@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>.role b{font-size:16px}.role .s{font-size:13.5px}.tier{display:inline-block;float:right;font-size:12px;border:1px solid #1b1b1b;border-radius:20px;padding:0 7px;background:#fff;margin-left:4px;font-weight:400}.card ol{margin:6px 0 0 20px;font-size:14.6px;line-height:1.5}</style></head><body>
+<div id="canvas" style="width:1136px;height:1090px">
+<div class="layer ui abs" id="LA"><div class="lt">1 · LLM call sites (roles)</div></div>
+<div class="card role abs" id="r1"><b>orchestrator</b><span class="s">dashboard chat</span><span class="chip">strong</span></div>
+<div class="card role abs" id="r2"><b>repo_analyzer</b><span class="s">builds Product Profile</span><span class="chip">strong</span></div>
+<div class="card role abs" id="r3"><b>researcher</b><span class="s">market and competitors</span><span class="chip">balanced</span></div>
+<div class="card role abs" id="r4"><b>reader</b><span class="s">untrusted text, no tools</span><span class="chip">fast</span></div>
+<div class="card role abs" id="r5"><b>planner</b><span class="s">weekly and ad plan</span><span class="chip">strong</span></div>
+<div class="card role abs" id="r6"><b>writer</b><span class="s">posts and ad copy</span><span class="chip">balanced</span></div>
+<div class="card role abs" id="r7"><b>reply_drafter</b><span class="s">replies to own audience</span><span class="chip">balanced</span></div>
+<div class="card role abs" id="r8"><b>creative_director</b><span class="s">prompts for media</span><span class="chip">balanced</span></div>
+<div class="card role abs" id="r9"><b>critic</b><span class="s">pre-approval check</span><span class="chip">balanced</span></div>
+<div class="card role abs" id="r10"><b>analyst</b><span class="s">metrics and reports</span><span class="chip">balanced</span></div>
+<div class="card role abs" id="r11"><b>vision</b><span class="s">screenshots, assets</span><span class="chip">balanced</span></div>
+<div class="card role abs" id="r12"><b>judge</b><span class="s">offline evaluation</span><span class="chip">strong</span></div>
+<div class="card role abs" id="r13"><b>embeddings</b><span class="s">memory vectors</span><span class="chip">own endpoint</span></div>
+
+<div class="card abs" id="rt" style="background:#FFF1C2"><b>Model router</b><ul><li>picks the model and parameters for each role</li><li>adds the fallback list</li><li>checks capabilities: tools, structured output, vision</li><li>refuses tools for roles that must not have them (reader)</li><li>enforces the per-call cost limit</li></ul></div>
+<div class="card abs" id="src" style="background:#DDF1DD"><b>Where a role's model comes from</b><span class="s">first match wins</span><ol><li>environment: LLM_MODEL__ROLE</li><li>project setting (dashboard)</li><li>workspace setting (dashboard)</li><li>models.yaml: role model</li><li>models.yaml: tier (fast, balanced, strong)</li><li>models.yaml: default</li></ol></div>
+
+<div class="card abs" id="gw" style="background:#E7DFF5"><b>OpenRouter</b><span class="s">single API, many model providers</span><span class="chip">one API key</span><span class="chip">fallback list</span><span class="chip">require_parameters</span><span class="chip">data_collection: deny</span><span class="chip">usage and cost per call</span></div>
+<div class="card abs" id="lg2" style="background:#fff"><b>LLM call log</b><span class="s">role, model, tokens, cost, latency, trace id; feeds Langfuse and the LLM monthly cap</span></div>
+
+<div class="layer ext abs" id="LP"><div class="lt">Model providers <small>switched by changing a string</small></div></div>
+<div class="card abs" id="p1"><b>Anthropic</b><span class="s">Claude models</span></div>
+<div class="card abs" id="p2"><b>OpenAI</b><span class="s">GPT models</span></div>
+<div class="card abs" id="p3"><b>Google</b><span class="s">Gemini models</span></div>
+<div class="card abs" id="p4"><b>Open-weight</b><span class="s">Llama, Mistral and others</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('LA',28,28,1080,418);
+ const xs=[46,254,462,670,878];
+ for(let i=0;i<13;i++){place('r'+(i+1),xs[i%5],80+Math.floor(i/5)*118,196,106)}
+ place('rt',28,502,590,236);place('src',650,502,458,236);
+ place('gw',28,794,640,150);place('lg2',704,794,404,150);
+ place('LP',28,1000,1080,146);
+ [['p1',46],['p2',312],['p3',578],['p4',844]].forEach(([id,x])=>place(id,x,1052,246,80));
+ edge('LA','rt',{from:'b',to:'t',oa:-250,ob:-250,label:'call(role, messages)'});
+ edge('src','rt',{from:'l',to:'r'});
+ edge('rt','gw',{from:'b',to:'t',oa:-150,ob:-150,label:'chat request + routing preferences'});
+ edge('gw','lg2',{from:'r',to:'l',dash:true});
+ edge('gw','LP',{from:'b',to:'t',oa:-150,ob:-150});
+ document.getElementById('canvas').style.height='1176px';
+});
+</script></body></html>

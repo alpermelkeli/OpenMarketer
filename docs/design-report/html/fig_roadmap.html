@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>
+.mh{position:absolute;top:28px;width:84px;text-align:center;font-size:14.5px;font-weight:700;color:#000}
+.vl{position:absolute;top:56px;width:0;border-left:1px solid #bbb;z-index:0}
+.bar{position:absolute;height:50px;border:1.5px solid #1b1b1b;border-radius:10px;z-index:10;display:flex;align-items:center;padding-left:12px;font-size:13px;font-weight:700;color:#000;box-shadow:0 1px 0 rgba(0,0,0,.25)}
+.lab{position:absolute;left:28px;width:420px;z-index:10;color:#000}.lab b{font-size:17.5px;display:block}.lab span{font-size:14.5px;line-height:1.35;display:block;margin-top:2px}
+.ms{position:absolute;z-index:11;width:20px;height:20px;background:#fff;border:2px solid #000;transform:rotate(45deg)}
+.mt{position:absolute;z-index:11;font-size:14.5px;font-weight:700;transform:translateX(-50%);text-align:center;white-space:nowrap;line-height:1.3;color:#000}
+</style></head><body><div id="canvas" style="width:1530px;height:800px"></div><script src="common.js"></script><script>
+run(()=>{
+ const c=$('canvas'),X0=470,MW=84;
+ const add=(h)=>{c.insertAdjacentHTML('beforeend',h)};
+ for(let m=0;m<12;m++){add(`<div class="mh" style="left:${X0+m*MW}px">M${m+1}</div>`);add(`<div class="vl" style="left:${X0+m*MW}px;height:620px"></div>`)}
+ add(`<div class="vl" style="left:${X0+12*MW}px;height:620px"></div>`);
+ const P=[
+ ['Phase 0 · Foundations','Monorepo, CI, license, Product Profile schema skeleton, docker compose dev stack.',0,1,'#DCEBFA'],
+ ['Phase 1 · Repo analyzer and Product Profile','Extractors, secret scan, evidence store, LLM synthesis, review UI, golden-repo evaluation.',0.6,3,'#D5F0EE'],
+ ['Phase 2 · Content engine and approved publishing','Brand-voice content, fal.ai images, templated visuals, X and Instagram publishing, approval queue, dry-run mode.',2.5,5,'#FFF1C2'],
+ ['Phase 3 · Community, analytics, repo watcher','Replies to own audience, metrics, weekly report, release-to-content, Higgsfield video, ElevenLabs voice, proactive digests.',4.5,7.5,'#DDF1DD'],
+ ['Phase 4 · Ads','Ad connectors: recommend-only first, then capped autonomy with platform-side limits.',7,10.5,'#F8D9D9'],
+ ['Phase 5 · Ecosystem','Plugin SDK, playbook packs, documentation, contribution guide, optional hosted offering.',9,12,'#E7DFF5']];
+ P.forEach((p,i)=>{const y=76+i*98;add(`<div class="lab" style="top:${y}px"><b>${p[0]}</b><span>${p[1]}</span></div>`);add(`<div class="bar" style="left:${X0+p[2]*MW}px;width:${(p[3]-p[2])*MW}px;top:${y+4}px;background:${p[4]}"></div>`)});
+ const M=[[3,'v0.1 alpha','profile from any repo'],[7.5,'v0.5 beta','publish + measure'],[12,'v1.0','ads + plugin SDK']];
+ M.forEach(m=>{const x=X0+m[0]*MW;add(`<div class="ms" style="left:${x-10}px;top:676px"></div>`);add(`<div class="mt" style="left:${x}px;top:706px">${m[1]}<br><span style="font-weight:400;font-size:12px">${m[2]}</span></div>`)});
+ add(`<div class="lab" style="top:676px"><b>Milestones</b><span>Month numbers are indicative. Every phase ends with a tagged release and an evaluation run.</span></div>`);
+});
+</script></body></html>

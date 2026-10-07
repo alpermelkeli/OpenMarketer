@@ -1,0 +1,116 @@
+# OpenMarketer - LLM model configuration
+#
+# Every place in the system that calls a language model is a "role".
+# Each role resolves to a model through OpenRouter. Change the model of any
+# role here, in the dashboard (Settings -> Models), or with an environment
+# variable. See .env.example for the environment variables.
+#
+# Resolution order for a role (first match wins):
+#   1. environment variable   LLM_MODEL__<ROLE>        (e.g. LLM_MODEL__WRITER)
+#   2. project setting        dashboard, stored in the database
+#   3. workspace setting      dashboard, stored in the database
+#   4. this file: role.model
+#   5. this file: tier mapping (role.tier -> tiers.<tier>)
+#   6. this file: defaults.model
+#
+# IMPORTANT: model slugs use OpenRouter's "provider/model" form. The slugs
+# below are placeholders chosen for readability. Verify the exact, current
+# slugs at https://openrouter.ai/models before first use.
+
+version: 1
+
+provider:
+  name: openrouter
+  base_url: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+  api_key_env: OPENROUTER_API_KEY
+  # Optional attribution headers (HTTP-Referer, X-Title)
+  app_url: ${OPENROUTER_APP_URL:-}
+  app_name: ${OPENROUTER_APP_NAME:-OpenMarketer}
+  # Sent to OpenRouter as provider-routing preferences on every request
+  routing:
+    allow_fallbacks: true
+    require_parameters: true     # only use upstream providers that support the requested features (tools, structured output)
+    data_collection: deny        # ask OpenRouter to avoid providers that may retain or train on prompts
+
+# Three reusable model classes. Change a tier and every role that uses it follows.
+tiers:
+  fast: anthropic/claude-haiku-4.5          # cheap, quick: classification, short replies
+  balanced: anthropic/claude-sonnet-5.5     # default workhorse: writing, planning
+  strong: anthropic/claude-opus-5.5         # hard reasoning: profile synthesis, strategy
+
+defaults:
+  model: anthropic/claude-sonnet-5.5
+  temperature: 0.4
+  max_tokens: 4096
+  timeout_s: 120
+  fallbacks:                                 # tried in order if the primary model or its providers fail
+    - anthropic/claude-haiku-4.5
+
+# Soft guard per request; the monthly cap in .env (LLM_MONTHLY_CAP_USD) is enforced by the budget ledger.
+limits:
+  max_cost_per_call_usd: 1.50
+
+roles:
+  # --- operator-facing -------------------------------------------------
+  orchestrator:                  # dashboard chat: status questions and special requests
+    tier: strong
+    temperature: 0.3
+    max_tokens: 4096
+    requires: [tools]            # reads data and creates requests through tools; never executes them directly
+
+  # --- understanding ---------------------------------------------------
+  repo_analyzer:                 # synthesises the Product Profile from extractor evidence
+    tier: strong
+    temperature: 0.1
+    max_tokens: 8192
+    requires: [tools, structured_output]
+  researcher:                    # market, competitor and trend research summaries
+    tier: balanced
+    temperature: 0.3
+    requires: [tools]
+  reader:                        # quarantined reader: classifies untrusted comments, DMs, web text
+    tier: fast
+    temperature: 0.0
+    max_tokens: 1024
+    requires: [structured_output]   # NO tools by design
+
+  # --- planning and creating ------------------------------------------
+  planner:                       # weekly plan, channel mix, ad plan
+    tier: strong
+    temperature: 0.4
+    requires: [structured_output]
+  writer:                        # posts, captions, threads, ad copy in brand voice
+    tier: balanced
+    temperature: 0.8
+    max_tokens: 2048
+  reply_drafter:                 # replies to the project's own audience
+    tier: balanced
+    temperature: 0.5
+    max_tokens: 512
+  creative_director:             # writes prompts and scripts for image, video and voice providers
+    tier: balanced
+    temperature: 0.7
+    requires: [structured_output]
+
+  # --- checking and learning ------------------------------------------
+  critic:                        # pre-approval quality check against brand voice and facts
+    tier: balanced
+    temperature: 0.0
+    requires: [structured_output]
+  analyst:                       # interprets metrics, writes the weekly report and proactive digests
+    tier: balanced
+    temperature: 0.2
+    requires: [structured_output]
+  vision:                        # understands screenshots and creative assets
+    tier: balanced
+    requires: [vision]
+  judge:                         # offline evaluation (LLM-as-judge); keep separate from the writer's model
+    tier: strong
+    temperature: 0.0
+    requires: [structured_output]
+
+  # --- retrieval (separate endpoint kind) -------------------------------
+  embeddings:                    # memory embeddings; switch provider if your OpenRouter plan lacks this endpoint
+    kind: embeddings
+    model: openai/text-embedding-3-small
+    dimensions: 1536

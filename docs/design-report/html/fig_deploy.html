@@ -1,0 +1,45 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>.svc b{font-family:"SF Mono",Menlo,monospace;font-size:16px}.opt{border-style:dashed}</style></head><body>
+<div id="canvas" style="width:1560px;height:900px">
+<div class="card abs" id="br"><b>Browser</b><span class="s">operator, approves actions</span></div>
+<div class="layer abs" id="host" style="background:#F6F6F6"><div class="lt">Single host or VM · docker compose</div></div>
+<div class="card svc abs" id="caddy" style="background:#DCEBFA"><b>caddy</b><span class="s">TLS termination and reverse proxy; the only port exposed to the internet</span></div>
+<div class="card svc abs" id="web" style="background:#DCEBFA"><b>web</b><span class="s">Next.js dashboard</span></div>
+<div class="card svc abs" id="api" style="background:#DDF1DD"><b>api</b><span class="s">FastAPI: REST, auth, approval endpoints</span></div>
+<div class="card svc abs" id="wk" style="background:#FFF1C2"><b>worker</b><span class="s">Temporal worker: agent runtime, repo analyzer, connectors, policy engine</span></div>
+<div class="card svc abs" id="tp" style="background:#FFF1C2"><b>temporal</b><span class="s">workflow server and UI</span></div>
+<div class="card svc abs" id="pg" style="background:#ECECEC"><b>postgres</b><span class="s">app database, Temporal database, pgvector; daily backup</span></div>
+<div class="card svc abs" id="s3" style="background:#ECECEC"><b>minio</b><span class="s">S3-compatible assets and repo snapshots (or external S3 / R2)</span></div>
+<div class="card svc abs" id="rn" style="background:#E7DFF5"><b>renderer</b><span class="s">Playwright + FFmpeg: templates to PNG, mixes voice and video clips</span></div>
+<div class="card svc abs opt" id="lf" style="background:#fff"><b>langfuse</b><span class="s">optional: LLM tracing and evals</span></div>
+<div class="card svc abs opt" id="ot" style="background:#fff"><b>otel-collector</b><span class="s">optional: traces and metrics export</span></div>
+<div class="layer ext abs" id="ex"><div class="lt">Internet</div></div>
+<div class="card abs" id="e1"><b>OpenRouter</b><span class="s">LLMs: one key, any model; or a local endpoint</span></div>
+<div class="card abs" id="e4"><b>Media providers</b><span class="s">fal.ai, Higgsfield, ElevenLabs</span></div>
+<div class="card abs" id="e2"><b>Platform APIs</b><span class="s">Meta, X, TikTok, Google, LinkedIn</span></div>
+<div class="card abs" id="e3"><b>Git hosts</b><span class="s">GitHub, GitLab</span></div>
+<div class="legend abs" id="lg"><span><i></i>internal network call</span><span><i class="d"></i>outbound HTTPS from the worker only</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('br',28,100,200,84);
+ place('host',290,28,920,690);
+ place('caddy',330,84,840,80);
+ place('web',330,230,260,86);place('api',640,230,260,86);place('wk',950,230,220,100);
+ place('tp',640,400,260,86);place('pg',950,400,220,100);place('s3',330,400,260,100);
+ place('rn',330,570,260,100);place('lf',640,570,260,86);place('ot',950,570,220,86);
+ place('ex',1270,28,262,690);
+ place('e1',1290,90,222,110);place('e4',1290,230,222,110);place('e2',1290,370,222,110);place('e3',1290,510,222,90);
+ place('lg',290,745);
+ edge('br','caddy',{from:'r',to:'l',label:'HTTPS'});
+ edge('caddy','web',{from:'b',to:'t',oa:-250,ob:0});
+ edge('caddy','api',{from:'b',to:'t',oa:0,ob:0});
+ edge('web','api',{from:'r',to:'l'});
+ edge('api','tp',{from:'b',to:'t',label:'start workflows'});
+ edge('wk','tp',{from:'b',to:'t',oa:-70,ob:100,my:360,label:'poll tasks',ldx:20});
+ edge('tp','pg',{from:'r',to:'l',label:'history'});
+ edge('wk','pg',{from:'b',to:'t',oa:70,ob:70,label:'state, ledger',ldx:0,ldy:0});
+ edge('wk','ex',{from:'r',to:'l',ob:-85,dash:true,label:'HTTPS'});
+ document.getElementById('canvas').style.height='800px';
+});
+</script></body></html>

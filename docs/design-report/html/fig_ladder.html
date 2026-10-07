@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>.blk{position:absolute;z-index:10;border:1.6px solid #1b1b1b;border-radius:12px 12px 0 0;padding:16px 18px;color:#000;box-shadow:0 1px 0 rgba(0,0,0,.25)}.blk b{display:block;font-size:19px}.blk .t{font-size:14.5px;margin-top:4px;font-weight:600}.blk ul{margin:10px 0 0 18px;font-size:15px;line-height:1.5}</style></head><body>
+<div id="canvas" style="width:1520px;height:820px">
+<div class="blk" id="b0" style="background:#EEEEEE"><b>Level 0 · Suggest only</b><div class="t">dry-run mode</div><ul><li>agent researches and drafts</li><li>nothing is published</li><li>you judge quality and tone</li></ul></div>
+<div class="blk" id="b1" style="background:#DCEBFA"><b>Level 1 · Approve everything</b><div class="t">default after onboarding</div><ul><li>every action waits for a decision</li><li>rejections and edits train preferences</li><li>budget caps already enforced</li></ul></div>
+<div class="blk" id="b2" style="background:#FFF1C2"><b>Level 2 · Automatic for low risk</b><div class="t">organic content autopilot</div><ul><li>L0 actions run on their own</li><li>L1 and L2 still need approval</li><li>weekly report to the owner</li></ul></div>
+<div class="blk" id="b3" style="background:#DDF1DD"><b>Level 3 · Capped autonomy</b><div class="t">includes paid campaigns</div><ul><li>agent adjusts campaigns inside caps</li><li>raising caps needs a human</li><li>L2 actions stay human-only</li></ul></div>
+<div class="card abs" id="p1"><b>Unlocked when</b><span class="s">Product Profile approved and one week of drafts reviewed</span></div>
+<div class="card abs" id="p2"><b>Unlocked when</b><span class="s">approval rate stays above the project threshold over N items, with zero policy violations</span></div>
+<div class="card abs" id="p3"><b>Unlocked when</b><span class="s">measurement and attribution work, caps are set, sandbox ad tests pass, results beat the baseline</span></div>
+<div class="card abs" id="dm" style="background:#F8D9D9"><b>Automatic demotion</b><span class="s">A policy violation, a platform warning, a negative incident or the kill switch lowers the autonomy level immediately. Promotion is always an explicit owner decision.</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ const B=700,w=340,xs=[28,388,748,1108],hs=[190,250,310,370];
+ for(let i=0;i<4;i++){place('b'+i,xs[i],B-hs[i],w,hs[i])}
+ place('p1',xs[1],B-hs[1]-50-100,w,100);place('p2',xs[2],B-hs[2]-50-110,w,110);place('p3',xs[3],B-hs[3]-50-120,w,120);
+ place('dm',28,28,1420,84);
+ edge('p1','b1',{from:'b',to:'t'});edge('p2','b2',{from:'b',to:'t'});edge('p3','b3',{from:'b',to:'t'});
+ document.getElementById('canvas').style.height='740px';
+});
+</script></body></html>

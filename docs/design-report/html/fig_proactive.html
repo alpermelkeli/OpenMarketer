@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"></head><body>
+<div id="canvas" style="width:1136px;height:1080px">
+<div class="layer cp abs" id="LT"><div class="lt">Triggers <small>Temporal schedules, timers and watchers</small></div></div>
+<div class="card abs" id="t1"><b>Schedules</b><span class="s">daily or weekly digest, weekly report</span></div>
+<div class="card abs" id="t2"><b>Timers</b><span class="s">approval reminders, deadlines, timeouts</span></div>
+<div class="card abs" id="t3"><b>Watchdog</b><span class="s">spend anomaly, negative spike, connector failure, platform warning; may trigger safe-direction brakes</span></div>
+<div class="card abs" id="t4"><b>Blocking questions</b><span class="s">the agent needs an answer to continue</span></div>
+<div class="card abs" id="nr" style="background:#FFF1C2"><b>Notification router</b><span class="s">builds messages from structured data only (analyst role), then applies the rules below</span><span class="chip">deduplicate</span><span class="chip">batch</span><span class="chip">quiet hours</span><span class="chip">daily cap</span><span class="chip">escalation</span><span class="chip">per-type mute</span></div>
+<div class="card abs" id="sv" style="background:#fff"><b>Severity</b><span class="s">info (digest) · action needed (approval, question) · alert (anomaly) · urgent (safety incident, may ignore quiet hours)</span></div>
+<div class="card abs" id="c1" style="background:#DCEBFA"><b>Dashboard chat</b><span class="s">message appears in the project thread with action cards</span></div>
+<div class="card abs" id="c2" style="background:#DCEBFA"><b>Chat apps and e-mail</b><span class="s">Telegram, Slack, e-mail through Apprise; short text and a signed link</span></div>
+<div class="card abs" id="c3" style="background:#DCEBFA"><b>Web push</b><span class="s">optional browser notification for action-needed items</span></div>
+<div class="card abs" id="op" style="background:#fff"><b>You</b><span class="s">read the digest, open the link, tap Approve, Edit or Reject on a card, answer a question, or reply in the chat</span></div>
+<div class="card abs" id="oc" style="background:#FFF1C2"><b>Orchestrator console</b><span class="s">continues the conversation with the context of the notification</span></div>
+<div class="card abs" id="pw" style="background:#F8D9D9"><b>Policy engine and workflows</b><span class="s">decisions go through the same gate; blocked workflows resume</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('LT',28,28,1080,210);
+ place('t1',46,80,246,140);place('t2',312,80,246,140);place('t3',578,80,246,140);place('t4',844,80,246,140);
+ place('nr',28,300,1080,150);place('sv',28,500,1080,86);
+ place('c1',28,650,340,130);place('c2',398,650,340,130);place('c3',768,650,340,130);
+ place('op',28,850,1080,100);
+ place('oc',28,1000,530,100);place('pw',578,1000,530,100);
+ edge('LT','nr',{from:'b',to:'t'});
+ edge('nr','sv',{from:'b',to:'t'});
+ edge('sv','c1',{from:'b',to:'t',oa:-360,ob:0,my:610});
+ edge('sv','c2',{from:'b',to:'t',my:610});
+ edge('sv','c3',{from:'b',to:'t',oa:360,ob:0,my:610});
+ edge('c1','op',{from:'b',to:'t',oa:0,ob:-360,my:815});
+ edge('c2','op',{from:'b',to:'t',my:815});
+ edge('c3','op',{from:'b',to:'t',oa:0,ob:360,my:815});
+ edge('op','oc',{from:'b',to:'t',oa:-270,ob:0,my:975});
+ edge('op','pw',{from:'b',to:'t',oa:270,ob:0,my:975,label:'approve / answer'});
+ document.getElementById('canvas').style.height='1150px';
+});
+</script></body></html>

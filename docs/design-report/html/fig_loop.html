@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css">
+<style>.step{width:250px;padding:12px 16px}.step .n{display:inline-block;width:26px;height:26px;border-radius:50%;border:1.4px solid #1b1b1b;background:#fff;text-align:center;line-height:23px;font-weight:700;font-size:14px;margin-right:8px}.step b{display:inline;font-size:16.5px}.ph{border-width:1.6px}.core{border-radius:50%;display:flex;align-items:center;justify-content:center;text-align:center;border:1.6px dashed #1b1b1b;background:#fff;font-size:15px;line-height:1.45;padding:20px}</style></head><body>
+<div id="canvas" style="width:1130px;height:860px">
+<div class="card step abs" id="s1" style="background:#DCEBFA"><span class="n">1</span><b>Research</b><span class="s">competitors, trends, keywords, relevant community conversations</span></div>
+<div class="card step abs" id="s2" style="background:#DCEBFA"><span class="n">2</span><b>Plan</b><span class="s">weekly content calendar, channel mix, ad plan within budget</span></div>
+<div class="card step abs" id="s3" style="background:#E7DFF5"><span class="n">3</span><b>Create</b><span class="s">copy, images, short video and voice-over via media providers</span></div>
+<div class="card step abs" id="s4" style="background:#F8D9D9"><span class="n">4</span><b>Policy check + approval</b><span class="s">budget caps, content filter, risk level, human decision when required</span></div>
+<div class="card step abs" id="s5" style="background:#DDF1DD"><span class="n">5</span><b>Publish</b><span class="s">posts, replies to own audience, campaigns, through connectors</span></div>
+<div class="card step abs" id="s6" style="background:#FFF1C2"><span class="n">6</span><b>Measure</b><span class="s">engagement, clicks, installs, cost per install, retention signals</span></div>
+<div class="card step abs" id="s7" style="background:#FFF1C2"><span class="n">7</span><b>Learn</b><span class="s">write results to memory, update hypotheses and the playbook</span></div>
+<div class="core abs" id="core"><span><b style="font-size:17px">Product Profile</b><br>+ project memory<br><span style="font-size:13px">read by every step</span></span></div>
+<div class="legend abs" id="lg"><span><i style="border-top:0;width:14px;height:14px;background:#DCEBFA;border:1.3px solid #111;border-radius:3px"></i>understand &amp; plan</span><span><i style="border-top:0;width:14px;height:14px;background:#E7DFF5;border:1.3px solid #111;border-radius:3px"></i>create</span><span><i style="border-top:0;width:14px;height:14px;background:#F8D9D9;border:1.3px solid #111;border-radius:3px"></i>control</span><span><i style="border-top:0;width:14px;height:14px;background:#DDF1DD;border:1.3px solid #111;border-radius:3px"></i>act</span><span><i style="border-top:0;width:14px;height:14px;background:#FFF1C2;border:1.3px solid #111;border-radius:3px"></i>measure &amp; learn</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ const cx=565,cy=385,rx=385,ry=305,n=7;
+ const pos=[];
+ for(let i=0;i<n;i++){const t=(-90+i*360/n)*Math.PI/180;pos.push([cx+rx*Math.cos(t),cy+ry*Math.sin(t)])}
+ for(let i=0;i<n;i++){const e=$('s'+(i+1));const w=250,h=e.offsetHeight;place('s'+(i+1),pos[i][0]-w/2,pos[i][1]-h/2)}
+ place('core',cx-120,cy-90,240,180);
+ place('lg',28,805);
+ const pt=t=>[cx+rx*Math.cos(t),cy+ry*Math.sin(t)];
+ const inside=(p,el,pad)=>{const r=R(el);return p[0]>r.l-pad&&p[0]<r.r+pad&&p[1]>r.t-pad&&p[1]<r.b+pad};
+ for(let i=0;i<n;i++){
+  const a=(-90+i*360/n)*Math.PI/180,b=(-90+(i+1)*360/n)*Math.PI/180;
+  const A=$('s'+(i+1)),B=$('s'+(((i+1)%n)+1));
+  const pts=[];const N=240;
+  for(let k=0;k<=N;k++){const t=a+(b-a)*k/N;pts.push(pt(t))}
+  let s0=0;while(s0<N&&inside(pts[s0],A,6))s0++;
+  let e0=N;while(e0>0&&inside(pts[e0],B,12))e0--;
+  const seg=pts.slice(s0,e0+1);
+  const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+  path.setAttribute('d','M'+seg.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L'));
+  path.setAttribute('fill','none');path.setAttribute('stroke','#111');path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');svg.appendChild(path);
+ }
+});
+</script></body></html>

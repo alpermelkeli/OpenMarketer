@@ -1,0 +1,71 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"></head><body>
+<div id="canvas" style="width:1136px;height:1560px">
+<div class="layer ui abs" id="L1"><div class="lt">1 · User layer</div></div>
+<div class="layer cp abs" id="L2"><div class="lt">2 · Control plane</div></div>
+<div class="layer orch abs" id="L3"><div class="lt">3 · Orchestration </div></div>
+<div class="layer guard abs" id="L4"><div class="lt">4 · Guardrail layer <small>deterministic, outside the LLM</small></div></div>
+<div class="layer conn abs" id="L5"><div class="lt">5 · Connector layer <small>one plugin per platform, common interface</small></div></div>
+<div class="layer data abs" id="L6"><div class="lt">6 · Data layer</div></div>
+<div class="layer ext abs" id="E1"><div class="lt">7 · External systems <small>reached only through adapters</small></div></div>
+
+<div class="card abs" id="notif"><b>Notifications</b><span class="s">approval requests via Apprise</span><span class="chip">Telegram</span><span class="chip">Slack</span><span class="chip">e-mail</span></div>
+<div class="card abs" id="web"><b>Web dashboard</b><span class="s">approval queue, budgets, reports, chat</span><span class="chip">Next.js</span><span class="chip">TypeScript</span></div>
+<div class="card abs" id="cli"><b>CLI</b><span class="s">self-host setup, onboarding, dry-run</span><span class="chip">Python</span></div>
+
+<div class="card abs" id="auth"><b>Orchestrator agent</b><span class="s">dashboard chat: status questions, special requests</span><span class="chip">read tools</span><span class="chip">request tools</span></div>
+<div class="card abs" id="api"><b>REST API</b><span class="s">OpenAPI contract, OIDC login, RBAC</span><span class="chip">FastAPI</span><span class="chip">Pydantic</span></div>
+
+<div class="card abs" id="tmp"><b>Durable workflows</b><span class="s">schedules, retries, approval waits</span><span class="chip">Temporal</span></div>
+<div class="card abs" id="ana"><b>Repo analyzer</b><span class="s">repo to Product Profile</span><span class="chip">gitleaks</span><span class="chip">tree-sitter</span></div>
+<div class="card abs" id="agt"><b>Agent runtime</b><span class="s">tool-use loop, one agent per project</span><span class="chip">per-role models</span></div>
+
+<div class="card abs" id="bud"><b>Budget ledger</b><span class="s">atomic reserve / commit / release</span><span class="chip">Postgres</span></div>
+<div class="card abs" id="pol"><b>Policy engine</b><span class="s">risk levels, approvals, kill switch</span><span class="chip">YAML</span><span class="chip">CEL</span></div>
+<div class="card abs" id="flt"><b>Content filter</b><span class="s">secrets, unreleased features, banned claims</span></div>
+
+<div class="card abs" id="c1"><b>Meta</b><span class="s">Instagram + Ads</span></div>
+<div class="card abs" id="c2"><b>X</b><span class="s">posts, mentions</span></div>
+<div class="card abs" id="c3"><b>TikTok</b><span class="s">publish, ads</span></div>
+<div class="card abs" id="c4"><b>Google Ads</b><span class="s">search, app campaigns</span></div>
+<div class="card abs" id="c5"><b>LinkedIn</b><span class="s">posts, ads</span></div>
+<div class="card abs" id="c6"><b>Analytics</b><span class="s">attribution, store data</span></div>
+
+<div class="card abs" id="pg"><b>PostgreSQL</b><span class="s">state, audit log, ledger, memory</span><span class="chip">pgvector</span><span class="chip">row-level security</span></div>
+<div class="card abs" id="obj"><b>Object storage</b><span class="s">creative assets, repo snapshots</span><span class="chip">S3 compatible</span></div>
+<div class="card abs" id="vault"><b>Secret vault</b><span class="s">OAuth tokens, envelope encryption</span><span class="chip">OpenBao optional</span></div>
+
+<div class="card abs" id="git"><b>Git hosts</b><span class="s">cloned read-only by the repo analyzer</span></div>
+<div class="card abs" id="llm"><b>OpenRouter (LLMs)</b><span class="s">default gateway to any model; any OpenAI-compatible or local endpoint also works</span></div>
+<div class="card abs" id="med"><b>Media providers</b><span class="s">fal.ai images, Higgsfield video, ElevenLabs voice</span></div>
+<div class="card abs" id="plat"><b>Platform APIs</b><span class="s">called only by connectors over HTTPS</span></div>
+
+<div class="legend abs" id="lg"><span><i></i>call</span><span><i class="d"></i>notification</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ const X=[46,402,758],w=332,H=104,Ls=[28,242,456,670,884,1082];
+ const LH=166;
+ ['L1','L2','L3','L4'].forEach((id,i)=>place(id,28,Ls[i],1080,LH));
+ place('L5',28,Ls[4],1080,150);place('L6',28,Ls[5],1080,LH);place('E1',28,1296,1080,196);
+ const cy=i=>Ls[i]+52;
+ place('notif',X[0],cy(0),w,H);place('web',X[1],cy(0),w,H);place('cli',X[2],cy(0),w,H);
+ place('auth',X[1],cy(1),w,H);place('api',X[2],cy(1),w,H);
+ place('tmp',X[0],cy(2),w,H);place('ana',X[1],cy(2),w,H);place('agt',X[2],cy(2),w,H);
+ place('bud',X[0],cy(3),w,H);place('pol',X[1],cy(3),w,H);place('flt',X[2],cy(3),w,H);
+ for(let i=0;i<6;i++)place('c'+(i+1),46+i*176,cy(4),164,84);
+ place('pg',X[0],cy(5),w,H);place('obj',X[1],cy(5),w,H);place('vault',X[2],cy(5),w,H);
+ [['git',46],['llm',312],['med',578],['plat',844]].forEach(([id,x])=>place(id,x,1348,246,128));
+ place('lg',46,1516);
+ edge('api','auth',{from:'l',to:'r',bi:true});
+ edge('web','api',{from:'b',to:'t',ob:-50,my:218});
+ edge('cli','api',{from:'b',to:'t',oa:50,ob:50});
+ edge('api','tmp',{from:'b',to:'t',ob:130,my:432});
+ edge('tmp','notif',{from:'t',to:'b',oa:60,ob:60,dash:true,label:'approval request',ldy:60});
+ edge('agt','pol',{from:'b',to:'t',oa:-80,ob:80,my:646});
+ edge('pol','bud',{from:'l',to:'r'});
+ edge('pol','flt',{from:'r',to:'l'});
+ edge('pol','L5',{from:'b',to:'t',label:'approved actions only'});
+ edge('L5','L6',{from:'b',to:'t',oa:-300,ob:-300,label:'tokens, metrics'});
+});
+</script></body></html>

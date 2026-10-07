@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"></head><body>
+<div id="canvas" style="width:1780px;height:820px">
+<div class="layer ui abs" id="L1"><div class="lt">1 · Intake</div></div>
+<div class="layer cp abs" id="L2"><div class="lt">2 · Deterministic extraction <small>no LLM, fast and reproducible</small></div></div>
+<div class="layer orch abs" id="L3"><div class="lt">3 · Synthesis</div></div>
+<div class="layer conn abs" id="L4"><div class="lt">4 · Review and activation</div></div>
+
+<div class="card abs" id="in"><b>Input</b><span class="s">Repository URL or local folder, optional website and store links</span></div>
+<div class="card abs" id="clone"><b>Read-only shallow clone</b><span class="s">default branch and tagged releases only, minimal-scope token</span></div>
+<div class="card abs" id="scan" style="background:#fff"><b>Secret scan and exclusion</b><span class="s">gitleaks runs first; .env*, key files, build output are never read or sent to an LLM</span></div>
+
+<div class="card abs" id="x1"><b>Manifests</b><span class="s">package.json, pubspec.yaml, build.gradle, Info.plist: name, platform, bundle ID, permissions</span></div>
+<div class="card abs" id="x2"><b>UI strings (i18n)</b><span class="s">supported languages, tone of voice, ready-made copy</span></div>
+<div class="card abs" id="x3"><b>Routes and screens</b><span class="s">real feature list and user flows</span></div>
+<div class="card abs" id="x4"><b>Theme and assets</b><span class="s">palette, fonts, logo, icons, screenshots</span></div>
+<div class="card abs" id="x5"><b>SDKs and config</b><span class="s">analytics, payments, attribution: measurement setup and business model</span></div>
+<div class="card abs" id="x6"><b>Changelog and releases</b><span class="s">tags and release notes: content opportunities</span></div>
+<div class="card abs" id="ev" style="background:#fff;border-radius:11px"><b>Evidence store</b><span class="s">every extracted fact is saved with its file path and line reference, so each claim in the profile is traceable</span><span class="chip">PostgreSQL</span></div>
+
+<div class="card abs" id="syn"><b>LLM synthesis</b><span class="s">read-only file tools (read, grep, glob); output validated against the Product Profile JSON Schema</span><span class="chip">Pydantic</span><span class="chip">structured output</span></div>
+<div class="card abs" id="gap"><b>Gap filling</b><span class="s">web research on store page and competitors, plus a short owner interview (5 to 8 questions) for audience, goals and brand personality</span></div>
+<div class="card abs" id="draft"><b>Draft Product Profile</b><span class="s">confidence score per field, evidence links, and a "publishable" flag per feature (live / unreleased / unknown)</span></div>
+
+<div class="card abs" id="rev"><b>Human review</b><span class="s">correct facts, add a do-not-mention list, confirm what is public</span></div>
+<div class="card abs" id="fin"><b>Product Profile v1</b><span class="s">approved, versioned, diffable; every later action cites the version it used</span></div>
+<div class="card abs" id="pb"><b>Playbook selection</b><span class="s">product-type classifier picks channel mix, cadence and KPIs</span></div>
+
+<div class="card abs" id="note" style="background:#FFF1C2"><b>Untrusted-input rule</b><span class="s">README files, code comments and issues are treated as data, never as instructions to the agent.</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ const T=28,LH=610;
+ place('L1',T,T,330,LH);place('L2',390,T,580,LH);place('L3',1010,T,370,LH);place('L4',1420,T,332,LH);
+ place('in',50,84,286,96);place('clone',50,220,286,96);place('scan',50,356,286,120);
+ const xs=[412,692],ys=[84,210,336];
+ ['x1','x2','x3','x4','x5','x6'].forEach((id,i)=>place(id,xs[i%2],ys[Math.floor(i/2)],258,112));
+ place('ev',412,480,538,130);
+ place('syn',1032,84,326,140);place('gap',1032,264,326,140);place('draft',1032,444,326,130);
+ place('rev',1442,84,288,120);place('fin',1442,244,288,120);place('pb',1442,404,288,120);
+ place('note',50,660,1680,70);
+ edge('in','clone',{from:'b',to:'t'});edge('clone','scan',{from:'b',to:'t'});
+ edge('scan','L2',{from:'r',to:'l'});
+ edge('ev','syn',{from:'r',to:'l',mx:990});
+ edge('syn','gap',{from:'b',to:'t'});edge('gap','draft',{from:'b',to:'t'});
+ edge('draft','rev',{from:'r',to:'l',mx:1400});
+ edge('rev','fin',{from:'b',to:'t'});edge('fin','pb',{from:'b',to:'t'});
+ document.getElementById('canvas').style.height='760px';
+});
+</script></body></html>

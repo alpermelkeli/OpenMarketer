@@ -1,0 +1,39 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"></head><body>
+<div id="canvas" style="width:1130px;height:1190px">
+<div class="layer guard abs" id="LU"><div class="lt">Untrusted input <small>treated as data, never as instructions</small></div></div>
+<div class="layer orch abs" id="LR"><div class="lt">Quarantine</div></div>
+<div class="layer cp abs" id="LT"><div class="lt">Trusted zone</div></div>
+<div class="card abs" id="u1"><b>Comments and DMs</b><span class="s">from the project's own audience</span></div>
+<div class="card abs" id="u2"><b>Web pages</b><span class="s">competitor sites, search results</span></div>
+<div class="card abs" id="u3"><b>Repository content</b><span class="s">README, code comments, issues of any repo</span></div>
+<div class="card abs" id="rd"><b>Reader agent</b><span class="s">classifies and summarizes untrusted text; cannot call connectors, cannot write to the database, cannot see credentials</span></div>
+<div class="card abs" id="sc"><b>Strict schema validation</b><span class="s">output must match fixed fields (sentiment, topic, intent, language, quoted text flagged); anything else is dropped</span></div>
+<div class="card abs" id="ih"><b>Injection heuristics</b><span class="s">suspicious patterns ("ignore previous instructions", hidden text) raise a flag for human review</span></div>
+<div class="card abs" id="op"><b>Operator instructions</b><span class="s">authenticated dashboard input only</span></div>
+<div class="card abs" id="ag"><b>Action agent</b><span class="s">plans and proposes actions; sees structured fields, never raw untrusted text</span></div>
+<div class="card abs" id="pf"><b>Approved Product Profile</b><span class="s">versioned, human-reviewed facts</span></div>
+<div class="card abs" id="gt" style="background:#E7DFF5"><b>Policy engine: deterministic gate</b><span class="s">risk level, budget caps, content filter, approvals</span></div>
+<div class="card abs" id="tl" style="background:#DCEBFA"><b>Connectors</b><span class="s">the only components with side effects</span></div>
+<div class="card abs" id="n1" style="background:#FFF1C2"><b>Principle</b><span class="s">untrusted text may inform a decision, but it can never authorize an action.</span></div>
+<div class="card abs" id="n2" style="background:#FFF1C2"><b>Provenance</b><span class="s">every proposal is logged with the inputs that influenced it.</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('LU',28,28,1074,170);place('LR',28,254,1074,300);place('LT',28,610,1074,180);
+ place('u1',46,82,330,96);place('u2',400,82,330,96);place('u3',754,82,330,96);
+ place('rd',46,306,1038,100);
+ place('sc',46,444,510,110);place('ih',574,444,510,110);
+ place('op',46,664,300,100);place('ag',385,664,360,100);place('pf',784,664,300,100);
+ place('gt',385,860,360,100);place('tl',385,1030,360,100);
+ place('n1',46,860,300,110);place('n2',784,860,300,110);
+ edge('u1','rd',{from:'b',to:'t',ob:-354});edge('u2','rd',{from:'b',to:'t',ob:0});edge('u3','rd',{from:'b',to:'t',ob:354});
+ edge('rd','sc',{from:'b',to:'t',oa:-264,ob:0});edge('rd','ih',{from:'b',to:'t',oa:264,ob:0});
+ edge('sc','ag',{from:'b',to:'t',ob:-90,my:582,label:'structured fields only',ldx:-40});
+ edge('ih','ag',{from:'b',to:'t',ob:90,my:582,label:'flags'});
+ edge('op','ag',{from:'r',to:'l'});edge('pf','ag',{from:'l',to:'r'});
+ edge('ag','gt',{from:'b',to:'t',label:'action proposal'});
+ edge('gt','tl',{from:'b',to:'t',label:'allowed actions only'});
+ document.getElementById('canvas').style.height='1190px';
+});
+</script></body></html>

@@ -1,0 +1,46 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css">
+<style>.dw{position:absolute;z-index:10;background:#1b1b1b;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}.dw>div{position:absolute;inset:2px;background:#FFF1C2;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);display:flex;align-items:center;justify-content:center;text-align:center;font-weight:700;font-size:17px;line-height:1.25;padding:0 56px;color:#000}</style></head><body>
+<div id="canvas" style="width:1130px;height:1570px">
+<div class="card abs" id="start" style="background:#DCEBFA"><b>Agent proposes an action</b><span class="s">tool call + rationale + evidence links + Product Profile version</span></div>
+<div class="dw" id="d1"><div>Banned by policy?</div></div>
+<div class="dw" id="d2"><div>Budget cap would be exceeded?</div></div>
+<div class="dw" id="d3"><div>Content filter clean?</div></div>
+<div class="dw" id="d4"><div>Risk level?</div></div>
+<div class="card abs" id="rej" style="background:#F8D9D9"><b>Reject</b><span class="s">write audit log and tell the agent why, so it can revise</span></div>
+<div class="card abs" id="l0" style="background:#DDF1DD"><b>L0 · Automatic</b><span class="s">organic post from the approved calendar, thank-you reply on own post, report generation</span></div>
+<div class="card abs" id="l1" style="background:#FFF1C2"><b>L1 · Approval queue</b><span class="s">new ad campaign, budget increase, reply to a complaint, new content theme</span></div>
+<div class="card abs" id="l2" style="background:#F8D9D9"><b>L2 · Human only</b><span class="s">crisis, legal or medical claim, first post on a new platform</span></div>
+<div class="card abs" id="hum" style="background:#fff"><b>Human decision</b><span class="s">Approve · Edit · Reject. No answer before the deadline means reject.</span></div>
+<div class="card abs" id="fb" style="background:#E7DFF5"><b>Feedback data</b><span class="s">rejections and edits become preference memory for the agent</span></div>
+<div class="card abs" id="res" style="background:#E7DFF5"><b>Atomic budget reservation</b><span class="s">PostgreSQL transaction; released if execution fails</span></div>
+<div class="card abs" id="exe" style="background:#DDF1DD"><b>Connector executes</b><span class="s">idempotency key, retries, platform-side spend limit as second guard</span></div>
+<div class="card abs" id="mea" style="background:#DDF1DD"><b>Measure and remember</b><span class="s">metrics snapshot, outcome written to project memory</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ const cx=550;
+ place('start',cx-215,28,430,92);
+ [['d1',176],['d2',356],['d3',536],['d4',716]].forEach(([id,y])=>place(id,cx-160,y,320,140));
+ place('rej',810,330,270,130);
+ place('l0',24,950,340,128);place('l1',380,950,340,128);place('l2',736,950,340,128);
+ place('hum',500,1130,320,110);place('fb',870,1130,220,130);
+ place('res',260,1280,360,96);place('exe',260,1410,360,110);place('mea',730,1410,340,110);
+ edge('start','d1',{from:'b',to:'t'});
+ edge('d1','d2',{from:'b',to:'t',label:'no'});edge('d2','d3',{from:'b',to:'t',label:'no'});edge('d3','d4',{from:'b',to:'t',label:'yes'});
+ edge('d1','rej',{from:'r',to:'t',label:'yes'});
+ edge('d2','rej',{from:'r',to:'l',label:'yes'});
+ edge('d3','rej',{from:'r',to:'b',label:'no'});
+ edge('d4','l0',{from:'l',to:'t',label:'low'});
+ edge('d4','l1',{from:'b',to:'t',label:'medium'});
+ edge('d4','l2',{from:'r',to:'t',label:'high'});
+ edge('l1','hum',{from:'b',to:'t',oa:90,ob:-100,my:1105});
+ edge('l2','hum',{from:'b',to:'t',oa:-90,ob:100,my:1105});
+ edge('hum','fb',{from:'r',to:'l'});
+ edge('l0','res',{from:'b',to:'l'});
+ edge('hum','res',{from:'b',to:'r',label:'approved'});
+ edge('res','exe',{from:'b',to:'t'});
+ edge('exe','mea',{from:'r',to:'l'});
+ document.getElementById('canvas').style.height='1570px';
+});
+</script></body></html>

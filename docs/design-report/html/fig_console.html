@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"></head><body>
+<div id="canvas" style="width:1290px;height:1170px">
+<div class="layer ui abs" id="LC"><div class="lt">Dashboard chat</div></div>
+<div class="card abs" id="you"><b>You (authenticated operator)</b><ul><li>"How are we doing this week?"</li><li>"Make a launch video for v2.1 tomorrow."</li><li>"Never post on Sundays."</li></ul></div>
+<div class="card abs" id="apc" style="background:#FFF1C2"><b>Inline approval cards</b><span class="s">Approve, edit or reject buttons inside the conversation. Only an authenticated human click approves; a model statement never does.</span></div>
+<div class="card abs" id="orc" style="background:#FFF1C2"><b>Orchestrator agent</b><span class="s">Context: Product Profile, current plan, approval queue, metrics, project memory, recent audit log. It sees structured data only, never raw comments or web text. It answers in plain language and links to the records it talks about.</span><span class="chip">role: orchestrator</span><span class="chip">strong tier by default</span></div>
+<div class="layer cp abs" id="LR"><div class="lt">Read tools <small>no side effects</small></div><ul style="margin:4px 0 0 18px;font-size:14.6px;line-height:1.55"><li>get_status</li><li>list_queue, explain_proposal</li><li>get_report, show_audit</li><li>search_memory</li></ul></div>
+<div class="layer conn abs" id="LW"><div class="lt">Request tools <small>create records, never execute</small></div><ul style="margin:4px 0 0 18px;font-size:14.6px;line-height:1.55"><li>create_task (for example, a launch video)</li><li>create_directive (one-off instruction)</li><li>draft_standing_rule (needs your confirmation)</li><li>pause_campaign, kill_switch (safe direction)</li></ul></div>
+<div class="card abs" id="dat" style="background:#ECECEC"><b>Project data</b><span class="s">PostgreSQL: plan, queue, metrics, memory, audit log</span></div>
+<div class="card abs" id="prp" style="background:#E7DFF5"><b>Proposals and directives</b><span class="s">each stored with source = chat and a link to the message that caused it</span></div>
+<div class="card abs" id="pol" style="background:#F8D9D9"><b>Policy engine</b><span class="s">the same deterministic gate as every other action</span></div>
+<div class="card abs" id="wf" style="background:#DDF1DD"><b>Workflows</b><span class="s">planner, writer, creative, publisher, ads; results flow back into the chat</span></div>
+<div class="card abs" id="gu" style="background:#fff"><b>Guarantees</b><ul><li>Chat cannot raise budget caps, change the autonomy level or approve proposals.</li><li>Safe-direction actions (pause, kill switch) run immediately.</li><li>Standing instructions stay drafts until you confirm them.</li><li>Every chat-driven action is logged with the message that caused it.</li></ul></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('LC',28,28,1100,190);
+ place('you',46,80,520,120);place('apc',590,80,520,120);
+ place('orc',28,270,1100,150);
+ place('LR',28,480,540,180);place('LW',588,480,540,180);
+ place('dat',28,730,540,96);place('prp',588,730,540,96);
+ place('pol',588,880,540,96);place('wf',588,1030,540,96);
+ place('gu',28,880,540,246);
+ edge('you','orc',{from:'b',to:'t',oa:-200,ob:-300,my:244,bi:true,label:'messages and answers'});
+ edge('orc','LR',{from:'b',to:'t',oa:-250,ob:0,my:450});
+ edge('orc','LW',{from:'b',to:'t',oa:250,ob:0,my:450});
+ edge('dat','LR',{from:'t',to:'b',label:'reads'});
+ edge('LW','prp',{from:'b',to:'t',label:'creates'});
+ edge('prp','pol',{from:'b',to:'t'});
+ edge('pol','wf',{from:'b',to:'t',label:'allowed actions'});
+ edge('prp','apc',{from:'r',to:'r',ob:22,mx:1170,dash:true,label:'needs approval'});
+ edge('apc','pol',{from:'r',to:'r',oa:-22,mx:1230,dash:true,label:'human click'});
+ document.getElementById('canvas').style.height='1170px';
+});
+</script></body></html>

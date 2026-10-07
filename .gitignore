@@ -1,0 +1,23 @@
+# secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# LaTeX build artifacts (the PDF itself is kept)
+*.aux
+*.log
+*.toc
+*.out
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+
+# macOS
+.DS_Store

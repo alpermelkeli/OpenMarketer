@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>.pg{width:430px}.pg code{display:block;font-family:"SF Mono",Menlo,monospace;font-size:13.5px;margin-top:6px;background:#F4F4F4;border:1px solid #1b1b1b;border-radius:6px;padding:4px 7px;color:#000;line-height:1.35}</style></head><body>
+<div id="canvas" style="width:1500px;height:1170px">
+<div class="card pg abs" id="p1" style="background:#E7DFF5"><b>Connectors</b><span class="s">one package per platform: Instagram, X, TikTok, LinkedIn, Google Ads, Apple Search Ads</span><code>publish() · reply() · get_metrics() · create_campaign()</code></div>
+<div class="card pg abs" id="p2" style="background:#D5F0EE"><b>Extractors</b><span class="s">framework-specific repo understanding: Flutter, React Native, Swift, Kotlin, Next.js, Python CLI</span><code>detect(repo) → bool · extract(repo) → Evidence[]</code></div>
+<div class="card pg abs" id="p3" style="background:#FFF1C2"><b>LLM providers</b><span class="s">OpenRouter by default (any model per role); any OpenAI-compatible or local endpoint</span><code>complete() · stream() · structured(schema)</code></div>
+<div class="card pg abs" id="p4" style="background:#DDF1DD"><b>Playbooks</b><span class="s">YAML packs: channel mix, cadence, KPIs, tone presets for consumer app, B2B SaaS, dev tool, game, e-commerce</span><code>playbook.yaml (declarative, no code)</code></div>
+<div class="card pg abs" id="p5" style="background:#DCEBFA"><b>Notifiers</b><span class="s">approval requests and alerts through Apprise: Telegram, Slack, e-mail, web push</span><code>send(message, actions[])</code></div>
+<div class="card pg abs" id="p6" style="background:#F8D9D9"><b>Policy packs</b><span class="s">CEL rule bundles: default safety pack, regulated-industry packs, custom team rules</span><code>policy.yaml (declarative CEL rules)</code></div>
+<div class="card pg abs" id="p7" style="background:#E7DFF5"><b>Media providers</b><span class="s">fal.ai for images, Higgsfield for video, ElevenLabs for voice; any other provider can be added</span><code>image() · video() · voice() · estimate_cost()</code></div>
+<div class="card pg abs" id="p8" style="background:#D5F0EE"><b>Analytics sources</b><span class="s">attribution and store data: AppsFlyer, Adjust, Firebase, App Store Connect, Google Play</span><code>fetch_metrics(range) → MetricSnapshot[]</code></div>
+<div class="layer abs" id="core" style="background:#fff;border-width:2.2px"><div class="lt">Core · PolyForm Noncommercial</div></div>
+<div class="card abs" id="cl" style="border:none;box-shadow:none;background:transparent"><ul style="font-size:14.5px;line-height:1.7;margin-left:8px"><li>Product Profile schema</li><li>Agent runtime</li><li>Policy engine</li><li>Budget ledger</li><li>Workflow definitions</li><li>Approval queue</li><li>Audit log</li><li>Plugin registry</li></ul></div>
+<div class="card abs" id="ft" style="background:#FFF1C2"><b>Plugin contract</b><span class="s">Plugins are separate Python packages discovered through Python entry points (groups marketer.connectors, marketer.extractors, and so on). Each plugin declares the OAuth scopes it needs and a risk class for every action. A plugin cannot bypass the policy engine, because the registry exposes it to the agent only through the guarded tool surface. Core inclusion requires a sandbox-account test suite and recorded API fixtures.</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('p1',40,40,430);place('p2',40,290,430);place('p3',40,540,430);place('p7',40,790,430);
+ place('p4',1030,40,430);place('p5',1030,290,430);place('p6',1030,540,430);place('p8',1030,790,430);
+ place('core',620,40,260,940);place('cl',632,100,236,420);
+ place('ft',40,1030,1420,110);
+ const cy=R($('core')).cy;
+ const L=[['p1','connectors'],['p2','extractors'],['p3','llm'],['p7','media']],Rr=[['p4','playbooks'],['p5','notifiers'],['p6','policies'],['p8','analytics']];
+ L.forEach(([id,lab])=>edge('core',id,{from:'l',to:'r',oa:R($(id)).cy-cy-0,label:lab}));
+ Rr.forEach(([id,lab])=>edge('core',id,{from:'r',to:'l',oa:R($(id)).cy-cy-0,label:lab}));
+ document.getElementById('canvas').style.height='1170px';
+});
+</script></body></html>
