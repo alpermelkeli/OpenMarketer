@@ -32,10 +32,16 @@ Look for issues labelled `good first issue` or `help wanted`. If you have a bigg
 
 ## Development setup (current repository)
 
+You need [uv](https://docs.astral.sh/uv/), Node.js 22+ with pnpm, Docker and [gitleaks](https://github.com/gitleaks/gitleaks).
+
 ```bash
-pip install pyyaml pydantic pytest
-cd config && pytest
+cp .env.example .env     # for host-run services use localhost:5433 (Postgres), localhost:7233 (Temporal), localhost:9000 (S3)
+make install             # uv sync + pnpm install
+make up                  # PostgreSQL + pgvector, Temporal, S3-compatible storage
+make check               # lint, type-check, tests (what CI runs)
 ```
+
+`make help` lists the other targets. The Temporal UI is at http://localhost:8233 and the storage console at http://localhost:9001.
 
 To rebuild the report and diagrams you need [tectonic](https://tectonic-typesetting.github.io) and, for the diagram renderer, Google Chrome on macOS. See the README for commands. Diagram sources are plain HTML and CSS in `docs/design-report/html/`; edit the source, re-render the PNG, and commit both.
 

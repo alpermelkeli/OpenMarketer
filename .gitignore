@@ -24,3 +24,15 @@ venv/
 
 # Local launch drafts (not published)
 launch/
+
+# Python tooling
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.next/
