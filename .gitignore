@@ -21,3 +21,6 @@ venv/
 
 # macOS
 .DS_Store
+
+# Local launch drafts (not published)
+launch/

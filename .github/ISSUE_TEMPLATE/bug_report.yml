@@ -1,0 +1,32 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not include API keys, tokens or private repository content. For security problems use private vulnerability reporting instead (Security tab).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Commands, configuration (with secrets removed) and files involved.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: e.g. main at 29b8df3
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, relevant package versions.

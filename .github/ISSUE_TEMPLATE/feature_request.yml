@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an idea or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and trust considerations
+      description: Does this spend money, publish content, read untrusted text or touch credentials? How does it pass the policy gate?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

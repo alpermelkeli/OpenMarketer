@@ -1,0 +1,44 @@
+name: Plugin proposal
+description: Propose an extractor, playbook, policy pack, connector or media provider
+labels: ["plugin"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Plugin kind
+      options:
+        - Extractor (framework or repository understanding)
+        - Playbook (strategy pack)
+        - Policy pack (rules)
+        - Connector (platform)
+        - Media provider
+        - Analytics source
+        - Notifier
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target
+      description: Framework, product type, platform or provider this plugin covers.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What it detects, produces or does. For connectors and providers, list the official API endpoints and required scopes.
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk class of its actions
+      description: For each action, say whether it is low, medium or high risk and why.
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checks
+      options:
+        - label: It uses only official, documented APIs and respects platform terms.
+        - label: It does not need credentials to be exposed to a language model.

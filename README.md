@@ -1,94 +1,102 @@
 # OpenMarketer
 
-An open-source, repository-driven autonomous marketing agent (working name).
+**Give it your repository. It markets your app.**
 
-Give it the repository of any mobile app or website. It builds a verified understanding of the product, researches the market, creates content (text, images, short video, voice-over), publishes it, runs ad campaigns inside hard budget limits, measures results and learns. You stay in control through approvals, budget caps, an autonomy ladder and a kill switch.
+OpenMarketer is an open-source AI agent that reads the source repository of any mobile app or website, builds a verified understanding of the product, and runs the marketing: research, content, publishing, ad campaigns and measurement. It asks you before anything risky or expensive, and it cannot spend beyond the budget you set.
+
+![License](https://img.shields.io/github/license/alpermelkeli/OpenMarketer)
+
+> **Status: design phase.** The architecture, safety model and roadmap are designed and documented. The first code milestone is the repository analyzer. See [what exists today](#status).
+
+<p align="center">
+  <img src="docs/design-report/figures/fig_loop.png" alt="The OpenMarketer agent loop" width="640">
+</p>
+
+## Why another marketing tool?
+
+Most tools automate one slice: scheduling, ad rules or copy generation. Strategy and coordination stay with you. OpenMarketer is built around a different set of ideas:
+
+- **Generic by construction.** Point it at any repository. It extracts a structured, versioned, human-approved *Product Profile* (features, tone, languages, business model, measurement setup) with file-and-line evidence for every claim. Strategy comes from replaceable playbooks, not from a hand-written brief.
+- **Safety outside the model.** Budget caps, approval rules and content filters are deterministic code at the tool boundary, not instructions in a prompt. A transactional ledger makes it impossible to exceed a cap, even with concurrent actions.
+- **You stay in control.** Four autonomy levels, from "suggest only" to "capped autonomy", promoted only by you. A kill switch stops everything. Only an authenticated human click approves an action; a model saying "approved" never does.
+- **Hostile text cannot steer it.** Comments, DMs, web pages and README files go through a quarantined reader agent that has no tools and returns only schema-validated fields.
+- **A model per role, through OpenRouter.** Every LLM call site (writer, planner, reader, orchestrator, and so on) has its own configurable model, with fallbacks and capability checks.
+- **Talk to it.** A dashboard chat (the orchestrator) answers questions about the project and takes special requests. In proactive mode it also sends digests, approval reminders, questions and alerts.
+- **Pluggable everything.** Platforms, media providers (fal.ai, Higgsfield, ElevenLabs), framework extractors, playbooks and policy packs are plugins behind small interfaces.
 
 ## Status
 
-**Design phase.** This repository currently holds the design documentation and a small reference for the LLM model configuration. There is no application code yet.
+| Area | Status |
+|---|---|
+| Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 47 pages) |
+| Per-role LLM model configuration through OpenRouter | Reference implementation with tests (`config/`) |
+| Repository analyzer and Product Profile | **Next milestone** |
+| Content engine and approved publishing (X, Instagram) | Planned |
+| Orchestrator console and proactive mode | Designed |
+| Ad connectors (recommend-only first) | Planned |
+| Plugin SDK and playbook packs | Planned |
 
-## Repository layout
+Roadmap in one line: Product Profile from any repo, then approved publishing, then community and analytics, then ads, then ecosystem. Details are in the report.
 
-```
-.
-├── README.md
-├── .env.example                  all environment variables, with comments
-├── .gitignore
-├── config/
-│   ├── models.yaml               per-role model configuration (OpenRouter)
-│   ├── llm_config.py             reference loader and router for models.yaml
-│   └── test_llm_config.py        tests for the loader (12 tests)
-└── docs/
-    └── design-report/
-        ├── report.pdf            the design report (English, 47 pages)
-        ├── report.tex            LaTeX source
-        ├── figures/              diagrams as PNG
-        ├── html/                 diagram sources (HTML + CSS + a small JS helper)
-        └── render.py             renders html/*.html to figures/*.png
-```
+## How it works
 
-## The design report
+<p align="center">
+  <img src="docs/design-report/figures/fig_arch.png" alt="System architecture" width="520">
+</p>
 
-Read [docs/design-report/report.pdf](docs/design-report/report.pdf). It covers:
+1. **Understand.** Read-only clone, secret scan, deterministic extractors, LLM synthesis, human review.
+2. **Plan and create.** Weekly plan from a playbook; text, images, short video and voice-over through replaceable providers.
+3. **Control.** Every action passes the policy engine: banned content, budget caps, content filter, then a risk level that decides between automatic execution and human review.
+4. **Act and learn.** Publish through connectors, measure, write results to memory, repeat.
 
-- concept and requirements, system architecture, data model
-- LLM access through OpenRouter with a configurable model per role
-- repository analysis and the Product Profile
-- safety: approval levels, budget controls, autonomy ladder
-- the orchestrator console (dashboard chat) and proactive mode (digests, reminders, questions, alerts)
-- security and trust model (prompt-injection defence, reader/actor split)
-- platform and media integrations (fal.ai for images, Higgsfield for video, ElevenLabs for voice)
-- technology selection with alternatives and reasons
-- open-source strategy, deployment, evaluation
-- a commercial path: installing and operating the system for companies
-- a twelve-month roadmap, risk register and open questions
+## Try what exists today
 
-## Key ideas
-
-- **Generic by construction.** The repository is analysed into a structured, versioned, human-approved Product Profile. Strategy comes from replaceable playbooks, and platforms, media providers and frameworks are plugins.
-- **Safety outside the model.** Budget caps, approval rules and content filters are deterministic code at the tool boundary. Untrusted text goes through a quarantined reader agent that has no tools.
-- **Chat prepares, a human approves.** The orchestrator can read, prepare and propose. Only an authenticated click approves anything.
-- **A model per role.** Every LLM call site is a named role whose model can be changed through environment variables, dashboard settings or `models.yaml`.
-
-## LLM model configuration
-
-Roles, tiers, fallbacks and routing preferences live in [config/models.yaml](config/models.yaml). Resolution order, first match wins:
-
-1. environment variable `LLM_MODEL__<ROLE>`
-2. project setting (dashboard)
-3. workspace setting (dashboard)
-4. `models.yaml`: the role's model
-5. `models.yaml`: the role's tier (`LLM_MODEL_FAST`, `LLM_MODEL_BALANCED`, `LLM_MODEL_STRONG` override a tier)
-6. `models.yaml`: the default model
-
-Try it:
+The repository currently contains the design documents and the model configuration reference:
 
 ```bash
 pip install pyyaml pydantic pytest
-cp .env.example .env            # then fill in OPENROUTER_API_KEY and anything else you need
-python config/llm_config.py show
-cd config && pytest
+cp .env.example .env                 # add your OPENROUTER_API_KEY and anything else you need
+python config/llm_config.py show     # effective model for every role and where it came from
+cd config && pytest                  # 12 tests
 ```
 
-## Rebuilding the report and diagrams
+Change a model without touching code: set `LLM_MODEL__WRITER=provider/model`, change a tier with `LLM_MODEL_STRONG`, or edit [config/models.yaml](config/models.yaml). Model slugs in the file are placeholders; check the current catalogue at https://openrouter.ai/models.
+
+## Help wanted
+
+The plugin model makes small, well-defined contributions possible:
+
+- **Extractors:** teach the analyzer to understand a framework (Flutter, React Native, SwiftUI, Kotlin, Next.js, and so on).
+- **Playbooks:** declarative YAML strategies for a product type (developer tool, game, e-commerce, B2B SaaS).
+- **Policy packs:** rule bundles for regulated categories (health, finance) and advertising rules.
+- **Benchmark:** labelled open-source apps for the repository-understanding benchmark.
+- **Review:** challenge the threat model and the safety design. Break it on paper first.
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the issues labelled `good first issue`.
+
+## Read more
+
+- [Design report (PDF)](docs/design-report/report.pdf): concept, requirements, architecture, LLM configuration, orchestrator console, security, technology choices, roadmap, risks.
+- [Diagrams](docs/design-report/figures/): PNG exports; sources are in `docs/design-report/html/`.
+
+Rebuild the report and diagrams:
 
 ```bash
-# PDF (needs tectonic: https://tectonic-typesetting.github.io)
-cd docs/design-report && tectonic -X compile report.tex
-
-# Diagrams (macOS, needs Google Chrome; the path is set in render.py)
-cd docs/design-report && python3 render.py            # all diagrams
-cd docs/design-report && python3 render.py fig_arch   # one diagram
+cd docs/design-report && tectonic -X compile report.tex     # PDF (needs tectonic)
+cd docs/design-report && python3 render.py                  # diagrams (macOS, needs Google Chrome)
 ```
+
+## Responsible use
+
+OpenMarketer is designed for authentic marketing of your own product. It deliberately does not support fake accounts, fake reviews, purchased engagement, unsolicited bulk replies or messages, or scraping personal data. Official connectors use only documented platform APIs. AI-generated media should be labelled where platforms require it, and voice cloning needs documented consent.
 
 ## Things to verify before building on this
 
-- The model slugs in `config/models.yaml` are placeholders in OpenRouter's `provider/model` form. Check the current catalogue at https://openrouter.ai/models.
-- The HTTP functions in `llm_config.py` (`complete`, `fetch_catalog`) are reference code and have not been run against the live API. The resolution logic and request building are covered by tests.
-- Statements about platform APIs (Instagram, X, TikTok, LinkedIn, Google Ads) and about Higgsfield API access come from general knowledge and must be checked against current official documentation.
-- "OpenMarketer" is a working name and needs a trademark check before any public release.
+- Model slugs in `config/models.yaml` are placeholders in OpenRouter's `provider/model` form.
+- The HTTP helpers in `config/llm_config.py` are reference code, not yet run against the live API.
+- Statements about platform APIs and about Higgsfield access come from general knowledge. Check current official documentation.
+- "OpenMarketer" is a working name.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE).
