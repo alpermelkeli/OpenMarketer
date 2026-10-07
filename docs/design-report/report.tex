@@ -72,7 +72,7 @@
 \vspace*{3.2cm}
 {\Huge\bfseries OpenMarketer\par}
 \vspace{0.6cm}
-{\LARGE A Source-Available, Repository-Driven\\Autonomous Marketing Agent\par}
+{\LARGE An Open-Source, Repository-Driven\\Autonomous Marketing Agent\par}
 \vspace{0.9cm}
 {\large Architecture, Safety Model, Technology Choices and Roadmap\par}
 \vspace{2.2cm}
@@ -92,7 +92,7 @@
 \section*{Summary}
 \addcontentsline{toc}{section}{Summary}
 
-OpenMarketer is a source-available platform (free for noncommercial use; commercial use by separate licence) in which an AI agent runs marketing for a mobile app or website. The user gives it a source repository. The agent reads the repository, builds a verified \emph{Product Profile}, researches the market, plans and creates content (text, images, short video, voice-over), publishes it to social platforms, manages ad campaigns within a hard budget, measures results and learns from them. A human stays in control: the agent asks before risky or expensive actions, and a deterministic guardrail layer enforces budget caps and approval rules regardless of what the language model decides.
+OpenMarketer is an open-source platform in which an AI agent runs marketing for a mobile app or website. The user gives it a source repository. The agent reads the repository, builds a verified \emph{Product Profile}, researches the market, plans and creates content (text, images, short video, voice-over), publishes it to social platforms, manages ad campaigns within a hard budget, measures results and learns from them. A human stays in control: the agent asks before risky or expensive actions, and a deterministic guardrail layer enforces budget caps and approval rules regardless of what the language model decides.
 
 The key design choices are:
 
@@ -103,10 +103,10 @@ The key design choices are:
   \item \textbf{OpenRouter by default, a model per role.} Every place that calls a language model is a named role (writer, planner, reader, orchestrator, and so on). Each role resolves its model through OpenRouter and can be changed from the dashboard settings, from \texttt{models.yaml} or from environment variables, without code changes.
   \item \textbf{A conversational control point.} An orchestrator agent in the dashboard answers questions about the state of the project and takes special requests. In proactive mode it also speaks first: digests, approval reminders, questions and alerts. It can read, prepare and propose; only a human click approves.
   \item \textbf{Pluggable everything.} Connectors (Instagram, X, TikTok, LinkedIn, Google Ads), media providers (fal.ai for images, Higgsfield for video, ElevenLabs for voice), repository extractors, playbooks, policy packs and analytics sources are plugins behind small interfaces.
-  \item \textbf{Boring, widely known technology.} Python and FastAPI for the backend, Next.js for the dashboard, PostgreSQL with pgvector for data, Temporal for workflows, Docker Compose for self-hosting, and the PolyForm Noncommercial licence, which keeps commercial use with the owner.
+  \item \textbf{Boring, widely known technology.} Python and FastAPI for the backend, Next.js for the dashboard, PostgreSQL with pgvector for data, Temporal for workflows, Docker Compose for self-hosting, Apache-2.0 for the licence.
 \end{itemize}
 
-The report covers the concept (Section~\ref{sec:concept}), requirements, architecture, LLM access and per-role model configuration (Section~\ref{sec:llm}), the repository-to-profile pipeline, the safety model, the orchestrator console (Section~\ref{sec:console}), the security model, platform and media integrations, the data model, the technology selection with rationale, the licensing and community strategy, deployment, evaluation, a commercial path for deploying the system at companies (Section~\ref{sec:commercial}), and a twelve-month roadmap with risks.
+The report covers the concept (Section~\ref{sec:concept}), requirements, architecture, LLM access and per-role model configuration (Section~\ref{sec:llm}), the repository-to-profile pipeline, the safety model, the orchestrator console (Section~\ref{sec:console}), the security model, platform and media integrations, the data model, the technology selection with rationale, the open-source strategy, deployment, evaluation, a commercial path for deploying the system at companies (Section~\ref{sec:commercial}), and a twelve-month roadmap with risks.
 
 \clearpage
 % ---------------------------------------------------------------- 1
@@ -122,7 +122,7 @@ Large language models can now plan, write and use tools, which makes an end-to-e
   \item Given any app or website repository, produce a verified understanding of the product with minimal input.
   \item Run the full marketing loop (research, plan, create, publish, measure, learn) with adjustable autonomy.
   \item Keep the owner in control through approvals, budget caps and a kill switch.
-  \item Be source-available, self-hostable and extensible through plugins, with commercial use reserved to the owner unless a commercial licence is granted.
+  \item Be open source, self-hostable, and extensible by third parties through plugins.
   \item Be provider-agnostic for LLMs, media generation and ad platforms, with the model of every LLM call site configurable.
   \item Offer a conversational interface (orchestrator agent) for status questions and special requests, without weakening the safety model.
 \end{enumerate}
@@ -193,7 +193,7 @@ Reliability & Workflows survive restarts and wait days for approvals. Publishing
 Auditability & Every action records who or what decided, why, with which inputs and which profile version. The log is append-only and hash-chained.\\
 Portability & One-command self-hosting. No mandatory cloud service. LLM, media and storage providers are swappable.\\
 Extensibility & New platforms, frameworks, playbooks and policies can be added without modifying the core.\\
-Transparency & Public source under a clear licence, public roadmap, documented threat model and acceptable-use policy.\\
+Transparency & Open licence, public roadmap, documented threat model and acceptable-use policy.\\
 \bottomrule
 \end{longtable}
 
@@ -228,7 +228,7 @@ D4 & Structured, versioned Product Profile & Every action can cite the profile v
 D5 & Reader/actor separation for untrusted text & Limits prompt-injection damage by design (Section~\ref{sec:security}).\\
 D6 & Plugins for platforms, media, extractors, playbooks, policies & Platform APIs change often and communities know their niches. Isolating them keeps the core stable.\\
 D7 & Platform-side spend limits as a second guard & Even if the ledger failed, caps configured in the ad account bound the worst case. The agent never holds payment methods.\\
-D8 & Bring-your-own platform apps for self-hosters & Each installation registers its own developer apps. This avoids a central app-review bottleneck for the project.\\
+D8 & Bring-your-own platform apps for self-hosters & Each installation registers its own developer apps. This avoids a central app-review bottleneck for the open-source project.\\
 D9 & OpenRouter as default LLM gateway, one model per role & One key reaches many models; any role can be moved to another model by changing a string. Cheap models for classification, strong models for planning, and no code change when better models appear.\\
 D10 & Chat can prepare, never approve & The orchestrator is a convenient interface, not a bypass. It creates records; approvals are authenticated button presses handled by the policy engine.\\
 \bottomrule
@@ -597,7 +597,7 @@ Content creation uses a \texttt{MediaProvider} interface so that providers can b
 Each generated asset is stored with its provider, model, parameters, prompt, cost and storage reference (the \texttt{media\_asset} table). Estimated cost is checked against the creative budget before generation. Platform rules on labelling AI-generated content are respected: the publisher adds the platform's AI label where one exists, and exposes the provenance record in the dashboard.
 
 \subsection{Acceptable use and abuse prevention}\label{sec:abuse}
-A publicly available marketing agent can be misused. The project therefore ships with an acceptable-use policy and enforces parts of it in code:
+An open-source marketing agent can be misused. The project therefore ships with an acceptable-use policy and enforces parts of it in code:
 \begin{itemize}
   \item No support for multiple fake accounts, coordinated inauthentic behaviour, fake reviews or purchased engagement.
   \item No unsolicited bulk replies or direct messages. Replies are limited to the project's own accounts and audience.
@@ -634,7 +634,7 @@ Notable choices:
 Figure~\ref{fig:stack} (end of this section) shows the stack by concern. Each box is a default; where a concern is provider-specific it can be replaced through the plugin interfaces.
 
 \subsection{Choices, alternatives and reasons}
-The goal is the most defensible choice for a source-available project that many people must be able to read, run and extend: mainstream tools, permissively licensed dependencies, few moving parts.
+The goal is the most defensible choice for an open-source project that many people must be able to read, run and extend: mainstream tools, permissive licences, few moving parts.
 
 {\small\begin{longtable}{@{}>{\raggedright\arraybackslash}p{2.3cm}>{\raggedright\arraybackslash}p{3.5cm}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{6.3cm}@{}}
 \toprule
@@ -663,7 +663,7 @@ Notifications & Apprise & Custom bots & One library for dozens of channels.\\
 Observability & OpenTelemetry + Langfuse & Bespoke logging & Standard traces; Langfuse for LLM traces and evals, optional.\\
 Packaging & uv, ruff, pyright; Docker Compose; Helm later & Poetry, mypy & Fast tooling; one-command self-hosting.\\
 Testing & pytest, recorded API fixtures, Playwright E2E, eval suite & Manual & Connectors need replayable fixtures; LLM behaviour needs scored evaluations.\\
-Licence & PolyForm Noncommercial 1.0.0 & Apache-2.0, MIT, AGPL-3.0, PolyForm Shield, Business Source License & Free for noncommercial use; commercial use needs the owner's permission, which keeps the commercial path (Section~\ref{sec:commercial}) with the owner. Trade-off: not OSI open source, so slower community and plugin growth than a permissive licence.\\
+Licence & Apache-2.0 & MIT, AGPL-3.0 & Permissive with a patent grant; best for plugin ecosystems and adoption. AGPL would deter commercial hosting but also contributors.\\
 \bottomrule
 \end{longtable}}
 
@@ -678,12 +678,10 @@ Licence & PolyForm Noncommercial 1.0.0 & Apache-2.0, MIT, AGPL-3.0, PolyForm Shi
 \figland{fig_stack}{Technology stack by concern. Each box is a default, replaceable through the plugin interfaces where the concern is provider-specific.}{fig:stack}
 
 % ---------------------------------------------------------------- 11
-\section{Licensing and Community Strategy}\label{sec:oss}
+\section{Open-Source Strategy}\label{sec:oss}
 
 \subsection{Licence and governance}
-The project is source-available under the PolyForm Noncommercial License 1.0.0. Anyone may read, run, modify and share the code for noncommercial purposes: personal study and research, hobby projects, and charitable, educational, public-research and government organisations. Commercial use, including building a commercial product or service from the code or using it in a business, needs a separate written licence from the copyright holder. The licence expressly leaves the owner free to grant commercial licences to anyone, which is what makes the service model in Section~\ref{sec:commercial} possible.
-
-This is \emph{not} an OSI-approved open-source licence, and the project should not be described as open source. Contributions require a contributor licence agreement (CLA) that allows the owner to include them in commercially licensed distributions; without it, outside contributions would block commercial licensing. The repository includes a code of conduct, a security policy with a private reporting channel, an acceptable-use policy and a documented threat model. Decisions are recorded as short architecture decision records in the repository. If the project grows, the licence and the ownership of the name can be revisited, for example by moving to a source-available licence with a delayed open-source conversion.
+The core is licensed under Apache-2.0. Contributions use a developer certificate of origin sign-off. The repository includes a code of conduct, a security policy with a private reporting channel, an acceptable-use policy and a documented threat model. Decisions are recorded as short architecture decision records in the repository. If the project grows, a neutral foundation or a steering group can take over naming and trademark.
 
 \subsection{Extension model}
 \figland{fig_plugin}{Plugin model. The core exposes small interfaces; plugins are separate Python packages discovered through entry points, and the policy engine wraps every plugin tool.}{fig:plugin}
@@ -733,7 +731,6 @@ openmarketer/
 \subsection{Community growth}
 \begin{itemize}
   \item A ``good first plugin'' track: playbooks and extractors are declarative or small, and a good entry point for contributors.
-  \item A contributor licence agreement signed through a bot on the first pull request, so that contributing stays simple.
   \item A public golden-repository benchmark so that extractor and profile quality can be compared across contributions.
   \item Example projects and a demo mode that runs entirely on recorded fixtures without any API keys.
   \item Bring-your-own platform apps: self-hosters register their own developer applications, so the project does not depend on a single central app review.
@@ -781,7 +778,7 @@ This section records a possible way to earn from the project: installing and ope
 \begin{itemize}
   \item \textbf{Single-tenant installs are natural.} Docker Compose or Helm on the client's own infrastructure keeps data, credentials and logs inside the client's boundary, which removes most multi-tenant risk for the first customers.
   \item \textbf{The client owns the accounts.} Social and ad accounts, ad payment methods, developer apps (bring-your-own), the OpenRouter key and the media-provider keys belong to the client. The installer works with scoped access.
-  \item \textbf{Source-available helps trust.} Clients can inspect the code and the safety model. The licence reserves commercial use to the owner, so every company installation needs a commercial licence from the owner, which can be bundled into the engagement.
+  \item \textbf{Open source helps sales.} Clients can inspect the code and the safety model, and are not locked in. The permissive licence allows commercial services and proprietary add-ons.
   \item \textbf{The safety model is the selling point.} Approval levels, budget caps, audit log and kill switch answer the question every company asks: ``what stops it from doing something stupid?''
   \item \textbf{The orchestrator console} gives non-technical staff a plain-language way to use the system.
 \end{itemize}
@@ -798,9 +795,6 @@ Managed operation & Ongoing tuning of playbooks, policies and models; weekly rev
 Custom development & Connectors, extractors, playbooks or integrations that the client needs (CRM, analytics, private models) & Plugins with tests, optionally contributed upstream\\
 \bottomrule
 \end{longtable}
-
-\subsection{Licensing for clients}
-The PolyForm Noncommercial licence does not allow a company to use the software for its business. Each client therefore receives a written commercial licence from the owner. Typical terms to define: the licensed organisation, number of projects or environments, term, support level, whether the client may modify the code, and a ban on reselling or white-labelling unless agreed. Third-party consultants cannot install or operate the system for clients without their own commercial licence. A short, written evaluation licence covers paid pilots, because business evaluation is not a noncommercial purpose. The owner can offer the same code under different terms to different parties, because the licence does not restrict the licensor.
 
 \subsection{Commercial structure}
 Typical components are a one-time setup fee, a recurring fee for managed operation, and paid custom development. Usage costs (LLM calls, media generation, ad spend) are billed directly to the client's own accounts rather than resold, which keeps margins honest, avoids reselling restrictions on advertising platforms and makes costs transparent. Using the client's own OpenRouter key and the per-role model settings also lets the client choose the quality and cost level.
@@ -826,7 +820,7 @@ A typical engagement starts with one to two weeks of assessment and installation
   \item Upstream drift: keep customisations in plugins and policy packs so upgrades stay easy.
   \item Dependence on third-party API access and pricing changes (platforms, OpenRouter, media providers).
 \end{itemize}
-Later options include a hosted multi-tenant service, closed add-ons alongside the source-available core, and a marketplace of playbooks and policy packs. Legal and tax questions of selling services internationally need professional advice.
+Later options include a hosted multi-tenant service, proprietary add-ons around an open core, and a marketplace of playbooks and policy packs. Legal and tax questions of selling services internationally need professional advice.
 
 % ---------------------------------------------------------------- 14
 \section{Roadmap and Risks}
@@ -846,9 +840,8 @@ Platform API access denied or changed & High & Likely: review programmes and ter
 Profile misunderstanding & High & Medium: unusual repositories & Evidence links, confidence scores, mandatory human review, golden-set benchmarking\\
 Low content quality (``AI slop'') & Medium & Likely without enough product detail & Deep profile, real product assets, templates for brand-critical visuals, approval-rate feedback\\
 Higgsfield integration not available as assumed & Medium & Unknown: API access to be confirmed & Confirm early; adapter boundary; alternative video models through fal.ai\\
-Misuse of the publicly available tool & Medium & Possible & Acceptable-use policy, default rate limits, no unsupported automation in official connectors\\
+Misuse of the open-source tool & Medium & Possible & Acceptable-use policy, default rate limits, no unsupported automation in official connectors\\
 Spend or reputation incident & High & Low with controls & Layered budget controls, approvals, kill switch, audit log\\
-Slower community and plugin growth & Medium & Likely: noncommercial licences deter companies and some contributors & Public roadmap, a clear commercial-licence path, a CLA, an easy plugin SDK for noncommercial users\\
 Maintenance burden of connectors & Medium & Certain over time & Plugin model, community ownership, deprecation policy\\
 LLM cost and latency & Medium & Medium & Model tiers per role, caching of profile context, batch jobs on schedules, per-call and monthly caps\\
 Gateway dependency or model retirement & Medium & Medium: third-party service and fast-moving model catalogue & Fallback lists, capability checks, configurable base URL for direct or local endpoints, tier indirection\\
@@ -863,14 +856,13 @@ Legal and compliance & High & Varies by market & Policy packs, disclosure labels
 
 \begin{enumerate}
   \item \textbf{Scope of the first release.} Which two platforms first? A consumer mobile app probably benefits most from Instagram and TikTok organic content; a developer tool from X.
-  \item \textbf{Hosted offering.} Self-hosted installations only, or also a hosted service? Hosting changes the platform-review burden and compliance duties; under the current licence it is reserved to the owner.
+  \item \textbf{Hosted offering.} Open-source only, or also a hosted service? Hosting changes the platform-review burden, compliance duties and the licence discussion.
   \item \textbf{Higgsfield access.} Confirm API availability, terms and rate limits; decide on the video fallback.
   \item \textbf{Default models.} Which models fill the three tiers, and the cost target per project per month. Verify the OpenRouter slugs and capabilities first.
   \item \textbf{Orchestrator scope.} Dashboard chat only at first, or also two-way Telegram and Slack bots? Which actions count as safe-direction? Which proactive messages should be on by default?
   \item \textbf{Commercial model.} Pure services, or services plus a hosted offering later? Which first client profile to target?
   \item \textbf{Attribution.} Which attribution source to support first (Firebase, AppsFlyer, Adjust, or store data only).
   \item \textbf{Name and trademark.} Replace the working name before a public release.
-  \item \textbf{Licence details.} Confirm PolyForm Noncommercial against alternatives such as PolyForm Shield or the Business Source License, set up the CLA process and write the commercial licence template.
   \item \textbf{Golden repository set.} Which open-source apps will be used as the first benchmark.
 \end{enumerate}
 

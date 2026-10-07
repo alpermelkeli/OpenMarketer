@@ -1,6 +1,6 @@
 # OpenMarketer
 
-A source-available, repository-driven autonomous marketing agent (working name). Free for noncommercial use; commercial use needs the owner's permission.
+An open-source, repository-driven autonomous marketing agent (working name).
 
 Give it the repository of any mobile app or website. It builds a verified understanding of the product, researches the market, creates content (text, images, short video, voice-over), publishes it, runs ad campaigns inside hard budget limits, measures results and learns. You stay in control through approvals, budget caps, an autonomy ladder and a kill switch.
 
@@ -40,7 +40,7 @@ Read [docs/design-report/report.pdf](docs/design-report/report.pdf). It covers:
 - security and trust model (prompt-injection defence, reader/actor split)
 - platform and media integrations (fal.ai for images, Higgsfield for video, ElevenLabs for voice)
 - technology selection with alternatives and reasons
-- licensing and community strategy, deployment, evaluation
+- open-source strategy, deployment, evaluation
 - a commercial path: installing and operating the system for companies
 - a twelve-month roadmap, risk register and open questions
 
@@ -91,16 +91,4 @@ cd docs/design-report && python3 render.py fig_arch   # one diagram
 
 ## License
 
-Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). In short:
-
-- You may read, run, modify and share the code for **noncommercial** purposes: personal study and research, hobby projects, and use by charitable, educational, public-research, public-safety or government organisations.
-- You may **not** use it commercially without the owner's written permission. That includes building a commercial product or service from it, offering it as a service, and using it in a business.
-- This is a source-available licence, **not** an OSI-approved open-source licence.
-
-### Commercial use
-
-To use OpenMarketer commercially (for example, installing it for a company, offering it as a service or including it in a product), you need a separate commercial licence from the owner. Open an issue in this repository or contact the repository owner on GitHub.
-
-### Contributions
-
-Contributions will require a contributor licence agreement (CLA) so that they can be included in commercially licensed distributions. The CLA process is not set up yet; please open an issue before sending a pull request.
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
