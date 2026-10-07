@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"></head><body>
+<div id="canvas" style="width:1136px;height:960px">
+<div class="layer cp abs" id="LT"><div class="lt">Temporal workflows <small>durable outer layer</small></div></div>
+<div class="card abs" id="t1"><b>Schedules and timers</b><span class="s">content calendar, metric pulls, digests</span></div>
+<div class="card abs" id="t2"><b>Approval waits</b><span class="s">hours or days, resumed by a signal</span></div>
+<div class="card abs" id="t3"><b>Retries and idempotency</b><span class="s">safe re-execution of side effects</span></div>
+<div class="card abs" id="t4"><b>Cross-task coordination</b><span class="s">fan-out, limits, backfills</span></div>
+
+<div class="layer orch abs" id="LG"><div class="lt">Agent graphs <small>LangGraph, run inside Temporal activities</small></div></div>
+<div class="card abs" id="g1"><b>Orchestrator</b><span class="s">dashboard chat, read and request tools</span></div>
+<div class="card abs" id="g2" style="background:#FFF1C2"><b>Creative studio</b><span class="s">brief, produce, verify, edit loop</span></div>
+<div class="card abs" id="g3"><b>Repo analyzer</b><span class="s">extract, synthesise, fill gaps</span></div>
+<div class="card abs" id="g4"><b>Planner and researcher</b><span class="s">research, weekly plan, ad plan</span></div>
+<div class="card abs" id="g5"><b>Reader pipeline</b><span class="s">quarantined, no tools, schema output</span></div>
+
+<div class="layer guard abs" id="LS"><div class="lt">Shared by every graph node <small>nothing bypasses these</small></div></div>
+<div class="card abs" id="s1"><b>Model router</b><span class="s">role to model through OpenRouter</span></div>
+<div class="card abs" id="s2"><b>Policy-gated tools</b><span class="s">connectors, media, sandbox; every call checked</span></div>
+<div class="card abs" id="s3"><b>Checkpoints</b><span class="s">graph state in PostgreSQL</span></div>
+<div class="card abs" id="s4"><b>Tracing</b><span class="s">Langfuse and OpenTelemetry</span></div>
+
+<div class="card abs" id="nt" style="background:#fff"><b>Boundaries we keep</b><ul><li>Graphs are thin wiring; domain logic lives in plain Python modules.</li><li>Nodes call our model router, never a provider directly.</li><li>Graph nodes cannot reach connectors except through policy-gated tools.</li><li>Long waits stay in Temporal; graphs only pause for short chat interrupts.</li><li>Versions are pinned behind a small adapter so graphs can be replaced.</li></ul></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('LT',28,28,1080,190);
+ [['t1',46],['t2',312],['t3',578],['t4',844]].forEach(([id,x])=>place(id,x,80,246,120));
+ place('LG',28,276,1080,206);
+ [['g1',46],['g2',254],['g3',462],['g4',670],['g5',878]].forEach(([id,x])=>place(id,x,328,196,140));
+ place('LS',28,540,1080,190);
+ [['s1',46],['s2',312],['s3',578],['s4',844]].forEach(([id,x])=>place(id,x,592,246,120));
+ place('nt',28,790,1080,160);
+ edge('LT','LG',{from:'b',to:'t',label:'runs a graph as an activity'});
+ edge('LG','LS',{from:'b',to:'t',label:'every model and tool call'});
+ document.getElementById('canvas').style.height='980px';
+});
+</script></body></html>

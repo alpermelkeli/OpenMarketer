@@ -1,0 +1,42 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>.dw{position:absolute;z-index:10;background:#1b1b1b;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}.dw>div{position:absolute;inset:2px;background:#FFF1C2;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);display:flex;align-items:center;justify-content:center;text-align:center;font-weight:700;font-size:17px;color:#000}.tn{font-weight:700}</style></head><body>
+<div id="canvas" style="width:1136px;height:1330px">
+<div class="card abs" id="br" style="background:#DCEBFA"><b>1 · Brief <span class="chip">creative_director</span></b><span class="s">structured brief: goal, platform sizes, exact copy, brand kit constraints (palette, fonts, logo, do-not-mention) and a technique plan per asset</span></div>
+
+<div class="layer orch abs" id="LP"><div class="lt">2 · Produce <small>the studio agent picks a technique per asset</small></div></div>
+<div class="card abs" id="ta"><b>A · Code composition</b><span class="s">Python in a sandbox, or HTML rendered to PNG. Exact text, layouts, logos, device frames, charts.</span></div>
+<div class="card abs" id="tb"><b>B · Generated background + code overlay</b><span class="s">Model makes the background or scene; code adds the text, logo and layout on top.</span></div>
+<div class="card abs" id="tc"><b>C · Direct generation and editing</b><span class="s">Full image from a model, then inpaint, outpaint, remove background, upscale.</span></div>
+<div class="card abs" id="tl" style="background:#DDF1DD"><b>Studio tools</b><span class="s">called from Produce</span><ul><li>run_python (sandbox, no network)</li><li>render_html</li><li>generate_image</li><li>edit_image, remove_background, upscale</li><li>brand_kit, view_image</li><li>ocr, measure_contrast</li></ul></div>
+
+<div class="layer guard abs" id="LV"><div class="lt">3 · Verify <small>separate model from the producer</small></div></div>
+<div class="card abs" id="v1"><b>Programmatic checks</b><ul><li>size and aspect ratio per platform</li><li>safe zones and text overflow</li><li>contrast ratio, palette distance</li><li>OCR text equals the intended copy</li><li>logo present, file size</li></ul></div>
+<div class="card abs" id="v2"><b>Visual verifier <span class="chip">asset_verifier</span></b><span class="s">looks at the image like a reviewer: legibility at thumbnail size, brand fit, malformed text or hands, misleading or risky content. Returns a structured report with severity and concrete edit suggestions.</span></div>
+
+<div class="dw" id="dc"><div>Pass?</div></div>
+<div class="card abs" id="fin" style="background:#DDF1DD"><b>5 · Finalize</b><span class="s">save the asset version with code, prompts, parameters, verifier report and cost; submit it as a proposal to the policy gate</span></div>
+<div class="card abs" id="ed" style="background:#FFF1C2"><b>4 · Edit plan <span class="chip">returns to Produce</span></b><span class="s">tweak code parameters, regenerate the background, inpaint a region, recompose, upscale, or switch technique after a repeated failure</span></div>
+<div class="card abs" id="es" style="background:#F8D9D9"><b>Escalate to a human</b><span class="s">iteration, cost or time limit reached: show the best candidate with the verifier report and the options</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('br',28,28,1080,100);
+ place('LP',28,206,770,300);
+ place('ta',46,258,232,230);place('tb',288,258,232,230);place('tc',530,258,252,230);
+ place('tl',846,206,262,300);
+ place('LV',28,574,1080,260);
+ place('v1',46,626,510,190);place('v2',580,626,510,190);
+ const dc=$('dc');dc.style.left='160px';dc.style.top='900px';dc.style.width='300px';dc.style.height='140px';
+ place('fin',620,910,470,120);
+ place('ed',28,1110,520,150);place('es',590,1110,500,150);
+ edge('br','LP',{from:'b',to:'t',oa:-250,ob:-250,label:'brief'});
+ edge('LP','tl',{from:'r',to:'l',bi:true});
+ edge('LP','LV',{from:'b',to:'t',oa:-250,ob:-250,label:'candidate asset'});
+ edge('LV','dc',{from:'b',to:'t',oa:-420,ob:0,my:870,label:'report'});
+ edge('dc','fin',{from:'r',to:'l',label:'pass'});
+ edge('dc','ed',{from:'b',to:'t',oa:0,ob:0,label:'fixable'});
+ edge('ed','es',{from:'r',to:'l',dash:true});
+ edge('ed','LP',{from:'l',to:'l',mx:14,dash:true});
+ document.getElementById('canvas').style.height='1310px';
+});
+</script></body></html>

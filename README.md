@@ -22,16 +22,19 @@ Most tools automate one slice: scheduling, ad rules or copy generation. Strategy
 - **Hostile text cannot steer it.** Comments, DMs, web pages and README files go through a quarantined reader agent that has no tools and returns only schema-validated fields.
 - **A model per role, through OpenRouter.** Every LLM call site (writer, planner, reader, orchestrator, and so on) has its own configurable model, with fallbacks and capability checks.
 - **Talk to it.** A dashboard chat (the orchestrator) answers questions about the project and takes special requests. In proactive mode it also sends digests, approval reminders, questions and alerts.
+- **An agentic creative studio.** Asset production works like a coding agent for graphics: it writes code to compose exact text, logos and layouts, generates backgrounds or whole images with models, then verifies the result (OCR, contrast, size checks and a separate vision model) and edits until it passes or hands over to a human, within iteration and cost limits.
+- **Agent graphs with durable workflows.** Agent behaviour is written as LangGraph graphs that run inside Temporal activities: Temporal owns time and reliability, LangGraph owns the reasoning flow of a task.
 - **Pluggable everything.** Platforms, media providers (fal.ai, Higgsfield, ElevenLabs), framework extractors, playbooks and policy packs are plugins behind small interfaces.
 
 ## Status
 
 | Area | Status |
 |---|---|
-| Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 47 pages) |
+| Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 53 pages) |
 | Per-role LLM model configuration through OpenRouter | Reference implementation with tests (`config/`) |
 | Repository analyzer and Product Profile | **Next milestone** |
 | Content engine and approved publishing (X, Instagram) | Planned |
+| Creative studio (compose with code, generate, verify, edit) | Designed |
 | Orchestrator console and proactive mode | Designed |
 | Ad connectors (recommend-only first) | Planned |
 | Plugin SDK and playbook packs | Planned |

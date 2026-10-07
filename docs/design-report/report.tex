@@ -101,6 +101,7 @@ The key design choices are:
   \item \textbf{Safety outside the model.} Budget limits, approval rules and content filters are enforced by deterministic code at the tool boundary. Untrusted text (comments, web pages, README files) is processed by a quarantined reader agent and can inform decisions but never authorise actions.
   \item \textbf{Durable, human-in-the-loop workflows.} Approvals can take days. Temporal workflows make waiting, retrying and resuming reliable.
   \item \textbf{OpenRouter by default, a model per role.} Every place that calls a language model is a named role (writer, planner, reader, orchestrator, and so on). Each role resolves its model through OpenRouter and can be changed from the dashboard settings, from \texttt{models.yaml} or from environment variables, without code changes.
+  \item \textbf{Agent graphs and an agentic creative studio.} Agent workflows are written as graphs with LangGraph, running inside Temporal for durability. Asset production works like a coding agent: it writes code to compose text and layouts, generates backgrounds or whole images, then verifies the result with programmatic checks and a separate vision model, and edits until it passes or escalates to a human.
   \item \textbf{A conversational control point.} An orchestrator agent in the dashboard answers questions about the state of the project and takes special requests. In proactive mode it also speaks first: digests, approval reminders, questions and alerts. It can read, prepare and propose; only a human click approves.
   \item \textbf{Pluggable everything.} Connectors (Instagram, X, TikTok, LinkedIn, Google Ads), media providers (fal.ai for images, Higgsfield for video, ElevenLabs for voice), repository extractors, playbooks, policy packs and analytics sources are plugins behind small interfaces.
   \item \textbf{Boring, widely known technology.} Python and FastAPI for the backend, Next.js for the dashboard, PostgreSQL with pgvector for data, Temporal for workflows, Docker Compose for self-hosting, Apache-2.0 for the licence.
@@ -178,6 +179,7 @@ F12 & Provide a kill switch that halts all outgoing actions immediately.\\
 F13 & Let the operator talk to an orchestrator agent in the dashboard: ask about status, plans, results and past decisions, and submit one-off requests and standing instructions.\\
 F14 & Resolve the model for every LLM call site through OpenRouter, with per-role configuration in files, environment variables and dashboard settings, fallbacks, capability checks and cost limits.\\
 F15 & Notify the operator proactively: periodic digests, reminders for pending approvals, blocking questions from the agent and alerts from a watchdog, with deduplication, quiet hours, daily caps and escalation.\\
+F16 & Produce images, video and voice through an agentic creative studio: compose with code, generate backgrounds or full images, verify every candidate against the brief, and edit in a bounded loop, with iteration and cost limits.\\
 \bottomrule
 \end{longtable}
 
@@ -208,7 +210,7 @@ Figure~\ref{fig:arch} shows the system as seven layers. Requests flow downward; 
 \begin{description}
   \item[User layer.] A Next.js dashboard (approval queue, budgets, reports, profile review), a CLI for setup and dry runs, and chat notifications (Telegram, Slack, e-mail through Apprise) that carry signed one-time links to the approval page.
   \item[Control plane.] A FastAPI service exposing a typed REST API with OIDC authentication and role-based access per workspace, and the orchestrator agent behind the dashboard chat (Section~\ref{sec:console}).
-  \item[Orchestration.] Temporal workflows run scheduled and long-lived processes. The agent runtime is a tool-use loop executed inside workflow activities. The repo analyzer is a separate workflow.
+  \item[Orchestration.] Temporal workflows run scheduled and long-lived processes. Agent behaviour is written as LangGraph graphs (orchestrator, creative studio, repo analyzer, planner, reader pipeline) that run inside workflow activities (Section~\ref{sec:graphs}).
   \item[Guardrail layer.] A policy engine (YAML rules evaluated with CEL), a budget ledger (transactional reserve/commit/release) and a content filter (secrets, unreleased features, banned claims). It is ordinary code, not a prompt.
   \item[Connector layer.] One plugin per platform behind a common interface.
   \item[Data layer.] PostgreSQL (with pgvector), S3-compatible object storage and a secret store.
@@ -223,7 +225,7 @@ Figure~\ref{fig:arch} shows the system as seven layers. Requests flow downward; 
 \endhead
 D1 & Guardrails are code, not prompts & Language models can be talked out of instructions. A deterministic gate in front of every side-effecting tool gives guarantees that can be tested and audited.\\
 D2 & Durable workflows for everything long-lived & Approvals, scheduled posts and metric pulls span hours to days. Durable execution removes custom retry and state-recovery code.\\
-D3 & Thin in-house agent loop & The loop is small. Owning it keeps the policy gate, tracing and replay under our control and avoids framework churn.\\
+D3 & LangGraph for agent graphs, Temporal as the durable outer layer & Production, planning and chat are graphs with loops and branches; LangGraph provides typed state, conditional edges, checkpoints, interrupts and streaming that would otherwise be rebuilt. Graphs stay thin and call only our model router and policy-gated tools, so the framework can be replaced (Section~\ref{sec:graphs}).\\
 D4 & Structured, versioned Product Profile & Every action can cite the profile version it relied on. Profiles can be diffed, reviewed and corrected.\\
 D5 & Reader/actor separation for untrusted text & Limits prompt-injection damage by design (Section~\ref{sec:security}).\\
 D6 & Plugins for platforms, media, extractors, playbooks, policies & Platform APIs change often and communities know their niches. Isolating them keeps the core stable.\\
@@ -231,8 +233,39 @@ D7 & Platform-side spend limits as a second guard & Even if the ledger failed, c
 D8 & Bring-your-own platform apps for self-hosters & Each installation registers its own developer apps. This avoids a central app-review bottleneck for the open-source project.\\
 D9 & OpenRouter as default LLM gateway, one model per role & One key reaches many models; any role can be moved to another model by changing a string. Cheap models for classification, strong models for planning, and no code change when better models appear.\\
 D10 & Chat can prepare, never approve & The orchestrator is a convenient interface, not a bypass. It creates records; approvals are authenticated button presses handled by the policy engine.\\
+D11 & Produce, verify, edit with a separate verifier & A model that grades its own work tends to pass it. Verification combines programmatic checks with a different vision model, and edits are bounded by iteration, time and cost limits (Section~\ref{sec:studio}).\\
+D12 & Agent-written code runs only in a network-less sandbox & Code composition is powerful and risky. The sandbox has no network, no secrets and strict resource limits; generation APIs are called by the worker, not by agent code.\\
 \bottomrule
 \end{longtable}
+
+\subsection{Agent graphs and durable workflows}\label{sec:graphs}
+The first design used a small in-house agent loop. Two things changed that decision: production work (brief, produce, verify, edit) and chat both have loops, branches and shared state, and LangGraph, an MIT-licensed library for stateful graph-based agents, provides these directly: typed state, conditional edges, subgraphs, checkpointing (including PostgreSQL), interrupts for human input and streaming. LangGraph does not replace Temporal; each solves a different problem (Figure~\ref{fig:graphs}).
+
+\fig{fig_agentgraphs}{Agent graphs inside Temporal. Temporal owns time and reliability; LangGraph owns the reasoning flow of one task; every model and tool call goes through shared, gated services.}{fig:graphs}
+
+\begin{longtable}{@{}p{3.2cm}p{5.9cm}p{6.2cm}@{}}
+\toprule
+\textbf{Concern} & \textbf{Temporal} & \textbf{LangGraph}\\
+\midrule
+\endhead
+Time & Schedules, timers, waits of hours or days & Not used for long waits\\
+Reliability & Retries, idempotent side effects, recovery after crashes & Checkpoints within a task so a graph can resume after a failure\\
+Human involvement & Approval waits resumed by a signal & Short interrupts inside a chat turn\\
+Reasoning flow & Not used & Nodes, conditional edges, loops, subgraphs, tool-calling agents\\
+Scope & Across tasks and projects & Inside one task\\
+\bottomrule
+\end{longtable}
+
+\textbf{How they fit.} A Temporal activity starts a graph with an input and a thread identifier, streams its events and returns a structured result. A workflow that needs a human decision ends the activity and waits for a Temporal signal instead of keeping a graph paused for days.
+
+\textbf{Boundaries we keep.}
+\begin{enumerate}
+  \item Graphs are thin wiring; domain logic lives in plain Python modules that can be tested without the framework.
+  \item Nodes call our model router (Section~\ref{sec:llm}) directly. LangChain model wrappers are optional, so the role-to-model configuration stays the single source of truth.
+  \item Graph nodes cannot reach connectors, media providers or the sandbox except through policy-gated tools. The gate is part of the tool wrapper, not a node a graph could skip.
+  \item Checkpoints are stored in PostgreSQL with the project identifier, under the same row-level security as other data.
+  \item The library version is pinned behind a small adapter, so graphs can be rewritten or replaced if the framework changes direction.
+\end{enumerate}
 
 % ---------------------------------------------------------------- LLM
 \section{LLM Access and Model Configuration}\label{sec:llm}
@@ -258,6 +291,8 @@ OpenRouter is the default gateway. It offers one API and one key for models from
 \texttt{writer} & Posts, captions, threads, ad copy & none & balanced\\
 \texttt{reply\_drafter} & Replies to the project's own audience & none & balanced\\
 \texttt{creative\_director} & Prompts and scripts for image, video and voice providers & structured output & balanced\\
+\texttt{studio} & Creative studio agent: writes code, calls image, video and voice tools, looks at results and edits & tools, image input & strong\\
+\texttt{asset\_verifier} & Checks every produced asset against the brief; a different model from \texttt{studio} & structured output, image input & balanced\\
 \texttt{critic} & Pre-approval check against brand voice and facts & structured output & balanced\\
 \texttt{analyst} & Metrics interpretation, weekly report, proactive digests & structured output & balanced\\
 \texttt{vision} & Understanding screenshots and creative assets & image input & balanced\\
@@ -530,7 +565,7 @@ WATCHDOG_AUTO_BRAKE=true
 \end{enumerate}
 
 \subsection{Implementation notes}
-The chat uses streaming responses from the API. A thread belongs to a project; a workspace-level thread gives an overview across projects. The orchestrator runs the same tool-use loop as the other agents, with the \texttt{orchestrator} role of Section~\ref{sec:llm}. Short interactions run inside the API process; long-running work is delegated to Temporal workflows, whose progress events are pushed back into the thread. Context is assembled on demand from the Product Profile, the current plan, the approval queue, recent metrics, project memory and the audit log, with older conversation turns summarised to stay within the model's context window.
+The chat uses streaming responses from the API. A thread belongs to a project; a workspace-level thread gives an overview across projects. The orchestrator is an agent graph like the others (Section~\ref{sec:graphs}), with the \texttt{orchestrator} role of Section~\ref{sec:llm}. Short interactions run inside the API process; long-running work is delegated to Temporal workflows, whose progress events are pushed back into the thread. Context is assembled on demand from the Product Profile, the current plan, the approval queue, recent metrics, project memory and the audit log, with older conversation turns summarised to stay within the model's context window.
 
 A later phase can expose the same orchestrator through Telegram or Slack bots. Approval in those channels would still use signed, expiring links that open the dashboard, so that a chat message alone can never approve anything.
 
@@ -588,9 +623,10 @@ App stores & Release metadata, store listing data, Apple Search Ads API, Google 
 Content creation uses a \texttt{MediaProvider} interface so that providers can be swapped, mixed and compared:
 
 \begin{description}
-  \item[Images: fal.ai.] A hosted inference platform with an API that exposes many image models, asynchronous jobs and webhooks. It is the default image provider. Brand-critical visuals (logos, screenshots, store graphics) are not generated: they are composed from real assets with HTML templates rendered by Playwright, which keeps them consistent and exact.
+  \item[Images: fal.ai.] A hosted inference platform with an API that exposes many image models, asynchronous jobs and webhooks. It is the default image provider, used for backgrounds, scenes, direct generation and image edits. Brand-critical elements (logos, screenshots, exact text) are not left to a generative model: the creative studio (Section~\ref{sec:studio}) composes them with code from real assets, which keeps them consistent and exact.
   \item[Video: Higgsfield.] Used for short-form video and motion content. Whether and how Higgsfield can be called programmatically (public API, access terms, rate limits) must be confirmed early; the adapter is isolated so that another video provider, also reachable through fal.ai, can replace it.
   \item[Voice: ElevenLabs.] Text-to-speech for voice-overs and narration through its API, multilingual output, and optional voice cloning. Cloned voices are allowed only when the voice owner's consent is documented in the project; the default is a licensed or stock voice.
+  \item[Editing and verification tools.] Image editing (inpaint, outpaint, background removal, upscale) is exposed through the same interface; the sandbox, an OCR step and a vision model verify what the providers return.
   \item[Assembly: FFmpeg.] Combines generated clips, voice-over, music and captions into the final format and aspect ratio per platform.
 \end{description}
 
@@ -610,6 +646,109 @@ This is a design commitment and a licence-adjacent policy, not a guarantee; fork
 \subsection{Legal and compliance notes}
 These points need review by a qualified professional before any hosted offering: advertising rules and endorsement disclosure, platform advertising policies (health, finance and similar categories), labelling of AI-generated content, data-protection law (GDPR, Turkish KVKK) for stored comments and messages, and the terms of each API. The system is designed so that these rules are configurable policy packs rather than hard-coded behaviour.
 
+% ---------------------------------------------------------------- studio
+\section{Creative Studio: Agentic Image, Video and Voice Production}\label{sec:studio}
+
+\subsection{Why an agent, not a single model call}
+One request to an image model rarely gives a usable marketing asset. Text comes out misspelled, logos and brand colours drift, sizes do not match the platform, and a small defect ruins the whole picture. A person fixes this by working: sketch, look, correct, repeat. The creative studio does the same. It behaves like a coding agent for graphics: it plans, uses tools (including writing and running code), looks at the result, verifies it against the brief, and edits until it passes or hands over to a human.
+
+\subsection{Three production techniques}
+The studio chooses a technique per asset and may switch after a failed verification.
+
+\begin{longtable}{@{}p{3.6cm}p{5.8cm}p{5.9cm}@{}}
+\toprule
+\textbf{Technique} & \textbf{How it works} & \textbf{Best for}\\
+\midrule
+\endhead
+A. Code composition & The agent writes Python (Pillow and similar libraries) or HTML and CSS, runs it, and renders the image. Text, layout, logos, device frames and charts are exact and reproducible. & Store graphics, feature announcements, quote cards, text-heavy posts, screenshots in device frames, anything that must match the brand exactly.\\
+B. Generated background plus code overlay & An image model creates the background or scene; code then places text, logo and layout on top, with contrast handling such as gradients or panels. & Posts and ads that need atmosphere and exact text at the same time.\\
+C. Direct generation and editing & An image model produces the whole image; the agent then edits it: inpaint a region, outpaint to another aspect ratio, remove the background, upscale. & Lifestyle imagery, illustrations and concept art where text is not critical.\\
+\bottomrule
+\end{longtable}
+
+The creative director writes a \emph{brief} for each asset (goal, platform sizes, exact copy, brand-kit constraints and a first technique choice). The brand kit comes from the approved Product Profile: palette, fonts, logo, screenshots and the do-not-mention list.
+
+\subsection{The production graph}
+Production is a LangGraph graph (Figure~\ref{fig:creative}) with a loop: produce, verify, decide, edit.
+
+\fig{fig_creative}{Creative studio graph. The studio agent produces a candidate with tools; a separate verifier checks it; failures return to production through an edit plan; limits force an escalation to a human.}{fig:creative}
+
+\textbf{Studio tools.}
+\begin{longtable}{@{}p{3.6cm}p{11.7cm}@{}}
+\toprule
+\textbf{Tool} & \textbf{Purpose}\\
+\midrule
+\endhead
+\texttt{run\_python} & Run agent-written code in the sandbox with the brand kit and inputs mounted read-only; returns files, logs and errors.\\
+\texttt{render\_html} & Render an HTML and CSS template to PNG with Playwright, using local assets only.\\
+\texttt{generate\_image} & Text-to-image through the media provider (fal.ai by default); returns the image and its cost.\\
+\texttt{edit\_image} & Inpaint, outpaint, remove background, upscale through the provider.\\
+\texttt{brand\_kit} & Read palette, fonts, logo variants, screenshots and rules from the Product Profile.\\
+\texttt{view\_image} & Let the agent look at an image, through the vision-capable studio model.\\
+\texttt{ocr}, \texttt{measure\_contrast} & Read text from an image; compute contrast and colour distance for regions.\\
+\bottomrule
+\end{longtable}
+Calls to generation providers are made by the worker through policy-gated tools; agent code in the sandbox never talks to the network.
+
+\subsection{Verification}
+Every candidate is verified twice, by code and by a different model.
+
+\begin{longtable}{@{}p{4.0cm}p{11.3cm}@{}}
+\toprule
+\textbf{Check} & \textbf{What it covers}\\
+\midrule
+\endhead
+Programmatic & Dimensions and aspect ratio for each target platform; safe zones and text overflow; contrast ratio of text against its background; distance from the brand palette; logo present, placed and sized correctly; file size and format; \emph{OCR text equals the intended copy}, which catches misspelled generated text.\\
+Visual verifier (\texttt{asset\_verifier}) & Legibility at thumbnail size; brand fit; malformed text, hands or objects; cropping and composition; misleading or risky content such as unsupported claims; consistency with the rest of the campaign.\\
+Result & A structured report with a pass or fail per criterion, severity, and concrete edit suggestions. The same schema is stored with the asset version.\\
+\bottomrule
+\end{longtable}
+The verifier is a different model from the producer on purpose, and deterministic checks run first, because models are poor at noticing small text errors and low contrast that code measures exactly.
+
+\subsection{Edit strategies}
+The decision step maps verification failures to actions:
+\begin{longtable}{@{}p{5.0cm}p{10.3cm}@{}}
+\toprule
+\textbf{Failure} & \textbf{Edit}\\
+\midrule
+\endhead
+Text overflow or wrong size & Change font size, wrapping or layout in the code and re-render.\\
+Low contrast & Add a gradient or panel behind the text, change the text colour within the palette.\\
+Logo missing or misplaced & Reposition or resize in code.\\
+Background does not fit & Regenerate with a revised prompt or a new seed, keeping the same code overlay.\\
+Local defect (hand, object, artefact) & Inpaint the region, or regenerate and recompose.\\
+Wrong aspect ratio & Recompose in code, or outpaint.\\
+Low resolution & Upscale.\\
+Same failure twice & Switch technique (for example from direct generation to background plus overlay).\\
+\bottomrule
+\end{longtable}
+
+\subsection{Limits and escalation}
+A loop must end. The graph stops when the asset passes, or when any limit is hit: maximum number of rounds (default four), time limit, or a per-asset cost cap that covers generation and model calls together. When a limit is hit, the studio escalates: it shows the best candidate, the verifier report and the available options, and a human decides. Costs are checked against the creative budget in the ledger before each generation, and expensive operations such as video follow the approval policy.
+
+\subsection{Sandbox for agent-written code}
+Letting an agent write and run code is what makes composition exact, and it needs containment:
+\begin{itemize}
+  \item A container without network access, with no secrets in its environment and a read-only mount for the brand kit and inputs.
+  \item A temporary writable directory, CPU, memory and time limits, and an allow-list of libraries and fonts.
+  \item Outputs limited to image files with size limits; logs retained for the audit trail.
+  \item Rendering HTML in a locked-down browser profile that can load only local assets.
+  \item An optional stronger layer (gVisor or a microVM) for hosted or high-risk deployments.
+\end{itemize}
+The studio receives structured briefs and brand-kit data, never raw untrusted text, so the prompt-injection surface of agent-written code stays small.
+
+\subsection{Video and voice}
+The same produce, verify, edit pattern applies:
+\begin{itemize}
+  \item \textbf{Voice (ElevenLabs).} Generate speech from the script; transcribe it back and compare it with the script, check duration and loudness; regenerate sentences that fail. Voice cloning follows the consent policy.
+  \item \textbf{Video clips (Higgsfield or another provider).} Generate clips; sample frames and have the verifier check composition, text legibility, artefacts and brand fit; check duration and aspect ratio.
+  \item \textbf{Assembly (FFmpeg).} Combine clips, voice-over, music and captions; verify audio and video sync, caption timing and safe zones on the final file.
+\end{itemize}
+Video generation is the most expensive step, so the studio prefers to verify the storyboard and script first, and uses fewer, more targeted regenerations than for images.
+
+\subsection{Provenance and evaluation}
+Each round is saved as an asset version with its code, prompts, parameters, provider and model, verifier report and cost. Approval cards in the dashboard show the final asset and a short summary of how it was made; generated media carries the platform's AI label where one exists. Quality is measured on a set of recurring briefs: first-pass success rate, rounds per accepted asset, cost per accepted asset, human acceptance rate, and agreement between the verifier and human reviewers.
+
 % ---------------------------------------------------------------- 9
 \section{Data Model}
 
@@ -623,7 +762,7 @@ Notable choices:
   \item \texttt{budget\_ledger\_entry} is append-only (reserve, commit, release); balances are derived.
   \item \texttt{audit\_log} is hash-chained: each entry stores the hash of the previous one.
   \item \texttt{memory\_entry} combines structured experiment results with embedded notes (pgvector) for retrieval.
-  \item \texttt{media\_asset} records provider, model, prompt, parameters and cost for reproducibility and cost control.
+  \item \texttt{media\_asset} records provider, model, prompt, parameters and cost for reproducibility and cost control. Every produce-verify-edit round creates a new version (\texttt{version}, \texttt{parent\_id}) that keeps its code, prompts, parameters and the verifier's report (\texttt{verification}), so any final asset can be explained and reproduced.
   \item Not shown in the figure: \texttt{llm\_setting} (workspace or project override of model and parameters per role, with author and timestamp), \texttt{llm\_call} (role, model, tokens, cost, latency, trace identifier), \texttt{chat\_thread} and \texttt{chat\_message} for the orchestrator console, and \texttt{directive} (one-off instructions and draft standing rules, each linked to the message that created it), \texttt{notification} (type, severity, channel, delivery status, deduplication key) and \texttt{question} (blocking questions with options, default and deadline).
 \end{itemize}
 
@@ -650,7 +789,9 @@ Database & PostgreSQL 16 + pgvector & MongoDB, SQLite, vector DB & Transactions 
 Object storage & Any S3-compatible store (MinIO, R2, S3) & Local disk & Standard API for creative assets and repository snapshots.\\
 Secrets & Envelope encryption in-app; OpenBao or cloud KMS optional & Vault only & Works out of the box, upgradable for stricter environments.\\
 LLM access & OpenRouter through an OpenAI-compatible client and a small model router; per-role configuration & Direct provider SDKs, LangChain, LiteLLM & One key and API for many models, per-role switching, fallbacks and cost reporting; base URL is configurable so direct or local endpoints also work.\\
-Agent loop & Custom tool-use loop inside Temporal activities & LangGraph, CrewAI & Durability handled by Temporal; the policy gate sits exactly at the tool boundary.\\
+Agent graphs & LangGraph (MIT) inside Temporal activities & Own tool-use loop, CrewAI, plain function chains & Loops, branches, state, checkpoints and interrupts for the studio and chat; Temporal keeps durability. The policy gate sits in the tool wrapper; version pinned behind an adapter.\\
+Code sandbox & Docker container without network; gVisor optional & Firecracker microVMs, WebAssembly (Pyodide), host execution & Strong isolation with simple operations; no secrets, resource limits, read-only brand assets. Stronger isolation can be added for hosted use.\\
+Asset verification & Programmatic checks (OCR, contrast, size) plus a separate vision model & Vision model only, human review only & Deterministic checks catch what models miss (wrong text, low contrast); a different model reviews overall quality.\\
 Policy language & YAML with CEL & OPA/Rego, Cedar, Python code & Readable by non-engineers, sandboxed expressions, small dependency.\\
 Secret scanning & gitleaks & trufflehog, detect-secrets & Fast, permissive licence, easy to run as a pre-processing step.\\
 Code understanding & tree-sitter + ripgrep & Language servers & Language-aware parsing without building each project.\\
@@ -671,6 +812,7 @@ Licence & Apache-2.0 & MIT, AGPL-3.0 & Permissive with a patent grant; best for 
 \begin{itemize}
   \item OpenRouter is the default gateway (Section~\ref{sec:llm}); any model that supports the capabilities a role needs can be configured. Model identifiers are configuration, not code.
   \item Different roles use different models: a small, fast model for classification in the reader agent, a stronger model for planning, profile synthesis and the orchestrator.
+  \item The \texttt{studio} and \texttt{asset\_verifier} roles are configured as different models on purpose, to reduce the tendency of a model to approve its own work.
   \item Structured outputs are validated against Pydantic models; invalid output triggers a bounded retry, then escalation.
   \item Tools are described through a neutral interface and can be exposed as MCP servers, so other agents can reuse the connectors under the same policy gate.
 \end{itemize}
@@ -698,6 +840,7 @@ class Connector(Protocol):
 class MediaProvider(Protocol):
     def estimate_cost(self, req: MediaRequest) -> Money: ...
     def image(self, req: ImageRequest) -> MediaAsset: ...
+    def edit(self, req: EditRequest) -> MediaAsset: ...   # inpaint, outpaint, remove background, upscale
     def video(self, req: VideoRequest) -> MediaAsset: ...
     def voice(self, req: VoiceRequest) -> MediaAsset: ...
 \end{lstlisting}
@@ -842,6 +985,10 @@ Low content quality (``AI slop'') & Medium & Likely without enough product detai
 Higgsfield integration not available as assumed & Medium & Unknown: API access to be confirmed & Confirm early; adapter boundary; alternative video models through fal.ai\\
 Misuse of the open-source tool & Medium & Possible & Acceptable-use policy, default rate limits, no unsupported automation in official connectors\\
 Spend or reputation incident & High & Low with controls & Layered budget controls, approvals, kill switch, audit log\\
+Framework churn (LangGraph) & Medium & Medium: fast-moving libraries & Thin graphs, domain logic in plain modules, pinned versions behind an adapter\\
+Agent-written code misbehaves or escapes & High & Low with controls & Network-less sandbox, no secrets, resource limits, allow-listed libraries, output limited to image files\\
+Endless or expensive edit loops & Medium & Medium & Iteration, time and per-asset cost limits; stagnation detection; escalate to a human with the best candidate\\
+Verifier approves bad assets & Medium & Medium & Different model from the producer, deterministic checks, human approval of every public asset, tracking of verifier-human agreement\\
 Maintenance burden of connectors & Medium & Certain over time & Plugin model, community ownership, deprecation policy\\
 LLM cost and latency & Medium & Medium & Model tiers per role, caching of profile context, batch jobs on schedules, per-call and monthly caps\\
 Gateway dependency or model retirement & Medium & Medium: third-party service and fast-moving model catalogue & Fallback lists, capability checks, configurable base URL for direct or local endpoints, tier indirection\\
@@ -863,6 +1010,9 @@ Legal and compliance & High & Varies by market & Policy packs, disclosure labels
   \item \textbf{Commercial model.} Pure services, or services plus a hosted offering later? Which first client profile to target?
   \item \textbf{Attribution.} Which attribution source to support first (Firebase, AppsFlyer, Adjust, or store data only).
   \item \textbf{Name and trademark.} Replace the working name before a public release.
+  \item \textbf{Graph integration.} How graph checkpoints and Temporal history relate in practice, and which graphs are worth the framework (studio and chat first).
+  \item \textbf{Sandbox technology.} Docker is the default; decide whether hosted or client deployments need gVisor or microVMs.
+  \item \textbf{Studio providers.} Which image and video models and edit endpoints to support first, and how to confirm Higgsfield's programmatic access.
   \item \textbf{Golden repository set.} Which open-source apps will be used as the first benchmark.
 \end{enumerate}
 
@@ -891,6 +1041,8 @@ The following official sources are listed for orientation. Versions, pricing and
   \item Higgsfield: \url{https://higgsfield.ai}
   \item ElevenLabs: \url{https://elevenlabs.io/docs}
   \item Playwright: \url{https://playwright.dev}
+  \item LangGraph: \url{https://langchain-ai.github.io/langgraph/}
+  \item Docker: \url{https://docs.docker.com}
 \end{itemize}
 
 \end{document}
