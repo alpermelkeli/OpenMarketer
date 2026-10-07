@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f deploy/compose/dev.yml
 
-.PHONY: help install up down reset logs ps psql api worker web lint format typecheck test check
+.PHONY: help install up down reset logs ps psql migrate migration api worker web lint format typecheck test check
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -26,6 +26,12 @@ ps: ## Show dev stack status
 
 psql: ## Open a psql shell in the dev database
 	$(COMPOSE) exec postgres psql -U openmarketer -d openmarketer
+
+migrate: ## Apply database migrations
+	uv run --env-file .env alembic upgrade head
+
+migration: ## Generate a migration from model changes: make migration m="add x"
+	uv run --env-file .env alembic revision --autogenerate -m "$(m)"
 
 api: ## Run the API on http://localhost:8000
 	uv run --env-file .env uvicorn openmarketer_api.main:app --reload --port 8000

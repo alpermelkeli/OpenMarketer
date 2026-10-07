@@ -2,8 +2,9 @@
 
 import pytest
 import yaml
-from openmarketer_core.profile import Evidence, FeatureStatus, ProductProfile
 from pydantic import ValidationError
+
+from openmarketer_core.profile import Evidence, FeatureStatus, ProductProfile
 
 # The excerpt from section 6.3 of the design report.
 REPORT_EXAMPLE = """
