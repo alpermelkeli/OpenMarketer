@@ -3,7 +3,15 @@
 import pytest
 from pydantic import ValidationError
 
-from openmarketer_core.extraction import Extractor, Fact, discover_extractors, run_extractors
+from openmarketer_core.extraction import (
+    ExtractedFact,
+    Extractor,
+    Fact,
+    discover_extractors,
+    group_by_scope,
+    is_auxiliary,
+    run_extractors,
+)
 from openmarketer_core.intake import RepoFiles
 
 
@@ -66,3 +74,76 @@ def test_invalid_facts_are_rejected(fields):
 
 def test_installed_extractors_are_discovered():
     assert "package_json" in [e.name for e in discover_extractors()]
+
+
+# ------------------------------------------------------------------ scopes
+def fact(kind: str, value, file: str) -> ExtractedFact:
+    return ExtractedFact(extractor="t", kind=kind, value=value, file=file)
+
+
+def manifest(file: str) -> ExtractedFact:
+    return fact("repo.manifest", {"ecosystem": "x"}, file)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("src/app.ts", False),
+        ("apps/mobile/package.json", False),
+        ("docs/package.json", True),
+        ("tests/fixtures/go.mod", True),
+        ("Examples/demo/pubspec.yaml", True),
+        ("docs", False),  # a file named docs at the root is not inside a docs folder
+    ],
+)
+def test_auxiliary_paths(path, expected):
+    assert is_auxiliary(path) is expected
+
+
+def test_monorepo_projects_are_kept_apart():
+    scopes = group_by_scope(
+        [
+            fact("repo.readme", {"title": "Mono"}, "README.md"),
+            manifest("package.json"),
+            manifest("docs/package.json"),
+            manifest("apps/mobile/package.json"),
+            manifest("cli/package.json"),
+            fact("manifest.name", "docs-site", "docs/package.json"),
+            fact("manifest.name", "mobile", "apps/mobile/package.json"),
+            fact("manifest.platform", "ios", "apps/mobile/app.json"),
+            fact("manifest.name", "cli", "cli/package.json"),
+            fact("manifest.platform", "cli", "cli/package.json"),
+            fact(
+                "android.permission",
+                "CAMERA",
+                "apps/mobile/android/app/src/main/AndroidManifest.xml",
+            ),
+        ]
+    )
+    assert [(s.path, s.auxiliary) for s in scopes] == [
+        ("", False),
+        ("cli", False),
+        ("apps/mobile", False),
+        ("docs", True),
+    ]
+    mobile = next(s for s in scopes if s.path == "apps/mobile")
+    assert [(f.kind, f.value) for f in mobile.facts if f.kind != "repo.manifest"] == [
+        ("manifest.name", "mobile"),
+        ("manifest.platform", "ios"),
+        ("android.permission", "CAMERA"),
+    ]
+
+
+def test_xcode_project_belongs_to_the_folder_around_it():
+    scopes = group_by_scope(
+        [
+            manifest("iosApp/iosApp.xcodeproj/project.pbxproj"),
+            fact("ios.permission", {"key": "NSCameraUsageDescription"}, "iosApp/iosApp/Info.plist"),
+        ]
+    )
+    assert [(s.path, len(s.facts)) for s in scopes] == [("iosApp", 2)]
+
+
+def test_facts_without_any_manifest_fall_into_the_root_scope():
+    scopes = group_by_scope([fact("repo.language", {"name": "Go"}, "cmd/x/main.go")])
+    assert [(s.path, s.auxiliary, len(s.facts)) for s in scopes] == [("", False, 1)]

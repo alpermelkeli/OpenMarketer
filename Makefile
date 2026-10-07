@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f deploy/compose/dev.yml
 
-.PHONY: help install up down reset logs ps psql migrate migration api worker web lint format typecheck test check
+.PHONY: help install up down reset logs ps psql analyze migrate migration api worker web lint format typecheck test check
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -26,6 +26,9 @@ ps: ## Show dev stack status
 
 psql: ## Open a psql shell in the dev database
 	$(COMPOSE) exec postgres psql -U openmarketer -d openmarketer
+
+analyze: ## Draft a Product Profile: make analyze repo=https://github.com/owner/name
+	uv run --env-file .env openmarketer analyze $(repo)
 
 migrate: ## Apply database migrations
 	uv run --env-file .env alembic upgrade head

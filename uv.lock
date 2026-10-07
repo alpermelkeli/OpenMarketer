@@ -686,12 +686,14 @@ version = "0.0.0"
 source = { editable = "apps/cli" }
 dependencies = [
     { name = "openmarketer-core" },
+    { name = "openmarketer-extractors" },
     { name = "typer" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "openmarketer-core", editable = "packages/core" },
+    { name = "openmarketer-extractors", editable = "packages/extractors" },
     { name = "typer", specifier = ">=0.27.3" },
 ]
 
@@ -719,7 +721,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.20.0" },
     { name = "boto3", specifier = ">=1.43.109" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "langgraph", specifier = ">=1.2.14" },
+    { name = "langgraph", specifier = ">=1.2.14,<2" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=3.1.2" },
     { name = "openai", specifier = ">=3.26.0" },
     { name = "pgvector", specifier = ">=0.5.0" },
@@ -736,6 +738,7 @@ version = "0.0.0"
 source = { editable = "packages/extractors" }
 dependencies = [
     { name = "openmarketer-core" },
+    { name = "pyyaml" },
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
 ]
@@ -743,6 +746,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "openmarketer-core", editable = "packages/core" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "tree-sitter", specifier = ">=0.26.0" },
     { name = "tree-sitter-language-pack", specifier = ">=1.21.0" },
 ]

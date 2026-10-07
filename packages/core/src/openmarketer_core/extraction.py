@@ -21,6 +21,20 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from openmarketer_core.intake import RepoFiles
 
 ENTRY_POINT_GROUP = "openmarketer.extractors"
+MANIFEST_KIND = "repo.manifest"
+
+# Folders that hold material around the product rather than the product itself.
+AUXILIARY_DIRS = frozenset({
+    "test", "tests", "__tests__", "spec", "specs", "testdata", "fixtures", "__fixtures__",
+    "example", "examples", "sample", "samples", "demo", "demos", "doc", "docs",
+    "documentation", "benchmark", "benchmarks", "third_party", "thirdparty", "vendor",
+    "vendored", "external", "scripts", "tools",
+})  # fmt: skip
+
+
+def is_auxiliary(path: str) -> bool:
+    """Whether ``path`` lies in a test, example, documentation or vendored folder."""
+    return any(part.lower() in AUXILIARY_DIRS for part in path.split("/")[:-1])
 
 
 class Fact(BaseModel):
@@ -88,3 +102,41 @@ def run_extractors(files: RepoFiles, extractors: Iterable[Extractor]) -> Extract
             continue
         result.facts.extend(facts)
     return result
+
+
+@dataclass(frozen=True)
+class Scope:
+    """The facts of one project inside the repository.
+
+    A repository can hold several projects (an app, its command-line tool, a
+    documentation site). Each folder with a project manifest is a scope, so
+    their names, versions and platforms are never mixed. ``path`` is "" for
+    the repository root.
+    """
+
+    path: str
+    auxiliary: bool
+    facts: list[ExtractedFact] = field(default_factory=list)
+
+
+def _project_dir(manifest_path: str) -> str:
+    parts = manifest_path.split("/")[:-1]
+    if parts and parts[-1].endswith((".xcodeproj", ".xcworkspace")):
+        parts.pop()  # an Xcode project bundle sits next to its sources
+    return "/".join(parts)
+
+
+def group_by_scope(facts: Iterable[ExtractedFact]) -> list[Scope]:
+    """Group facts by the project they belong to; main projects first, then by depth."""
+    facts = list(facts)
+    roots = {_project_dir(f.file) for f in facts if f.kind == MANIFEST_KIND} | {""}
+    scopes = {root: Scope(path=root, auxiliary=is_auxiliary(f"{root}/x")) for root in roots}
+
+    for fact in facts:
+        folder = fact.file.rsplit("/", 1)[0] if "/" in fact.file else ""
+        while folder not in scopes:
+            folder = folder.rsplit("/", 1)[0] if "/" in folder else ""
+        scopes[folder].facts.append(fact)
+
+    ordered = sorted(scopes.values(), key=lambda s: (s.auxiliary, s.path.count("/"), s.path))
+    return [scope for scope in ordered if scope.facts]

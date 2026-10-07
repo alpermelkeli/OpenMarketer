@@ -2,7 +2,8 @@
 
 ``RepoFiles`` lists and reads files, and refuses anything that must never be
 read or sent to a model: ``.env*`` files, key material, build output, version
-control data and every file in which the secret scan found something.
+control data and every file in which a secret was found and could not be
+blanked out.
 """
 
 from __future__ import annotations

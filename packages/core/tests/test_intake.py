@@ -1,5 +1,6 @@
 """Tests for the intake stage. They use real git and gitleaks on a local repository."""
 
+import base64
 import os
 import random
 import shutil
@@ -45,7 +46,13 @@ def source_repo(tmp_path: Path) -> Path:
         "certs/server.pem": "not really a key\n",
         "ios/AuthKey.p8": "not really a key\n",
         "node_modules/left-pad/index.js": "module.exports = 1\n",
-        "config/settings.py": f'GITHUB_TOKEN = "{FAKE_TOKEN}"  # gitleaks:allow\n',
+        "config/settings.py": (
+            "DEBUG = False\n"
+            f'GITHUB_TOKEN = "{FAKE_TOKEN}"  # gitleaks:allow\n'
+            f'SAME_AGAIN = "{FAKE_TOKEN}"\n'
+            "TIMEOUT = 30\n"
+        ),
+        "config/blob.txt": base64.b64encode(f'token = "{FAKE_TOKEN}"'.encode()).decode() + "\n",
         # A repository must not be able to switch the scan off:
         ".gitleaks.toml": '[allowlist]\npaths = [".*"]\n',
         ".gitleaksignore": "config/settings.py\n",
@@ -144,8 +151,12 @@ def test_user_git_configuration_is_ignored():
 # ------------------------------------------------------------ secret scan
 @needs_gitleaks
 def test_secret_is_found_despite_repository_allowlists(intake):
-    assert [(f.file, f.start_line) for f in intake.findings] == [("config/settings.py", 1)]
-    assert intake.findings[0].rule_id
+    assert [(f.file, f.start_line, f.redacted) for f in intake.findings] == [
+        ("config/blob.txt", 1, False),
+        ("config/settings.py", 2, True),
+        ("config/settings.py", 3, True),
+    ]
+    assert all(f.rule_id for f in intake.findings)
 
 
 @needs_gitleaks
@@ -154,10 +165,44 @@ def test_findings_do_not_carry_the_secret(intake):
 
 
 @needs_gitleaks
-def test_file_with_a_secret_cannot_be_read(intake):
-    assert intake.files.exclusion("config/settings.py") is Exclusion.SECRET_FOUND
+def test_secret_is_blanked_out_and_the_rest_of_the_file_stays_readable(intake):
+    assert intake.files.read_text("config/settings.py") == (
+        "DEBUG = False\n"
+        'GITHUB_TOKEN = "[REDACTED]"  # gitleaks:allow\n'
+        'SAME_AGAIN = "[REDACTED]"\n'
+        "TIMEOUT = 30\n"
+    )
+
+
+@needs_gitleaks
+def test_secret_does_not_survive_anywhere_in_the_readable_tree(intake):
+    for path in intake.files:
+        assert FAKE_TOKEN.encode() not in intake.files.read_bytes(path), path
+
+
+@needs_gitleaks
+def test_file_whose_secret_cannot_be_blanked_out_is_excluded(intake):
+    # The token sits inside a base64 blob: gitleaks finds it, but it is not literally in the file.
+    assert intake.files.exclusion("config/blob.txt") is Exclusion.SECRET_FOUND
     with pytest.raises(ExcludedFileError, match="secret_found"):
-        intake.files.read_text("config/settings.py")
+        intake.files.read_text("config/blob.txt")
+
+
+@needs_gitleaks
+def test_multi_line_secret_keeps_line_numbers(tmp_path):
+    from openmarketer_core.intake.secrets import scan_and_redact
+
+    body = "\n".join(
+        "".join(random.Random(i).choices(string.ascii_letters + string.digits, k=64))
+        for i in range(12)
+    )
+    key = "-----BEGIN " + "RSA PRIVATE KEY-----\n" + body + "\n-----END " + "RSA PRIVATE KEY-----"
+    (tmp_path / "deploy.py").write_text(f'BEFORE = 1\nKEY = """{key}"""\nAFTER = 2\n')
+    findings = scan_and_redact(tmp_path)
+    text = (tmp_path / "deploy.py").read_text()
+    assert findings and all(f.redacted for f in findings)
+    assert body.splitlines()[3] not in text
+    assert text.splitlines()[15] == "AFTER = 2"
 
 
 @needs_gitleaks
@@ -167,6 +212,7 @@ def test_readable_files_after_intake(intake):
         ".gitleaksignore",
         "README.md",
         "hosts-link",
+        "config/settings.py",
         "src/app.py",
     ]
     assert intake.files.read_text("src/app.py") == "print('hello')\n"
