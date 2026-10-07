@@ -26,6 +26,10 @@ SCHEMA_VERSION = 1
 
 LINES_RE = re.compile(r"^(\d+)(?:-(\d+))?$")
 
+# Open vocabularies: a product can be anything, and playbooks or extractors may
+# introduce values the core has never heard of. The enums below list the
+# well-known values, they do not limit the field.
+Slug = Annotated[str, Field(pattern=r"^[a-z0-9]+(_[a-z0-9]+)*$", max_length=64)]
 FeatureId = Annotated[str, Field(pattern=r"^[a-z0-9]+(-[a-z0-9]+)*$", max_length=64)]
 LanguageTag = Annotated[str, Field(pattern=r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$")]
 HexColor = Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
@@ -33,6 +37,8 @@ Confidence = Annotated[float, Field(ge=0.0, le=1.0)]
 
 
 class ProductType(StrEnum):
+    """Well-known product types, each with a playbook in the core distribution."""
+
     CONSUMER_APP = "consumer_app"
     B2B_SAAS = "b2b_saas"
     DEV_TOOL = "dev_tool"
@@ -41,6 +47,8 @@ class ProductType(StrEnum):
 
 
 class Platform(StrEnum):
+    """Well-known platforms. Others (a watch, a browser extension, an API) are just slugs."""
+
     IOS = "ios"
     ANDROID = "android"
     WEB = "web"
@@ -107,8 +115,8 @@ class Evidenced(_Model):
 # --------------------------------------------------------------- sections
 class Product(Evidenced):
     name: str = Field(min_length=1)
-    type: ProductType
-    platforms: list[Platform] = Field(default_factory=list)
+    type: Slug
+    platforms: list[Slug] = Field(default_factory=list)
     languages: list[LanguageTag] = Field(default_factory=list)
 
 

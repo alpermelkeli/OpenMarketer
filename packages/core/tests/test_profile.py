@@ -4,7 +4,13 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from openmarketer_core.profile import Evidence, FeatureStatus, ProductProfile
+from openmarketer_core.profile import (
+    Evidence,
+    FeatureStatus,
+    Platform,
+    ProductProfile,
+    ProductType,
+)
 
 # The excerpt from section 6.3 of the design report.
 REPORT_EXAMPLE = """
@@ -107,8 +113,8 @@ def test_evidence_file_must_stay_inside_the_repository(file):
 @pytest.mark.parametrize(
     ("section", "field", "value"),
     [
-        ("product", "type", "social_network"),
-        ("product", "platforms", ["symbian"]),
+        ("product", "type", "Social Network"),
+        ("product", "platforms", ["Apple Watch"]),
         ("product", "languages", ["English"]),
         ("brand", "palette", ["blue"]),
         ("business_model", "trial_days", -1),
@@ -119,6 +125,21 @@ def test_invalid_values_are_rejected(section, field, value):
     data[section][field] = value
     with pytest.raises(ValidationError):
         ProductProfile.model_validate(data)
+
+
+def test_product_type_and_platforms_are_open_vocabularies():
+    data = example()
+    data["product"]["type"] = "hardware_device"
+    data["product"]["platforms"] = ["ios", "watchos", "browser_extension"]
+    p = ProductProfile.model_validate(data)
+    assert p.product.type == "hardware_device"
+    assert p.product.platforms == ["ios", "watchos", "browser_extension"]
+
+
+def test_well_known_values_compare_equal_to_their_slugs():
+    p = ProductProfile.model_validate(example())
+    assert p.product.type == ProductType.CONSUMER_APP
+    assert Platform.IOS in p.product.platforms
 
 
 def test_feature_id_must_be_a_slug():

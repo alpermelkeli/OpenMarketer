@@ -10,6 +10,12 @@ dependencies = [
     "tree-sitter-language-pack>=1.21.0",
 ]
 
+[project.entry-points."openmarketer.extractors"]
+android_manifest = "openmarketer_extractors.mobile_manifests:AndroidManifestExtractor"
+gradle = "openmarketer_extractors.gradle:GradleExtractor"
+info_plist = "openmarketer_extractors.mobile_manifests:InfoPlistExtractor"
+package_json = "openmarketer_extractors.package_json:PackageJsonExtractor"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
