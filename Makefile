@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f deploy/compose/dev.yml
 
-.PHONY: help install up down reset logs ps psql web lint format typecheck test check
+.PHONY: help install up down reset logs ps psql api worker web lint format typecheck test check
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -26,6 +26,12 @@ ps: ## Show dev stack status
 
 psql: ## Open a psql shell in the dev database
 	$(COMPOSE) exec postgres psql -U openmarketer -d openmarketer
+
+api: ## Run the API on http://localhost:8000
+	uv run --env-file .env uvicorn openmarketer_api.main:app --reload --port 8000
+
+worker: ## Run the Temporal worker
+	uv run --env-file .env python -m openmarketer_worker
 
 web: ## Run the dashboard on http://localhost:3000
 	cd apps/web && pnpm dev
