@@ -1,0 +1,75 @@
+# Local development stack: backing services only.
+# The API, worker and dashboard run on the host (see Makefile).
+#
+#   make up      start     make down    stop     make reset   stop and delete data
+#
+# Credentials here are development defaults; never reuse them elsewhere.
+name: openmarketer-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: openmarketer
+      POSTGRES_PASSWORD: openmarketer
+      POSTGRES_DB: openmarketer
+    ports:
+      # 5433 on the host so it does not collide with a local PostgreSQL on 5432
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openmarketer -d openmarketer"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Single-binary Temporal dev server (SQLite-backed) with the web UI on 8233.
+  temporal:
+    image: temporalio/temporal:latest
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--ui-ip", "0.0.0.0", "--db-filename", "/data/temporal.db"]
+    user: "0:0"
+    ports:
+      - "127.0.0.1:${TEMPORAL_PORT:-7233}:7233"
+      - "127.0.0.1:${TEMPORAL_UI_PORT:-8233}:8233"
+    volumes:
+      - temporal-data:/data
+
+  # S3-compatible object storage. MinIO no longer publishes official images on
+  # Docker Hub, so this uses the Chainguard build of the same server.
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: openmarketer
+      MINIO_ROOT_PASSWORD: openmarketer-dev
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+
+  # One-shot: waits for the store, creates the asset bucket, then exits.
+  minio-init:
+    image: amazon/aws-cli:latest
+    depends_on:
+      - minio
+    environment:
+      AWS_ACCESS_KEY_ID: openmarketer
+      AWS_SECRET_ACCESS_KEY: openmarketer-dev
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for i in $$(seq 1 30); do
+          aws --endpoint-url http://minio:9000 s3 mb s3://openmarketer-assets 2>/dev/null && exit 0
+          aws --endpoint-url http://minio:9000 s3 ls s3://openmarketer-assets >/dev/null 2>&1 && exit 0
+          sleep 1
+        done
+        exit 1
+
+volumes:
+  postgres-data:
+  temporal-data:
+  minio-data:

@@ -1,0 +1,60 @@
+[project]
+name = "openmarketer"
+version = "0.0.0"
+description = "Open-source, repository-driven autonomous marketing agent"
+requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+# Virtual workspace root: `uv sync` installs every member in editable mode.
+dependencies = [
+    "openmarketer-core",
+    "openmarketer-extractors",
+    "openmarketer-api",
+    "openmarketer-worker",
+    "openmarketer-cli",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["apps/api", "apps/worker", "apps/cli", "packages/*"]
+
+[tool.uv.sources]
+openmarketer-core = { workspace = true }
+openmarketer-extractors = { workspace = true }
+openmarketer-api = { workspace = true }
+openmarketer-worker = { workspace = true }
+openmarketer-cli = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["config", "apps", "packages"]
+pythonpath = ["config"]
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# config/ predates the lint setup; drop it from this list once it is reformatted.
+extend-exclude = ["apps/web", "docs", "config"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+include = ["apps", "packages", "config"]
+exclude = ["apps/web", "**/node_modules", "**/__pycache__", ".venv"]
+extraPaths = ["config"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.2",
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.10",
+]
