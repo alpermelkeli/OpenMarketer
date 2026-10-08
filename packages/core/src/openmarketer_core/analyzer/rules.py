@@ -69,7 +69,7 @@ to work around this.
 
 @dataclass(frozen=True)
 class Limits:
-    max_steps: int = 24
+    max_steps: int = 40
     max_cost_usd: float = 0.50
     max_submissions: int = 3  # attempts at submit_profile before the draft is repaired in code
 

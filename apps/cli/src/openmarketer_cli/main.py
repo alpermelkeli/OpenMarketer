@@ -34,8 +34,8 @@ def analyze_command(
     out: Annotated[Path | None, typer.Option(help="Write the profile JSON here")] = None,
     max_cost: Annotated[
         float, typer.Option(help="Stop when the run has cost this much (USD)")
-    ] = 0.5,
-    max_steps: Annotated[int, typer.Option(help="Maximum model turns")] = 24,
+    ] = Limits.max_cost_usd,
+    max_steps: Annotated[int, typer.Option(help="Maximum model turns")] = Limits.max_steps,
 ) -> None:
     """Analyse a repository and print a draft Product Profile as JSON.
 
