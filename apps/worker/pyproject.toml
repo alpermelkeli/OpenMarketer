@@ -1,12 +1,13 @@
 [project]
 name = "openmarketer-worker"
 version = "0.0.0"
-description = "OpenMarketer Temporal worker: agent runtime, analyzer"
+description = "OpenMarketer Temporal worker: runs repository analyses as durable workflows"
 requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
 dependencies = [
     "openmarketer-core",
     "openmarketer-extractors",
+    "sqlalchemy>=2",
     "temporalio>=1.34.0",
 ]
 

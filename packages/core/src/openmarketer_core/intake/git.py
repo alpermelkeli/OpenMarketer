@@ -1,24 +1,95 @@
 """Read-only shallow clone of the repository to analyse.
 
-The repository is untrusted input, so the clone is locked down: only HTTPS
-URLs and local git folders are accepted, the user's git configuration and
-credential helpers are ignored, submodules and LFS objects are not fetched,
-and symbolic links are checked out as plain text so that no path in the
-working tree can point outside it.
+The repository and the host it is on are untrusted, so the clone is locked
+down:
+
+- only HTTPS URLs and local git folders are accepted, and git may use no other
+  transport at any point of the clone;
+- git gets an environment built here, not the one of this process: none of
+  its variables can change how git behaves, and none of the secrets in it
+  (model keys, the database URL, tokens) reach git or a program git starts;
+- git asks nobody for a password: no askpass program, no credential helper,
+  no prompt, no ``.netrc``. The only credential it can send is a token
+  configured for the host of the URL (``credentials.py`` decides);
+- no redirect is followed. After a redirect git repeats its extra headers,
+  the token among them, to the new host; and without a token a redirect could
+  still send the clone to an address the caller did not name;
+- submodules and LFS objects are not fetched, and symbolic links are checked
+  out as plain text so that no path in the working tree can point outside it.
+
+What git prints when a clone fails is partly written by the remote host. It
+goes to the log; the error raised is one of a few fixed sentences.
 """
 
 from __future__ import annotations
 
 import base64
+import logging
 import os
+import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from openmarketer_core.intake.credentials import NO_TOKENS, RepositoryTokens, is_unambiguous
 from openmarketer_core.intake.errors import IntakeError
 
+logger = logging.getLogger(__name__)
+
 CLONE_TIMEOUT_S = 300
+
+# Why a clone failed, as told to whoever asked for it. Fixed text: nothing a
+# repository host wrote is repeated.
+NOT_FOUND = (
+    "the repository was not found, or it needs an access token that is not configured "
+    "for its host or does not give access to it"
+)
+REDIRECTED = (
+    "the repository URL redirects to another address, and redirects are not followed: "
+    "use the URL the repository has now (a renamed or moved repository redirects, "
+    "and some hosts redirect a URL that does not end in .git)"
+)
+CLONE_TIMED_OUT = f"cloning the repository did not finish within {CLONE_TIMEOUT_S} seconds"
+HOST_UNREACHABLE = "the repository host could not be reached"
+NOT_SECURE = "the connection to the repository host could not be secured (TLS)"
+NOT_CLONED = "the repository could not be cloned"
+
+# What git's own messages (in the C locale) say for each cause, tried in this order.
+_CAUSES: tuple[tuple[str, str], ...] = (
+    (r"returned error: 30\d|redirect", REDIRECTED),
+    (r"ssl|tls|certificate", NOT_SECURE),
+    (r"timed out|timeout", CLONE_TIMED_OUT),
+    (
+        r"could not resolve|failed to connect|couldn't connect|connection refused"
+        r"|connection reset|network is unreachable|empty reply",
+        HOST_UNREACHABLE,
+    ),
+    (
+        r"not found|returned error: 40[134]|authentication failed"
+        r"|could not read username|could not read password",
+        NOT_FOUND,
+    ),
+)
+
+# The variables of this process that git may see. Everything else is withheld.
+INHERITED_VARIABLES = (
+    "PATH",  # to find git and the programs it is made of
+    "TMPDIR",
+    # An installation behind a proxy, or with its own certificate authority, cannot
+    # clone without these. They add a route or a trusted issuer; none switches
+    # verification off (GIT_SSL_NO_VERIFY is not here).
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "GIT_SSL_CAINFO",
+    "GIT_SSL_CAPATH",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "CURL_CA_BUNDLE",
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +102,29 @@ class Snapshot:
     ref: str | None
 
 
+def remote_repository_url(source: str) -> str:
+    """Validate ``source`` as the URL of a remote repository and return it.
+
+    This is the only form a caller that is not the machine's own user may
+    submit: a local folder or a ``file://`` URL would let a request make the
+    service read the disk it runs on.
+    """
+    try:
+        parts = urlsplit(source)
+        host, _ = parts.hostname, parts.port
+    except ValueError as e:
+        raise IntakeError("repository URL is not a valid URL") from e
+    if parts.scheme != "https":
+        raise IntakeError("repository URL must start with https://")
+    if not host:
+        raise IntakeError("repository URL has no host")
+    if parts.username is not None or parts.password is not None:
+        raise IntakeError("credentials in the URL are not accepted; configure a token instead")
+    if not is_unambiguous(source):
+        raise IntakeError("repository URL contains characters that are not allowed in a URL")
+    return source
+
+
 def _clone_url(source: str) -> str:
     """Validate ``source`` and return the URL handed to git."""
     if source.startswith("-"):
@@ -38,11 +132,7 @@ def _clone_url(source: str) -> str:
 
     parts = urlsplit(source)
     if parts.scheme == "https":
-        if not parts.hostname:
-            raise IntakeError("repository URL has no host")
-        if parts.username or parts.password:
-            raise IntakeError("credentials in the URL are not accepted; pass a token instead")
-        return source
+        return remote_repository_url(source)
 
     path = Path(source).expanduser()
     if parts.scheme in ("", "file") or path.exists():
@@ -59,79 +149,157 @@ def _clone_url(source: str) -> str:
     )
 
 
-def _git_env(token: str | None) -> dict[str, str]:
-    """Environment for git: isolated from user configuration, never prompts.
+def _origin(url: str) -> str:
+    """Scheme, host and port of ``url``, the form git matches ``http.<url>.*`` settings by."""
+    parts = urlsplit(url)
+    port = "" if parts.port is None else f":{parts.port}"
+    return f"{parts.scheme}://{parts.hostname}{port}/"
+
+
+def _authorization(token: str) -> str:
+    return base64.b64encode(f"x-access-token:{token}".encode()).decode()
+
+
+def _git_env(token: str | None, url: str) -> dict[str, str]:
+    """Environment for git, built from nothing: see the module docstring for what it rules out.
 
     The token travels as an HTTP header set through the environment, so it is
-    neither visible in the process list nor written to ``.git/config``.
+    neither visible in the process list nor written to ``.git/config``, and the
+    header is configured for the origin of ``url`` only.
     """
-    env = dict(os.environ)
+    env = {name: os.environ[name] for name in INHERITED_VARIABLES if name in os.environ}
     env.update(
-        GIT_TERMINAL_PROMPT="0",
+        # No home folder: no user configuration, no ~/.netrc for curl to read.
+        HOME=os.devnull,
         GIT_CONFIG_NOSYSTEM="1",
         GIT_CONFIG_GLOBAL=os.devnull,
+        # Messages in one language, because the cause of a failure is read from them.
+        LC_ALL="C",
+        GIT_TERMINAL_PROMPT="0",
+        # Set and empty: git then asks no program for a password, whatever else is configured.
+        GIT_ASKPASS="",
+        SSH_ASKPASS="",
         GIT_LFS_SKIP_SMUDGE="1",
     )
+    config = {
+        "core.askPass": "",
+        "credential.helper": "",
+        "http.followRedirects": "false",
+        "protocol.allow": "never",
+        f"protocol.{urlsplit(url).scheme}.allow": "always",
+    }
     if token:
-        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-        env.update(
-            GIT_CONFIG_COUNT="1",
-            GIT_CONFIG_KEY_0="http.extraHeader",
-            GIT_CONFIG_VALUE_0=f"Authorization: Basic {basic}",
-        )
+        config[f"http.{_origin(url)}.extraHeader"] = f"Authorization: Basic {_authorization(token)}"
+    env["GIT_CONFIG_COUNT"] = str(len(config))
+    for index, (key, value) in enumerate(config.items()):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
     return env
 
 
-def _git(args: list[str], *, env: dict[str, str], cwd: Path | None = None) -> str:
+class _GitFailed(Exception):
+    """git exited with an error. ``output`` is what it printed, without secrets."""
+
+    def __init__(self, output: str) -> None:
+        super().__init__("git failed")
+        self.output = output
+
+
+class _GitTimedOut(Exception):
+    """git was stopped after ``CLONE_TIMEOUT_S``."""
+
+
+def _without(secrets: Sequence[str], text: str) -> str:
+    for secret in secrets:
+        text = text.replace(secret, "[REDACTED]")
+    return text
+
+
+def _git(
+    args: list[str], *, env: dict[str, str], cwd: Path | None = None, secrets: Sequence[str] = ()
+) -> str:
+    """Run git and return what it printed. ``secrets`` are removed from what a failure carries."""
     try:
         done = subprocess.run(
             ["git", *args],
             cwd=cwd,
             env=env,
             capture_output=True,
-            text=True,
+            # A remote host chooses some of these bytes; they need not be valid text.
+            encoding="utf-8",
+            errors="replace",
             timeout=CLONE_TIMEOUT_S,
             check=False,
         )
     except FileNotFoundError as e:
         raise IntakeError("git is not installed") from e
-    except subprocess.TimeoutExpired as e:
-        raise IntakeError(f"git {args[0]} timed out after {CLONE_TIMEOUT_S}s") from e
+    except subprocess.TimeoutExpired:
+        raise _GitTimedOut from None
     if done.returncode != 0:
-        raise IntakeError(f"git {args[0]} failed: {done.stderr.strip()[-500:]}")
+        raise _GitFailed(_without(secrets, done.stderr).strip())
     return done.stdout.strip()
 
 
-def clone(source: str, dest: Path, *, token: str | None = None) -> Snapshot:
-    """Shallow-clone the default branch of ``source`` into ``dest``."""
+def _cause(git_output: str) -> str:
+    """The fixed sentence for what git reported.
+
+    Only git's own lines are read. Lines it relays from the host start with
+    ``remote:``, and the URL it quotes was written by the caller; neither
+    decides anything.
+    """
+    own_lines = [
+        re.sub(r"'[^']*'", "", line).lower()
+        for line in git_output.splitlines()
+        if line.startswith(("fatal:", "error:"))
+    ]
+    for pattern, cause in _CAUSES:
+        if any(re.search(pattern, line) for line in own_lines):
+            return cause
+    return NOT_CLONED
+
+
+def clone(source: str, dest: Path, *, tokens: RepositoryTokens = NO_TOKENS) -> Snapshot:
+    """Shallow-clone the default branch of ``source`` into ``dest``.
+
+    A token from ``tokens`` is used only if it is configured for the host of ``source``.
+    """
     url = _clone_url(source)
     if dest.exists() and any(dest.iterdir()):
         raise IntakeError(f"destination is not empty: {dest}")
 
-    env = _git_env(token)
-    _git(
-        [
-            "-c", "core.symlinks=false",
-            "-c", f"core.hooksPath={os.devnull}",
-            "-c", "protocol.ext.allow=never",
-            "clone",
-            "--depth", "1",
-            "--single-branch",
-            "--no-tags",
-            "--no-recurse-submodules",
-            "--",
-            url,
-            str(dest),
-        ],
-        env=env,
-    )  # fmt: skip
+    token = tokens.token_for(url)
+    env = _git_env(token, url)
+    try:
+        _git(
+            [
+                "-c", "core.symlinks=false",
+                "-c", f"core.hooksPath={os.devnull}",
+                "clone",
+                "--depth", "1",
+                "--single-branch",
+                "--no-tags",
+                "--no-recurse-submodules",
+                "--",
+                url,
+                str(dest),
+            ],
+            env=env,
+            secrets=(token, _authorization(token)) if token else (),
+        )  # fmt: skip
+    except _GitTimedOut:
+        logger.warning("git clone of %s was stopped after %ss", url, CLONE_TIMEOUT_S)
+        raise IntakeError(CLONE_TIMED_OUT) from None
+    except _GitFailed as e:
+        # For the operator. The error itself carries none of it: see _cause.
+        logger.warning("git clone of %s failed: %r", url, e.output[-2000:])
+        raise IntakeError(_cause(e.output)) from None
 
     try:
         commit_sha = _git(["rev-parse", "HEAD"], env=env, cwd=dest)
-    except IntakeError as e:
-        raise IntakeError("repository has no commits") from e
+    except (_GitFailed, _GitTimedOut):
+        raise IntakeError("repository has no commits") from None
     try:
         ref = _git(["symbolic-ref", "--short", "-q", "HEAD"], env=env, cwd=dest) or None
-    except IntakeError:
+    except (_GitFailed, _GitTimedOut):
         ref = None
     return Snapshot(root=dest.resolve(), source_url=url, commit_sha=commit_sha, ref=ref)

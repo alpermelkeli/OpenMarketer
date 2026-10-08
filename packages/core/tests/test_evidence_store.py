@@ -8,7 +8,12 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from openmarketer_core.db.evidence_store import SavedAnalysis, local_workspace_id, save_analysis
+from openmarketer_core.db.evidence_store import (
+    SavedAnalysis,
+    local_workspace_id,
+    save_analysis,
+    save_analysis_of_project,
+)
 from openmarketer_core.db.models import (
     Evidence,
     ProductProfileRecord,
@@ -17,6 +22,7 @@ from openmarketer_core.db.models import (
     RepoSnapshot,
     Workspace,
 )
+from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.extraction import ExtractedFact
 from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
@@ -155,6 +161,65 @@ def test_run_without_facts_is_saved_without_evidence(session, workspace_id):
     )
     assert saved.evidence_count == count == 0
     assert saved.profile_version == 1
+
+
+def new_project(session: Session, workspace_id: uuid.UUID, source_repo_url: str) -> uuid.UUID:
+    project = Project(
+        workspace_id=workspace_id, name="Named By Hand", source_repo_url=source_repo_url
+    )
+    session.add(project)
+    session.flush()
+    return project.id
+
+
+def save_of_project(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID):
+    return save_analysis_of_project(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        snapshot=snapshot_of(),
+        facts=FACTS,
+        profile=profile_named(),
+    )
+
+
+def test_analysis_of_a_project_is_stored_under_that_project(session, workspace_id):
+    project_id = new_project(session, workspace_id, "https://example.com/acme/renamed.git")
+    saved = save_of_project(session, workspace_id, project_id)
+    assert saved.project_id == project_id
+    assert saved.profile_version == 1
+    assert saved.evidence_count == 2
+    assert session.get_one(RepoSnapshot, saved.snapshot_id).project_id == project_id
+    assert session.get_one(ProductProfileRecord, saved.profile_id).project_id == project_id
+
+
+def test_analysis_of_a_project_ignores_another_project_of_the_same_repository(
+    session, workspace_id
+):
+    by_repository = save(session, workspace_id)
+    project_id = new_project(session, workspace_id, REPOSITORY)
+    saved = save_of_project(session, workspace_id, project_id)
+    assert saved.project_id == project_id != by_repository.project_id
+    assert saved.profile_version == 1
+
+
+def test_second_analysis_of_a_project_adds_version_two(session, workspace_id):
+    project_id = new_project(session, workspace_id, REPOSITORY)
+    save_of_project(session, workspace_id, project_id)
+    assert save_of_project(session, workspace_id, project_id).profile_version == 2
+
+
+def test_analysis_of_an_unknown_project_is_not_stored(session, workspace_id):
+    with pytest.raises(ProjectNotFound):
+        save_of_project(session, workspace_id, uuid.uuid4())
+    assert session.scalar(select(func.count()).select_from(RepoSnapshot)) == 0
+
+
+def test_analysis_is_not_stored_under_a_project_of_another_workspace(session, workspace_id):
+    project_id = new_project(session, workspace_id, REPOSITORY)
+    with pytest.raises(ProjectNotFound):
+        save_of_project(session, new_workspace(session), project_id)
+    assert session.scalar(select(func.count()).select_from(RepoSnapshot)) == 0
 
 
 def test_local_workspace_is_created_once(session):

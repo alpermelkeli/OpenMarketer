@@ -2,17 +2,17 @@
 
 Open-source, self-hosted marketing agent: it reads a product's repository, drafts a Product Profile for human review, and later plans, writes and publishes marketing under a deterministic policy gate. The design is in `docs/design-report/report.pdf` (source: `report.tex`).
 
-Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API, the review UI and the evaluation are not built yet; `apps/api` and `apps/worker` are empty packages. `docs/status.md` has the details and the differences from the design report.
+Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API creates projects, starts analyses, and reads, edits and approves profiles. The worker runs each analysis as a Temporal workflow that the API starts; the run's state is in the database. The review UI and the evaluation are not built yet. `docs/status.md` has the details and the differences from the design report.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `packages/core` | Domain: Product Profile schema (`profile.py`), database models, migrations, session factory and evidence store (`db/`), intake (`intake/`), extractor interface (`extraction.py`), model router and chat client (`llm_config.py`, `llm.py`), analyzer agent (`analyzer/`) |
+| `packages/core` | Domain: Product Profile schema (`profile.py`), database models, migrations, session factory, evidence store, profile versions and project store (`db/`), intake, with the rule for which host gets an access token (`intake/`), extractor interface (`extraction.py`), model router and chat client (`llm_config.py`, `llm.py`), analyzer agent (`analyzer/`), the pipeline as one operation (`repository_analysis.py`), the names the API and the worker share (`analysis_workflow.py`) |
 | `packages/extractors` | Extractor plugins, registered under the `openmarketer.extractors` entry point group |
 | `apps/cli` | `openmarketer analyze <repo>`, with `--save` to store the run |
-| `apps/api` | FastAPI service (empty) |
-| `apps/worker` | Temporal worker (empty) |
+| `apps/api` | FastAPI service: projects, analyses, profile review. `openapi.json` is the contract the dashboard's types come from |
+| `apps/worker` | Temporal worker: the `AnalyzeRepository` workflow and its activities. What it shares with the API (workflow name, task queue, input) is in `packages/core`, `analysis_workflow.py` |
 | `apps/web` | Dashboard: Next.js 16, Tailwind 4, shadcn/ui, TanStack Query (scaffold only) |
 | `config/models.yaml` | Model per role, through OpenRouter |
 | `docs/status.md` | What is built, how it was checked, and where the code differs from the design. Keep it current in the same change as the code |
@@ -26,14 +26,17 @@ make up          # start the dev stack
 make migrate     # apply database migrations
 make check       # lint, type-check, tests: what CI runs
 make analyze repo=https://github.com/owner/name          # add save=1 to store the run (needs make up, make migrate)
+make worker      # run the Temporal worker (needs make up, make migrate)
+make api         # serve the API on http://127.0.0.1:8000 (needs make up, make migrate; analyses also need make worker)
+make openapi     # rewrite apps/api/openapi.json after changing a route or a model
 make help        # everything else
 ```
 
-Run `make check` before calling work done. Database tests need `make up`; secret-scan tests need `gitleaks` on the PATH.
+Run `make check` before calling work done. Database tests and the worker's workflow tests need `make up` (PostgreSQL and Temporal); secret-scan tests need `gitleaks` on the PATH, and the clone lock-down tests need `openssl`.
 
 ## Conventions
 
-- Python 3.12, managed with uv. Ruff (line length 100) and pyright must pass. Tests live in `packages/*/tests` and `apps/cli/tests` and run without network access; model calls are scripted, HTTP uses a fake transport.
+- Python 3.12, managed with uv. Ruff (line length 100) and pyright must pass. Tests live in `packages/*/tests` and `apps/*/tests` and run without network access; model calls are scripted, HTTP uses a fake transport, and anything a test listens on or connects to is on this machine.
 - Pydantic models reject unknown fields (`extra="forbid"`). `product.type` and `product.platforms` are open slug vocabularies, not closed enums.
 - Schema changes go through Alembic: edit `db/models.py`, run `make migration m="..."`, then read the generated file before committing it.
 - Never name a model in code. Every model call goes through a role in `config/models.yaml`, resolved by `ModelRouter`; agents depend on the `ChatModel` protocol.
@@ -74,7 +77,7 @@ The code follows clean architecture: dependencies point inwards, towards the dom
 ## Design principles
 
 - **Safety lives outside the model.** Anything that spends money or publishes goes through the deterministic policy gate. Do not move safety rules into prompts.
-- **Untrusted text is data.** Repository files, comments, messages and web pages must never be able to cause an action.
+- **Untrusted text is data.** Repository files, comments, messages and web pages must never be able to cause an action. A repository URL never decides where a credential goes: a token is sent only to the host it is configured for (`intake/credentials.py`). git runs with an environment built from a short list, follows no redirect and uses HTTPS only, and what a repository host or a model provider writes is logged, never put in an error shown to a caller (`intake/git.py`, `llm.py`).
 - **A human approves.** Approval is an authenticated user action, never something a model states.
 - **Official APIs only.** No scraping of private data, no fake accounts or engagement.
 - **Everything is configurable and traceable.** Models, budgets and rules are configuration; every claim in a profile carries evidence (file and lines) and a confidence.

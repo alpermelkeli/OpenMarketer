@@ -38,6 +38,18 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
+      # The worker's workflow tests run against a Temporal dev server, as in the dev stack.
+      # A service container cannot be given a command, so it is started here.
+      - name: Start Temporal dev server
+        run: |
+          docker run -d --name temporal -p 7233:7233 temporalio/temporal:latest \
+            server start-dev --ip 0.0.0.0
+          for _ in $(seq 1 30); do
+            if docker exec temporal temporal operator cluster health >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          docker logs temporal
+          exit 1
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .

@@ -88,3 +88,49 @@ def test_network_failure_raises_without_leaking_details():
 
     with pytest.raises(LLMError, match="request failed: ConnectError"):
         client(handler).chat("writer", [{"role": "user", "content": "x"}])
+
+
+ECHOED = "Authorization: Bearer key-echoed-by-an-error-page"
+
+
+def failure_of(response: httpx.Response) -> LLMError:
+    with pytest.raises(LLMError) as failure:
+        client(lambda request: response).chat("writer", [{"role": "user", "content": "x"}])
+    return failure.value
+
+
+def test_refusal_says_the_status_and_not_what_the_provider_wrote():
+    failure = failure_of(httpx.Response(401, text=f"<html>{ECHOED}</html>"))
+    assert str(failure) == "the model provider answered HTTP 401"
+    assert failure.status == 401
+
+
+def test_error_inside_a_reply_is_not_repeated_either():
+    failure = failure_of(httpx.Response(200, json={"error": {"message": ECHOED, "code": 429}}))
+    assert str(failure) == "the model provider reported an error"
+    assert failure.status == 429
+
+
+def test_what_the_provider_wrote_is_logged_for_the_operator(caplog):
+    with caplog.at_level("WARNING", logger="openmarketer_core.llm"):
+        failure_of(httpx.Response(402, json={"error": {"message": "insufficient credits"}}))
+    assert "insufficient credits" in caplog.text
+
+
+@pytest.mark.parametrize("status", [408, 429, 500, 502, 503])
+def test_failure_that_can_pass(status):
+    assert LLMError("x", status=status).may_pass
+
+
+@pytest.mark.parametrize("status", [400, 401, 402, 403, 404, 422])
+def test_refusal_of_the_request_itself_will_not_pass(status):
+    assert not LLMError("x", status=status).may_pass
+
+
+def test_provider_that_did_not_answer_may_answer_later():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow")
+
+    with pytest.raises(LLMError) as failure:
+        client(handler).chat("writer", [{"role": "user", "content": "x"}])
+    assert (failure.value.status, failure.value.may_pass) == (None, True)

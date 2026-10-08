@@ -668,15 +668,21 @@ name = "openmarketer-api"
 version = "0.0.0"
 source = { editable = "apps/api" }
 dependencies = [
+    { name = "anyio" },
     { name = "fastapi" },
     { name = "openmarketer-core" },
+    { name = "sqlalchemy" },
+    { name = "temporalio" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4" },
     { name = "fastapi", specifier = ">=0.142.4" },
     { name = "openmarketer-core", editable = "packages/core" },
+    { name = "sqlalchemy", specifier = ">=2" },
+    { name = "temporalio", specifier = ">=1.34.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
 ]
 
@@ -758,6 +764,7 @@ source = { editable = "apps/worker" }
 dependencies = [
     { name = "openmarketer-core" },
     { name = "openmarketer-extractors" },
+    { name = "sqlalchemy" },
     { name = "temporalio" },
 ]
 
@@ -765,6 +772,7 @@ dependencies = [
 requires-dist = [
     { name = "openmarketer-core", editable = "packages/core" },
     { name = "openmarketer-extractors", editable = "packages/extractors" },
+    { name = "sqlalchemy", specifier = ">=2" },
     { name = "temporalio", specifier = ">=1.34.0" },
 ]
 

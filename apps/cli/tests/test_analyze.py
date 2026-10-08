@@ -15,8 +15,14 @@ from openmarketer_core.analyzer import Analysis
 from openmarketer_core.db.models import Evidence, ProductProfileRecord, Project, RepoSnapshot
 from openmarketer_core.db.session import DatabaseError
 from openmarketer_core.extraction import ExtractedFact, ExtractionResult
-from openmarketer_core.intake import IntakeResult, RepoFiles, Snapshot
-from openmarketer_core.llm import RouterChatModel
+from openmarketer_core.intake import (
+    NO_TOKENS,
+    IntakeResult,
+    RepoFiles,
+    RepositoryTokens,
+    Snapshot,
+)
+from openmarketer_core.llm import LLMError, RouterChatModel
 from openmarketer_core.profile import ProductProfile
 
 REPOSITORY = "https://example.com/acme/app.git"
@@ -27,12 +33,21 @@ FACT = ExtractedFact(
 
 
 @pytest.fixture
-def clones(monkeypatch) -> list[str]:
+def offered_tokens() -> list[RepositoryTokens]:
+    """The tokens each clone was allowed to choose from."""
+    return []
+
+
+@pytest.fixture
+def clones(monkeypatch, offered_tokens) -> list[str]:
     """Replace intake, extraction and the analyzer; return the sources that were cloned."""
     cloned: list[str] = []
 
-    def run_intake(source: str, dest: Path, *, token: str | None = None) -> IntakeResult:
+    def run_intake(
+        source: str, dest: Path, *, tokens: RepositoryTokens = NO_TOKENS
+    ) -> IntakeResult:
         cloned.append(source)
+        offered_tokens.append(tokens)
         dest.mkdir()
         snapshot = Snapshot(root=dest, source_url=source, commit_sha="a" * 40, ref="main")
         return IntakeResult(snapshot=snapshot, files=RepoFiles(dest), findings=[])
@@ -123,3 +138,33 @@ def test_profile_is_still_printed_when_saving_fails(clones, database_url, monkey
 
 def test_command_line_does_not_import_sqlalchemy():
     assert "sqlalchemy" not in Path(main.__file__).read_text()
+
+
+def test_token_of_the_environment_is_offered_to_its_own_host_only(
+    clones, offered_tokens, monkeypatch
+):
+    monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+    monkeypatch.delenv("GITLAB_HOST", raising=False)
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-value")
+    assert run().exit_code == 0
+    (tokens,) = offered_tokens
+    assert tokens.token_for("https://github.com/acme/app.git") == "github-token-value"
+    assert tokens.token_for(REPOSITORY) is None
+
+
+def test_token_host_that_is_not_a_host_name_stops_the_command(clones, monkeypatch):
+    monkeypatch.setenv("GITLAB_HOST", "https://gitlab.example.com")
+    result = run()
+    assert result.exit_code == 1
+    assert "GITLAB_HOST" in result.stderr
+    assert clones == []
+
+
+def test_refusal_by_the_model_provider_is_reported_with_its_status(clones, monkeypatch):
+    def refuse(*_, **__):
+        raise LLMError("the model provider answered HTTP 401", status=401)
+
+    monkeypatch.setattr(main, "analyze", refuse)
+    result = run()
+    assert result.exit_code == 1
+    assert "error: the model provider answered HTTP 401" in result.stderr

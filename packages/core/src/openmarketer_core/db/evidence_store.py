@@ -1,12 +1,16 @@
 """Evidence store: what an analysis run leaves in the database.
 
 One run adds a repository snapshot, the extractor facts found in it and a new
-draft version of the project's Product Profile. Domain objects (``Snapshot``,
-``ExtractedFact``, ``ProductProfile``) are converted to rows here and nowhere
-else.
+draft version of the project's Product Profile. The command line names the
+project by its repository (``save_analysis``, which creates it on first use);
+a caller that already has a project names it by id
+(``save_analysis_of_project``). Domain objects (``Snapshot``, ``ExtractedFact``,
+``ProductProfile``) are converted to rows here and nowhere else.
 
 Functions take a session and never commit: the caller owns the transaction.
-Approval of a profile is not handled here; every version is stored as a draft.
+Every version is stored here as a draft; editing, approving and reading
+versions is in ``profile_versions``, and the state of a requested run is in
+``analysis_runs``.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from openmarketer_core.db.models import (
@@ -25,6 +29,8 @@ from openmarketer_core.db.models import (
     RepoSnapshot,
     Workspace,
 )
+from openmarketer_core.db.profile_versions import next_profile_version, wait_for_other_writes
+from openmarketer_core.db.projects import get_project
 from openmarketer_core.extraction import ExtractedFact
 from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
@@ -72,7 +78,7 @@ def save_analysis(
     The first run of a repository creates the project, named after the product.
     Every run adds a snapshot, its evidence and the next profile version.
     """
-    _wait_for_other_saves(session, workspace_id)
+    wait_for_other_writes(session, workspace_id)
     project = _project_for_repository(session, workspace_id, snapshot.source_url)
     if project is None:
         project = Project(
@@ -83,15 +89,45 @@ def save_analysis(
         session.add(project)
         session.flush()
 
+    return _store_run(session, project.id, snapshot, facts, profile)
+
+
+def save_analysis_of_project(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    snapshot: Snapshot,
+    facts: Iterable[ExtractedFact],
+    profile: ProductProfile,
+) -> SavedAnalysis:
+    """Store one analysis run under a project the workspace already has.
+
+    Raises ``ProjectNotFound`` when the workspace has no such project. The
+    project is taken as given: the repository URL of the snapshot is not
+    compared with the project's.
+    """
+    wait_for_other_writes(session, workspace_id)
+    project = get_project(session, workspace_id=workspace_id, project_id=project_id)
+    return _store_run(session, project.id, snapshot, facts, profile)
+
+
+def _store_run(
+    session: Session,
+    project_id: uuid.UUID,
+    snapshot: Snapshot,
+    facts: Iterable[ExtractedFact],
+    profile: ProductProfile,
+) -> SavedAnalysis:
     stored_snapshot = RepoSnapshot(
-        project_id=project.id, commit_sha=snapshot.commit_sha, ref=snapshot.ref
+        project_id=project_id, commit_sha=snapshot.commit_sha, ref=snapshot.ref
     )
     session.add(stored_snapshot)
     session.flush()
 
     evidence_rows = [
         {
-            "project_id": project.id,
+            "project_id": project_id,
             "snapshot_id": stored_snapshot.id,
             "extractor": fact.extractor,
             "kind": fact.kind,
@@ -106,30 +142,21 @@ def save_analysis(
         session.execute(insert(Evidence), evidence_rows)
 
     record = ProductProfileRecord(
-        project_id=project.id,
+        project_id=project_id,
         snapshot_id=stored_snapshot.id,
-        version=_next_profile_version(session, project.id),
+        version=next_profile_version(session, project_id),
         content=profile.model_dump(mode="json"),
     )
     session.add(record)
     session.flush()
 
     return SavedAnalysis(
-        project_id=project.id,
+        project_id=project_id,
         snapshot_id=stored_snapshot.id,
         profile_id=record.id,
         profile_version=record.version,
         evidence_count=len(evidence_rows),
     )
-
-
-def _wait_for_other_saves(session: Session, workspace_id: uuid.UUID) -> None:
-    """Hold the workspace row until the transaction ends.
-
-    Saves in one workspace then run one after another, so two runs of the same
-    repository cannot both create its project or take the same version number.
-    """
-    session.execute(select(Workspace.id).where(Workspace.id == workspace_id).with_for_update())
 
 
 def _project_for_repository(
@@ -141,12 +168,3 @@ def _project_for_repository(
         .order_by(Project.created_at)
         .limit(1)
     )
-
-
-def _next_profile_version(session: Session, project_id: uuid.UUID) -> int:
-    latest = session.scalar(
-        select(func.max(ProductProfileRecord.version)).where(
-            ProductProfileRecord.project_id == project_id
-        )
-    )
-    return (latest or 0) + 1
