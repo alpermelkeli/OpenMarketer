@@ -26,6 +26,7 @@ class Snapshot:
     """A checked-out commit of the analysed repository."""
 
     root: Path
+    source_url: str  # what git cloned from; a local folder appears as a file:// URL
     commit_sha: str
     ref: str | None
 
@@ -133,4 +134,4 @@ def clone(source: str, dest: Path, *, token: str | None = None) -> Snapshot:
         ref = _git(["symbolic-ref", "--short", "-q", "HEAD"], env=env, cwd=dest) or None
     except IntakeError:
         ref = None
-    return Snapshot(root=dest.resolve(), commit_sha=commit_sha, ref=ref)
+    return Snapshot(root=dest.resolve(), source_url=url, commit_sha=commit_sha, ref=ref)

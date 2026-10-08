@@ -5,22 +5,62 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from openmarketer_core.analyzer import AnalysisError, Limits, analyze
-from openmarketer_core.extraction import discover_extractors, run_extractors
-from openmarketer_core.intake import IntakeError, run_intake
+from openmarketer_core.db.evidence_store import SavedAnalysis, local_workspace_id, save_analysis
+from openmarketer_core.db.session import DatabaseError, session_factory, transaction
+from openmarketer_core.extraction import ExtractedFact, discover_extractors, run_extractors
+from openmarketer_core.intake import IntakeError, Snapshot, run_intake
 from openmarketer_core.llm import LLMError, RouterChatModel
 from openmarketer_core.llm_config import ConfigError
+from openmarketer_core.profile import ProductProfile
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
+
+DATABASE_HINT = "is the dev stack running and migrated? (`make up`, `make migrate`)"
+
+SaveRun = Callable[[Snapshot, Sequence[ExtractedFact], ProductProfile], SavedAnalysis]
 
 
 def _say(message: str) -> None:
     print(message, file=sys.stderr)
+
+
+def _failure(message: str) -> typer.Exit:
+    _say(f"error: {message}")
+    return typer.Exit(1)
+
+
+def _open_store() -> SaveRun:
+    """Connect to the database of DATABASE_URL and return how to save a run in it.
+
+    The connection is tried here, before any repository is cloned or model is
+    called, so a database that cannot take the result does not waste a run.
+    """
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise _failure("--save needs DATABASE_URL (see .env.example)")
+    try:
+        sessions = session_factory(database_url)
+        with transaction(sessions) as session:
+            workspace_id = local_workspace_id(session)
+    except DatabaseError as e:
+        raise _failure(f"database: {e}\n  {DATABASE_HINT}") from e
+
+    def save_run(
+        snapshot: Snapshot, facts: Sequence[ExtractedFact], profile: ProductProfile
+    ) -> SavedAnalysis:
+        with transaction(sessions) as session:
+            return save_analysis(
+                session, workspace_id=workspace_id, snapshot=snapshot, facts=facts, profile=profile
+            )
+
+    return save_run
 
 
 @app.callback()
@@ -36,11 +76,17 @@ def analyze_command(
         float, typer.Option(help="Stop when the run has cost this much (USD)")
     ] = Limits.max_cost_usd,
     max_steps: Annotated[int, typer.Option(help="Maximum model turns")] = Limits.max_steps,
+    save: Annotated[
+        bool, typer.Option("--save", help="Store the run in the database of DATABASE_URL")
+    ] = False,
 ) -> None:
     """Analyse a repository and print a draft Product Profile as JSON.
 
-    Nothing is published or stored. The profile is a draft for human review.
+    Nothing is published. With --save the snapshot, the extractor facts and the
+    profile are stored as a new draft version; otherwise nothing is stored.
+    The profile is a draft for human review.
     """
+    save_run = _open_store() if save else None
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITLAB_TOKEN") or None
     with tempfile.TemporaryDirectory(prefix="openmarketer-") as tmp:
         try:
@@ -63,8 +109,7 @@ def analyze_command(
                 limits=Limits(max_steps=max_steps, max_cost_usd=max_cost),
             )
         except (IntakeError, AnalysisError, LLMError, ConfigError) as e:
-            _say(f"error: {e}")
-            raise typer.Exit(1) from e
+            raise _failure(str(e)) from e
 
     _say(
         f"analyzer: {result.model}, {result.steps} steps, "
@@ -78,3 +123,14 @@ def analyze_command(
         _say(f"profile written to {out}")
     else:
         print(text)
+
+    if save_run is None:
+        return
+    try:
+        saved = save_run(intake.snapshot, extraction.facts, result.profile)
+    except DatabaseError as e:
+        raise _failure(f"the profile was not stored: {e}") from e
+    _say(
+        f"stored: project {saved.project_id}, profile version {saved.profile_version}, "
+        f"{saved.evidence_count} evidence rows"
+    )

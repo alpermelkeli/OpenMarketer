@@ -2,15 +2,15 @@
 
 Open-source, self-hosted marketing agent: it reads a product's repository, drafts a Product Profile for human review, and later plans, writes and publishes marketing under a deterministic policy gate. The design is in `docs/design-report/report.pdf` (source: `report.tex`).
 
-Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI. Storage of results, the API, the review UI and the evaluation are not built yet; `apps/api` and `apps/worker` are empty packages. `docs/status.md` has the details and the differences from the design report.
+Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API, the review UI and the evaluation are not built yet; `apps/api` and `apps/worker` are empty packages. `docs/status.md` has the details and the differences from the design report.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `packages/core` | Domain: Product Profile schema (`profile.py`), database models and migrations (`db/`), intake (`intake/`), extractor interface (`extraction.py`), model router and chat client (`llm_config.py`, `llm.py`), analyzer agent (`analyzer/`) |
+| `packages/core` | Domain: Product Profile schema (`profile.py`), database models, migrations, session factory and evidence store (`db/`), intake (`intake/`), extractor interface (`extraction.py`), model router and chat client (`llm_config.py`, `llm.py`), analyzer agent (`analyzer/`) |
 | `packages/extractors` | Extractor plugins, registered under the `openmarketer.extractors` entry point group |
-| `apps/cli` | `openmarketer analyze <repo>` |
+| `apps/cli` | `openmarketer analyze <repo>`, with `--save` to store the run |
 | `apps/api` | FastAPI service (empty) |
 | `apps/worker` | Temporal worker (empty) |
 | `apps/web` | Dashboard: Next.js 16, Tailwind 4, shadcn/ui, TanStack Query (scaffold only) |
@@ -25,7 +25,7 @@ make install     # uv sync + pnpm install
 make up          # start the dev stack
 make migrate     # apply database migrations
 make check       # lint, type-check, tests: what CI runs
-make analyze repo=https://github.com/owner/name
+make analyze repo=https://github.com/owner/name          # add save=1 to store the run (needs make up, make migrate)
 make help        # everything else
 ```
 
@@ -33,7 +33,7 @@ Run `make check` before calling work done. Database tests need `make up`; secret
 
 ## Conventions
 
-- Python 3.12, managed with uv. Ruff (line length 100) and pyright must pass. Tests live in `packages/*/tests` and run without network access; model calls are scripted, HTTP uses a fake transport.
+- Python 3.12, managed with uv. Ruff (line length 100) and pyright must pass. Tests live in `packages/*/tests` and `apps/cli/tests` and run without network access; model calls are scripted, HTTP uses a fake transport.
 - Pydantic models reject unknown fields (`extra="forbid"`). `product.type` and `product.platforms` are open slug vocabularies, not closed enums.
 - Schema changes go through Alembic: edit `db/models.py`, run `make migration m="..."`, then read the generated file before committing it.
 - Never name a model in code. Every model call goes through a role in `config/models.yaml`, resolved by `ModelRouter`; agents depend on the `ChatModel` protocol.

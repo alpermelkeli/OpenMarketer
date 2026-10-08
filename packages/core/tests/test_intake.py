@@ -82,6 +82,17 @@ def test_clone_records_the_commit(source_repo, tmp_path):
     assert (snapshot.root / "README.md").read_text() == "# Example App\n"
 
 
+def test_clone_records_where_it_came_from(source_repo, tmp_path):
+    snapshot = clone(str(source_repo), tmp_path / "clone")
+    assert snapshot.source_url == source_repo.resolve().as_uri()
+
+
+def test_same_folder_given_as_path_or_file_url_is_one_source(source_repo, tmp_path):
+    by_path = clone(str(source_repo), tmp_path / "a")
+    by_url = clone(source_repo.resolve().as_uri(), tmp_path / "b")
+    assert by_path.source_url == by_url.source_url
+
+
 def test_clone_contains_only_committed_files(source_repo, tmp_path):
     snapshot = clone(str(source_repo), tmp_path / "clone")
     assert not (snapshot.root / "untracked-notes.txt").exists()

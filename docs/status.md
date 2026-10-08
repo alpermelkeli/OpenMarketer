@@ -13,8 +13,8 @@ Phase 1 of the roadmap is "repository analyzer and Product Profile": extractors,
 | Extractors (11, as plugins) | Built | `packages/extractors/` |
 | Analyzer agent | Built, runs from the CLI | `packages/core/src/openmarketer_core/analyzer/` |
 | Model configuration and chat client | Built | `config/models.yaml`, `packages/core/src/openmarketer_core/llm_config.py`, `llm.py` |
-| Database models and migrations | Built, but nothing writes to them yet | `packages/core/src/openmarketer_core/db/` |
-| Evidence store: saving snapshots, evidence and profile versions | Not built | |
+| Database models and migrations | Built | `packages/core/src/openmarketer_core/db/models.py`, `db/migrations/` |
+| Evidence store: saving snapshots, evidence and profile versions | Built, used by the CLI with `--save`; see [Storing a run](#storing-a-run) for what it leaves out | `packages/core/src/openmarketer_core/db/evidence_store.py`, `db/session.py` |
 | API | Not built (`apps/api` is an empty package) | |
 | Worker | Not built (`apps/worker` is an empty package) | |
 | Review UI | Not built (`apps/web` is a scaffold) | |
@@ -26,11 +26,61 @@ The one thing that runs end to end is the command line:
 make analyze repo=https://github.com/owner/name
 ```
 
-It clones the repository, scans and redacts secrets, runs the extractors, lets the analyzer agent explore the files, and prints a draft Product Profile as JSON. Nothing is stored and nothing is published. The profile is a draft: no person has reviewed it.
+It clones the repository, scans and redacts secrets, runs the extractors, lets the analyzer agent explore the files, and prints a draft Product Profile as JSON. Nothing is published, and nothing is stored unless the run is started with `save=1` (next section). The profile is a draft: no person has reviewed it.
+
+### Storing a run
+
+`make analyze repo=... save=1` passes `--save` to `openmarketer analyze`, which writes the run to PostgreSQL after the profile has been printed (or written with `--out`). It needs the dev stack, a migrated database, and a `DATABASE_URL` in `.env` that points at it. For the dev stack that is `postgresql+psycopg://openmarketer:openmarketer@localhost:5433/openmarketer`; the value in `.env.example` uses the host name of the compose network and does not work from the host.
+
+```bash
+make up          # start PostgreSQL (and the rest of the dev stack)
+make migrate     # create the tables
+make analyze repo=https://github.com/owner/name save=1
+```
+
+The database is checked before the repository is cloned, so a missing `DATABASE_URL` or an unreachable or unmigrated database ends the command before any model call is made.
+
+The database check also creates a workspace called `local` if there is none; it stands in for a user account in single-user mode. One saved run then writes, in a single transaction:
+
+- a `project` row in that workspace for the repository, the first time that repository is saved. It is named after the product in the profile and keeps that name if a later profile names the product differently;
+- a `repo_snapshot` row: the commit and the branch that were analysed;
+- one `evidence` row per extractor fact: extractor, kind, value, file and lines;
+- a `product_profile` row holding the profile as JSON, with status `draft` and a version one higher than the project's highest so far. Saving the same repository again adds a snapshot and version 2; it does not replace version 1.
+
+To look at what was stored, open a shell in the dev database with `make psql`:
+
+```sql
+-- Every stored profile version, newest first, with the commit it was drafted from
+SELECT p.name, p.source_repo_url, s.commit_sha, s.ref, pp.version, pp.status, pp.created_at
+FROM product_profile pp
+JOIN project p ON p.id = pp.project_id
+LEFT JOIN repo_snapshot s ON s.id = pp.snapshot_id
+ORDER BY pp.created_at DESC;
+
+-- The extractor facts of the most recent snapshot
+SELECT extractor, kind, file, start_line, value
+FROM evidence
+WHERE snapshot_id = (SELECT id FROM repo_snapshot ORDER BY created_at DESC LIMIT 1)
+ORDER BY extractor, kind;
+
+-- One section of the most recent profile
+SELECT jsonb_pretty(content -> 'product') FROM product_profile ORDER BY created_at DESC LIMIT 1;
+```
+
+What storing a run does not do yet:
+
+- **No approval.** Every stored profile is a draft. The table has the columns for an approved version, and no code sets them.
+- **What the analyzer read is not stored.** The `evidence` table holds the extractor facts only, which the analyzer receives as hints. The evidence behind each claim in the profile (file and lines) is stored inside the profile JSON, not as rows, and the analyzer's tool calls are not stored at all.
+- **A project is matched by the exact repository URL.** `https://host/a/b` and `https://host/a/b.git` become two projects, and so does the same repository analysed once from its URL and once from a local folder (stored as a `file://` URL).
+- **No workspace isolation in the database.** Queries are scoped to a workspace in code; there is no row-level security (see the differences below).
+- **The command line is the only caller.** Nothing reads the stored rows back: there is no API and no review UI.
+
+If saving fails after the analysis, the profile has already been printed or written, and the command exits with an error saying it was not stored.
 
 ## How it was checked
 
-- `make check` (ruff, pyright, 197 tests) passes locally and in CI. The tests need no network: model calls are scripted and HTTP uses a fake transport. Database tests run against PostgreSQL, secret-scan tests against gitleaks.
+- `make check` (ruff, pyright, 226 tests) passes locally and in CI. The tests need no network: model calls are scripted and HTTP uses a fake transport. Database tests run against PostgreSQL, secret-scan tests against gitleaks.
+- Storing a run is covered by those tests: the evidence store and the session module against PostgreSQL, and `openmarketer analyze --save` with the clone, extractors and model replaced by fixed results. One complete `make analyze repo=. save=1` run, on this repository with the free model, stored a project, a snapshot, 41 evidence rows and profile version 1, and the rows were read back with psql. A second save of the same repository (version 2) has only been run in the tests.
 - Intake and the extractors were run by hand on seven public repositories of different kinds (Kotlin Multiplatform, Flutter, Expo, Swift, Rust, Python, Go).
 - The analyzer completed full runs against a live model on one repository ([Memoria](https://github.com/alpermelkeli/Memoria), a Kotlin Multiplatform app) with the free model named below. Three runs finished with an accepted profile at no cost; the two whose length was recorded took 12 and 19 model turns and needed no repairs.
 
@@ -77,4 +127,4 @@ Other things observed:
 
 ## What comes next
 
-In order: saving results to the database, the API, the review UI, the golden-repository evaluation. Whether a proposed strategy belongs to Phase 1 is open: the roadmap caption mentions it, the phase description does not.
+Saving results to the database is done for the command line. Next, in order: the API, the review UI, the golden-repository evaluation. Whether a proposed strategy belongs to Phase 1 is open: the roadmap caption mentions it, the phase description does not.
