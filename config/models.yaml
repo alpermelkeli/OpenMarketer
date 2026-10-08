@@ -13,9 +13,10 @@
 #   5. this file: tier mapping (role.tier -> tiers.<tier>)
 #   6. this file: defaults.model
 #
-# IMPORTANT: model slugs use OpenRouter's "provider/model" form. The slugs
-# below are placeholders chosen for readability. Verify the exact, current
-# slugs at https://openrouter.ai/models before first use.
+# IMPORTANT: model slugs use OpenRouter's "provider/model" form and change as
+# models are released and retired. Check them against the catalogue at
+# https://openrouter.ai/models; `python config/llm_config.py show` prints
+# the model each role resolves to.
 
 version: 1
 
@@ -34,7 +35,7 @@ provider:
 
 # Three reusable model classes. Change a tier and every role that uses it follows.
 tiers:
-  fast: apodex/apodex-1.1-mini:free          # cheap, quick: classification, short replies
+  fast: apodex/apodex-1.1-mini:free          # cheap, quick: classification, short replies (free, rate limited)
   balanced: anthropic/claude-sonnet-5.5     # default workhorse: writing, planning
   strong: anthropic/claude-opus-5.5         # hard reasoning: profile synthesis, strategy
 
@@ -59,8 +60,8 @@ roles:
     requires: [tools]            # reads data and creates requests through tools; never executes them directly
 
   # --- understanding ---------------------------------------------------
-  repo_analyzer:                 # synthesises the Product Profile from extractor evidence
-    tier: fast
+  repo_analyzer:                 # explores the repository with read-only tools and drafts the Product Profile
+    tier: fast                   # free model while the analyzer is being built; the intended default is strong
     temperature: 0.1
     max_tokens: 8192
     requires: [tools, structured_output]
