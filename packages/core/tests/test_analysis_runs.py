@@ -26,7 +26,6 @@ from openmarketer_core.db.analysis_runs import (
     request_analysis_run,
 )
 from openmarketer_core.db.evidence_store import (
-    AnalysisProjectNotFound,
     SavedAnalysis,
     save_analysis_of_project,
 )
@@ -38,13 +37,14 @@ from openmarketer_core.db.models import (
     Workspace,
 )
 from openmarketer_core.db.profile_versions import latest_draft_profile
+from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.session import transaction
 from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
 
 
 @dataclass(frozen=True)
-class StoredProject:
+class ProjectInWorkspace:
     workspace_id: uuid.UUID
     project_id: uuid.UUID
 
@@ -60,21 +60,21 @@ def new_workspace(session: Session) -> uuid.UUID:
     return workspace.id
 
 
-def new_project(session: Session, workspace_id: uuid.UUID) -> StoredProject:
+def new_project(session: Session, workspace_id: uuid.UUID) -> ProjectInWorkspace:
     project = Project(
         workspace_id=workspace_id, name="Example App", source_repo_url="https://example.com/r.git"
     )
     session.add(project)
     session.flush()
-    return StoredProject(workspace_id, project.id)
+    return ProjectInWorkspace(workspace_id, project.id)
 
 
 @pytest.fixture
-def project(session) -> StoredProject:
+def project(session) -> ProjectInWorkspace:
     return new_project(session, new_workspace(session))
 
 
-def stored_result(session: Session, project: StoredProject) -> SavedAnalysis:
+def stored_result(session: Session, project: ProjectInWorkspace) -> SavedAnalysis:
     return save_analysis_of_project(
         session,
         **project.scope,
@@ -89,22 +89,22 @@ def stored_result(session: Session, project: StoredProject) -> SavedAnalysis:
     )
 
 
-def requested(session: Session, project: StoredProject) -> AnalysisRun:
+def requested(session: Session, project: ProjectInWorkspace) -> AnalysisRun:
     return request_analysis_run(session, **project.scope)
 
 
-def started(session: Session, project: StoredProject) -> AnalysisRun:
+def started(session: Session, project: ProjectInWorkspace) -> AnalysisRun:
     run = requested(session, project)
     return mark_run_started(session, **project.scope, run_id=run.id)
 
 
-def succeeded(session: Session, project: StoredProject) -> AnalysisRun:
+def succeeded(session: Session, project: ProjectInWorkspace) -> AnalysisRun:
     run = started(session, project)
     result = stored_result(session, project)
     return mark_run_succeeded(session, **project.scope, run_id=run.id, profile_id=result.profile_id)
 
 
-def failed(session: Session, project: StoredProject) -> AnalysisRun:
+def failed(session: Session, project: ProjectInWorkspace) -> AnalysisRun:
     run = requested(session, project)
     return mark_run_failed(session, **project.scope, run_id=run.id, error="clone failed")
 
@@ -119,12 +119,12 @@ def test_requested_run_is_queued_and_has_no_outcome(session, project):
 
 
 def test_run_cannot_be_requested_for_an_unknown_project(session, project):
-    with pytest.raises(AnalysisProjectNotFound):
+    with pytest.raises(ProjectNotFound):
         request_analysis_run(session, workspace_id=project.workspace_id, project_id=uuid.uuid4())
 
 
 def test_run_cannot_be_requested_for_a_project_of_another_workspace(session, project):
-    with pytest.raises(AnalysisProjectNotFound):
+    with pytest.raises(ProjectNotFound):
         request_analysis_run(
             session, workspace_id=new_workspace(session), project_id=project.project_id
         )
@@ -320,7 +320,7 @@ def test_run_of_another_project_is_not_found(session, project, use):
     assert analysis_run(session, **project.scope, run_id=run.id) == run
 
 
-def committed_project(sessions: sessionmaker[Session]) -> StoredProject:
+def committed_project(sessions: sessionmaker[Session]) -> ProjectInWorkspace:
     with sessions.begin() as setup:
         return new_project(setup, new_workspace(setup))
 

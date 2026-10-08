@@ -30,18 +30,12 @@ from openmarketer_core.db.models import (
     Workspace,
 )
 from openmarketer_core.db.profile_versions import next_profile_version, wait_for_other_writes
+from openmarketer_core.db.projects import get_project
 from openmarketer_core.extraction import ExtractedFact
 from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
 
 LOCAL_WORKSPACE_NAME = "local"
-
-
-class AnalysisProjectNotFound(Exception):
-    """The workspace has no such project to analyse or to store an analysis under."""
-
-    def __init__(self, project_id: uuid.UUID) -> None:
-        super().__init__(f"project {project_id} does not exist")
 
 
 @dataclass(frozen=True)
@@ -109,24 +103,13 @@ def save_analysis_of_project(
 ) -> SavedAnalysis:
     """Store one analysis run under a project the workspace already has.
 
-    The project is taken as given: the repository URL of the snapshot is not
+    Raises ``ProjectNotFound`` when the workspace has no such project. The
+    project is taken as given: the repository URL of the snapshot is not
     compared with the project's.
     """
     wait_for_other_writes(session, workspace_id)
-    project = project_in_workspace(session, workspace_id, project_id)
+    project = get_project(session, workspace_id=workspace_id, project_id=project_id)
     return _store_run(session, project.id, snapshot, facts, profile)
-
-
-def project_in_workspace(
-    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID
-) -> Project:
-    """The project, if the workspace has it; a project of another workspace does not exist."""
-    project = session.scalar(
-        select(Project).where(Project.workspace_id == workspace_id, Project.id == project_id)
-    )
-    if project is None:
-        raise AnalysisProjectNotFound(project_id)
-    return project
 
 
 def _store_run(

@@ -44,7 +44,6 @@ from sqlalchemy import Select, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from openmarketer_core.db.evidence_store import project_in_workspace
 from openmarketer_core.db.models import (
     ANALYSIS_ERROR_MAX_LENGTH,
     AnalysisRunRecord,
@@ -52,6 +51,7 @@ from openmarketer_core.db.models import (
     ProductProfileRecord,
     Project,
 )
+from openmarketer_core.db.projects import get_project
 
 UNFINISHED_RUN_INDEX = "uq_analysis_run_project_id_unfinished"
 FINISHED = (AnalysisRunStatus.SUCCEEDED, AnalysisRunStatus.FAILED)
@@ -104,8 +104,11 @@ class AnalysisRun:
 def request_analysis_run(
     session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID
 ) -> AnalysisRun:
-    """Add a queued run for the project, unless it has an unfinished one."""
-    project = project_in_workspace(session, workspace_id, project_id)
+    """Add a queued run for the project, unless it has an unfinished one.
+
+    Raises ``ProjectNotFound`` when the workspace has no such project.
+    """
+    project = get_project(session, workspace_id=workspace_id, project_id=project_id)
     record = AnalysisRunRecord(project_id=project.id)
     try:
         # A savepoint, so that a refusal leaves the caller's transaction usable.

@@ -15,7 +15,7 @@ from openmarketer_core.analyzer import AnalysisError, Limits, analyze
 from openmarketer_core.db.evidence_store import SavedAnalysis, local_workspace_id, save_analysis
 from openmarketer_core.db.session import DatabaseError, session_factory, transaction
 from openmarketer_core.extraction import ExtractedFact, discover_extractors, run_extractors
-from openmarketer_core.intake import IntakeError, Snapshot, run_intake
+from openmarketer_core.intake import IntakeError, RepositoryTokens, Snapshot, run_intake
 from openmarketer_core.llm import LLMError, RouterChatModel
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.profile import ProductProfile
@@ -87,10 +87,13 @@ def analyze_command(
     The profile is a draft for human review.
     """
     save_run = _open_store() if save else None
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GITLAB_TOKEN") or None
+    try:
+        tokens = RepositoryTokens.from_environment(os.environ)
+    except IntakeError as e:
+        raise _failure(str(e)) from e
     with tempfile.TemporaryDirectory(prefix="openmarketer-") as tmp:
         try:
-            intake = run_intake(source, Path(tmp) / "repo", token=token)
+            intake = run_intake(source, Path(tmp) / "repo", tokens=tokens)
             redacted = sum(f.redacted for f in intake.findings)
             _say(
                 f"intake: commit {intake.snapshot.commit_sha[:10]}, "

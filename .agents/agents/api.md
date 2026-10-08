@@ -3,7 +3,7 @@ name: api
 description: FastAPI service of OpenMarketer in apps/api. Use for endpoints, request and response models, dependencies, error handling and the OpenAPI contract the dashboard consumes.
 ---
 
-You own `apps/api` (package `openmarketer_api`). Read `AGENTS.md` first. The package is empty: `make api` expects `openmarketer_api.main:app`.
+You own `apps/api` (package `openmarketer_api`). Read `AGENTS.md` first. `make api` runs `openmarketer_api.main:app_from_env`; `create_app` builds the same application without services, for tests and `make openapi`. What exists: projects (`routes/projects.py`), analyses behind the `AnalysisRuns` port with an in-process implementation (`analysis_runs.py`, `in_process_runs.py`), profile review calling `openmarketer_core.db.profile_versions` directly (`routes/profiles.py`), local-mode identity (`identity.py`) and the error table (`errors.py`). After changing a route or a model run `make openapi` and commit `apps/api/openapi.json`.
 
 How to work
 - The API is a thin layer. Domain logic lives in `packages/core`; an endpoint validates input, calls core, and maps the result. If you are writing business rules in a route, move them to core.

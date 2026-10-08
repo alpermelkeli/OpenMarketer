@@ -9,7 +9,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.db.evidence_store import (
-    AnalysisProjectNotFound,
     SavedAnalysis,
     local_workspace_id,
     save_analysis,
@@ -23,6 +22,7 @@ from openmarketer_core.db.models import (
     RepoSnapshot,
     Workspace,
 )
+from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.extraction import ExtractedFact
 from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
@@ -210,14 +210,14 @@ def test_second_analysis_of_a_project_adds_version_two(session, workspace_id):
 
 
 def test_analysis_of_an_unknown_project_is_not_stored(session, workspace_id):
-    with pytest.raises(AnalysisProjectNotFound):
+    with pytest.raises(ProjectNotFound):
         save_of_project(session, workspace_id, uuid.uuid4())
     assert session.scalar(select(func.count()).select_from(RepoSnapshot)) == 0
 
 
 def test_analysis_is_not_stored_under_a_project_of_another_workspace(session, workspace_id):
     project_id = new_project(session, workspace_id, REPOSITORY)
-    with pytest.raises(AnalysisProjectNotFound):
+    with pytest.raises(ProjectNotFound):
         save_of_project(session, new_workspace(session), project_id)
     assert session.scalar(select(func.count()).select_from(RepoSnapshot)) == 0
 

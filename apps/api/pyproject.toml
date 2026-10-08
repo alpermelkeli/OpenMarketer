@@ -7,6 +7,8 @@ license = "Apache-2.0"
 dependencies = [
     "fastapi>=0.142.4",
     "openmarketer-core",
+    "openmarketer-extractors",
+    "sqlalchemy>=2",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -19,3 +21,4 @@ packages = ["src/openmarketer_api"]
 
 [tool.uv.sources]
 openmarketer-core = { workspace = true }
+openmarketer-extractors = { workspace = true }

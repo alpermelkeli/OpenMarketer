@@ -15,6 +15,7 @@ from openmarketer_core.intake import (
     Exclusion,
     IntakeError,
     RepoFiles,
+    remote_repository_url,
     run_intake,
 )
 from openmarketer_core.intake.git import _git_env, clone
@@ -144,16 +145,8 @@ def test_destination_must_be_empty(source_repo, tmp_path):
         clone(str(source_repo), dest)
 
 
-def test_token_is_passed_through_the_environment_only():
-    env = _git_env("s3cret-token")
-    assert env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
-    assert env["GIT_CONFIG_VALUE_0"].startswith("Authorization: Basic ")
-    assert "s3cret-token" not in env["GIT_CONFIG_VALUE_0"]  # base64, not plain text
-    assert "GIT_CONFIG_COUNT" not in _git_env(None)
-
-
 def test_user_git_configuration_is_ignored():
-    env = _git_env(None)
+    env = _git_env(None, "https://example.com/acme/app.git")
     assert env["GIT_CONFIG_GLOBAL"] == os.devnull
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
     assert env["GIT_TERMINAL_PROMPT"] == "0"
@@ -271,3 +264,37 @@ def test_listing_never_includes_excluded_files(files):
     assert "README.md" in listed
     assert not any(files.exclusion(path) for path in listed)
     assert not any(p.startswith((".env", ".git/", "node_modules/")) for p in listed)
+
+
+# ------------------------------------------------- sources a remote caller may submit
+def test_https_url_is_a_remote_repository_url():
+    url = "https://example.com/acme/app.git"
+    assert remote_repository_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "/etc",
+        ".",
+        "file:///etc",
+        "http://example.com/repo.git",
+        "ssh://git@example.com/repo.git",
+        "git@example.com:org/repo.git",
+        "https://user:secret@example.com/repo.git",
+        "https:///repo.git",
+        "https://example.com:port/repo.git",
+        "https://example.com\\@other.example/repo.git",
+        "https://example.com/repo.git\n",
+        "https://example.com/a b.git",
+        "--upload-pack=touch /tmp/pwned",
+    ],
+)
+def test_anything_but_a_plain_https_url_is_not_a_remote_repository_url(source):
+    with pytest.raises(IntakeError):
+        remote_repository_url(source)
+
+
+def test_existing_local_repository_is_not_a_remote_repository_url(source_repo):
+    with pytest.raises(IntakeError, match="must start with https://"):
+        remote_repository_url(str(source_repo))

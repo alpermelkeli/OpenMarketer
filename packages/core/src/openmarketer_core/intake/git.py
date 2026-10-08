@@ -5,6 +5,11 @@ URLs and local git folders are accepted, the user's git configuration and
 credential helpers are ignored, submodules and LFS objects are not fetched,
 and symbolic links are checked out as plain text so that no path in the
 working tree can point outside it.
+
+An access token is sent only to the host it is configured for
+(``credentials.py`` decides), and git is told not to follow redirects while it
+carries one: after a redirect git sends its extra headers to the new host,
+whatever URL the header was configured for.
 """
 
 from __future__ import annotations
@@ -12,10 +17,12 @@ from __future__ import annotations
 import base64
 import os
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from openmarketer_core.intake.credentials import NO_TOKENS, RepositoryTokens, is_unambiguous
 from openmarketer_core.intake.errors import IntakeError
 
 CLONE_TIMEOUT_S = 300
@@ -31,6 +38,29 @@ class Snapshot:
     ref: str | None
 
 
+def remote_repository_url(source: str) -> str:
+    """Validate ``source`` as the URL of a remote repository and return it.
+
+    This is the only form a caller that is not the machine's own user may
+    submit: a local folder or a ``file://`` URL would let a request make the
+    service read the disk it runs on.
+    """
+    try:
+        parts = urlsplit(source)
+        host, _ = parts.hostname, parts.port
+    except ValueError as e:
+        raise IntakeError("repository URL is not a valid URL") from e
+    if parts.scheme != "https":
+        raise IntakeError("repository URL must start with https://")
+    if not host:
+        raise IntakeError("repository URL has no host")
+    if parts.username is not None or parts.password is not None:
+        raise IntakeError("credentials in the URL are not accepted; configure a token instead")
+    if not is_unambiguous(source):
+        raise IntakeError("repository URL contains characters that are not allowed in a URL")
+    return source
+
+
 def _clone_url(source: str) -> str:
     """Validate ``source`` and return the URL handed to git."""
     if source.startswith("-"):
@@ -38,11 +68,7 @@ def _clone_url(source: str) -> str:
 
     parts = urlsplit(source)
     if parts.scheme == "https":
-        if not parts.hostname:
-            raise IntakeError("repository URL has no host")
-        if parts.username or parts.password:
-            raise IntakeError("credentials in the URL are not accepted; pass a token instead")
-        return source
+        return remote_repository_url(source)
 
     path = Path(source).expanduser()
     if parts.scheme in ("", "file") or path.exists():
@@ -59,11 +85,24 @@ def _clone_url(source: str) -> str:
     )
 
 
-def _git_env(token: str | None) -> dict[str, str]:
+def _origin(url: str) -> str:
+    """Scheme, host and port of ``url``, the form git matches ``http.<url>.*`` settings by."""
+    parts = urlsplit(url)
+    port = "" if parts.port is None else f":{parts.port}"
+    return f"{parts.scheme}://{parts.hostname}{port}/"
+
+
+def _authorization(token: str) -> str:
+    return base64.b64encode(f"x-access-token:{token}".encode()).decode()
+
+
+def _git_env(token: str | None, url: str) -> dict[str, str]:
     """Environment for git: isolated from user configuration, never prompts.
 
     The token travels as an HTTP header set through the environment, so it is
-    neither visible in the process list nor written to ``.git/config``.
+    neither visible in the process list nor written to ``.git/config``. The
+    header is configured for the origin of ``url`` only, and redirects are
+    refused: git would repeat the header to the host a redirect names.
     """
     env = dict(os.environ)
     env.update(
@@ -73,16 +112,26 @@ def _git_env(token: str | None) -> dict[str, str]:
         GIT_LFS_SKIP_SMUDGE="1",
     )
     if token:
-        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
         env.update(
-            GIT_CONFIG_COUNT="1",
-            GIT_CONFIG_KEY_0="http.extraHeader",
-            GIT_CONFIG_VALUE_0=f"Authorization: Basic {basic}",
+            GIT_CONFIG_COUNT="2",
+            GIT_CONFIG_KEY_0=f"http.{_origin(url)}.extraHeader",
+            GIT_CONFIG_VALUE_0=f"Authorization: Basic {_authorization(token)}",
+            GIT_CONFIG_KEY_1="http.followRedirects",
+            GIT_CONFIG_VALUE_1="false",
         )
     return env
 
 
-def _git(args: list[str], *, env: dict[str, str], cwd: Path | None = None) -> str:
+def _without(secrets: Sequence[str], text: str) -> str:
+    for secret in secrets:
+        text = text.replace(secret, "[REDACTED]")
+    return text
+
+
+def _git(
+    args: list[str], *, env: dict[str, str], cwd: Path | None = None, secrets: Sequence[str] = ()
+) -> str:
+    """Run git and return what it printed. ``secrets`` never appear in the error it raises."""
     try:
         done = subprocess.run(
             ["git", *args],
@@ -98,17 +147,22 @@ def _git(args: list[str], *, env: dict[str, str], cwd: Path | None = None) -> st
     except subprocess.TimeoutExpired as e:
         raise IntakeError(f"git {args[0]} timed out after {CLONE_TIMEOUT_S}s") from e
     if done.returncode != 0:
-        raise IntakeError(f"git {args[0]} failed: {done.stderr.strip()[-500:]}")
+        raise IntakeError(f"git {args[0]} failed: {_without(secrets, done.stderr).strip()[-500:]}")
     return done.stdout.strip()
 
 
-def clone(source: str, dest: Path, *, token: str | None = None) -> Snapshot:
-    """Shallow-clone the default branch of ``source`` into ``dest``."""
+def clone(source: str, dest: Path, *, tokens: RepositoryTokens = NO_TOKENS) -> Snapshot:
+    """Shallow-clone the default branch of ``source`` into ``dest``.
+
+    A token from ``tokens`` is used only if it is configured for the host of ``source``.
+    """
     url = _clone_url(source)
     if dest.exists() and any(dest.iterdir()):
         raise IntakeError(f"destination is not empty: {dest}")
 
-    env = _git_env(token)
+    token = tokens.token_for(url)
+    env = _git_env(token, url)
+    secrets = (token, _authorization(token)) if token else ()
     _git(
         [
             "-c", "core.symlinks=false",
@@ -124,6 +178,7 @@ def clone(source: str, dest: Path, *, token: str | None = None) -> Snapshot:
             str(dest),
         ],
         env=env,
+        secrets=secrets,
     )  # fmt: skip
 
     try:

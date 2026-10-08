@@ -1,6 +1,6 @@
 COMPOSE := docker compose -f deploy/compose/dev.yml
 
-.PHONY: help install up down reset logs ps psql analyze migrate migration api worker web lint format typecheck test check
+.PHONY: help install up down reset logs ps psql analyze migrate migration api openapi worker web lint format typecheck test check
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -36,8 +36,11 @@ migrate: ## Apply database migrations
 migration: ## Generate a migration from model changes: make migration m="add x"
 	uv run --env-file .env alembic revision --autogenerate -m "$(m)"
 
-api: ## Run the API on http://localhost:8000
-	uv run --env-file .env uvicorn openmarketer_api.main:app --reload --port 8000
+api: ## Run the API on http://localhost:8000 (this machine only: there is no login yet)
+	uv run --env-file .env uvicorn openmarketer_api.main:app_from_env --factory --reload --host 127.0.0.1 --port 8000
+
+openapi: ## Write the API contract to apps/api/openapi.json
+	uv run python -m openmarketer_api.openapi
 
 worker: ## Run the Temporal worker
 	uv run --env-file .env python -m openmarketer_worker
