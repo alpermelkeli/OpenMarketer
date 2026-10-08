@@ -190,12 +190,23 @@ def test_approval_is_recorded_under_the_current_user(client, profile_url):
     assert body["approved_at"] is not None
 
 
-def test_approver_cannot_be_named_by_the_request(client, session, profile_url, project_id):
+@pytest.mark.parametrize("body", [{"approved_by": str(uuid.uuid4())}, {}])
+def test_approval_with_a_request_body_is_rejected_and_approves_nothing(
+    client, session, profile_url, project_id, body
+):
+    response = client.post(f"{profile_url}/versions/1/approval", json=body)
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["msg"] == "this request takes no body"
+    assert stored_versions(session, project_id) == [(1, "draft", "Example App")]
+
+
+def test_approver_cannot_be_named_in_the_query_or_a_header(
+    client, session, profile_url, project_id
+):
     someone_else = str(uuid.uuid4())
     client.post(
         f"{profile_url}/versions/1/approval",
         params={"approved_by": someone_else},
-        json={"approved_by": someone_else},
         headers={"X-User-Id": someone_else},
     )
     approver = session.scalar(

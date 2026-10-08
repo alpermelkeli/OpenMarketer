@@ -2,7 +2,7 @@
 
 Open-source, self-hosted marketing agent: it reads a product's repository, drafts a Product Profile for human review, and later plans, writes and publishes marketing under a deterministic policy gate. The design is in `docs/design-report/report.pdf` (source: `report.tex`).
 
-Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API creates projects, runs analyses in the background, and reads, edits and approves profiles. The worker runs an analysis as a Temporal workflow; the API does not start it yet and still analyses in its own process. The review UI and the evaluation are not built yet. `docs/status.md` has the details and the differences from the design report.
+Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API creates projects, starts analyses, and reads, edits and approves profiles. The worker runs each analysis as a Temporal workflow that the API starts; the run's state is in the database. The review UI and the evaluation are not built yet. `docs/status.md` has the details and the differences from the design report.
 
 ## Layout
 
@@ -27,7 +27,7 @@ make migrate     # apply database migrations
 make check       # lint, type-check, tests: what CI runs
 make analyze repo=https://github.com/owner/name          # add save=1 to store the run (needs make up, make migrate)
 make worker      # run the Temporal worker (needs make up, make migrate)
-make api         # serve the API on http://127.0.0.1:8000 (needs make up, make migrate)
+make api         # serve the API on http://127.0.0.1:8000 (needs make up, make migrate; analyses also need make worker)
 make openapi     # rewrite apps/api/openapi.json after changing a route or a model
 make help        # everything else
 ```

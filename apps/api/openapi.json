@@ -53,8 +53,20 @@
             "title": "Project Id",
             "type": "string"
           },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
           "status": {
-            "$ref": "#/components/schemas/AnalysisStatus"
+            "$ref": "#/components/schemas/AnalysisRunStatus"
           }
         },
         "required": [
@@ -62,6 +74,7 @@
           "project_id",
           "status",
           "created_at",
+          "started_at",
           "finished_at",
           "error",
           "profile_version"
@@ -69,14 +82,14 @@
         "title": "AnalysisRunResponse",
         "type": "object"
       },
-      "AnalysisStatus": {
+      "AnalysisRunStatus": {
         "enum": [
           "queued",
           "running",
           "succeeded",
           "failed"
         ],
-        "title": "AnalysisStatus",
+        "title": "AnalysisRunStatus",
         "type": "string"
       },
       "Audience": {
@@ -246,6 +259,7 @@
           "analysis_already_running",
           "profile_already_approved",
           "internal_error",
+          "analysis_not_started",
           "database_unavailable"
         ],
         "title": "ErrorCode",
@@ -780,7 +794,7 @@
     },
     "/v1/projects/{project_id}/analyses": {
       "post": {
-        "description": "Start analysing the repository and return the run to poll. The work happens later.",
+        "description": "Queue an analysis and return the run to poll. A worker executes it later.\n\n409 while the project has an unfinished run. 503 `analysis_not_started` when\nthe run could not be handed to a worker: it is then stored as failed, does\nnot block the project, and a new one can be started.",
         "operationId": "startAnalysis",
         "parameters": [
           {
@@ -874,7 +888,7 @@
     },
     "/v1/projects/{project_id}/analyses/{run_id}": {
       "get": {
-        "description": "The run as it is now: queued, running, succeeded or failed.",
+        "description": "The run as it is now: queued, running, succeeded (with the profile version) or failed.",
         "operationId": "getAnalysis",
         "parameters": [
           {
@@ -1106,7 +1120,7 @@
     },
     "/v1/projects/{project_id}/profile/versions/{version}/approval": {
       "post": {
-        "description": "Approve one version as the current user. The request has no body.",
+        "description": "Approve one version as the current user. The request takes no body; one is a 422.",
         "operationId": "approveProfileVersion",
         "parameters": [
           {

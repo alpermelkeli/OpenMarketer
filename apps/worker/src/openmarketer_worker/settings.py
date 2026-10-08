@@ -10,12 +10,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+from openmarketer_core.analysis_workflow import (
+    DEFAULT_NAMESPACE,
+    DEV_STACK_WORKFLOW_SERVER,
+    WorkflowServer,
+)
 from openmarketer_worker.policy import AnalysisPolicy
 
-# The dev stack's Temporal as seen from the host. ``.env.example`` names the
-# compose-network host instead, which only resolves inside that network.
-DEV_STACK_TEMPORAL_ADDRESS = "localhost:7233"
-DEFAULT_NAMESPACE = "default"
 DEFAULT_CONCURRENT_ACTIVITIES = 4
 
 
@@ -26,7 +27,7 @@ class SettingsError(Exception):
 @dataclass(frozen=True)
 class Settings:
     database_url: str
-    temporal_address: str = DEV_STACK_TEMPORAL_ADDRESS
+    temporal_address: str = DEV_STACK_WORKFLOW_SERVER
     temporal_namespace: str = DEFAULT_NAMESPACE
     analysis_policy: AnalysisPolicy = field(default_factory=AnalysisPolicy)
     max_concurrent_activities: int = DEFAULT_CONCURRENT_ACTIVITIES
@@ -37,10 +38,11 @@ class Settings:
         if not database_url:
             raise SettingsError("the worker needs DATABASE_URL (see .env.example)")
         defaults = AnalysisPolicy()
+        workflow_server = WorkflowServer.from_environment(environ)
         return cls(
             database_url=database_url,
-            temporal_address=environ.get("TEMPORAL_ADDRESS") or DEV_STACK_TEMPORAL_ADDRESS,
-            temporal_namespace=environ.get("TEMPORAL_NAMESPACE") or DEFAULT_NAMESPACE,
+            temporal_address=workflow_server.address,
+            temporal_namespace=workflow_server.namespace,
             analysis_policy=AnalysisPolicy(
                 attempt_timeout_seconds=60
                 * _positive(

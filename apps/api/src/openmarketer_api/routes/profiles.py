@@ -11,10 +11,10 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Path
+from fastapi import APIRouter, Depends, Path
 from pydantic import BaseModel, ConfigDict
 
-from openmarketer_api.dependencies import DbSession
+from openmarketer_api.dependencies import DbSession, no_request_body
 from openmarketer_api.errors import ProfileNotFound, problems
 from openmarketer_api.identity import CurrentUserId, CurrentWorkspaceId
 from openmarketer_core.db.models import ProfileStatus
@@ -124,6 +124,7 @@ def save_edit(
     operation_id="approveProfileVersion",
     response_model=ProfileVersionResponse,
     responses=problems(404, 409),
+    dependencies=[Depends(no_request_body)],
 )
 def approve(
     project_id: uuid.UUID,
@@ -132,7 +133,7 @@ def approve(
     workspace_id: CurrentWorkspaceId,
     approver: CurrentUserId,
 ) -> ProfileVersionResponse:
-    """Approve one version as the current user. The request has no body."""
+    """Approve one version as the current user. The request takes no body; one is a 422."""
     approved = approve_profile_version(
         session,
         workspace_id=workspace_id,

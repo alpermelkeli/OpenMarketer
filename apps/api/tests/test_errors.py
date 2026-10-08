@@ -1,23 +1,23 @@
 """Tests for what a client is told when the database or the code fails."""
 
 import uuid
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from openmarketer_api.dependencies import Services, analysis_runs
-from openmarketer_api.in_process_runs import InProcessAnalysisRuns
+from openmarketer_api.dependencies import Services
+from openmarketer_api.identity import current_workspace_id
+from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
 from openmarketer_core.db.session import session_factory
-from openmarketer_core.repository_analysis import RepositoryAnalysis
 
 # Port 1 is reserved and nothing listens on it.
 UNREACHABLE_URL = "postgresql+psycopg://nobody:hunter2@127.0.0.1:1/nothing?connect_timeout=2"
 RUN_URL = f"/v1/projects/{uuid.uuid4()}/analyses/{uuid.uuid4()}"
 
 
-def never_analyses(repository_url: str, clone_into: Path) -> RepositoryAnalysis:
-    raise AssertionError("no analysis may start without a database")
+class NoWorkflows:
+    async def start(self, run: AnalyzeRepositoryInput) -> None:
+        raise AssertionError("no workflow may be started without a database")
 
 
 @pytest.fixture
@@ -31,12 +31,13 @@ def client(app) -> TestClient:
     )
 
 
-def test_unreachable_database_is_reported_without_connection_details(app, client):
-    sessions = session_factory(UNREACHABLE_URL)
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_unreachable_database_is_reported_without_connection_details(app, client, method):
     app.state.services = Services(
-        sessions=sessions, analysis_runs=InProcessAnalysisRuns(sessions, never_analyses)
+        sessions=session_factory(UNREACHABLE_URL), analysis_workflows=NoWorkflows()
     )
-    response = client.post(RUN_URL.rsplit("/", 1)[0])
+    url = RUN_URL if method == "GET" else RUN_URL.rsplit("/", 1)[0]
+    response = client.request(method, url)
     assert (response.status_code, response.json()) == (
         503,
         {"code": "database_unavailable", "message": "the database could not complete the request"},
@@ -44,11 +45,10 @@ def test_unreachable_database_is_reported_without_connection_details(app, client
 
 
 def test_unexpected_error_is_reported_without_its_detail(app, client, without_database):
-    class Broken:
-        def get(self, *, workspace_id, project_id, run_id):
-            raise RuntimeError("/Users/someone/.env: hunter2")
+    def broken() -> uuid.UUID:
+        raise RuntimeError("/Users/someone/.env: hunter2")
 
-    app.dependency_overrides[analysis_runs] = Broken
+    app.dependency_overrides[current_workspace_id] = broken
     response = client.get(RUN_URL)
     assert (response.status_code, response.json()) == (
         500,

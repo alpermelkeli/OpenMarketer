@@ -17,8 +17,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from openmarketer_api.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
 from openmarketer_api.identity import NotLocalRequest
+from openmarketer_core.analysis_request import AnalysisNotStarted
+from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
 from openmarketer_core.db.profile_versions import ProfileAlreadyApproved, ProfileVersionNotFound
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.session import DatabaseError
@@ -37,6 +38,7 @@ class ErrorCode(StrEnum):
     ANALYSIS_ALREADY_RUNNING = "analysis_already_running"
     PROFILE_ALREADY_APPROVED = "profile_already_approved"
     INTERNAL_ERROR = "internal_error"
+    ANALYSIS_NOT_STARTED = "analysis_not_started"
     DATABASE_UNAVAILABLE = "database_unavailable"
 
 
@@ -63,6 +65,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ProjectAlreadyExists: (409, ErrorCode.PROJECT_ALREADY_EXISTS),
     AnalysisAlreadyRunning: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
+    AnalysisNotStarted: (503, ErrorCode.ANALYSIS_NOT_STARTED),
 }
 
 
