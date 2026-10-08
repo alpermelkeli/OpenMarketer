@@ -271,7 +271,7 @@ Scope & Across tasks and projects & Inside one task\\
 \section{LLM Access and Model Configuration}\label{sec:llm}
 
 \subsection{Principle}
-Language models are used in many places, and the best model differs by place. Classifying a comment needs a fast, cheap model; synthesising a Product Profile or planning a week needs a strong one. The system therefore never refers to a model directly. Code refers to a \emph{role} such as \texttt{writer}, and a configuration layer maps each role to a model.
+Language models are used in many places, and the best model differs by place. Classifying a comment needs a fast, cheap model; planning a week or deciding a strategy needs a strong one. The system therefore never refers to a model directly. Code refers to a \emph{role} such as \texttt{writer}, and a configuration layer maps each role to a model.
 
 OpenRouter is the default gateway. It offers one API and one key for models from many providers, an OpenAI-compatible interface with tool calling and structured output, fallback lists, provider-routing preferences and per-call usage and cost reporting. Changing the model of a role means changing a string, either in a file, in an environment variable or in the dashboard.
 
@@ -284,7 +284,7 @@ OpenRouter is the default gateway. It offers one API and one key for models from
 \midrule
 \endhead
 \texttt{orchestrator} & Dashboard chat: status questions, special requests & tools & strong\\
-\texttt{repo\_analyzer} & Synthesises the Product Profile from extractor evidence & tools, structured output & strong\\
+\texttt{repo\_analyzer} & Explores the repository with read-only tools and drafts the Product Profile & tools, structured output & fast\\
 \texttt{researcher} & Market, competitor and trend research & tools & balanced\\
 \texttt{reader} & Quarantined classification of untrusted text & structured output, \emph{no tools} & fast\\
 \texttt{planner} & Weekly plan, channel mix, ad plan & structured output & strong\\
@@ -359,13 +359,17 @@ The model identifiers above are placeholders in OpenRouter's \texttt{provider/mo
 OpenRouter adds a network hop, a fee on top of provider prices and a dependency on a third-party service. Feature support (tool calling, structured output, caching behaviour) varies by upstream provider and model. The design limits these risks through capability checks, \texttt{require\_parameters} routing, fallbacks, and the fact that the base URL is configuration: the same OpenAI-compatible client can point at a provider directly or at a local gateway. A per-role provider override is a planned extension.
 
 \subsection{Shipped configuration}
-The repository ships with \texttt{config/models.yaml} (the role and tier definitions above), \texttt{config/llm\_config.py} (a validated loader and router that resolves models, builds OpenRouter requests and checks capabilities) and \texttt{.env.example} (all environment variables with comments). The loader is covered by unit tests for resolution order, overrides, validation, request shape and the no-tools rule for the reader. The HTTP calls themselves (\texttt{complete} and the catalogue fetch) are reference code that has not been exercised against the live API.
+The repository ships with \texttt{config/models.yaml} (the role and tier definitions above), a validated loader and router that resolves models, builds OpenRouter requests and checks capabilities (\texttt{openmarketer\_core.llm\_config}, re-exported by \texttt{config/llm\_config.py}) and \texttt{.env.example} (all environment variables with comments). The loader is covered by unit tests for resolution order, overrides, validation, request shape and the no-tools rule for the reader. Chat requests built by the router have been run against the live API by the repository analyzer; the catalogue fetch and the embeddings endpoint have not.
+
+One assignment in the table is deliberate and less obvious: \texttt{repo\_analyzer} uses the fast tier, and the shipped fast tier is a free model. Analysing a repository is the first thing a new installation does and the most token-hungry single task in the system: the agent takes many turns, each carrying the files it has read. Running it on a free model means that trying OpenMarketer on a repository costs nothing. The design can afford a weaker model here because the model is not trusted with the outcome: what counts as an acceptable profile is checked in code (Section~\ref{sec:profile}), and the profile is a draft until a person has reviewed it. The costs of the choice are real: free models are rate limited, they make more formal mistakes that the acceptance checks have to catch, and the quality of their profiles has not yet been measured against a stronger model. An installation that prefers quality over cost moves the role to another tier or model with one setting.
 
 % ---------------------------------------------------------------- 5
 \section{From Repository to Product Profile}\label{sec:profile}
 
 \subsection{Pipeline}
-The profile is built in four stages (Figure~\ref{fig:profile}): intake, deterministic extraction, LLM synthesis, human review. The order matters: deterministic extractors run first and produce cheap, reproducible evidence, and the model only synthesises and fills gaps.
+The profile is built in four stages (Figure~\ref{fig:profile}): intake, deterministic extraction, agentic analysis, human review. The first design had the extractors carry the understanding and the model only synthesise their output. That did not hold up: repositories are too varied, and too often contain several projects, for a fixed set of extractors to cover. The analyzer is therefore an agent that explores the repository itself with three read-only tools (list files, search, read a file) and then submits a profile. Extractors still run first, but their output is a set of hints that orients the agent, not the evidence the profile rests on.
+
+What counts as an acceptable profile is decided in code, not by the model: a submission must match the schema, every piece of evidence must point at lines that exist in a file the agent was allowed to read, every part must state a confidence, and a feature without evidence cannot be marked live. A rejected submission is returned to the agent with the reasons. The run is bounded by a number of model turns, a cost limit and a number of submissions; when a limit is reached the draft is repaired in code and the corrections are reported.
 
 \figland{fig_profile}{Repository analysis pipeline. Secrets are scanned out before any file is read by a model; every fact in the profile keeps a file-and-line evidence link.}{fig:profile}
 
@@ -394,13 +398,13 @@ Which features are public & Per-feature ``publishable'' flag confirmed by the ow
 \end{longtable}
 
 \subsection{Profile schema (excerpt)}
-The schema is defined once as Pydantic models and exported as JSON Schema. Every model output is validated against it.
+The schema is defined once as Pydantic models and exported as JSON Schema. Every model output is validated against it. Product type and platforms are open vocabularies: a product can be a browser extension, a watch app or a hardware device, so any lowercase slug is valid and the values listed in the excerpt are only the well-known ones that ship with a playbook.
 
 \begin{lstlisting}
 product:
   name: "Example App"
-  type: consumer_app          # consumer_app | b2b_saas | dev_tool | game | ecommerce
-  platforms: [ios, android]
+  type: consumer_app          # open slug: consumer_app, b2b_saas, dev_tool, game, ...
+  platforms: [ios, android]   # open slugs: ios, android, web, desktop, cli, ...
   languages: [en, tr]
 features:
   - id: offline-mode
@@ -418,7 +422,7 @@ measurement: {analytics: [firebase], attribution: none, deep_links: true}
 \end{lstlisting}
 
 \subsection{Handling untrusted and private content}
-Private repositories contain material that must never become public: unreleased features, internal names, customer data, credentials. The pipeline therefore (1) uses read-only access with the smallest possible token scope, (2) runs a secret scanner (gitleaks) and excludes \texttt{.env*}, key files and build output before any model sees a file, (3) marks each feature as live, unreleased or unknown and lets only ``live'' items into public content, and (4) treats README text, code comments and issues as data that may contain hostile instructions.
+Private repositories contain material that must never become public: unreleased features, internal names, customer data, credentials. The pipeline therefore (1) uses read-only access with the smallest possible token scope, (2) runs a secret scanner (gitleaks) before any model sees a file, excludes \texttt{.env*}, key files and build output, replaces a secret found inside any other file by a placeholder and scans again, and excludes a file only if a finding cannot be removed this way, (3) marks each feature as live, unreleased or unknown and lets only ``live'' items into public content, and (4) treats README text, code comments and issues as data that may contain hostile instructions.
 
 \subsection{Continuous use of the repository}
 After onboarding, a repository watcher turns new releases into proposals: announcement posts, store ``What's new'' text and short-video scripts. If measurement is missing, the agent can propose a pull request that adds attribution parameters, deep links or metadata, which the owner reviews and merges. If an error-monitoring integration shows a spike in crashes, the agent proposes pausing paid campaigns.
@@ -811,7 +815,7 @@ Licence & Apache-2.0 & MIT, AGPL-3.0 & Permissive with a patent grant; best for 
 \subsection{LLM usage notes}
 \begin{itemize}
   \item OpenRouter is the default gateway (Section~\ref{sec:llm}); any model that supports the capabilities a role needs can be configured. Model identifiers are configuration, not code.
-  \item Different roles use different models: a small, fast model for classification in the reader agent, a stronger model for planning, profile synthesis and the orchestrator.
+  \item Different roles use different models: a small, fast model for classification in the reader agent, a stronger model for planning and the orchestrator. The repository analyzer runs on the fast tier by design (Section~\ref{sec:llm}).
   \item The \texttt{studio} and \texttt{asset\_verifier} roles are configured as different models on purpose, to reduce the tendency of a model to approve its own work.
   \item Structured outputs are validated against Pydantic models; invalid output triggers a bounded retry, then escalation.
   \item Tools are described through a neutral interface and can be exposed as MCP servers, so other agents can reuse the connectors under the same policy gate.
@@ -856,15 +860,15 @@ openmarketer/
     web/        Next.js dashboard
     cli/        setup, onboarding, dry-run
   packages/
-    core/       schemas, agent runtime, policy engine, ledger
+    core/       schemas, agent runtime, model router, policy engine, ledger
     connectors/ meta, x, tiktok, linkedin, google_ads
     media/      fal, higgsfield, elevenlabs
-    extractors/ flutter, react_native, swift, kotlin, nextjs
+    extractors/ one per project file format: package.json, gradle, xcode, ...
     playbooks/  consumer_app, b2b_saas, dev_tool, game, ecommerce
     policies/   default_safety, regulated_industries
   config/
     models.yaml     role and tier model configuration (OpenRouter)
-    llm_config.py   loader, router, capability checks
+    llm_config.py   entry point of the loader (the code is in core)
   deploy/       compose, helm
   evals/        golden repositories, rubrics
   docs/         guides, threat model, ADRs

@@ -6,8 +6,12 @@ requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
 dependencies = [
     "openmarketer-core",
+    "openmarketer-extractors",
     "typer>=0.27.3",
 ]
+
+[project.scripts]
+openmarketer = "openmarketer_cli.main:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -18,3 +22,4 @@ packages = ["src/openmarketer_cli"]
 
 [tool.uv.sources]
 openmarketer-core = { workspace = true }
+openmarketer-extractors = { workspace = true }

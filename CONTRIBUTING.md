@@ -1,12 +1,12 @@
 # Contributing to OpenMarketer
 
-Thanks for your interest. The project is in its design phase, so the most valuable contributions right now are small, well-defined pieces and sharp review.
+Thanks for your interest. The project is in early development: the design is written down and the first milestone, the repository analyzer, runs from the command line ([what is built](docs/status.md)). The most valuable contributions right now are small, well-defined pieces and sharp review.
 
 ## Ways to help
 
 | Kind | Examples |
 |---|---|
-| Extractor specs and plugins | How to understand a Flutter, React Native, SwiftUI, Kotlin or Next.js repository |
+| Extractor plugins | A small plugin that reads one project file format (a manifest, a build file) and gives the analyzer hints |
 | Playbooks | YAML strategies per product type: channel mix, cadence, KPIs, tone presets |
 | Policy packs | CEL rule bundles for regulated categories and advertising rules |
 | Benchmark | Candidate open-source apps with a human-labelled Product Profile |
@@ -49,8 +49,8 @@ To rebuild the report and diagrams you need [tectonic](https://tectonic-typesett
 
 - Keep each pull request focused on one change.
 - Describe what changed and why; link the issue.
-- Add or update tests when you change `config/`.
-- Update the documentation (and the report source, if the design changes).
+- Add or update tests with every change in behaviour; `make check` must pass.
+- Update the documentation: `docs/status.md` when what is built changes, and the report source when the design changes.
 - Sign off your commits (see below).
 
 ### Sign-off (Developer Certificate of Origin)

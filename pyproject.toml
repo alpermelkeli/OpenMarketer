@@ -41,6 +41,15 @@ extend-exclude = ["apps/web", "docs", "config"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.isort]
+known-first-party = [
+    "openmarketer_core",
+    "openmarketer_extractors",
+    "openmarketer_api",
+    "openmarketer_worker",
+    "openmarketer_cli",
+]
+
 [tool.pyright]
 include = ["apps", "packages", "config"]
 exclude = ["apps/web", "**/node_modules", "**/__pycache__", ".venv"]

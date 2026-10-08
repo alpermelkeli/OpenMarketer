@@ -6,9 +6,23 @@ requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
 dependencies = [
     "openmarketer-core",
+    "pyyaml>=6.0.3",
     "tree-sitter>=0.26.0",
     "tree-sitter-language-pack>=1.21.0",
 ]
+
+[project.entry-points."openmarketer.extractors"]
+android_manifest = "openmarketer_extractors.mobile_manifests:AndroidManifestExtractor"
+cargo = "openmarketer_extractors.manifests:CargoExtractor"
+expo = "openmarketer_extractors.expo:ExpoExtractor"
+flutter = "openmarketer_extractors.flutter:FlutterExtractor"
+generic = "openmarketer_extractors.generic:GenericExtractor"
+go_mod = "openmarketer_extractors.manifests:GoModExtractor"
+gradle = "openmarketer_extractors.gradle:GradleExtractor"
+info_plist = "openmarketer_extractors.mobile_manifests:InfoPlistExtractor"
+package_json = "openmarketer_extractors.package_json:PackageJsonExtractor"
+pyproject = "openmarketer_extractors.manifests:PyprojectExtractor"
+xcode = "openmarketer_extractors.xcode:XcodeExtractor"
 
 [build-system]
 requires = ["hatchling"]
