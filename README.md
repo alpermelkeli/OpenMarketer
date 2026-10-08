@@ -6,7 +6,7 @@ OpenMarketer is an open-source AI agent that reads the source repository of any 
 
 ![License](https://img.shields.io/github/license/alpermelkeli/OpenMarketer)
 
-> **Status: early development.** The architecture, safety model and roadmap are designed and documented. The first milestone, the repository analyzer, runs from the command line and produces a draft Product Profile; nothing is stored, reviewed or published yet. See [what exists today](#status).
+> **Status: early development.** The architecture, safety model and roadmap are designed and documented. The first milestone, the repository analyzer, runs from the command line and produces a draft Product Profile, which can be stored in a local database; nothing is reviewed or published yet. See [what exists today](#status).
 
 <p align="center">
   <img src="docs/design-report/figures/fig_loop.png" alt="The OpenMarketer agent loop" width="640">
@@ -32,7 +32,7 @@ Most tools automate one slice: scheduling, ad rules or copy generation. Strategy
 |---|---|
 | Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 54 pages) |
 | Per-role LLM model configuration through OpenRouter | Built and used by the analyzer (`config/models.yaml`) |
-| Repository analyzer and Product Profile | **In progress**: intake, extractors and the analyzer agent run from the CLI; storage, review UI and evaluation are not built yet |
+| Repository analyzer and Product Profile | **In progress**: intake, extractors and the analyzer agent run from the CLI, which can store a run as a draft; the API, review UI and evaluation are not built yet |
 | Content engine and approved publishing (X, Instagram) | Planned |
 | Creative studio (compose with code, generate, verify, edit) | Designed |
 | Orchestrator console and proactive mode | Designed |
@@ -62,7 +62,18 @@ uv sync
 make analyze repo=https://github.com/owner/name
 ```
 
-This clones the repository, removes secrets, lets the analyzer agent read the code and prints a draft Product Profile as JSON: product, features with their status, brand, audience, business model and measurement, each with file-and-line evidence and a confidence. It is a draft for a person to review, and it is not stored anywhere. A private repository needs `GITHUB_TOKEN` or `GITLAB_TOKEN` in `.env`; that path is untested.
+This clones the repository, removes secrets, lets the analyzer agent read the code and prints a draft Product Profile as JSON: product, features with their status, brand, audience, business model and measurement, each with file-and-line evidence and a confidence. It is a draft for a person to review, and it is not stored unless you ask for that (below). A private repository needs `GITHUB_TOKEN` or `GITLAB_TOKEN` in `.env`; that path is untested.
+
+To keep the result, store the run in the development database. This also needs Docker, and `DATABASE_URL` in `.env` set to `postgresql+psycopg://openmarketer:openmarketer@localhost:5433/openmarketer`:
+
+```bash
+make up                              # start PostgreSQL and the rest of the dev stack
+make migrate                         # create the tables
+make analyze repo=https://github.com/owner/name save=1
+make psql                            # look at the tables: project, repo_snapshot, evidence, product_profile
+```
+
+Each stored run adds a snapshot of the commit, the extractor facts and a new draft version of the profile. There is no way to approve a stored profile yet. Example queries and the limits of what is stored are in [docs/status.md](docs/status.md#storing-a-run).
 
 The analyzer uses a free model by design, so a run costs nothing. It is rate limited, and the quality of its profiles has not been measured yet. To see or change which model each role uses:
 

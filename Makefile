@@ -27,8 +27,8 @@ ps: ## Show dev stack status
 psql: ## Open a psql shell in the dev database
 	$(COMPOSE) exec postgres psql -U openmarketer -d openmarketer
 
-analyze: ## Draft a Product Profile: make analyze repo=https://github.com/owner/name
-	uv run --env-file .env openmarketer analyze $(repo)
+analyze: ## Draft a Product Profile: make analyze repo=https://github.com/owner/name (save=1 stores it)
+	uv run --env-file .env openmarketer analyze $(repo) $(if $(save),--save)
 
 migrate: ## Apply database migrations
 	uv run --env-file .env alembic upgrade head

@@ -1,0 +1,152 @@
+"""Evidence store: what an analysis run leaves in the database.
+
+One run adds a repository snapshot, the extractor facts found in it and a new
+draft version of the project's Product Profile. Domain objects (``Snapshot``,
+``ExtractedFact``, ``ProductProfile``) are converted to rows here and nowhere
+else.
+
+Functions take a session and never commit: the caller owns the transaction.
+Approval of a profile is not handled here; every version is stored as a draft.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Iterable
+from dataclasses import dataclass
+
+from sqlalchemy import func, insert, select
+from sqlalchemy.orm import Session
+
+from openmarketer_core.db.models import (
+    Evidence,
+    ProductProfileRecord,
+    Project,
+    RepoSnapshot,
+    Workspace,
+)
+from openmarketer_core.extraction import ExtractedFact
+from openmarketer_core.intake import Snapshot
+from openmarketer_core.profile import ProductProfile
+
+LOCAL_WORKSPACE_NAME = "local"
+
+
+@dataclass(frozen=True)
+class SavedAnalysis:
+    """Where one analysis run was stored."""
+
+    project_id: uuid.UUID
+    snapshot_id: uuid.UUID
+    profile_id: uuid.UUID
+    profile_version: int
+    evidence_count: int
+
+
+def local_workspace_id(session: Session) -> uuid.UUID:
+    """The workspace of single-user local mode, created on first use."""
+    existing = session.scalar(
+        select(Workspace.id)
+        .where(Workspace.name == LOCAL_WORKSPACE_NAME)
+        .order_by(Workspace.created_at)
+        .limit(1)
+    )
+    if existing is not None:
+        return existing
+    workspace = Workspace(name=LOCAL_WORKSPACE_NAME)
+    session.add(workspace)
+    session.flush()
+    return workspace.id
+
+
+def save_analysis(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    snapshot: Snapshot,
+    facts: Iterable[ExtractedFact],
+    profile: ProductProfile,
+) -> SavedAnalysis:
+    """Store one analysis run under the workspace's project for that repository.
+
+    The first run of a repository creates the project, named after the product.
+    Every run adds a snapshot, its evidence and the next profile version.
+    """
+    _wait_for_other_saves(session, workspace_id)
+    project = _project_for_repository(session, workspace_id, snapshot.source_url)
+    if project is None:
+        project = Project(
+            workspace_id=workspace_id,
+            name=profile.product.name,
+            source_repo_url=snapshot.source_url,
+        )
+        session.add(project)
+        session.flush()
+
+    stored_snapshot = RepoSnapshot(
+        project_id=project.id, commit_sha=snapshot.commit_sha, ref=snapshot.ref
+    )
+    session.add(stored_snapshot)
+    session.flush()
+
+    evidence_rows = [
+        {
+            "project_id": project.id,
+            "snapshot_id": stored_snapshot.id,
+            "extractor": fact.extractor,
+            "kind": fact.kind,
+            "value": fact.value,
+            "file": fact.file,
+            "start_line": fact.start_line,
+            "end_line": fact.end_line,
+        }
+        for fact in facts
+    ]
+    if evidence_rows:
+        session.execute(insert(Evidence), evidence_rows)
+
+    record = ProductProfileRecord(
+        project_id=project.id,
+        snapshot_id=stored_snapshot.id,
+        version=_next_profile_version(session, project.id),
+        content=profile.model_dump(mode="json"),
+    )
+    session.add(record)
+    session.flush()
+
+    return SavedAnalysis(
+        project_id=project.id,
+        snapshot_id=stored_snapshot.id,
+        profile_id=record.id,
+        profile_version=record.version,
+        evidence_count=len(evidence_rows),
+    )
+
+
+def _wait_for_other_saves(session: Session, workspace_id: uuid.UUID) -> None:
+    """Hold the workspace row until the transaction ends.
+
+    Saves in one workspace then run one after another, so two runs of the same
+    repository cannot both create its project or take the same version number.
+    """
+    session.execute(select(Workspace.id).where(Workspace.id == workspace_id).with_for_update())
+
+
+def _project_for_repository(
+    session: Session, workspace_id: uuid.UUID, source_repo_url: str
+) -> Project | None:
+    return session.scalar(
+        select(Project)
+        .where(Project.workspace_id == workspace_id, Project.source_repo_url == source_repo_url)
+        .order_by(Project.created_at)
+        .limit(1)
+    )
+
+
+def _next_profile_version(session: Session, project_id: uuid.UUID) -> int:
+    latest = session.scalar(
+        select(func.max(ProductProfileRecord.version)).where(
+            ProductProfileRecord.project_id == project_id
+        )
+    )
+    return (latest or 0) + 1
