@@ -138,18 +138,26 @@ class ProductProfileRecord(Base):
     """One version of a project's Product Profile.
 
     ``content`` holds a serialised ``openmarketer_core.profile.ProductProfile``.
+    A trigger written in the migration (``product_profile_guard_version``) lets
+    a row be inserted only as a draft, lets an update change nothing but a
+    draft's approval columns, and refuses every deletion.
     """
 
     __tablename__ = "product_profile"
     __table_args__ = (
         UniqueConstraint("project_id", "version"),
         CheckConstraint("version >= 1", name="version"),
-        CheckConstraint("(status = 'approved') = (approved_at IS NOT NULL)", name="approved_at"),
+        CheckConstraint(
+            "(status = 'approved') = (approved_by IS NOT NULL)"
+            " AND (status = 'approved') = (approved_at IS NOT NULL)",
+            name="approval",
+        ),
     )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     project_id: Mapped[uuid.UUID] = _project_fk()
     snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("repo_snapshot.id"))
+    edited_from_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("product_profile.id"))
     version: Mapped[int] = mapped_column(Integer)
     status: Mapped[ProfileStatus] = mapped_column(
         _enum(ProfileStatus, "status"), server_default=ProfileStatus.DRAFT.value

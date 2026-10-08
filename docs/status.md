@@ -15,6 +15,7 @@ Phase 1 of the roadmap is "repository analyzer and Product Profile": extractors,
 | Model configuration and chat client | Built | `config/models.yaml`, `packages/core/src/openmarketer_core/llm_config.py`, `llm.py` |
 | Database models and migrations | Built | `packages/core/src/openmarketer_core/db/models.py`, `db/migrations/` |
 | Evidence store: saving snapshots, evidence and profile versions | Built, used by the CLI with `--save`; see [Storing a run](#storing-a-run) for what it leaves out | `packages/core/src/openmarketer_core/db/evidence_store.py`, `db/session.py` |
+| Profile versions: editing, approval, latest approved and latest draft | Built as functions with tests; nothing calls them yet. See [Profile versions and approval](#profile-versions-and-approval) | `packages/core/src/openmarketer_core/db/profile_versions.py` |
 | API | Not built (`apps/api` is an empty package) | |
 | Worker | Not built (`apps/worker` is an empty package) | |
 | Review UI | Not built (`apps/web` is a scaffold) | |
@@ -69,7 +70,7 @@ SELECT jsonb_pretty(content -> 'product') FROM product_profile ORDER BY created_
 
 What storing a run does not do yet:
 
-- **No approval.** Every stored profile is a draft. The table has the columns for an approved version, and no code sets them.
+- **No approval.** Every profile stored by a run is a draft. The functions that approve a version exist (next section), and no command, API or UI calls them.
 - **What the analyzer read is not stored.** The `evidence` table holds the extractor facts only, which the analyzer receives as hints. The evidence behind each claim in the profile (file and lines) is stored inside the profile JSON, not as rows, and the analyzer's tool calls are not stored at all.
 - **A project is matched by the exact repository URL.** `https://host/a/b` and `https://host/a/b.git` become two projects, and so does the same repository analysed once from its URL and once from a local folder (stored as a `file://` URL).
 - **No workspace isolation in the database.** Queries are scoped to a workspace in code; there is no row-level security (see the differences below).
@@ -77,10 +78,40 @@ What storing a run does not do yet:
 
 If saving fails after the analysis, the profile has already been printed or written, and the command exits with an error saying it was not stored.
 
+### Profile versions and approval
+
+`db/profile_versions.py` holds the database side of reviewing a profile. Its only callers are the tests.
+
+- `save_edited_profile` stores an edited profile as a new draft with the project's next version number. The version that was edited is left as it is; the new row keeps its snapshot and records it in `edited_from_id`.
+- `approve_profile_version` marks one version as approved, with the approver's user id and the database's time. Approving a version a second time raises `ProfileAlreadyApproved`.
+- `latest_approved_profile` and `latest_draft_profile` return the approved version, or the draft, with the highest version number, or nothing. The latest draft can be older than the latest approved version; the caller compares the numbers.
+
+Each function takes a workspace and a project, and a project of another workspace is treated like one that does not exist. They return a `ProfileVersion` holding the validated `ProductProfile`, not a database row.
+
+The database enforces the rules itself, so they also hold for `INSERT`, `UPDATE` and `DELETE` statements written by hand:
+
+- a trigger on `product_profile` accepts a new row only as a draft, so a version becomes approved only by an update of a stored draft;
+- the same trigger lets an update of a draft change `status`, `approved_by` and `approved_at` and nothing else: not the content, the version number, the project, the snapshot or the creation time. It compares whole rows, so a column added later is frozen too unless the trigger is changed;
+- it refuses every update of an approved row, and every deletion, draft or approved. A version number is therefore never used twice, and approving "version 2" always approves the content that was stored as version 2;
+- a CHECK constraint requires an approved row to have both `approved_by` and `approved_at`, and a draft to have neither.
+
+A consequence: a project that has profile versions cannot be deleted with plain SQL, because its versions cannot be. Removing a project will need a deliberate, privileged path when that feature is built.
+
+What this does not do:
+
+- **No caller.** There is no API route, command or screen that edits or approves a profile.
+- **The approver is not checked.** There is no user table; `approved_by` is whatever id the caller passes.
+- **No rule about which version may be approved.** An older draft can be approved after a newer version; "latest approved" follows the version number, not the time of approval.
+- **`TRUNCATE` is not stopped, and the trigger can be removed.** Row triggers do not fire for `TRUNCATE`, and the owner of the table can disable or drop the trigger. Downgrading the migration does exactly that: while a database is downgraded nothing protects its versions, and a later upgrade cannot tell whether approved content was rewritten in between.
+- **An approved row without an approver stops the upgrade.** The first revision allowed one, though no code wrote it. The migration refuses rather than guess; its docstring says how to repair the row.
+- **Writes are serialised only under READ COMMITTED**, PostgreSQL's default. Under a stricter isolation level a write that had to wait fails on the unique constraint instead of taking the next version number.
+- **No single-version or list query.** Nothing fetches one version by number or lists a project's versions yet.
+
 ## How it was checked
 
-- `make check` (ruff, pyright, 226 tests) passes locally and in CI. The tests need no network: model calls are scripted and HTTP uses a fake transport. Database tests run against PostgreSQL, secret-scan tests against gitleaks.
+- `make check` (ruff, pyright, 275 tests) passes locally and in CI. The tests need no network: model calls are scripted and HTTP uses a fake transport. Database tests run against PostgreSQL, secret-scan tests against gitleaks.
 - Storing a run is covered by those tests: the evidence store and the session module against PostgreSQL, and `openmarketer analyze --save` with the clone, extractors and model replaced by fixed results. One complete `make analyze repo=. save=1` run, on this repository with the free model, stored a project, a snapshot, 41 evidence rows and profile version 1, and the rows were read back with psql. A second save of the same repository (version 2) has only been run in the tests.
+- Profile versions and approval are covered by tests against PostgreSQL only: the functions, including two edits and two approvals running at the same time; the trigger and the CHECK constraint with hand-written SQL; and the migration applied to a database that already holds a draft, taken back one revision and applied again, and refused by a database holding an approved row without an approver. Nothing has been approved outside the tests.
 - Intake and the extractors were run by hand on seven public repositories of different kinds (Kotlin Multiplatform, Flutter, Expo, Swift, Rust, Python, Go).
 - The analyzer completed full runs against a live model on one repository ([Memoria](https://github.com/alpermelkeli/Memoria), a Kotlin Multiplatform app) with the free model named below. Three runs finished with an accepted profile at no cost; the two whose length was recorded took 12 and 19 model turns and needed no repairs.
 
@@ -127,4 +158,4 @@ Other things observed:
 
 ## What comes next
 
-Saving results to the database is done for the command line. Next, in order: the API, the review UI, the golden-repository evaluation. Whether a proposed strategy belongs to Phase 1 is open: the roadmap caption mentions it, the phase description does not.
+Saving results to the database is done for the command line, and the database functions for editing and approving a profile are in place. Next, in order: the API (which will be their first caller), the review UI, the golden-repository evaluation. Whether a proposed strategy belongs to Phase 1 is open: the roadmap caption mentions it, the phase description does not.

@@ -6,7 +6,8 @@ draft version of the project's Product Profile. Domain objects (``Snapshot``,
 else.
 
 Functions take a session and never commit: the caller owns the transaction.
-Approval of a profile is not handled here; every version is stored as a draft.
+Every version is stored here as a draft; editing, approving and reading
+versions is in ``profile_versions``.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from openmarketer_core.db.models import (
@@ -25,6 +26,7 @@ from openmarketer_core.db.models import (
     RepoSnapshot,
     Workspace,
 )
+from openmarketer_core.db.profile_versions import next_profile_version, wait_for_other_writes
 from openmarketer_core.extraction import ExtractedFact
 from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
@@ -72,7 +74,7 @@ def save_analysis(
     The first run of a repository creates the project, named after the product.
     Every run adds a snapshot, its evidence and the next profile version.
     """
-    _wait_for_other_saves(session, workspace_id)
+    wait_for_other_writes(session, workspace_id)
     project = _project_for_repository(session, workspace_id, snapshot.source_url)
     if project is None:
         project = Project(
@@ -108,7 +110,7 @@ def save_analysis(
     record = ProductProfileRecord(
         project_id=project.id,
         snapshot_id=stored_snapshot.id,
-        version=_next_profile_version(session, project.id),
+        version=next_profile_version(session, project.id),
         content=profile.model_dump(mode="json"),
     )
     session.add(record)
@@ -123,15 +125,6 @@ def save_analysis(
     )
 
 
-def _wait_for_other_saves(session: Session, workspace_id: uuid.UUID) -> None:
-    """Hold the workspace row until the transaction ends.
-
-    Saves in one workspace then run one after another, so two runs of the same
-    repository cannot both create its project or take the same version number.
-    """
-    session.execute(select(Workspace.id).where(Workspace.id == workspace_id).with_for_update())
-
-
 def _project_for_repository(
     session: Session, workspace_id: uuid.UUID, source_repo_url: str
 ) -> Project | None:
@@ -141,12 +134,3 @@ def _project_for_repository(
         .order_by(Project.created_at)
         .limit(1)
     )
-
-
-def _next_profile_version(session: Session, project_id: uuid.UUID) -> int:
-    latest = session.scalar(
-        select(func.max(ProductProfileRecord.version)).where(
-            ProductProfileRecord.project_id == project_id
-        )
-    )
-    return (latest or 0) + 1

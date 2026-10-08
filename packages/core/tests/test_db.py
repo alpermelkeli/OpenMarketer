@@ -77,30 +77,134 @@ def test_profile_version_is_unique_per_project(session, project):
         session.flush()
 
 
-def test_approved_profile_needs_an_approval_time(session, project):
+def stored_draft(session, project) -> ProductProfileRecord:
+    record = ProductProfileRecord(project_id=project.id, version=1, content=profile_content())
+    session.add(record)
+    session.flush()
+    return record
+
+
+def stored_approved(session, project) -> ProductProfileRecord:
+    record = stored_draft(session, project)
+    change(session, record, APPROVAL)
+    return record
+
+
+def another_project(session, project) -> Project:
+    other = Project(
+        workspace_id=project.workspace_id, name="Other", source_repo_url="https://example.com/o.git"
+    )
+    session.add(other)
+    session.flush()
+    return other
+
+
+APPROVAL = "status = 'approved', approved_by = gen_random_uuid(), approved_at = now()"
+REWRITES = {
+    "content": "content = '{}'::jsonb",
+    "renumbered": "version = 50",
+    "moved to another project": "project_id = :other_project",
+    "another snapshot": "snapshot_id = gen_random_uuid()",
+    "another creation time": "created_at = now() - interval '1 day'",
+}
+
+
+def change(session, record, assignments: str, **values) -> None:
+    session.execute(
+        text(f"UPDATE product_profile SET {assignments} WHERE id = :id"),
+        {"id": record.id, **values},
+    )
+
+
+def test_approval_needs_an_approval_time(session, project):
+    draft = stored_draft(session, project)
+    with pytest.raises(IntegrityError, match="ck_product_profile_approval"):
+        change(session, draft, "status = 'approved', approved_by = gen_random_uuid()")
+
+
+def test_approval_needs_an_approver(session, project):
+    draft = stored_draft(session, project)
+    with pytest.raises(IntegrityError, match="ck_product_profile_approval"):
+        change(session, draft, "status = 'approved', approved_at = now()")
+
+
+def test_draft_profile_cannot_name_an_approver(session, project):
     session.add(
         ProductProfileRecord(
-            project_id=project.id,
-            version=1,
-            content=profile_content(),
-            status=ProfileStatus.APPROVED,
+            project_id=project.id, version=1, content=profile_content(), approved_by=uuid.uuid4()
         )
     )
-    with pytest.raises(IntegrityError, match="ck_product_profile_approved_at"):
+    with pytest.raises(IntegrityError, match="ck_product_profile_approval"):
         session.flush()
 
 
-def test_approved_profile_with_time_is_accepted(session, project):
+def test_draft_is_approved_by_an_update_with_approver_and_time(session, project):
+    record = stored_approved(session, project)
+    session.refresh(record)
+    assert record.status is ProfileStatus.APPROVED
+
+
+def test_profile_cannot_be_inserted_already_approved(session, project):
     session.add(
         ProductProfileRecord(
             project_id=project.id,
             version=1,
             content=profile_content(),
             status=ProfileStatus.APPROVED,
+            approved_by=uuid.uuid4(),
             approved_at=datetime.now(UTC),
         )
     )
-    session.flush()
+    with pytest.raises(IntegrityError, match="stored as a draft and approved afterwards"):
+        session.flush()
+
+
+@pytest.mark.parametrize("assignments", REWRITES.values(), ids=REWRITES.keys())
+def test_draft_profile_cannot_be_rewritten(session, project, assignments):
+    draft = stored_draft(session, project)
+    other = another_project(session, project)
+    with pytest.raises(IntegrityError, match="version 1 can only be approved, not changed"):
+        change(session, draft, assignments, other_project=other.id)
+
+
+@pytest.mark.parametrize("assignments", REWRITES.values(), ids=REWRITES.keys())
+def test_approval_cannot_rewrite_the_draft_in_the_same_statement(session, project, assignments):
+    draft = stored_draft(session, project)
+    other = another_project(session, project)
+    with pytest.raises(IntegrityError, match="version 1 can only be approved, not changed"):
+        change(session, draft, f"{APPROVAL}, {assignments}", other_project=other.id)
+
+
+@pytest.mark.parametrize("assignments", REWRITES.values(), ids=REWRITES.keys())
+def test_approved_profile_cannot_be_rewritten(session, project, assignments):
+    approved = stored_approved(session, project)
+    other = another_project(session, project)
+    with pytest.raises(IntegrityError, match="approved product profile version 1 cannot be"):
+        change(session, approved, assignments, other_project=other.id)
+
+
+def test_approved_profile_cannot_be_unapproved(session, project):
+    approved = stored_approved(session, project)
+    with pytest.raises(IntegrityError, match="approved product profile version 1 cannot be"):
+        change(session, approved, "status = 'draft', approved_by = NULL, approved_at = NULL")
+
+
+def test_approved_profile_cannot_get_another_approver(session, project):
+    approved = stored_approved(session, project)
+    with pytest.raises(IntegrityError, match="approved product profile version 1 cannot be"):
+        change(session, approved, "approved_by = gen_random_uuid()")
+
+
+def test_approved_profile_cannot_be_deleted(session, project):
+    approved = stored_approved(session, project)
+    with pytest.raises(IntegrityError, match="product profile version 1 cannot be deleted"):
+        session.execute(text("DELETE FROM product_profile WHERE id = :id"), {"id": approved.id})
+
+
+def test_draft_profile_cannot_be_deleted(session, project):
+    draft = stored_draft(session, project)
+    with pytest.raises(IntegrityError, match="product profile version 1 cannot be deleted"):
+        session.execute(text("DELETE FROM product_profile WHERE id = :id"), {"id": draft.id})
 
 
 def test_autonomy_level_is_limited_to_the_ladder(session, project):
