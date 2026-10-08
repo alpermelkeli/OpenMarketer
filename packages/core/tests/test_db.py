@@ -12,6 +12,9 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from openmarketer_core.db.models import (
+    ANALYSIS_ERROR_MAX_LENGTH,
+    AnalysisRunRecord,
+    AnalysisRunStatus,
     Evidence,
     ProductProfileRecord,
     ProfileStatus,
@@ -22,7 +25,7 @@ from openmarketer_core.db.models import (
 )
 from openmarketer_core.profile import ProductProfile
 
-TABLES = {"workspace", "project", "repo_snapshot", "evidence", "product_profile"}
+TABLES = {"workspace", "project", "repo_snapshot", "evidence", "product_profile", "analysis_run"}
 
 
 @pytest.fixture
@@ -205,6 +208,114 @@ def test_draft_profile_cannot_be_deleted(session, project):
     draft = stored_draft(session, project)
     with pytest.raises(IntegrityError, match="product profile version 1 cannot be deleted"):
         session.execute(text("DELETE FROM product_profile WHERE id = :id"), {"id": draft.id})
+
+
+NOW = datetime.now(UTC)
+STARTED = {"status": AnalysisRunStatus.RUNNING, "started_at": NOW}
+FAILED = {"status": AnalysisRunStatus.FAILED, "error": "clone failed", "finished_at": NOW}
+INCONSISTENT_RUNS = {
+    "succeeded without a profile": (
+        STARTED | {"status": AnalysisRunStatus.SUCCEEDED, "finished_at": NOW},
+        "ck_analysis_run_profile_id",
+    ),
+    "failed without an error": (
+        {"status": AnalysisRunStatus.FAILED, "finished_at": NOW},
+        "ck_analysis_run_error",
+    ),
+    "running with an error": (STARTED | {"error": "clone failed"}, "ck_analysis_run_error"),
+    "error longer than the limit": (
+        FAILED | {"error": "x" * (ANALYSIS_ERROR_MAX_LENGTH + 1)},
+        "ck_analysis_run_error_length",
+    ),
+    "queued with a start": ({"started_at": NOW}, "ck_analysis_run_started_at"),
+    "running without a start": (
+        {"status": AnalysisRunStatus.RUNNING},
+        "ck_analysis_run_started_at",
+    ),
+    "running with an end": (STARTED | {"finished_at": NOW}, "ck_analysis_run_finished_at"),
+    "failed without an end": (FAILED | {"finished_at": None}, "ck_analysis_run_finished_at"),
+}
+
+
+def stored_run(session, project, **columns) -> AnalysisRunRecord:
+    run = AnalysisRunRecord(project_id=project.id, **columns)
+    session.add(run)
+    session.flush()
+    return run
+
+
+@pytest.mark.parametrize(
+    ("columns", "constraint"), INCONSISTENT_RUNS.values(), ids=INCONSISTENT_RUNS.keys()
+)
+def test_inconsistent_analysis_run_is_rejected(session, project, columns, constraint):
+    with pytest.raises(IntegrityError, match=constraint):
+        stored_run(session, project, **columns)
+
+
+def test_unfinished_analysis_run_cannot_name_a_profile(session, project):
+    draft = stored_draft(session, project)
+    with pytest.raises(IntegrityError, match="ck_analysis_run_profile_id"):
+        stored_run(session, project, profile_id=draft.id, **STARTED)
+
+
+def test_unknown_analysis_run_status_is_rejected(session, project):
+    run = stored_run(session, project)
+    with pytest.raises(IntegrityError, match="ck_analysis_run_status"):
+        session.execute(
+            text("UPDATE analysis_run SET status = 'cancelled', started_at = now() WHERE id = :id"),
+            {"id": run.id},
+        )
+
+
+def test_analysis_run_starts_queued(session, project):
+    run = stored_run(session, project)
+    session.refresh(run)
+    assert run.status is AnalysisRunStatus.QUEUED
+    assert (run.started_at, run.finished_at, run.error, run.profile_id) == (None,) * 4
+
+
+def test_failed_analysis_run_may_never_have_started(session, project):
+    stored_run(session, project, **FAILED)
+
+
+@pytest.mark.parametrize("unfinished", [{}, STARTED], ids=["queued", "running"])
+def test_project_has_one_unfinished_analysis_run(session, project, unfinished):
+    stored_run(session, project, **unfinished)
+    with pytest.raises(IntegrityError, match="uq_analysis_run_project_id_unfinished"):
+        stored_run(session, project)
+
+
+def test_finished_analysis_runs_do_not_block_a_new_one(session, project):
+    stored_run(session, project, **FAILED)
+    stored_run(session, project, **FAILED)
+    stored_run(session, project)
+
+
+def test_another_project_can_have_its_own_unfinished_analysis_run(session, project):
+    stored_run(session, project)
+    stored_run(session, another_project(session, project))
+
+
+def test_succeeded_analysis_run_cannot_name_a_profile_of_another_project(session, project):
+    draft = stored_draft(session, project)
+    other = another_project(session, project)
+    with pytest.raises(IntegrityError, match="fk_analysis_run_profile_id_product_profile"):
+        stored_run(
+            session,
+            other,
+            profile_id=draft.id,
+            **STARTED | {"status": AnalysisRunStatus.SUCCEEDED, "finished_at": NOW},
+        )
+
+
+def test_succeeded_analysis_run_names_a_profile_of_its_project(session, project):
+    draft = stored_draft(session, project)
+    stored_run(
+        session,
+        project,
+        profile_id=draft.id,
+        **STARTED | {"status": AnalysisRunStatus.SUCCEEDED, "finished_at": NOW},
+    )
 
 
 def test_autonomy_level_is_limited_to_the_ladder(session, project):

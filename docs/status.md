@@ -16,6 +16,7 @@ Phase 1 of the roadmap is "repository analyzer and Product Profile": extractors,
 | Database models and migrations | Built | `packages/core/src/openmarketer_core/db/models.py`, `db/migrations/` |
 | Evidence store: saving snapshots, evidence and profile versions | Built, used by the CLI with `--save`; see [Storing a run](#storing-a-run) for what it leaves out | `packages/core/src/openmarketer_core/db/evidence_store.py`, `db/session.py` |
 | Profile versions: editing, approval, latest approved and latest draft | Built as functions with tests; nothing calls them yet. See [Profile versions and approval](#profile-versions-and-approval) | `packages/core/src/openmarketer_core/db/profile_versions.py` |
+| Analysis runs: requesting a run and recording its start and outcome | Built as a table and functions with tests; nothing calls them yet. See [Analysis runs](#analysis-runs) | `packages/core/src/openmarketer_core/db/analysis_runs.py` |
 | API | Not built (`apps/api` is an empty package) | |
 | Worker | Not built (`apps/worker` is an empty package) | |
 | Review UI | Not built (`apps/web` is a scaffold) | |
@@ -107,11 +108,34 @@ What this does not do:
 - **Writes are serialised only under READ COMMITTED**, PostgreSQL's default. Under a stricter isolation level a write that had to wait fails on the unique constraint instead of taking the next version number.
 - **No single-version or list query.** Nothing fetches one version by number or lists a project's versions yet.
 
+### Analysis runs
+
+The design runs an analysis in a Temporal workflow that the API starts. `db/analysis_runs.py` and the `analysis_run` table hold the state of such a run, so the API and the worker share it and it survives a restart of either. Neither the API nor the worker exists on this branch; the only callers are the tests.
+
+- `request_analysis_run` adds a `queued` run for a project. A project has at most one unfinished run (a partial unique index); a second request raises `AnalysisAlreadyRunning`, so a repeated request does not pay for the model twice.
+- `mark_run_started`, `mark_run_succeeded` and `mark_run_failed` are what the worker reports. A run only moves forwards: `queued` to `running` to `succeeded`, or `queued` or `running` to `failed`. A report that repeats what is already recorded changes nothing, because Temporal can deliver an activity twice. A finished run is never changed (`AnalysisRunFinished`), and a run that was never started cannot succeed (`AnalysisRunNotStarted`).
+- `analysis_run` reads one run: status, times, the failure message, and for a succeeded run the profile version it stored and that version's snapshot.
+- `save_analysis_of_project` in the evidence store stores a run's snapshot, evidence and draft profile under a project given by id, where the command line's `save_analysis` finds or creates the project by repository URL. The worker can store the result and report the success in one transaction.
+
+Every function takes the workspace, the project and the run, including those the worker calls; a run of another workspace or project is treated like one that does not exist. CHECK constraints keep a row consistent: a profile version if and only if the run succeeded, an error if and only if it failed, an end time if and only if it is finished, a start time once it is running. A foreign key over both columns makes the profile version belong to the run's project.
+
+What this does not do:
+
+- **No caller.** No workflow, activity or API route exists here. No workflow id is stored: the caller is expected to derive it from the run id.
+- **A run whose worker died stays unfinished and blocks the project.** Nothing here times a run out; the workflow has to report the failure.
+- **Runs are never deleted.** There is no clean-up and no way to cancel.
+- **The failure message is not redacted.** It can contain git output or exception text. It is cut to 2000 characters and stored as given; what may be written there is the caller's decision.
+- **A finished row is protected in code only.** Unlike profile versions there is no trigger, so SQL written by hand can rewrite a finished run within what the CHECK constraints allow.
+- **The snapshot's repository is not compared with the project's** when a result is stored under a project id.
+- **No list query.** Nothing lists a project's runs or returns its latest one.
+- **No access token.** The token for a private repository is not stored in the database and does not pass through these functions.
+
 ## How it was checked
 
-- `make check` (ruff, pyright, 275 tests) passes locally and in CI. The tests need no network: model calls are scripted and HTTP uses a fake transport. Database tests run against PostgreSQL, secret-scan tests against gitleaks.
+- `make check` (ruff, pyright, 336 tests) passes locally and in CI. The tests need no network: model calls are scripted and HTTP uses a fake transport. Database tests run against PostgreSQL, secret-scan tests against gitleaks.
 - Storing a run is covered by those tests: the evidence store and the session module against PostgreSQL, and `openmarketer analyze --save` with the clone, extractors and model replaced by fixed results. One complete `make analyze repo=. save=1` run, on this repository with the free model, stored a project, a snapshot, 41 evidence rows and profile version 1, and the rows were read back with psql. A second save of the same repository (version 2) has only been run in the tests.
 - Profile versions and approval are covered by tests against PostgreSQL only: the functions, including two edits and two approvals running at the same time; the trigger and the CHECK constraint with hand-written SQL; and the migration applied to a database that already holds a draft, taken back one revision and applied again, and refused by a database holding an approved row without an approver. Nothing has been approved outside the tests.
+- Analysis runs are covered by tests against PostgreSQL only: every transition and every refusal, each CHECK constraint and the one-unfinished-run index, two requests and two reports running at the same time, and a result stored together with its success in one transaction (and not stored when the success is refused). No workflow has used them.
 - Intake and the extractors were run by hand on seven public repositories of different kinds (Kotlin Multiplatform, Flutter, Expo, Swift, Rust, Python, Go).
 - The analyzer completed full runs against a live model on one repository ([Memoria](https://github.com/alpermelkeli/Memoria), a Kotlin Multiplatform app) with the free model named below. Three runs finished with an accepted profile at no cost; the two whose length was recorded took 12 and 19 model turns and needed no repairs.
 
@@ -158,4 +182,4 @@ Other things observed:
 
 ## What comes next
 
-Saving results to the database is done for the command line, and the database functions for editing and approving a profile are in place. Next, in order: the API (which will be their first caller), the review UI, the golden-repository evaluation. Whether a proposed strategy belongs to Phase 1 is open: the roadmap caption mentions it, the phase description does not.
+Saving results to the database is done for the command line, and the database functions for editing and approving a profile and for tracking analysis runs are in place. Next, in order: the API and the Temporal worker (which will be their first callers), the review UI, the golden-repository evaluation. Whether a proposed strategy belongs to Phase 1 is open: the roadmap caption mentions it, the phase description does not.

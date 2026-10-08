@@ -1,13 +1,16 @@
 """Evidence store: what an analysis run leaves in the database.
 
 One run adds a repository snapshot, the extractor facts found in it and a new
-draft version of the project's Product Profile. Domain objects (``Snapshot``,
-``ExtractedFact``, ``ProductProfile``) are converted to rows here and nowhere
-else.
+draft version of the project's Product Profile. The command line names the
+project by its repository (``save_analysis``, which creates it on first use);
+a caller that already has a project names it by id
+(``save_analysis_of_project``). Domain objects (``Snapshot``, ``ExtractedFact``,
+``ProductProfile``) are converted to rows here and nowhere else.
 
 Functions take a session and never commit: the caller owns the transaction.
 Every version is stored here as a draft; editing, approving and reading
-versions is in ``profile_versions``.
+versions is in ``profile_versions``, and the state of a requested run is in
+``analysis_runs``.
 """
 
 from __future__ import annotations
@@ -32,6 +35,13 @@ from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
 
 LOCAL_WORKSPACE_NAME = "local"
+
+
+class AnalysisProjectNotFound(Exception):
+    """The workspace has no such project to analyse or to store an analysis under."""
+
+    def __init__(self, project_id: uuid.UUID) -> None:
+        super().__init__(f"project {project_id} does not exist")
 
 
 @dataclass(frozen=True)
@@ -85,15 +95,56 @@ def save_analysis(
         session.add(project)
         session.flush()
 
+    return _store_run(session, project.id, snapshot, facts, profile)
+
+
+def save_analysis_of_project(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    snapshot: Snapshot,
+    facts: Iterable[ExtractedFact],
+    profile: ProductProfile,
+) -> SavedAnalysis:
+    """Store one analysis run under a project the workspace already has.
+
+    The project is taken as given: the repository URL of the snapshot is not
+    compared with the project's.
+    """
+    wait_for_other_writes(session, workspace_id)
+    project = project_in_workspace(session, workspace_id, project_id)
+    return _store_run(session, project.id, snapshot, facts, profile)
+
+
+def project_in_workspace(
+    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID
+) -> Project:
+    """The project, if the workspace has it; a project of another workspace does not exist."""
+    project = session.scalar(
+        select(Project).where(Project.workspace_id == workspace_id, Project.id == project_id)
+    )
+    if project is None:
+        raise AnalysisProjectNotFound(project_id)
+    return project
+
+
+def _store_run(
+    session: Session,
+    project_id: uuid.UUID,
+    snapshot: Snapshot,
+    facts: Iterable[ExtractedFact],
+    profile: ProductProfile,
+) -> SavedAnalysis:
     stored_snapshot = RepoSnapshot(
-        project_id=project.id, commit_sha=snapshot.commit_sha, ref=snapshot.ref
+        project_id=project_id, commit_sha=snapshot.commit_sha, ref=snapshot.ref
     )
     session.add(stored_snapshot)
     session.flush()
 
     evidence_rows = [
         {
-            "project_id": project.id,
+            "project_id": project_id,
             "snapshot_id": stored_snapshot.id,
             "extractor": fact.extractor,
             "kind": fact.kind,
@@ -108,16 +159,16 @@ def save_analysis(
         session.execute(insert(Evidence), evidence_rows)
 
     record = ProductProfileRecord(
-        project_id=project.id,
+        project_id=project_id,
         snapshot_id=stored_snapshot.id,
-        version=next_profile_version(session, project.id),
+        version=next_profile_version(session, project_id),
         content=profile.model_dump(mode="json"),
     )
     session.add(record)
     session.flush()
 
     return SavedAnalysis(
-        project_id=project.id,
+        project_id=project_id,
         snapshot_id=stored_snapshot.id,
         profile_id=record.id,
         profile_version=record.version,

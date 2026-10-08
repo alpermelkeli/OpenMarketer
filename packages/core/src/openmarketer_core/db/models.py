@@ -1,4 +1,4 @@
-"""Tables for projects, repository evidence and Product Profile versions.
+"""Tables for projects, repository evidence, Product Profile versions and analysis runs.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project.
@@ -16,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     SmallInteger,
@@ -40,6 +41,17 @@ class ProjectStatus(StrEnum):
 class ProfileStatus(StrEnum):
     DRAFT = "draft"
     APPROVED = "approved"
+
+
+class AnalysisRunStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+# A failure message can carry git output or a traceback; the row keeps only its start.
+ANALYSIS_ERROR_MAX_LENGTH = 2000
 
 
 def _enum(enum_cls: type[StrEnum], name: str) -> Enum:
@@ -146,6 +158,8 @@ class ProductProfileRecord(Base):
     __tablename__ = "product_profile"
     __table_args__ = (
         UniqueConstraint("project_id", "version"),
+        # Lets an analysis run reference a version together with its project.
+        UniqueConstraint("id", "project_id"),
         CheckConstraint("version >= 1", name="version"),
         CheckConstraint(
             "(status = 'approved') = (approved_by IS NOT NULL)"
@@ -166,3 +180,47 @@ class ProductProfileRecord(Base):
     approved_by: Mapped[uuid.UUID | None]
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created_at()
+
+
+# ------------------------------------------------------------------- runs
+class AnalysisRunRecord(Base):
+    """One requested analysis of a project, from the request to its outcome.
+
+    A project has at most one unfinished run. A succeeded run points at the
+    profile version it stored, which must belong to the same project; the
+    snapshot is that version's snapshot.
+    """
+
+    __tablename__ = "analysis_run"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["profile_id", "project_id"], ["product_profile.id", "product_profile.project_id"]
+        ),
+        CheckConstraint("(status = 'succeeded') = (profile_id IS NOT NULL)", name="profile_id"),
+        CheckConstraint("(status = 'failed') = (error IS NOT NULL)", name="error"),
+        CheckConstraint(f"char_length(error) <= {ANALYSIS_ERROR_MAX_LENGTH}", name="error_length"),
+        # A run can fail before a worker picks it up, so a failed run may have no start.
+        CheckConstraint(
+            "status = 'failed' OR (status = 'queued') = (started_at IS NULL)", name="started_at"
+        ),
+        CheckConstraint(
+            "(status IN ('succeeded', 'failed')) = (finished_at IS NOT NULL)", name="finished_at"
+        ),
+        Index(
+            "uq_analysis_run_project_id_unfinished",
+            "project_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    status: Mapped[AnalysisRunStatus] = mapped_column(
+        _enum(AnalysisRunStatus, "status"), server_default=AnalysisRunStatus.QUEUED.value
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    profile_id: Mapped[uuid.UUID | None]
+    created_at: Mapped[datetime] = _created_at()
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
