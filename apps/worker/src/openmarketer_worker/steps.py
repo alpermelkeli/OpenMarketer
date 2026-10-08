@@ -4,7 +4,7 @@ The workflow calls activities by name and the activities register under the
 same names, so the workflow module never imports the code that clones
 repositories and talks to the database (the workflow sandbox could not load
 it). Everything here is stored in the workflow history: identifiers and short
-messages only.
+messages only. (Temporal adds the stack trace of a failed activity on its own.)
 """
 
 from __future__ import annotations

@@ -22,7 +22,7 @@ from openmarketer_core.intake import (
     RepositoryTokens,
     Snapshot,
 )
-from openmarketer_core.llm import RouterChatModel
+from openmarketer_core.llm import LLMError, RouterChatModel
 from openmarketer_core.profile import ProductProfile
 
 REPOSITORY = "https://example.com/acme/app.git"
@@ -158,3 +158,13 @@ def test_token_host_that_is_not_a_host_name_stops_the_command(clones, monkeypatc
     assert result.exit_code == 1
     assert "GITLAB_HOST" in result.stderr
     assert clones == []
+
+
+def test_refusal_by_the_model_provider_is_reported_with_its_status(clones, monkeypatch):
+    def refuse(*_, **__):
+        raise LLMError("the model provider answered HTTP 401", status=401)
+
+    monkeypatch.setattr(main, "analyze", refuse)
+    result = run()
+    assert result.exit_code == 1
+    assert "error: the model provider answered HTTP 401" in result.stderr

@@ -12,9 +12,9 @@ set freely: approval is recorded under this identity.
 from __future__ import annotations
 
 import ipaddress
+import re
 import uuid
 from typing import Annotated
-from urllib.parse import urlsplit
 
 from fastapi import Depends, Request
 
@@ -25,7 +25,12 @@ from openmarketer_core.db.evidence_store import local_workspace_id
 # user approved can be told apart from real accounts once those exist.
 LOCAL_USER_ID = uuid.uuid5(uuid.NAMESPACE_DNS, "local-user.openmarketer")
 
-_LOCAL_HOST_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+# The whole of a Host header that names this machine: one of three names and, optionally,
+# a port in digits. Anything else a URL parser might still read a local name out of
+# (a user part, a fragment, a path, a backslash) does not match.
+_LOCAL_HOST = r"(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?"
+_LOCAL_HOST_HEADER = re.compile(_LOCAL_HOST, re.IGNORECASE)
+_LOCAL_ORIGIN = re.compile(rf"https?://{_LOCAL_HOST}", re.IGNORECASE)
 
 
 class NotLocalRequest(Exception):
@@ -56,13 +61,19 @@ def _comes_from_this_machine(request: Request) -> bool:
     The peer address alone is not enough: a web page open in the user's browser
     connects from this machine too. Such a page announces itself in ``Origin``,
     and a foreign name pointed at 127.0.0.1 (DNS rebinding) shows up in ``Host``.
+    Both headers are matched whole against the few forms that name this
+    machine, never parsed: a value that is missing, repeated or malformed is
+    not local.
     """
     if request.client is None or not _is_loopback(request.client.host):
         return False
-    if request.url.hostname not in _LOCAL_HOST_NAMES:
+    # The header as it was sent, exactly once. ``request.url`` would fill in the
+    # listening address when the header is missing or cannot be parsed.
+    hosts = request.headers.getlist("host")
+    if len(hosts) != 1 or not _LOCAL_HOST_HEADER.fullmatch(hosts[0]):
         return False
-    origin = request.headers.get("origin")
-    return origin is None or urlsplit(origin).hostname in _LOCAL_HOST_NAMES
+    origins = request.headers.getlist("origin")
+    return all(_LOCAL_ORIGIN.fullmatch(origin) for origin in origins)
 
 
 def _is_loopback(host: str) -> bool:

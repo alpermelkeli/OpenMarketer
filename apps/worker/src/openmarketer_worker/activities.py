@@ -8,7 +8,8 @@ twice (the run's transition rules in ``db.analysis_runs`` see to that).
 
 Dependencies are handed in when the worker starts; nothing here reads the
 environment. The original error of a failure is logged, not attached: Temporal
-stores a failure with its causes, and those can name local paths.
+stores a failure with its causes, and those can name local paths. It also
+stores the failure's stack trace, which names source files and lines only.
 """
 
 from __future__ import annotations
@@ -129,7 +130,8 @@ class AnalysisActivities:
             except ANALYSIS_FAILURES as e:
                 logger.info("analysis run %s failed: %s", run.run_id, e)
                 # Only the model provider fails in ways that pass: an outage, a rate limit.
-                kind = steps.MODEL_UNAVAILABLE if isinstance(e, LLMError) else steps.ANALYSIS_FAILED
+                passing = isinstance(e, LLMError) and e.may_pass
+                kind = steps.MODEL_UNAVAILABLE if passing else steps.ANALYSIS_FAILED
                 raise _failure(kind, failure_message(e, Path(workdir))) from None
         self._store(run, result)
 

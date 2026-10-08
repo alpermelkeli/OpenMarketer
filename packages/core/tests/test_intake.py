@@ -18,7 +18,7 @@ from openmarketer_core.intake import (
     remote_repository_url,
     run_intake,
 )
-from openmarketer_core.intake.git import _git_env, clone
+from openmarketer_core.intake.git import clone
 
 needs_gitleaks = pytest.mark.skipif(shutil.which("gitleaks") is None, reason="needs gitleaks")
 
@@ -143,13 +143,6 @@ def test_destination_must_be_empty(source_repo, tmp_path):
     (dest / "existing.txt").write_text("x")
     with pytest.raises(IntakeError, match="not empty"):
         clone(str(source_repo), dest)
-
-
-def test_user_git_configuration_is_ignored():
-    env = _git_env(None, "https://example.com/acme/app.git")
-    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
-    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
-    assert env["GIT_TERMINAL_PROMPT"] == "0"
 
 
 # ------------------------------------------------------------ secret scan

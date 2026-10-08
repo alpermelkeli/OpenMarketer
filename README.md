@@ -62,7 +62,7 @@ uv sync
 make analyze repo=https://github.com/owner/name
 ```
 
-This clones the repository, removes secrets, lets the analyzer agent read the code and prints a draft Product Profile as JSON: product, features with their status, brand, audience, business model and measurement, each with file-and-line evidence and a confidence. It is a draft for a person to review, and it is not stored unless you ask for that (below). A private repository needs `GITHUB_TOKEN` (github.com) or `GITLAB_TOKEN` (gitlab.com, or the host in `GITLAB_HOST`) in `.env`. A token is sent only to its own host; cloning a real private repository is untested.
+This clones the repository, removes secrets, lets the analyzer agent read the code and prints a draft Product Profile as JSON: product, features with their status, brand, audience, business model and measurement, each with file-and-line evidence and a confidence. It is a draft for a person to review, and it is not stored unless you ask for that (below). A private repository needs `GITHUB_TOKEN` (github.com) or `GITLAB_TOKEN` (gitlab.com, or the host in `GITLAB_HOST`) in `.env`. A token is sent only to its own host; cloning a real private repository is untested. Redirects are not followed, so use the address a repository has now, and on gitlab.com one that ends in `.git`.
 
 To keep the result, store the run in the development database. This also needs Docker, and `DATABASE_URL` in `.env` set to `postgresql+psycopg://openmarketer:openmarketer@localhost:5433/openmarketer`:
 

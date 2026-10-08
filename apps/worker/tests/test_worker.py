@@ -108,11 +108,24 @@ async def test_refused_repository_ends_the_run_failed_with_a_reason_fit_to_show(
 async def test_model_provider_failure_is_tried_again_and_the_run_succeeds(
     execute, scripted, run, database
 ):
-    analysis = scripted([LLMError("HTTP 429: rate limited")])
+    analysis = scripted([LLMError("the model provider answered HTTP 429", status=429)])
     await execute(run, analysis)
     assert len(analysis.cloned) == 2
     assert database.run(run).status is AnalysisRunStatus.SUCCEEDED
     assert database.profile_versions(run) == 1
+
+
+async def test_request_the_model_provider_refuses_ends_the_run_at_the_first_attempt(
+    execute, scripted, run, database
+):
+    analysis = scripted([LLMError("the model provider answered HTTP 401", status=401)])
+    await execute(run, analysis)
+    stored = database.run(run)
+    assert (stored.status, stored.error) == (
+        AnalysisRunStatus.FAILED,
+        "the model provider answered HTTP 401",
+    )
+    assert len(analysis.cloned) == 1
 
 
 async def test_unexpected_error_ends_the_run_failed_without_its_detail(

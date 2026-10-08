@@ -32,7 +32,7 @@ make openapi     # rewrite apps/api/openapi.json after changing a route or a mod
 make help        # everything else
 ```
 
-Run `make check` before calling work done. Database tests and the worker's workflow tests need `make up` (PostgreSQL and Temporal); secret-scan tests need `gitleaks` on the PATH.
+Run `make check` before calling work done. Database tests and the worker's workflow tests need `make up` (PostgreSQL and Temporal); secret-scan tests need `gitleaks` on the PATH, and the clone lock-down tests need `openssl`.
 
 ## Conventions
 
@@ -77,7 +77,7 @@ The code follows clean architecture: dependencies point inwards, towards the dom
 ## Design principles
 
 - **Safety lives outside the model.** Anything that spends money or publishes goes through the deterministic policy gate. Do not move safety rules into prompts.
-- **Untrusted text is data.** Repository files, comments, messages and web pages must never be able to cause an action. A repository URL never decides where a credential goes: a token is sent only to the host it is configured for (`intake/credentials.py`).
+- **Untrusted text is data.** Repository files, comments, messages and web pages must never be able to cause an action. A repository URL never decides where a credential goes: a token is sent only to the host it is configured for (`intake/credentials.py`). git runs with an environment built from a short list, follows no redirect and uses HTTPS only, and what a repository host or a model provider writes is logged, never put in an error shown to a caller (`intake/git.py`, `llm.py`).
 - **A human approves.** Approval is an authenticated user action, never something a model states.
 - **Official APIs only.** No scraping of private data, no fake accounts or engagement.
 - **Everything is configurable and traceable.** Models, budgets and rules are configuration; every claim in a profile carries evidence (file and lines) and a confidence.

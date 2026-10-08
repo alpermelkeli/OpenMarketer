@@ -237,3 +237,16 @@ def test_approving_a_version_that_does_not_exist_is_not_found(client, profile_ur
 
 def test_version_zero_is_rejected(client, profile_url):
     assert client.post(f"{profile_url}/versions/0/approval").status_code == 422
+
+
+@pytest.mark.parametrize("version", [2_147_483_648, 99999999999999999999])
+def test_version_number_no_project_can_have_is_rejected_before_the_database(
+    client, profile_url, version
+):
+    body = {"profile": PROFILE}
+    assert client.post(f"{profile_url}/versions/{version}/approval").status_code == 422
+    assert client.post(f"{profile_url}/versions/{version}/edits", json=body).status_code == 422
+
+
+def test_highest_version_number_a_project_can_have_is_looked_up(client, profile_url):
+    assert client.post(f"{profile_url}/versions/2147483647/approval").status_code == 404

@@ -189,16 +189,35 @@ async def test_refused_repository_or_profile_is_not_worth_another_attempt(failin
 
 
 async def test_model_provider_failure_is_worth_another_attempt(failing, started):
-    limited = LLMError("HTTP 429: rate limited")
+    limited = LLMError("the model provider answered HTTP 429", status=429)
     failure = await refused(failing(limited).analyse_and_store, started)
     assert (failure.type, failure.non_retryable) == (steps.MODEL_UNAVAILABLE, False)
-    assert failure.message == "HTTP 429: rate limited"
+    assert failure.message == "the model provider answered HTTP 429"
+
+
+@pytest.mark.parametrize("status", [401, 402, 403, 404])
+async def test_request_the_model_provider_refuses_is_not_worth_another_attempt(
+    failing, started, status
+):
+    refusal = LLMError(f"the model provider answered HTTP {status}", status=status)
+    failure = await refused(failing(refusal).analyse_and_store, started)
+    assert (failure.type, failure.non_retryable) == (steps.ANALYSIS_FAILED, True)
+
+
+async def test_model_provider_that_did_not_answer_is_worth_another_attempt(failing, started):
+    failure = await refused(
+        failing(LLMError("request failed: ReadTimeout")).analyse_and_store, started
+    )
+    assert (failure.type, failure.non_retryable) == (steps.MODEL_UNAVAILABLE, False)
 
 
 async def test_failed_attempt_leaves_the_run_running_for_the_workflow_to_settle(
     failing, started, database
 ):
-    await refused(failing(LLMError("HTTP 503")).analyse_and_store, started)
+    await refused(
+        failing(LLMError("the model provider answered HTTP 503", status=503)).analyse_and_store,
+        started,
+    )
     assert database.run(started).status is AnalysisRunStatus.RUNNING
 
 

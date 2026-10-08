@@ -29,7 +29,8 @@ from openmarketer_core.profile import ProductProfile
 
 router = APIRouter(prefix="/projects/{project_id}/profile", tags=["profiles"])
 
-VersionNumber = Annotated[int, Path(ge=1)]
+# Version numbers are a 32-bit integer column; a larger number is no version, not a database error.
+VersionNumber = Annotated[int, Path(ge=1, le=2_147_483_647)]
 
 
 class SaveProfileEditRequest(BaseModel):

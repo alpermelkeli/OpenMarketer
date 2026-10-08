@@ -8,7 +8,9 @@ first two steps can end without a result (a refused repository, attempts used
 up, a timeout, a worker that died, a cancellation) leads to the third.
 
 It does not pass repository content, profiles or credentials: the history
-holds the three identifiers of the run and short messages. It does not cancel
+holds the three identifiers of the run, the limits, short messages and, for a
+failed activity, the stack trace Temporal records (file names and source lines
+of the worker, no values). It does not cancel
 an analysis that is already running in a worker, and it cannot record anything
 when the workflow itself is terminated.
 """
