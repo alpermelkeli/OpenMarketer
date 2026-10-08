@@ -5,7 +5,7 @@ import json
 import pytest
 
 from openmarketer_core.analyzer import AnalysisError, Limits, analyze
-from openmarketer_core.analyzer.rules import SUBMIT, repository_map
+from openmarketer_core.analyzer.rules import SUBMIT, repository_map, submit_schema
 from openmarketer_core.analyzer.tools import RepoTools
 from openmarketer_core.extraction import ExtractedFact
 from openmarketer_core.intake import RepoFiles
@@ -161,6 +161,38 @@ def test_live_feature_needs_evidence(files):
     model = ScriptedModel([call(SUBMIT, **bad)], [call(SUBMIT, **profile())])
     analyze(files, model)
     assert "status is live but no evidence is cited" in model.tool_results()[0]
+
+
+def test_missing_confidence_is_rejected_instead_of_defaulting_to_zero(files):
+    bad = profile()
+    del bad["features"][0]["confidence"]
+    model = ScriptedModel([call(SUBMIT, **bad)], [call(SUBMIT, **profile())])
+    result = analyze(files, model)
+    assert "feature 'offline-sharing': confidence is missing" in model.tool_results()[0]
+    assert result.profile.features[0].confidence == 0.8
+
+
+def test_missing_confidence_on_the_last_attempt_is_noted(files):
+    bad = profile()
+    del bad["features"][0]["confidence"]
+    result = analyze(files, ScriptedModel(*[[call(SUBMIT, **bad)]] * 3))
+    assert result.notes == ["feature 'offline-sharing': no confidence was given, it is 0"]
+
+
+def test_zero_confidence_next_to_evidence_is_rejected(files):
+    bad = profile()
+    bad["features"][0]["confidence"] = 0.0
+    model = ScriptedModel([call(SUBMIT, **bad)], [call(SUBMIT, **profile())])
+    analyze(files, model)
+    assert "feature 'offline-sharing': confidence is missing or 0" in model.tool_results()[0]
+
+
+def test_submit_schema_requires_confidence_and_shows_no_default():
+    definitions = submit_schema()["function"]["parameters"]["$defs"]
+    for name in ("Product", "Feature", "Brand", "Audience", "BusinessModel", "Measurement"):
+        assert "confidence" in definitions[name]["required"]
+        assert "default" not in definitions[name]["properties"]["confidence"]
+    assert "confidence" not in ProductProfile.model_json_schema()["$defs"]["Feature"]["required"]
 
 
 def test_schema_errors_are_explained_to_the_model(files):

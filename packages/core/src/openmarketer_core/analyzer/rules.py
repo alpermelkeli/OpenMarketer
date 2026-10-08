@@ -89,12 +89,20 @@ class AnalysisError(Exception):
 
 
 def submit_schema() -> dict[str, Any]:
+    parameters = ProductProfile.model_json_schema()
+    # The models default confidence to 0 so a profile can be built in code; a model shown that
+    # default copies it. Towards the agent, confidence is required and has no default.
+    for definition in parameters.get("$defs", {}).values():
+        confidence = definition.get("properties", {}).get("confidence")
+        if confidence is not None:
+            confidence.pop("default", None)
+            definition["required"] = [*definition.get("required", []), "confidence"]
     return {
         "type": "function",
         "function": {
             "name": SUBMIT,
             "description": "Submit the finished Product Profile. Call it once, when done.",
-            "parameters": ProductProfile.model_json_schema(),
+            "parameters": parameters,
         },
     }
 
@@ -144,6 +152,15 @@ def _evidence_problem(tools: RepoTools, file: str, lines: str | None) -> str | N
     return None
 
 
+def _confidence_missing(part: Evidenced) -> bool:
+    """A filled-in part with no confidence, or with the schema default 0 next to its evidence."""
+    if not part.model_fields_set:
+        return False
+    return "confidence" not in part.model_fields_set or (
+        part.confidence == 0 and bool(part.evidence)
+    )
+
+
 def verify(profile: ProductProfile, tools: RepoTools) -> list[str]:
     """Problems that make a submitted profile unacceptable. Empty means accepted."""
     problems: list[str] = []
@@ -152,6 +169,8 @@ def verify(profile: ProductProfile, tools: RepoTools) -> list[str]:
             problem = _evidence_problem(tools, evidence.file, evidence.lines)
             if problem:
                 problems.append(f"{label}: {problem}")
+        if _confidence_missing(part):
+            problems.append(f"{label}: confidence is missing or 0, give a number from 0 to 1")
     for feature in profile.features:
         if feature.status is FeatureStatus.LIVE and not feature.evidence:
             problems.append(f"feature '{feature.id}': status is live but no evidence is cited")
@@ -169,6 +188,8 @@ def repair(profile: ProductProfile, tools: RepoTools) -> tuple[ProductProfile, l
                 notes.append(f"{label}: removed evidence ({problem})")
             else:
                 kept.append(evidence)
+        if _confidence_missing(part):  # before assigning: that marks the part as filled in
+            notes.append(f"{label}: no confidence was given, it is 0")
         part.evidence = kept
     for feature in profile.features:
         if feature.status is FeatureStatus.LIVE and not feature.evidence:
