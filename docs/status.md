@@ -43,10 +43,9 @@ What that does not show:
 
 ## Differences from the design report
 
-| Topic | The report says | The code does | Why |
+| Topic | The original design said | The code does | Why |
 |---|---|---|---|
 | Role of the extractors | Deterministic extractors run first and the model "only synthesises and fills gaps" | The analyzer is an agent that explores the repository itself with read-only tools (`list_files`, `search`, `read_file`). Extractor output is given to it as hints. | Repositories are too varied, and too often monorepos, for extractors to carry the understanding. Covering each stack deterministically did not scale. |
-| Model for the analyzer | `repo_analyzer` on the strong tier | `repo_analyzer` on the fast tier, and the fast tier set to the free model `apodex/apodex-1.1-mini:free` | Cost during development. A free model completes the run; see the caveats above. This is a setting in `config/models.yaml`, not a design decision, and is expected to change after an evaluation exists. |
 | Files with secrets | A secret scanner runs, and `.env*`, key files and build output are excluded. What happens to a finding inside an ordinary file is not specified; the first implementation excluded the whole file. | The secret is replaced by `[REDACTED]` in place and the file is scanned again; a file is excluded only if a finding cannot be redacted. `.env*`, key files and build output are still excluded outright. | Excluding whole files removed configuration and source files the analyzer needs. |
 | Product type and platforms | A fixed list (`consumer_app`, `b2b_saas`, …; `ios`, `android`, …) | Open vocabularies: any lowercase slug is valid, and the listed values are only the well-known ones | A product can be anything: a browser extension, a watch app, a hardware device. |
 | Workspace isolation | PostgreSQL row-level security binds a session to one project | Tables carry the identifiers; no row-level security policy exists | Not done yet. |
@@ -56,7 +55,11 @@ What that does not show:
 | Model configuration loader | `config/llm_config.py` | `packages/core/src/openmarketer_core/llm_config.py`; the file in `config/` re-exports it | The core package needs to import it. |
 | Extractor list | `flutter, react_native, swift, kotlin, nextjs` | Extractors follow file formats, not frameworks: `package.json`, Gradle, Android manifest, `Info.plist`, Xcode project, Flutter, Expo, Cargo, `pyproject.toml`, `go.mod`, and a generic README and licence reader | Follows from extractors being hints. |
 
-The first four are decisions and are reflected in the report text. The pipeline diagram in the report (`fig_profile`) still shows the original order and has not been redrawn.
+The first three are decisions, and the report text has been updated to match them. The rest are parts of the design that are not built yet. The pipeline diagram in the report (`fig_profile`) still shows the original order and has not been redrawn.
+
+## Model for the analyzer
+
+The `repo_analyzer` role uses the fast tier, and the fast tier is the free model `apodex/apodex-1.1-mini:free`. This is a design decision, described in the report's section on model configuration: analysing a repository costs nothing, and the model's output is checked in code and reviewed by a person. The first version of the design had the role on the strong tier. The quality of profiles from the free model has not been measured; `LLM_MODEL__REPO_ANALYZER` moves the role to another model.
 
 ## Model behaviour worth knowing
 

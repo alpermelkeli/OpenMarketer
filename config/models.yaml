@@ -37,7 +37,7 @@ provider:
 tiers:
   fast: apodex/apodex-1.1-mini:free          # cheap, quick: classification, short replies (free, rate limited)
   balanced: anthropic/claude-sonnet-5.5     # default workhorse: writing, planning
-  strong: anthropic/claude-opus-5.5         # hard reasoning: profile synthesis, strategy
+  strong: anthropic/claude-opus-5.5         # hard reasoning: planning, strategy
 
 defaults:
   model: anthropic/claude-sonnet-5.5
@@ -61,7 +61,7 @@ roles:
 
   # --- understanding ---------------------------------------------------
   repo_analyzer:                 # explores the repository with read-only tools and drafts the Product Profile
-    tier: fast                   # free model while the analyzer is being built; the intended default is strong
+    tier: fast                   # by design: analysing a repository costs nothing; its output is checked in code and reviewed by a person
     temperature: 0.1
     max_tokens: 8192
     requires: [tools, structured_output]

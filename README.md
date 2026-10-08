@@ -64,7 +64,7 @@ make analyze repo=https://github.com/owner/name
 
 This clones the repository, removes secrets, lets the analyzer agent read the code and prints a draft Product Profile as JSON: product, features with their status, brand, audience, business model and measurement, each with file-and-line evidence and a confidence. It is a draft for a person to review, and it is not stored anywhere. A private repository needs `GITHUB_TOKEN` or `GITLAB_TOKEN` in `.env`; that path is untested.
 
-The analyzer currently uses a free model, so a run costs nothing but is rate limited and its quality has not been measured. To see or change which model each role uses:
+The analyzer uses a free model by design, so a run costs nothing. It is rate limited, and the quality of its profiles has not been measured yet. To see or change which model each role uses:
 
 ```bash
 uv run python config/llm_config.py show     # effective model for every role and where it came from

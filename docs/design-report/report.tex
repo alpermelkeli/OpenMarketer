@@ -271,7 +271,7 @@ Scope & Across tasks and projects & Inside one task\\
 \section{LLM Access and Model Configuration}\label{sec:llm}
 
 \subsection{Principle}
-Language models are used in many places, and the best model differs by place. Classifying a comment needs a fast, cheap model; synthesising a Product Profile or planning a week needs a strong one. The system therefore never refers to a model directly. Code refers to a \emph{role} such as \texttt{writer}, and a configuration layer maps each role to a model.
+Language models are used in many places, and the best model differs by place. Classifying a comment needs a fast, cheap model; planning a week or deciding a strategy needs a strong one. The system therefore never refers to a model directly. Code refers to a \emph{role} such as \texttt{writer}, and a configuration layer maps each role to a model.
 
 OpenRouter is the default gateway. It offers one API and one key for models from many providers, an OpenAI-compatible interface with tool calling and structured output, fallback lists, provider-routing preferences and per-call usage and cost reporting. Changing the model of a role means changing a string, either in a file, in an environment variable or in the dashboard.
 
@@ -284,7 +284,7 @@ OpenRouter is the default gateway. It offers one API and one key for models from
 \midrule
 \endhead
 \texttt{orchestrator} & Dashboard chat: status questions, special requests & tools & strong\\
-\texttt{repo\_analyzer} & Explores the repository with read-only tools and drafts the Product Profile & tools, structured output & strong\\
+\texttt{repo\_analyzer} & Explores the repository with read-only tools and drafts the Product Profile & tools, structured output & fast\\
 \texttt{researcher} & Market, competitor and trend research & tools & balanced\\
 \texttt{reader} & Quarantined classification of untrusted text & structured output, \emph{no tools} & fast\\
 \texttt{planner} & Weekly plan, channel mix, ad plan & structured output & strong\\
@@ -361,7 +361,7 @@ OpenRouter adds a network hop, a fee on top of provider prices and a dependency 
 \subsection{Shipped configuration}
 The repository ships with \texttt{config/models.yaml} (the role and tier definitions above), a validated loader and router that resolves models, builds OpenRouter requests and checks capabilities (\texttt{openmarketer\_core.llm\_config}, re-exported by \texttt{config/llm\_config.py}) and \texttt{.env.example} (all environment variables with comments). The loader is covered by unit tests for resolution order, overrides, validation, request shape and the no-tools rule for the reader. Chat requests built by the router have been run against the live API by the repository analyzer; the catalogue fetch and the embeddings endpoint have not.
 
-The tiers in the table are the intended defaults. During development the shipped file may differ: at the time of writing the fast tier points at a free model and \texttt{repo\_analyzer} uses the fast tier, so that analysing a repository costs nothing while the analyzer is being built. The quality of that choice has not been measured; the implementation status page in the repository (\texttt{docs/status.md}) records the current setting.
+One assignment in the table is deliberate and less obvious: \texttt{repo\_analyzer} uses the fast tier, and the shipped fast tier is a free model. Analysing a repository is the first thing a new installation does and the most token-hungry single task in the system: the agent takes many turns, each carrying the files it has read. Running it on a free model means that trying OpenMarketer on a repository costs nothing. The design can afford a weaker model here because the model is not trusted with the outcome: what counts as an acceptable profile is checked in code (Section~\ref{sec:profile}), and the profile is a draft until a person has reviewed it. The costs of the choice are real: free models are rate limited, they make more formal mistakes that the acceptance checks have to catch, and the quality of their profiles has not yet been measured against a stronger model. An installation that prefers quality over cost moves the role to another tier or model with one setting.
 
 % ---------------------------------------------------------------- 5
 \section{From Repository to Product Profile}\label{sec:profile}
@@ -815,7 +815,7 @@ Licence & Apache-2.0 & MIT, AGPL-3.0 & Permissive with a patent grant; best for 
 \subsection{LLM usage notes}
 \begin{itemize}
   \item OpenRouter is the default gateway (Section~\ref{sec:llm}); any model that supports the capabilities a role needs can be configured. Model identifiers are configuration, not code.
-  \item Different roles use different models: a small, fast model for classification in the reader agent, a stronger model for planning, profile synthesis and the orchestrator.
+  \item Different roles use different models: a small, fast model for classification in the reader agent, a stronger model for planning and the orchestrator. The repository analyzer runs on the fast tier by design (Section~\ref{sec:llm}).
   \item The \texttt{studio} and \texttt{asset\_verifier} roles are configured as different models on purpose, to reduce the tendency of a model to approve its own work.
   \item Structured outputs are validated against Pydantic models; invalid output triggers a bounded retry, then escalation.
   \item Tools are described through a neutral interface and can be exposed as MCP servers, so other agents can reuse the connectors under the same policy gate.
