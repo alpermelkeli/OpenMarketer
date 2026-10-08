@@ -250,12 +250,26 @@ def run_tool_calls(
     return outcome
 
 
+def _unwrap_json(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Decode sections sent as JSON text; some models stringify nested objects."""
+    unwrapped = dict(arguments)
+    for key, value in arguments.items():
+        if isinstance(value, str) and value.lstrip()[:1] in ("{", "["):
+            try:
+                decoded = json.loads(value)
+            except ValueError:
+                continue
+            if isinstance(decoded, dict | list):
+                unwrapped[key] = decoded
+    return unwrapped
+
+
 def _submit(
     arguments: dict[str, Any], tools: RepoTools, outcome: ToolOutcome, *, last_attempt: bool
 ) -> str:
     """Check a submission. Sets ``outcome.profile`` if accepted, else returns the rejection."""
     try:
-        profile = ProductProfile.model_validate(arguments)
+        profile = ProductProfile.model_validate(_unwrap_json(arguments))
     except ValidationError as e:
         problems = _schema_problems(e)
         if last_attempt:

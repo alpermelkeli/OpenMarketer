@@ -50,7 +50,7 @@ def test_request_and_reply():
 
     assert seen["url"] == "https://openrouter.ai/api/v1/chat/completions"
     assert seen["auth"] == "Bearer test-key"
-    assert seen["body"]["model"] == "anthropic/claude-opus-5.5"
+    assert seen["body"]["model"] == model.router.resolve("repo_analyzer").model
     assert seen["body"]["tools"] == [TOOL]
     assert seen["body"]["usage"] == {"include": True}
     assert "tool_choice" not in seen["body"]

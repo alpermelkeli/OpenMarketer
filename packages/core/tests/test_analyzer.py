@@ -10,6 +10,7 @@ from openmarketer_core.analyzer.tools import RepoTools
 from openmarketer_core.extraction import ExtractedFact
 from openmarketer_core.intake import RepoFiles
 from openmarketer_core.llm import ChatReply
+from openmarketer_core.profile import ProductProfile
 
 
 def call(name: str, **arguments) -> dict:
@@ -168,6 +169,15 @@ def test_schema_errors_are_explained_to_the_model(files):
     model = ScriptedModel([call(SUBMIT, **bad)], [call(SUBMIT, **profile())])
     analyze(files, model)
     assert "features.0.confidence" in model.tool_results()[0]
+
+
+def test_sections_sent_as_json_text_are_decoded(files):
+    stringified = {
+        key: json.dumps(value) if isinstance(value, dict | list) else value
+        for key, value in profile().items()
+    }
+    result = analyze(files, ScriptedModel([call(SUBMIT, **stringified)]))
+    assert result.profile == ProductProfile.model_validate(profile())
 
 
 def test_last_attempt_is_repaired_in_code(files):
