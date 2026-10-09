@@ -30,7 +30,9 @@ worker can store a run's result (``evidence_store.save_analysis_of_project``)
 and report its success in one transaction.
 
 This module does not start or cancel workflows, and stores no workflow id: the
-caller derives it from the run id. It does not time out a run whose worker
+caller derives it from the run id. The thread a run's graph checkpoints are
+kept under is derived from the run id too (``run_thread_id``); the checkpoints
+themselves are not this module's (``graph_checkpoints``). It does not time out a run whose worker
 died, does not delete runs, and does not redact the failure message, which it
 only shortens.
 """
@@ -57,6 +59,14 @@ from openmarketer_core.db.projects import get_project
 
 UNFINISHED_RUN_INDEX = "uq_analysis_run_project_id_unfinished"
 FINISHED = (AnalysisRunStatus.SUCCEEDED, AnalysisRunStatus.FAILED)
+
+
+def run_thread_id(run_id: uuid.UUID) -> str:
+    """The thread an analysis run keeps its checkpoints under: the run's id as text.
+
+    ``db/checkpoint_cleanup.py`` finds the run of a thread by the same rule.
+    """
+    return str(run_id)
 
 
 class AnalysisRunNotFound(Exception):

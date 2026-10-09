@@ -21,6 +21,8 @@ from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ModelRouter
 
 logger = logging.getLogger(__name__)
 
+MAX_MODEL_NAME_LENGTH = 200
+
 _PASSING_STATUSES = (408, 429)
 
 
@@ -134,13 +136,27 @@ class RouterChatModel:
                 for key in ("role", "content", "tool_calls")
                 if message.get(key) is not None
             },
-            model=body.get("model", payload["model"]),
+            model=_model_name(body.get("model"), asked_for=payload["model"]),
             cost_usd=float(usage.get("cost") or 0.0),
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
         )
         self.calls.append(reply)
         return reply
+
+
+def _model_name(reported: Any, *, asked_for: str) -> str:
+    """The model the provider says answered, or the one asked for when that cannot be kept.
+
+    The provider writes the name, and it is stored with the run: in its
+    checkpoints and its records. PostgreSQL stores no NUL character, so one in
+    the name would fail every write of the run. A name is kept only when it is
+    printable text of a plausible length.
+    """
+    if isinstance(reported, str) and reported.isprintable():
+        if 0 < len(reported) <= MAX_MODEL_NAME_LENGTH:
+            return reported
+    return asked_for
 
 
 def _reported_status(error: Any) -> int | None:
