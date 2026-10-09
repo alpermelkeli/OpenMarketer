@@ -2,7 +2,7 @@
 
 Open-source, self-hosted marketing agent: it reads a product's repository, drafts a Product Profile for human review, and later plans, writes and publishes marketing under a deterministic policy gate. The design is in `docs/design-report/report.pdf` (source: `report.tex`).
 
-Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API creates projects, starts analyses, and reads, edits and approves profiles. The worker runs each analysis as a Temporal workflow that the API starts; the run's state is in the database. The review UI and the evaluation are not built yet. `docs/status.md` has the details and the differences from the design report.
+Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API creates projects, starts analyses, and reads, edits and approves profiles. The worker runs each analysis as a Temporal workflow that the API starts; the run's state is in the database. The dashboard has three screens on top of the API: projects, analyses and the profile review. The evaluation is not built yet. `docs/status.md` has the details and the differences from the design report.
 
 ## Layout
 
@@ -13,7 +13,7 @@ Phase 1 is in progress. Intake, extractors and the analyzer agent run from the C
 | `apps/cli` | `openmarketer analyze <repo>`, with `--save` to store the run |
 | `apps/api` | FastAPI service: projects, analyses, profile review. `openapi.json` is the contract the dashboard's types come from |
 | `apps/worker` | Temporal worker: the `AnalyzeRepository` workflow and its activities. What it shares with the API (workflow name, task queue, input) is in `packages/core`, `analysis_workflow.py` |
-| `apps/web` | Dashboard: Next.js 16, Tailwind 4, shadcn/ui, TanStack Query (scaffold only) |
+| `apps/web` | Dashboard: Next.js 16, Tailwind 4, shadcn/ui, TanStack Query. Projects, analyses and the Product Profile review; the browser reaches the API only through the dashboard's own proxy route |
 | `config/models.yaml` | Model per role, through OpenRouter |
 | `docs/status.md` | What is built, how it was checked, and where the code differs from the design. Keep it current in the same change as the code |
 | `deploy/compose/dev.yml` | Dev stack: PostgreSQL + pgvector (5433), Temporal (7233, UI 8233), S3-compatible storage (9000/9001) |
@@ -28,7 +28,8 @@ make check       # lint, type-check, tests: what CI runs
 make analyze repo=https://github.com/owner/name          # add save=1 to store the run (needs make up, make migrate)
 make worker      # run the Temporal worker (needs make up, make migrate)
 make api         # serve the API on http://127.0.0.1:8000 (needs make up, make migrate; analyses also need make worker)
-make openapi     # rewrite apps/api/openapi.json after changing a route or a model
+make openapi     # rewrite apps/api/openapi.json and the dashboard's types after changing a route or a model
+make web         # serve the dashboard on http://localhost:3000 (needs make api)
 make help        # everything else
 ```
 
@@ -42,7 +43,7 @@ Run `make check` before calling work done. Database tests and the worker's workf
 - Never name a model in code. Every model call goes through a role in `config/models.yaml`, resolved by `ModelRouter`; agents depend on the `ChatModel` protocol.
 - Agent frameworks stay at the edge. Rules, prompts and checks live in framework-free modules (`analyzer/rules.py`); only `analyzer/graph.py` imports LangGraph.
 - Repository content is read only through `RepoFiles`, after intake has scanned and redacted it.
-- Web: pnpm inside `apps/web`. Next.js 16 differs from older versions; check the installed version's docs in `node_modules/next/dist/docs/` before relying on memory.
+- Web: pnpm inside `apps/web`. Next.js 16 differs from older versions; check the installed version's docs in `node_modules/next/dist/docs/` before relying on memory. API types are generated from `apps/api/openapi.json` (`pnpm api:types`, also run by `make openapi`), and `make lint` fails when they are stale. Tests are vitest (`pnpm test`, part of `make test`).
 - Code, comments, commit messages and documentation are in English.
 
 ## Architecture

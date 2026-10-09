@@ -39,19 +39,20 @@ migration: ## Generate a migration from model changes: make migration m="add x"
 api: ## Run the API on http://localhost:8000 (this machine only: there is no login yet)
 	uv run --env-file .env uvicorn openmarketer_api.main:app_from_env --factory --reload --host 127.0.0.1 --port 8000
 
-openapi: ## Write the API contract to apps/api/openapi.json
+openapi: ## Write the API contract to apps/api/openapi.json and the dashboard's types from it
 	uv run python -m openmarketer_api.openapi
+	cd apps/web && pnpm api:types
 
 worker: ## Run the Temporal worker
 	uv run --env-file .env python -m openmarketer_worker
 
-web: ## Run the dashboard on http://localhost:3000
+web: ## Run the dashboard on http://localhost:3000 (this machine only; it needs make api)
 	cd apps/web && pnpm dev
 
 lint: ## Lint Python and web
 	uv run ruff check .
 	uv run ruff format --check .
-	cd apps/web && pnpm lint
+	cd apps/web && pnpm lint && pnpm api:types:check
 
 format: ## Format and auto-fix Python
 	uv run ruff format .
@@ -61,7 +62,8 @@ typecheck: ## Type-check Python and web
 	uv run pyright
 	cd apps/web && pnpm typecheck
 
-test: ## Run Python tests
+test: ## Run Python and web tests
 	uv run pytest
+	cd apps/web && pnpm test
 
 check: lint typecheck test ## Everything CI runs

@@ -1,6 +1,6 @@
 # Implementation status
 
-What is built, how it was checked, and where the code differs from the [design report](design-report/report.pdf). The report describes the whole design; this page describes the repository as it is. Last updated 2026-10-08.
+What is built, how it was checked, and where the code differs from the [design report](design-report/report.pdf). The report describes the whole design; this page describes the repository as it is. Last updated 2026-10-09.
 
 ## What is built
 
@@ -22,10 +22,10 @@ Phase 1 of the roadmap is "repository analyzer and Product Profile": extractors,
 | Repository tokens: which access token may be sent to which host | Built, used by the CLI and the worker. See [Private repositories](#private-repositories) | `packages/core/src/openmarketer_core/intake/credentials.py`, `intake/git.py` |
 | API | Built: projects, analyses handed to the worker, and reading, editing and approving a profile. See [The API](#the-api) | `apps/api/`, contract in `apps/api/openapi.json` |
 | Worker | Built: the `AnalyzeRepository` workflow and its activities, started by the API. See [The worker](#the-worker) | `apps/worker/`, contract with the API in `packages/core/src/openmarketer_core/analysis_workflow.py` |
-| Review UI | Not built (`apps/web` is a scaffold) | |
+| Review UI | Built: projects, analyses and the profile review, on top of the API. See [The dashboard](#the-dashboard) | `apps/web/` |
 | Golden-repository evaluation | Not built | |
 
-Three things run: the command line, end to end; the API, which registers a repository, hands its analysis to the worker and reads, edits and approves the resulting profile; and the worker, which executes the analysis as a Temporal workflow. The command line first:
+Four things run: the command line, end to end; the API, which registers a repository, hands its analysis to the worker and reads, edits and approves the resulting profile; the worker, which executes the analysis as a Temporal workflow; and the dashboard, where a person does all of that in a browser. The command line first:
 
 ```bash
 make analyze repo=https://github.com/owner/name
@@ -74,11 +74,11 @@ SELECT jsonb_pretty(content -> 'product') FROM product_profile ORDER BY created_
 
 What storing a run does not do yet:
 
-- **No approval.** Every profile stored by a run is a draft. A version is approved through the API (`approveProfileVersion`, see [The API](#the-api)); no command or UI does it.
+- **No approval.** Every profile stored by a run is a draft. A version is approved by a person in the dashboard, through the API (`approveProfileVersion`, see [The API](#the-api)); no command does it.
 - **What the analyzer read is not stored.** The `evidence` table holds the extractor facts only, which the analyzer receives as hints. The evidence behind each claim in the profile (file and lines) is stored inside the profile JSON, not as rows, and the analyzer's tool calls are not stored at all.
 - **A project is matched by the exact repository URL.** `https://host/a/b` and `https://host/a/b.git` become two projects, and so does the same repository analysed once from its URL and once from a local folder (stored as a `file://` URL).
 - **No workspace isolation in the database.** Queries are scoped to a workspace in code; there is no row-level security (see the differences below).
-- **No review UI.** The API stores drafts the same way and can read, edit and approve them, but no screen uses it yet.
+- **A project stored by the command line is not listed in the dashboard.** The API cannot list projects yet; such a project is opened by its ID (see [The dashboard](#the-dashboard)).
 
 If saving fails after the analysis, the profile has already been printed or written, and the command exits with an error saying it was not stored.
 
@@ -103,7 +103,7 @@ A consequence: a project that has profile versions cannot be deleted with plain 
 
 What this does not do:
 
-- **No screen or command.** The API routes edit and approve a profile; no review UI or CLI command does.
+- **No command.** The API routes edit and approve a profile and the dashboard uses them; no CLI command does.
 - **The approver is not checked.** There is no user table; `approved_by` is whatever id the caller passes. The API passes the one local user (see [The API](#the-api)).
 - **No rule about which version may be approved.** An older draft can be approved after a newer version; "latest approved" follows the version number, not the time of approval.
 - **`TRUNCATE` is not stopped, and the trigger can be removed.** Row triggers do not fire for `TRUNCATE`, and the owner of the table can disable or drop the trigger. Downgrading the migration does exactly that: while a database is downgraded nothing protects its versions, and a later upgrade cannot tell whether approved content was rewritten in between.
@@ -128,7 +128,7 @@ The API finds Temporal through `TEMPORAL_ADDRESS` and `TEMPORAL_NAMESPACE`, read
 | `POST /v1/projects/{project_id}/profile/versions/{version}/edits` | `saveProfileEdit` | Stores an edit of that version as a new draft with the next version number. The edited version, draft or approved, is not changed |
 | `POST /v1/projects/{project_id}/profile/versions/{version}/approval` | `approveProfileVersion` | Approves one version as the current user. The request takes no body, and one that is sent is a 422, so that a client sending `approved_by` learns it had no effect; a second approval is 409 |
 
-Errors have one shape, `{"code": ..., "message": ...}`, except request validation, which is FastAPI's 422. The contract is `apps/api/openapi.json`: `make openapi` writes it without starting the server, and a test fails when the committed file no longer matches the routes. The dashboard's types are not generated from it yet.
+Errors have one shape, `{"code": ..., "message": ...}`, except request validation, which is FastAPI's 422. The contract is `apps/api/openapi.json`: `make openapi` writes it without starting the server, and a test fails when the committed file no longer matches the routes. The dashboard's types are generated from it (`pnpm api:types` in `apps/web`), and a check in `make lint` and CI fails when they are stale.
 
 When the workflow of a run cannot be started (Temporal unreachable within 5 seconds, or refusing), the run that was just stored is marked `failed` with the text "the analysis could not be handed to a worker", and the request is answered 503 with the code `analysis_not_started` and the run's id in the message. The failed run does not block the project: the client starts a new one. The order is fixed in `request_analysis` (`analysis_request.py`): the run is committed first, so the worker finds the row; then the workflow is started. A workflow that already exists for the run counts as started.
 
@@ -139,8 +139,39 @@ What the API does not do yet:
 - **A run cannot be cancelled or listed through the API**, and nothing times out a run whose workflow is lost; the cases are listed under [The worker](#the-worker).
 - **A start can be answered 503 although a workflow was started.** If Temporal starts the workflow but its answer does not arrive within 10 seconds, the run is marked failed; the worker then finds a finished run and does not analyse it.
 - **Any https host is cloned from**, including hosts on the local network. That is acceptable while only the local user can call the API and has to be decided before it is exposed.
-- **A browser on another origin is not served.** There is no CORS configuration; the dashboard has to call the API through its own server or a rewrite.
+- **A browser on another origin is not served.** There is no CORS configuration; the dashboard calls the API through its own server (see [The dashboard](#the-dashboard)).
 - **No routes to list or read projects, to list runs, or to list a project's profile versions or read one by number.**
+
+### The dashboard
+
+`make web` serves the dashboard on `http://localhost:3000` (Next.js 16, `apps/web`). It needs `make api`, and `make worker` for an analysis. Three screens:
+
+| Screen | Address | What it does |
+|---|---|---|
+| Projects | `/` | The projects this browser remembers, an empty state that explains the three steps, "new project" (name and https repository URL, with the API's validation, refusal and conflict messages beside the fields), and "open a project by ID" |
+| Analyses | `/projects/{id}/analyses` | Starts an analysis and follows the runs started from this browser: status polled every two seconds until the run has finished, time elapsed, the failure text of a failed run, the profile version of a successful one with a link to the review. 409 and 503 `analysis_not_started` are explained in words, and a run that has been queued for 20 seconds says that no worker may be running |
+| Profile review | `/projects/{id}/profile` | The latest draft and the latest approved version, one shown at a time (the newer of the two first). Parts the analyzer was unsure about are listed first under "Needs your attention". Every section and feature shows its confidence and its evidence (file and lines). "Edit" changes a working copy and saves it as a new draft version through `saveProfileEdit`; "Approve" asks for confirmation, says that approval is permanent, and calls `approveProfileVersion`. An approved version is shown locked |
+
+How it is put together:
+
+- **Types come from the contract.** `pnpm api:types` writes `src/lib/api/schema.d.ts` from `apps/api/openapi.json` (`make openapi` runs it too), and `pnpm api:types:check`, part of `make lint` and of the web job in CI, fails when the file is stale. `src/lib/api/types.ts` only gives the generated schemas short names. Requests go through `openapi-fetch` and TanStack Query hooks in `src/lib/api/`.
+- **The browser never calls the API.** It calls the dashboard's own route handler, `src/app/api/v1/[...path]/route.ts`, which forwards to the API from the server (`OPENMARKETER_API_URL`, default `http://127.0.0.1:8000`). The rules are in `src/lib/server/api-proxy.ts`:
+  - the `Host` header must name this machine, so a foreign name pointed at 127.0.0.1 is refused;
+  - `Sec-Fetch-Site`, when the browser sends it, must be `same-origin` (or `none` for a read);
+  - `Origin`, when present, must be the dashboard's own origin, and a `POST` must carry it. This replaces the API's own `Origin` check, which a server-side proxy hides from the API: a page of another site that posts to `/api/v1/projects/{id}/profile/versions/{n}/approval` is answered 403 here and nothing is forwarded;
+  - only the seven method-and-path pairs the dashboard uses are forwarded, matched whole with a UUID for each identifier and digits for the version; the upstream address is built from the configured origin and the matched path, never from the incoming URL, and no query string, cookie or browser header travels upstream;
+  - a body must be `application/json` and at most 1 MB.
+- **The dashboard listens on 127.0.0.1 only** (`next dev` and `next start` default to all interfaces; the scripts pass `--hostname 127.0.0.1`), and every page is sent with `frame-ancestors 'none'`, so another site cannot put the approve button in a frame.
+- **Profile text is shown as text.** Nothing from a profile or a run is rendered as HTML or Markdown or turned into a link automatically. A repository URL is used as a link only when it is `https://`. An evidence reference becomes a link only for a repository on github.com, gitlab.com or bitbucket.org, built from a fixed origin and encoded path segments (`src/lib/profile/evidence-link.ts`); it points at the default branch as it is today, because the API does not expose the analysed commit. A palette colour reaches a style only if it is a six-digit hex colour.
+- **Design tokens are in one file**, `src/app/globals.css`: colour (light and dark, following the system setting), type scale, radius, layout measures and motion, as Tailwind 4 theme variables.
+
+What the dashboard does not do:
+
+- **It cannot list anything.** The API has no routes to list projects, read a project, list a project's runs or list profile versions. As a stop-gap the dashboard remembers, in the browser's local storage, the projects it created, the project IDs it opened and the runs it started (`src/lib/remembered/`); it says so on screen. Another browser starts empty, a project made with the command line has to be opened by its ID and is then shown without name or repository (so without evidence links), and a run started elsewhere is not shown.
+- **It shows two versions at most.** The latest draft and the latest approved one are what the API serves; an older version cannot be read, there is no history and no comparison between versions, and a run's "profile version N" links to the review screen, not to that version.
+- **"Needs your attention" is a reading aid, decided in the browser.** A part is listed when a feature's status is `unknown`, when it cites no evidence, or when its confidence is below 0.6 (`src/lib/profile/confidence.ts`). Nothing is blocked or allowed by it. If the product defines what needs review, the API should say so and the dashboard should display it.
+- **Editing covers part of the profile.** The product name, a feature's description and status, the brand voice, the primary audience and the business model type can be changed. Lists (platforms, pains, palette), evidence, confidence, and adding or removing a feature cannot.
+- **No light/dark switch** (it follows the system), no sign-in, no cancelling of a run, no project deletion or renaming.
 
 ### Analysis runs
 
@@ -241,6 +272,7 @@ Consequences:
 - The worker is covered by three sets of tests, with cloning and the model scripted. The activities run as functions against PostgreSQL: a repeated attempt, two attempts at once, a run that failed meanwhile, a run of another workspace or project, each kind of error with whether it is retried, and the clone folder gone afterwards. The workflow runs on the Temporal dev server with scripted activities: success, a failure that passes on the second attempt, attempts used up, failures that are not retried, an attempt that takes too long, a missed heartbeat, and a cancellation. The two together run on Temporal and PostgreSQL: a run ends `succeeded` with one profile version or `failed` with a message, and the decoded history is searched for the profile, the repository URL and the clone folder. The time-skipping test server is not used, because it is downloaded on first use.
 - The worker was run once outside the tests, against the dev Temporal server and a scratch database, with workflows started by a script. A repository that does not exist on github.com, with a made-up `GITHUB_TOKEN`: the run ended `failed` in under a second with git's message and `<clone>` in place of the folder, after one attempt. (This run was made before errors of a clone and of the provider became fixed sentences and before a refused model request stopped being retried; it has not been repeated since.) A small public repository on bitbucket.org with a made-up provider key: it was cloned without credentials, the model call was refused (HTTP 401), the attempt was repeated a minute later and the run ended `failed` with the provider's message. In both, the history held the three identifiers, the limits and the message, and neither the token nor the folder. Stopping the worker with SIGTERM ended the process. **No run has succeeded outside the tests**: no model key was available, so a real analysis through the worker, a worker killed in the middle of one, and a clone with a real token are not checked.
 - The token rule and the clone lock-down are covered by tests without network. The host comparison and what git is told are plain tests. The rest runs real git, through `clone`, against HTTPS servers on the loopback interface with a certificate made by `openssl` for the test (skipped without it): a host answering 401 while the process has an askpass program (not run, no credentials sent; and the same host against git with the inherited environment, where it is run); a redirect to another HTTPS host and to plain HTTP, with and without a token (the second host is not contacted); plain HTTP not contacted even with redirects switched back on; `file`, `ext` and `ssh` refused; text and invalid bytes from the host kept out of the error; a token echoed by the host kept out of the log; an untrusted certificate with `GIT_SSL_NO_VERIFY` in the process (refused); a host that hangs. The locked-down git was run once against github.com, gitlab.com and bitbucket.org with `git ls-remote`: all three answered for a URL ending in `.git`, and gitlab.com redirected the one without.
+- The dashboard: `pnpm lint`, `pnpm typecheck`, `pnpm test` and `pnpm build` pass. The tests (vitest, 78) cover the proxy rules with a fake upstream (requests from another site, another port, an opaque origin, a foreign `Host`, a `POST` without `Origin`, methods and paths outside the list, a non-JSON body, an unreachable API), the evidence links, what is listed under "Needs your attention", the working-copy edits, what the browser remembers, and the wording of each failure. No test renders a component. Outside the tests it was run once against the live API and worker and driven through a headless Chrome, in light and dark and at 1360, 1024 and 390 pixels wide: a project created (after a refused `http://` URL and an empty name were shown beside their fields), one analysis of a small public repository followed from `queued` through `running` to `succeeded` in 1 minute 27 seconds, its draft edited (an empty product name refused by the API with the message shown, then saved as version 2), version 2 approved through the confirmation and shown locked, and a second approval answered 409. With curl against the running dashboard, a `POST` to the approval route was answered 403 with `Origin: https://evil.example`, with `Sec-Fetch-Site: cross-site`, with `Origin: null`, from another local port and without an `Origin`, and 403 for a foreign `Host`; the same `POST` from the dashboard's own origin reached the API. The port did not answer on the machine's network address.
 - Intake and the extractors were run by hand on seven public repositories of different kinds (Kotlin Multiplatform, Flutter, Expo, Swift, Rust, Python, Go).
 - The analyzer completed full runs against a live model on one repository ([Memoria](https://github.com/alpermelkeli/Memoria), a Kotlin Multiplatform app) with the free model named below. Three runs finished with an accepted profile at no cost; the two whose length was recorded took 12 and 19 model turns and needed no repairs.
 
@@ -249,6 +281,7 @@ What that does not show:
 - Whether a profile is correct. A submitted profile is checked for matching the schema and for evidence that points at lines which exist. Nobody has compared a profile with a human-written one.
 - Whether it works on other repositories or models. One repository and one model is an example, not a result. Two runs on the same repository produced different feature lists.
 - A complete run on a paid model. Earlier attempts on paid models ended at the cost limit of $0.50, or on an account without credit, before a profile was accepted.
+- The dashboard with a person at it. It was driven by script: nobody has reviewed a profile in it with a keyboard or a screen reader, contrast was chosen by lightness values and not measured, and only Chrome was used. The failed and the long-queued states of a run, the 409 and 503 answers to starting an analysis, and an unreachable API were not produced live; their wording is covered by tests.
 - Access to private repositories. Which host gets a token is tested; a clone of a real private repository with a real token is not.
 - A clone through a proxy or with a certificate authority from `SSL_CERT_FILE`, `SSL_CERT_DIR` or `CURL_CA_BUNDLE`. `GIT_SSL_CAINFO` is what the tests use; on the macOS git these were run with, `SSL_CERT_FILE` was not honoured.
 - The cause of a failed clone on another git or curl build. The sentences are chosen from messages of git 2.50 with libcurl 8.7; a message that is worded differently gives "the repository could not be cloned".
@@ -265,6 +298,8 @@ What that does not show:
 | Where the analyzer runs | Inside a Temporal activity | In two places. In the worker, inside the `analyse_and_store` activity of the `AnalyzeRepository` workflow that the API starts, with run state in the `analysis_run` table, one retry, timeouts and a heartbeat; but without stored checkpoints, progress, or a way to stop an analysis that is running. And synchronously inside the CLI | The CLI is the direct way to try the analyzer; it needs no Temporal. |
 | Login | OIDC, or single-user local mode | Local mode only: no user table, requests are accepted from the same machine only, approvals carry one fixed local user identifier | Not done yet. The current user and workspace are one dependency each. |
 | Release tags | Tags and release notes are a source of content | Clones are shallow and fetch no tags | Not needed for the profile; needed later for the repository watcher. |
+| Review UI | A profile review in the dashboard, for a profile "with evidence links and per-field confidence" (F1); how projects, runs and versions are browsed is not specified | Each section and feature shows its confidence and its evidence as file and lines, linked to the default branch on github.com, gitlab.com and bitbucket.org and plain text elsewhere. Confidence is per section and per feature, as the schema has it, not per field. Projects and runs are the ones this browser remembers, and only the latest draft and the latest approved version can be read | The API has no list routes and does not expose the analysed commit yet. |
+| Dashboard to API | Not specified | The browser calls a route handler of the dashboard, which checks that the request comes from its own page and forwards seven routes to the API | The API has no login and no CORS, and trusts the browser's `Origin`; a server-side proxy has to repeat that check. |
 | Model configuration loader | `config/llm_config.py` | `packages/core/src/openmarketer_core/llm_config.py`; the file in `config/` re-exports it | The core package needs to import it. |
 | Extractor list | `flutter, react_native, swift, kotlin, nextjs` | Extractors follow file formats, not frameworks: `package.json`, Gradle, Android manifest, `Info.plist`, Xcode project, Flutter, Expo, Cargo, `pyproject.toml`, `go.mod`, and a generic README and licence reader | Follows from extractors being hints. |
 
@@ -290,4 +325,4 @@ Other things observed:
 
 ## What comes next
 
-Saving results to the database is done, and the API can create a project, have the worker analyse it as a workflow, and read, edit and approve its profile. Next, in order: the review UI (with types generated from `apps/api/openapi.json`), the golden-repository evaluation. Whether a proposed strategy belongs to Phase 1 is open: the roadmap caption mentions it, the phase description does not.
+Saving results to the database is done, the API can create a project, have the worker analyse it as a workflow, and read, edit and approve its profile, and the dashboard does all of it in a browser. Next, in order: the list and read routes the dashboard works around (projects, a project by id, a project's runs, its profile versions and one version by number, and the analysed commit of a version), then the golden-repository evaluation. Whether a proposed strategy belongs to Phase 1 is open: the roadmap caption mentions it, the phase description does not.
