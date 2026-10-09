@@ -300,3 +300,99 @@ def test_run_is_not_found_from_another_workspace(app, client, run, sessions):
 
 def test_malformed_run_identifier_is_rejected(client, workflows, project_id):
     assert client.get(f"{analyses_url(project_id)}/not-a-uuid").status_code == 422
+
+
+# ------------------------------------------------------------------- list
+def finished_run(client, sessions, workspace_id, project_id) -> dict:
+    """Start a run, have the worker report its failure, and return it as the API shows it."""
+    ids = AnalyzeRepositoryInput(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        run_id=uuid.UUID(client.post(analyses_url(project_id)).json()["id"]),
+    )
+    run = ReportedRun(sessions, ids)
+    run.failed("git clone failed")
+    return client.get(run.url).json()
+
+
+def test_project_without_runs_lists_none(client, workflows, project_id):
+    response = client.get(analyses_url(project_id))
+    assert (response.status_code, response.json()) == (200, {"runs": [], "next_cursor": None})
+
+
+def test_runs_are_listed_newest_first_as_they_are_now(
+    client, workflows, sessions, workspace_id, project_id
+):
+    first = finished_run(client, sessions, workspace_id, project_id)
+    second = finished_run(client, sessions, workspace_id, project_id)
+    unfinished = client.post(analyses_url(project_id)).json()
+    assert client.get(analyses_url(project_id)).json()["runs"] == [unfinished, second, first]
+
+
+def test_listed_succeeded_run_names_the_profile_version_it_stored(client, run):
+    run.picked_up()
+    run.succeeded()
+    listed = client.get(analyses_url(run.ids.project_id)).json()["runs"]
+    assert listed == [client.get(run.url).json()]
+    assert (listed[0]["status"], listed[0]["profile_version"]) == ("succeeded", 1)
+
+
+def test_run_behind_a_conflict_is_the_first_one_listed(client, workflows, project_id):
+    unfinished = client.post(analyses_url(project_id)).json()
+    assert client.post(analyses_url(project_id)).status_code == 409
+    assert client.get(analyses_url(project_id), params={"limit": 1}).json()["runs"] == [unfinished]
+
+
+def test_list_holds_no_more_runs_than_the_limit_and_names_the_next_page(
+    client, workflows, sessions, workspace_id, project_id
+):
+    runs = [finished_run(client, sessions, workspace_id, project_id) for _ in range(3)]
+    page = client.get(analyses_url(project_id), params={"limit": 2}).json()
+    assert page["runs"] == [runs[2], runs[1]]
+    following = client.get(
+        analyses_url(project_id), params={"limit": 2, "cursor": page["next_cursor"]}
+    ).json()
+    assert following == {"runs": [runs[0]], "next_cursor": None}
+
+
+def test_run_started_between_two_pages_neither_repeats_nor_hides_one(
+    client, workflows, sessions, workspace_id, project_id
+):
+    runs = [finished_run(client, sessions, workspace_id, project_id) for _ in range(4)]
+    first = client.get(analyses_url(project_id), params={"limit": 2}).json()
+    client.post(analyses_url(project_id))
+    second = client.get(
+        analyses_url(project_id), params={"limit": 2, "cursor": first["next_cursor"]}
+    ).json()
+    assert first["runs"] + second["runs"] == runs[::-1]
+
+
+def test_runs_of_another_project_are_not_listed(client, run, sessions, workspace_id):
+    other = new_project(sessions, workspace_id, "https://example.com/acme/other.git")
+    assert client.get(analyses_url(other)).json()["runs"] == []
+
+
+def test_runs_of_an_unknown_project_are_not_found(client, workflows):
+    project_id = uuid.uuid4()
+    response = client.get(analyses_url(project_id))
+    assert (response.status_code, response.json()) == (
+        404,
+        {"code": "project_not_found", "message": f"project {project_id} not found"},
+    )
+
+
+def test_runs_of_a_project_of_another_workspace_are_answered_like_an_unknown_one(
+    app, client, run, sessions
+):
+    foreign_workspace = new_workspace(sessions)
+    app.dependency_overrides[current_workspace_id] = lambda: foreign_workspace
+    response = client.get(analyses_url(run.ids.project_id))
+    assert (response.status_code, response.json()) == (
+        404,
+        {"code": "project_not_found", "message": f"project {run.ids.project_id} not found"},
+    )
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+def test_limit_of_runs_outside_the_bounds_is_rejected(client, workflows, project_id, limit):
+    assert client.get(analyses_url(project_id), params={"limit": limit}).status_code == 422

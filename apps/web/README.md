@@ -1,36 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# OpenMarketer dashboard
 
-## Getting Started
+The web interface of OpenMarketer: see every project and where it stands, start an analysis of a repository and follow it, then review the drafted Product Profile, with the evidence and confidence behind every claim, correct it, approve it, and look back through its versions. Next.js 16, React 19, Tailwind 4, shadcn/ui (Base UI), TanStack Query.
 
-First, run the development server:
+What it does, what it works around and how it was checked is in [docs/status.md](../../docs/status.md#the-dashboard).
+
+## Running it
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+make api      # from the repository root: the API on http://127.0.0.1:8000
+make worker   # only needed to run an analysis
+make web      # the dashboard on http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Inside `apps/web`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm dev               # development server, on 127.0.0.1 only
+pnpm lint              # eslint
+pnpm typecheck         # route types and tsc
+pnpm test              # vitest
+pnpm build             # production build
+pnpm api:types         # regenerate src/lib/api/schema.d.ts from ../api/openapi.json
+pnpm api:types:check   # fail if that file is stale
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Configuration
 
-## Learn More
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPENMARKETER_API_URL` | `http://127.0.0.1:8000` | Where the dashboard's server finds the API. Read on the server only; the browser never sees it |
 
-To learn more about Next.js, take a look at the following resources:
+## Do not expose it
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+There is no login. The API trusts requests from this machine, and the dashboard's proxy (`src/lib/server/api-proxy.ts`) trusts requests from the dashboard's own page. Both listen on `127.0.0.1`. Binding the dashboard to another address, or putting it behind a reverse proxy, lets anyone who can reach it approve a profile.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Where things are
 
-## Deploy on Vercel
+| Path | What it is |
+|---|---|
+| `src/app` | Routes. Pages read the route and compose a screen; `api/v1/[...path]/route.ts` is the proxy to the API |
+| `src/app/globals.css` | Every design token: colour (light and dark), type, radius, layout measures, motion |
+| `src/components/<screen>` | One container per screen, and the presentational components it composes |
+| `src/components/ui` | shadcn primitives, added with the shadcn CLI |
+| `src/lib/api` | Generated types, the typed client, query and mutation hooks |
+| `src/lib/server` | The proxy's rules |
+| `src/lib/profile`, `src/lib/analysis`, `src/lib/projects` | Pure display logic, with tests |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The typefaces are Hedvig Letters Sans and Hedvig Letters Serif (SIL Open Font License 1.1) and Geist Mono (SIL Open Font License 1.1), loaded through `next/font`.

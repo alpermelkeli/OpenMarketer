@@ -73,11 +73,13 @@ make analyze repo=https://github.com/owner/name save=1
 make psql                            # look at the tables: project, repo_snapshot, evidence, product_profile
 ```
 
-Each stored run adds a snapshot of the commit, the extractor facts and a new draft version of the profile. A stored profile can be edited and approved through the API; there is no screen for it yet. Example queries and the limits of what is stored are in [docs/status.md](docs/status.md#storing-a-run).
+Each stored run adds a snapshot of the commit, the extractor facts and a new draft version of the profile. A stored profile is reviewed, edited and approved in the dashboard (below). Example queries and the limits of what is stored are in [docs/status.md](docs/status.md#storing-a-run).
 
-`make api` serves the API on `http://127.0.0.1:8000`, for the dashboard that is not built yet: register a repository, start an analysis, poll it, then read, edit and approve the profile. It has no login, so it answers only requests made on the same machine; do not expose it. The routes and their limits are in [docs/status.md](docs/status.md#the-api).
+`make api` serves the API on `http://127.0.0.1:8000`, for the dashboard: register a repository, start an analysis, poll it, then read, edit and approve the profile. It has no login, so it answers only requests made on the same machine; do not expose it. The routes and their limits are in [docs/status.md](docs/status.md#the-api).
 
 `make worker` runs the Temporal worker that executes each analysis the API starts, as a durable workflow with a retry, timeouts and the run's state in the database. To analyse a repository through the API you need both, on top of the database: `make up`, `make migrate`, `make worker` and `make api`. What the worker does and what it leaves out is in [docs/status.md](docs/status.md#the-worker).
+
+`make web` serves the dashboard on `http://localhost:3000`: create a project, start an analysis and watch it, then review the drafted profile, with the evidence and confidence of every claim and what the analyzer was unsure about first, correct it and approve it. It needs `make api` (and `make worker` to analyse). Like the API it has no login and listens on this machine only. What it does and what it works around is in [docs/status.md](docs/status.md#the-dashboard).
 
 The analyzer uses a free model by design, so a run costs nothing. It is rate limited, and the quality of its profiles has not been measured yet. To see or change which model each role uses:
 

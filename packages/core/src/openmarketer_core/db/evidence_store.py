@@ -29,8 +29,9 @@ from openmarketer_core.db.models import (
     RepoSnapshot,
     Workspace,
 )
-from openmarketer_core.db.profile_versions import next_profile_version, wait_for_other_writes
+from openmarketer_core.db.profile_versions import next_profile_version
 from openmarketer_core.db.projects import get_project
+from openmarketer_core.db.workspace_lock import wait_for_other_writes
 from openmarketer_core.extraction import ExtractedFact
 from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile

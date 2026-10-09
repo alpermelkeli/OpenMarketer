@@ -6,6 +6,7 @@ They need PostgreSQL (see the root ``conftest.py``).
 import threading
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from openmarketer_core.db.analysis_runs import (
     AnalysisRunNotFound,
     AnalysisRunNotStarted,
     analysis_run,
+    list_analysis_runs,
     mark_run_failed,
     mark_run_started,
     mark_run_succeeded,
@@ -31,11 +33,13 @@ from openmarketer_core.db.evidence_store import (
 )
 from openmarketer_core.db.models import (
     ANALYSIS_ERROR_MAX_LENGTH,
+    AnalysisRunRecord,
     AnalysisRunStatus,
     Project,
     RepoSnapshot,
     Workspace,
 )
+from openmarketer_core.db.pages import CreatedPosition
 from openmarketer_core.db.profile_versions import latest_draft_profile
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.session import transaction
@@ -318,6 +322,120 @@ def test_run_of_another_project_is_not_found(session, project, use):
     with pytest.raises(AnalysisRunNotFound):
         use(session, **other.scope, run_id=run.id)
     assert analysis_run(session, **project.scope, run_id=run.id) == run
+
+
+# ------------------------------------------------------------------- list
+NOON = datetime(2026, 10, 1, 12, tzinfo=UTC)
+
+
+def run_requested(session: Session, project: ProjectInWorkspace, minutes_ago: int) -> uuid.UUID:
+    """A failed run with a request time of its own.
+
+    The rows of one test are written in one transaction and would otherwise
+    all carry its start time; and a project has one unfinished run at most.
+    """
+    requested_at = NOON - timedelta(minutes=minutes_ago)
+    record = AnalysisRunRecord(
+        project_id=project.project_id,
+        status=AnalysisRunStatus.FAILED,
+        error="clone failed",
+        created_at=requested_at,
+        finished_at=requested_at,
+    )
+    session.add(record)
+    session.flush()
+    return record.id
+
+
+def listed_ids(
+    session: Session,
+    project: ProjectInWorkspace,
+    limit: int = 10,
+    before: CreatedPosition | None = None,
+) -> list[uuid.UUID]:
+    listed = list_analysis_runs(session, **project.scope, limit=limit, before=before)
+    return [run.id for run in listed.items]
+
+
+def test_runs_are_listed_newest_first(session, project):
+    old = run_requested(session, project, minutes_ago=30)
+    new = run_requested(session, project, minutes_ago=10)
+    middle = run_requested(session, project, minutes_ago=20)
+    assert listed_ids(session, project) == [new, middle, old]
+
+
+def test_project_without_runs_has_an_empty_list(session, project):
+    listed = list_analysis_runs(session, **project.scope, limit=10)
+    assert (listed.items, listed.next_before) == ((), None)
+
+
+@pytest.mark.parametrize("state", [requested, started, succeeded, failed])
+def test_listed_run_is_the_run_as_it_is_read_alone(session, project, state):
+    run = state(session, project)
+    assert list_analysis_runs(session, **project.scope, limit=10).items == (run,)
+
+
+def test_runs_of_another_project_are_not_listed(session, project):
+    ours = run_requested(session, project, minutes_ago=10)
+    run_requested(session, new_project(session, project.workspace_id), minutes_ago=5)
+    assert listed_ids(session, project) == [ours]
+
+
+def test_page_holds_no_more_runs_than_the_limit(session, project):
+    runs = [run_requested(session, project, minutes_ago=n) for n in range(1, 4)]
+    assert listed_ids(session, project, limit=2) == runs[:2]
+
+
+def test_next_page_starts_after_the_last_run_of_the_page_before(session, project):
+    runs = [run_requested(session, project, minutes_ago=n) for n in range(1, 4)]
+    first = list_analysis_runs(session, **project.scope, limit=2)
+    assert listed_ids(session, project, limit=2, before=first.next_before) == runs[2:]
+
+
+def test_page_that_ends_the_list_of_runs_names_no_next_page(session, project):
+    for n in range(1, 3):
+        run_requested(session, project, minutes_ago=n)
+    assert list_analysis_runs(session, **project.scope, limit=2).next_before is None
+
+
+def test_run_requested_between_two_pages_neither_repeats_nor_hides_one(session, project):
+    runs = [run_requested(session, project, minutes_ago=n) for n in range(1, 5)]
+    first = list_analysis_runs(session, **project.scope, limit=2)
+    run_requested(session, project, minutes_ago=0)
+    second = listed_ids(session, project, limit=2, before=first.next_before)
+    assert [run.id for run in first.items] + second == runs
+
+
+def test_runs_requested_at_the_same_moment_are_each_listed_once(session, project):
+    runs = {run_requested(session, project, minutes_ago=7) for _ in range(3)}
+    first = list_analysis_runs(session, **project.scope, limit=2)
+    second = list_analysis_runs(session, **project.scope, limit=2, before=first.next_before)
+    walked = [run.id for page in (first, second) for run in page.items]
+    assert (len(walked), set(walked), second.next_before) == (3, runs, None)
+
+
+def test_runs_of_an_unknown_project_are_not_found(session, project):
+    with pytest.raises(ProjectNotFound):
+        list_analysis_runs(
+            session, workspace_id=project.workspace_id, project_id=uuid.uuid4(), limit=10
+        )
+
+
+def test_runs_of_a_project_of_another_workspace_are_not_found(session, project):
+    run_requested(session, project, minutes_ago=10)
+    with pytest.raises(ProjectNotFound):
+        list_analysis_runs(
+            session, workspace_id=new_workspace(session), project_id=project.project_id, limit=10
+        )
+
+
+def test_list_of_runs_is_two_statements_and_reads_no_profile(session, project, statements):
+    for _ in range(3):
+        succeeded(session, project)
+    statements.clear()
+    assert len(list_analysis_runs(session, **project.scope, limit=10).items) == 3
+    assert len(statements) == 2
+    assert not any("content" in statement for statement in statements)
 
 
 def committed_project(sessions: sessionmaker[Session]) -> ProjectInWorkspace:

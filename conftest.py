@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, make_url, text
+from sqlalchemy import create_engine, event, make_url, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -57,3 +57,20 @@ def session(engine):
         with Session(conn, join_transaction_mode="create_savepoint") as session:
             yield session
         transaction.rollback()
+
+
+@pytest.fixture
+def statements(engine):
+    """The SQL statements sent to the database from here on, in order.
+
+    A test empties the list before the call it measures, then counts what the
+    call sent or reads which columns it asked for.
+    """
+    sent: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany) -> None:
+        sent.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    yield sent
+    event.remove(engine, "before_cursor_execute", record)

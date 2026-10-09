@@ -13,11 +13,22 @@ from sqlalchemy.orm import Session
 from openmarketer_api.dependencies import db_session
 from openmarketer_api.identity import LOCAL_USER_ID
 from openmarketer_core.db.evidence_store import local_workspace_id, save_analysis
-from openmarketer_core.db.models import ProductProfileRecord, Workspace
+from openmarketer_core.db.models import ProductProfileRecord, Project, Workspace
 from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
 
 PROFILE = {"product": {"name": "Example App", "type": "dev_tool"}}
+COMMIT = "a" * 40
+SUMMARY_FIELDS = {
+    "project_id",
+    "version",
+    "status",
+    "edited_from_version",
+    "commit_sha",
+    "created_at",
+    "approved_by",
+    "approved_at",
+}
 EDITED = {"product": {"name": "Example App Pro", "type": "dev_tool"}}
 
 
@@ -32,7 +43,7 @@ def analysed_project(session: Session, workspace_id: uuid.UUID) -> uuid.UUID:
     snapshot = Snapshot(
         root=Path("/unused"),
         source_url="https://example.com/acme/app.git",
-        commit_sha="a" * 40,
+        commit_sha=COMMIT,
         ref="main",
     )
     saved = save_analysis(
@@ -48,6 +59,15 @@ def analysed_project(session: Session, workspace_id: uuid.UUID) -> uuid.UUID:
 @pytest.fixture
 def project_id(session) -> uuid.UUID:
     return analysed_project(session, local_workspace_id(session))
+
+
+@pytest.fixture
+def foreign_project(session) -> uuid.UUID:
+    """An analysed project of another workspace than the one requests work in."""
+    elsewhere = Workspace(name="Elsewhere")
+    session.add(elsewhere)
+    session.flush()
+    return analysed_project(session, elsewhere.id)
 
 
 @pytest.fixture
@@ -71,15 +91,7 @@ def test_latest_draft_is_returned_with_its_version(client, profile_url, project_
     response = client.get(f"{profile_url}/draft")
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {
-        "project_id",
-        "version",
-        "status",
-        "profile",
-        "created_at",
-        "approved_by",
-        "approved_at",
-    }
+    assert set(body) == SUMMARY_FIELDS | {"profile"}
     assert (body["project_id"], body["version"], body["status"]) == (str(project_id), 1, "draft")
     assert (body["approved_by"], body["approved_at"]) == (None, None)
     assert ProductProfile.model_validate(body["profile"]) == ProductProfile.model_validate(PROFILE)
@@ -116,6 +128,165 @@ def test_profile_of_a_project_in_another_workspace_is_not_found(client, session)
     assert client.post(f"{url}/versions/1/approval").status_code == 404
     assert client.post(f"{url}/versions/1/edits", json={"profile": EDITED}).status_code == 404
     assert stored_versions(session, foreign_project) == [(1, "draft", "Example App")]
+
+
+# ------------------------------------------------------------ one version
+def test_version_is_read_by_its_number(client, profile_url):
+    edited = client.post(f"{profile_url}/versions/1/edits", json={"profile": EDITED}).json()
+    response = client.get(f"{profile_url}/versions/2")
+    assert (response.status_code, response.json()) == (200, edited)
+
+
+def test_older_version_than_the_latest_draft_can_be_read(client, profile_url):
+    client.post(f"{profile_url}/versions/1/edits", json={"profile": EDITED})
+    body = client.get(f"{profile_url}/versions/1").json()
+    assert (body["version"], body["profile"]["product"]["name"]) == (1, "Example App")
+
+
+def test_version_stored_by_an_analysis_names_the_analysed_commit(client, profile_url):
+    body = client.get(f"{profile_url}/versions/1").json()
+    assert (body["commit_sha"], body["edited_from_version"]) == (COMMIT, None)
+
+
+def test_edit_names_the_version_it_was_made_from_and_keeps_its_commit(client, profile_url):
+    client.post(f"{profile_url}/versions/1/edits", json={"profile": EDITED})
+    body = client.post(f"{profile_url}/versions/2/edits", json={"profile": EDITED}).json()
+    assert (body["version"], body["edited_from_version"], body["commit_sha"]) == (3, 2, COMMIT)
+
+
+def test_approved_edit_still_names_the_version_it_was_made_from(client, profile_url):
+    client.post(f"{profile_url}/versions/1/edits", json={"profile": EDITED})
+    client.post(f"{profile_url}/versions/2/approval")
+    body = client.get(f"{profile_url}/approved").json()
+    assert (body["version"], body["edited_from_version"], body["commit_sha"]) == (2, 1, COMMIT)
+
+
+def test_version_that_does_not_exist_is_not_found(client, profile_url, project_id):
+    response = client.get(f"{profile_url}/versions/7")
+    assert (response.status_code, response.json()) == (
+        404,
+        {"code": "profile_not_found", "message": f"project {project_id} has no profile version 7"},
+    )
+
+
+def test_version_of_an_unknown_project_is_not_found(client):
+    response = client.get(f"/v1/projects/{uuid.uuid4()}/profile/versions/1")
+    assert (response.status_code, response.json()["code"]) == (404, "profile_not_found")
+
+
+def test_version_of_a_project_in_another_workspace_is_answered_like_a_missing_one(
+    client, foreign_project
+):
+    response = client.get(f"/v1/projects/{foreign_project}/profile/versions/1")
+    assert (response.status_code, response.json()) == (
+        404,
+        {
+            "code": "profile_not_found",
+            "message": f"project {foreign_project} has no profile version 1",
+        },
+    )
+
+
+@pytest.mark.parametrize("version", [0, 2_147_483_648, "latest"])
+def test_version_number_no_project_can_have_is_not_read(client, profile_url, version):
+    assert client.get(f"{profile_url}/versions/{version}").status_code == 422
+
+
+# ------------------------------------------------------------------- list
+def listed(client, profile_url: str, **query) -> list[int]:
+    versions = client.get(f"{profile_url}/versions", params=query).json()["versions"]
+    return [version["version"] for version in versions]
+
+
+def test_versions_are_listed_highest_number_first(client, profile_url):
+    client.post(f"{profile_url}/versions/1/edits", json={"profile": EDITED})
+    response = client.get(f"{profile_url}/versions")
+    assert response.status_code == 200
+    assert listed(client, profile_url) == [2, 1]
+    assert response.json()["next_cursor"] is None
+
+
+def test_listed_version_is_the_version_without_its_profile(client, profile_url):
+    client.post(f"{profile_url}/versions/1/edits", json={"profile": EDITED})
+    client.post(f"{profile_url}/versions/2/approval")
+    alone = client.get(f"{profile_url}/versions/2").json()
+    newest = client.get(f"{profile_url}/versions").json()["versions"][0]
+    assert set(newest) == SUMMARY_FIELDS
+    assert newest == {field: alone[field] for field in SUMMARY_FIELDS}
+    assert (newest["status"], newest["edited_from_version"], newest["approved_by"]) == (
+        "approved",
+        1,
+        str(LOCAL_USER_ID),
+    )
+
+
+def test_list_holds_no_more_versions_than_the_limit_and_names_the_next_page(client, profile_url):
+    for _ in range(2):
+        client.post(f"{profile_url}/versions/1/edits", json={"profile": EDITED})
+    page = client.get(f"{profile_url}/versions", params={"limit": 2}).json()
+    assert [version["version"] for version in page["versions"]] == [3, 2]
+    following = client.get(
+        f"{profile_url}/versions", params={"limit": 2, "cursor": page["next_cursor"]}
+    ).json()
+    assert (
+        [version["version"] for version in following["versions"]],
+        following["next_cursor"],
+    ) == (
+        [1],
+        None,
+    )
+
+
+def test_version_saved_between_two_pages_neither_repeats_nor_hides_one(client, profile_url):
+    for _ in range(3):
+        client.post(f"{profile_url}/versions/1/edits", json={"profile": EDITED})
+    first = client.get(f"{profile_url}/versions", params={"limit": 2}).json()
+    client.post(f"{profile_url}/versions/4/edits", json={"profile": EDITED})
+    second = listed(client, profile_url, limit=2, cursor=first["next_cursor"])
+    assert [version["version"] for version in first["versions"]] + second == [4, 3, 2, 1]
+
+
+def test_project_that_was_never_analysed_lists_no_versions(client, session):
+    project = Project(
+        workspace_id=local_workspace_id(session),
+        name="New",
+        source_repo_url="https://example.com/acme/new.git",
+    )
+    session.add(project)
+    session.flush()
+    response = client.get(f"/v1/projects/{project.id}/profile/versions")
+    assert (response.status_code, response.json()) == (200, {"versions": [], "next_cursor": None})
+
+
+def test_versions_of_an_unknown_project_are_not_found(client):
+    project_id = uuid.uuid4()
+    response = client.get(f"/v1/projects/{project_id}/profile/versions")
+    assert (response.status_code, response.json()) == (
+        404,
+        {"code": "project_not_found", "message": f"project {project_id} not found"},
+    )
+
+
+def test_versions_of_a_project_in_another_workspace_are_answered_like_an_unknown_one(
+    client, foreign_project
+):
+    response = client.get(f"/v1/projects/{foreign_project}/profile/versions")
+    assert (response.status_code, response.json()) == (
+        404,
+        {"code": "project_not_found", "message": f"project {foreign_project} not found"},
+    )
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+def test_limit_of_versions_outside_the_bounds_is_rejected(client, profile_url, limit):
+    assert client.get(f"{profile_url}/versions", params={"limit": limit}).status_code == 422
+
+
+@pytest.mark.parametrize("cursor", ["0", "-1", "2147483648", "1.5", "abc", "١"])
+def test_cursor_that_is_no_version_position_is_rejected(client, profile_url, cursor):
+    response = client.get(f"{profile_url}/versions", params={"cursor": cursor})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", "cursor"]
 
 
 # ------------------------------------------------------------------- edit

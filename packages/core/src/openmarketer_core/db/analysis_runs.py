@@ -24,7 +24,8 @@ cannot succeed (``AnalysisRunNotStarted``).
 
 Every function is scoped to a workspace and a project, including those the
 worker calls: a run of another workspace or project is treated exactly like a
-run that does not exist. Functions take a session and never commit, so the
+run that does not exist. Listing the runs of a project the workspace does not
+have is ``ProjectNotFound``, like requesting one. Functions take a session and never commit, so the
 worker can store a run's result (``evidence_store.save_analysis_of_project``)
 and report its success in one transaction.
 
@@ -40,7 +41,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Select, func, select, update
+from sqlalchemy import Select, func, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -51,6 +52,7 @@ from openmarketer_core.db.models import (
     ProductProfileRecord,
     Project,
 )
+from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.projects import get_project
 
 UNFINISHED_RUN_INDEX = "uq_analysis_run_project_id_unfinished"
@@ -199,6 +201,42 @@ def analysis_run(
     return _analysis_run(session, record)
 
 
+def list_analysis_runs(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    limit: int,
+    before: CreatedPosition | None = None,
+) -> Page[AnalysisRun, CreatedPosition]:
+    """The project's runs as they are now, newest first.
+
+    At most ``limit`` of them, starting after ``before`` (the ``next_before``
+    of the previous page) or at the newest. The profile version of each
+    succeeded run comes with the same query, without the profile itself.
+    Raises ``ProjectNotFound`` when the workspace has no such project.
+    """
+    get_project(session, workspace_id=workspace_id, project_id=project_id)
+    query = (
+        select(AnalysisRunRecord, ProductProfileRecord.version, ProductProfileRecord.snapshot_id)
+        .join(Project, Project.id == AnalysisRunRecord.project_id)
+        .outerjoin(ProductProfileRecord, ProductProfileRecord.id == AnalysisRunRecord.profile_id)
+        .where(Project.workspace_id == workspace_id, Project.id == project_id)
+    )
+    if before is not None:
+        query = query.where(
+            tuple_(AnalysisRunRecord.created_at, AnalysisRunRecord.id)
+            < tuple_(before.created_at, before.id)
+        )
+    rows = session.execute(
+        query.order_by(AnalysisRunRecord.created_at.desc(), AnalysisRunRecord.id.desc()).limit(
+            rows_to_fetch(limit)
+        )
+    )
+    runs = [_run(*row) for row in rows]
+    return page_of(runs, limit, lambda last: CreatedPosition(last.created_at, last.id))
+
+
 def _run_of_project(
     workspace_id: uuid.UUID, project_id: uuid.UUID, run_id: uuid.UUID
 ) -> Select[AnalysisRunRecord]:
@@ -245,14 +283,22 @@ def _analysis_run(session: Session, record: AnalysisRunRecord) -> AnalysisRun:
         if record.profile_id is None
         else session.get_one(ProductProfileRecord, record.profile_id)
     )
+    if profile is None:
+        return _run(record, None, None)
+    return _run(record, profile.version, profile.snapshot_id)
+
+
+def _run(
+    record: AnalysisRunRecord, profile_version: int | None, snapshot_id: uuid.UUID | None
+) -> AnalysisRun:
     return AnalysisRun(
         id=record.id,
         project_id=record.project_id,
         status=record.status,
         error=record.error,
         profile_id=record.profile_id,
-        profile_version=None if profile is None else profile.version,
-        snapshot_id=None if profile is None else profile.snapshot_id,
+        profile_version=profile_version,
+        snapshot_id=snapshot_id,
         created_at=record.created_at,
         started_at=record.started_at,
         finished_at=record.finished_at,

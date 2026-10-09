@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "lint": "eslint",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "api:types": "openapi-typescript ../api/openapi.json -o src/lib/api/schema.d.ts",
+    "api:types:check": "openapi-typescript ../api/openapi.json -o src/lib/api/schema.d.ts --check"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
@@ -16,6 +19,7 @@
     "cn": "^0.4.0",
     "lucide-react": "^1.52.0",
     "next": "16.4.0",
+    "openapi-fetch": "^0.17.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "shadcn": "^4.21.4",
@@ -31,7 +35,8 @@
     "eslint-config-next": "16.4.0",
     "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^5.0.3"
   },
   "packageManager": "pnpm@10.4.1"
 }

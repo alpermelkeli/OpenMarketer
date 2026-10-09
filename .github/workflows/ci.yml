@@ -73,5 +73,8 @@ jobs:
           cache-dependency-path: apps/web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      # Fails when src/lib/api/schema.d.ts no longer matches apps/api/openapi.json.
+      - run: pnpm api:types:check
       - run: pnpm typecheck
+      - run: pnpm test
       - run: pnpm build
