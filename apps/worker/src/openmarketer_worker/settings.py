@@ -1,21 +1,23 @@
 """Settings of the worker process, read from the environment at the edge.
 
-Only what the worker itself needs is here. Model configuration is read by the
-model router and repository tokens by ``RepositoryTokens``, both from the same
-environment mapping in ``main.py``; activities read none of it.
+Only what the process itself needs is here: its database, its workflow server
+and how much it runs at once. Each agent reads its own settings in its folder,
+with ``positive_number`` and ``SettingsError`` from here; this module imports
+none of them. Model configuration is read by the model router and repository
+tokens by ``RepositoryTokens``, from the same environment mapping, in the
+wiring of the agent that uses them; activities read none of it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from openmarketer_core.analysis_workflow import (
+from openmarketer_core.workflow_server import (
     DEFAULT_NAMESPACE,
     DEV_STACK_WORKFLOW_SERVER,
     WorkflowServer,
 )
-from openmarketer_worker.policy import AnalysisPolicy
 
 DEFAULT_CONCURRENT_ACTIVITIES = 4
 
@@ -29,7 +31,6 @@ class Settings:
     database_url: str
     temporal_address: str = DEV_STACK_WORKFLOW_SERVER
     temporal_namespace: str = DEFAULT_NAMESPACE
-    analysis_policy: AnalysisPolicy = field(default_factory=AnalysisPolicy)
     max_concurrent_activities: int = DEFAULT_CONCURRENT_ACTIVITIES
 
     @classmethod
@@ -37,32 +38,21 @@ class Settings:
         database_url = environ.get("DATABASE_URL")
         if not database_url:
             raise SettingsError("the worker needs DATABASE_URL (see .env.example)")
-        defaults = AnalysisPolicy()
         workflow_server = WorkflowServer.from_environment(environ)
         return cls(
             database_url=database_url,
             temporal_address=workflow_server.address,
             temporal_namespace=workflow_server.namespace,
-            analysis_policy=AnalysisPolicy(
-                attempt_timeout_seconds=60
-                * _positive(
-                    environ, "ANALYSIS_TIMEOUT_MINUTES", defaults.attempt_timeout_seconds / 60
-                ),
-                heartbeat_timeout_seconds=defaults.heartbeat_timeout_seconds,
-                max_attempts=int(
-                    _positive(environ, "ANALYSIS_MAX_ATTEMPTS", defaults.max_attempts)
-                ),
-                retry_after_seconds=defaults.retry_after_seconds,
-            ),
             max_concurrent_activities=int(
-                _positive(
+                positive_number(
                     environ, "WORKER_MAX_CONCURRENT_ACTIVITIES", DEFAULT_CONCURRENT_ACTIVITIES
                 )
             ),
         )
 
 
-def _positive(environ: Mapping[str, str], name: str, default: float) -> float:
+def positive_number(environ: Mapping[str, str], name: str, default: float) -> float:
+    """The number in the variable ``name``, at least 1, or ``default`` when it is not set."""
     text = environ.get(name)
     if not text:
         return default

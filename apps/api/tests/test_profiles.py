@@ -14,8 +14,8 @@ from openmarketer_api.dependencies import db_session
 from openmarketer_api.identity import LOCAL_USER_ID
 from openmarketer_core.db.evidence_store import local_workspace_id, save_analysis
 from openmarketer_core.db.models import ProductProfileRecord, Project, Workspace
-from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.intake import Snapshot
 
 PROFILE = {"product": {"name": "Example App", "type": "dev_tool"}}
 COMMIT = "a" * 40

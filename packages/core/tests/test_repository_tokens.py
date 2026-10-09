@@ -6,7 +6,7 @@ in ``test_clone_lockdown.py``.
 
 import pytest
 
-from openmarketer_core.intake import IntakeError, RepositoryTokens
+from openmarketer_core.repository_analysis.intake import IntakeError, RepositoryTokens
 
 GITHUB = "github-token-value"
 GITLAB = "gitlab-token-value"

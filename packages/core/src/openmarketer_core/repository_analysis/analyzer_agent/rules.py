@@ -17,14 +17,15 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from pydantic import ValidationError
 
-from openmarketer_core.analyzer.tools import TOOL_SCHEMAS, RepoTools
-from openmarketer_core.extraction import ExtractedFact, group_by_scope
-from openmarketer_core.intake import RepoFiles
 from openmarketer_core.profile import Evidenced, FeatureStatus, ProductProfile
+from openmarketer_core.repository_analysis.analyzer_agent.tools import TOOL_SCHEMAS, RepoTools
+from openmarketer_core.repository_analysis.extraction import ExtractedFact, group_by_scope
+from openmarketer_core.repository_analysis.intake import RepoFiles
 
 ROLE = "repo_analyzer"
 SUBMIT = "submit_profile"
@@ -74,6 +75,36 @@ class Limits:
     max_submissions: int = 3  # attempts at submit_profile before the draft is repaired in code
 
 
+class Resumption(StrEnum):
+    """How an attempt at an analysis began, given what an earlier attempt left behind."""
+
+    FRESH = "fresh"  # nothing was stored
+    CONTINUED = "continued"  # from the last finished step of an earlier attempt
+    STARTED_OVER = "started_over"  # what was stored analysed another commit
+    ALREADY_FINISHED = "already_finished"  # an earlier attempt's profile was accepted
+
+
+@dataclass(frozen=True)
+class StoredProgress:
+    """What an earlier attempt at a run left behind: the commit it read and how far it got."""
+
+    commit_sha: str
+    finished: bool
+
+
+def resumption(stored: StoredProgress | None, commit_sha: str) -> Resumption:
+    """Decide how an attempt at analysing ``commit_sha`` begins.
+
+    Progress on another commit is never continued: the evidence in its
+    conversation cites line numbers of files that may have changed since.
+    """
+    if stored is None:
+        return Resumption.FRESH
+    if stored.commit_sha != commit_sha:
+        return Resumption.STARTED_OVER
+    return Resumption.ALREADY_FINISHED if stored.finished else Resumption.CONTINUED
+
+
 @dataclass
 class Analysis:
     profile: ProductProfile
@@ -82,6 +113,7 @@ class Analysis:
     model: str
     tool_calls: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)  # what was corrected in code
+    resumption: Resumption = Resumption.FRESH  # steps and cost count every attempt
 
 
 class AnalysisError(Exception):

@@ -2,17 +2,17 @@
 
 Open-source, self-hosted marketing agent: it reads a product's repository, drafts a Product Profile for human review, and later plans, writes and publishes marketing under a deterministic policy gate. The design is in `docs/design-report/report.pdf` (source: `report.tex`).
 
-Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API creates projects, starts analyses, and reads, edits and approves profiles. The worker runs each analysis as a Temporal workflow that the API starts; the run's state is in the database. The dashboard has three screens on top of the API: projects, analyses and the profile review. The evaluation is not built yet. `docs/status.md` has the details and the differences from the design report.
+Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API creates projects, starts analyses, and reads, edits and approves profiles. The worker runs each analysis as a Temporal workflow that the API starts; the run's state is in the database, and the analyzer's graph stores a checkpoint in PostgreSQL after every step, so a retried attempt continues instead of starting over (the CLI runs it in memory). The dashboard has three screens on top of the API: projects, analyses and the profile review. The evaluation is not built yet. `docs/status.md` has the details and the differences from the design report.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `packages/core` | Domain: Product Profile schema (`profile.py`), database models, migrations, session factory, evidence store, profile versions and project store (`db/`), intake, with the rule for which host gets an access token (`intake/`), extractor interface (`extraction.py`), model router and chat client (`llm_config.py`, `llm.py`), analyzer agent (`analyzer/`), the pipeline as one operation (`repository_analysis.py`), the names the API and the worker share (`analysis_workflow.py`) |
+| `packages/core` | Domain: Product Profile schema (`profile.py`), database models, migrations, session factory, evidence store, profile versions and project store, the graph checkpointer's tables and their cleanup (`db/`), model router and chat client (`llm_config.py`, `llm.py`), the checkpoint store every graph uses (`graph_checkpoints/`), the Temporal address the API and the worker share (`workflow_server.py`). Organised by feature, as the worker is by agent: what one feature owns is in its folder, what several share stays above, and a feature package's `__init__` imports nothing. `repository_analysis/`: intake, with the rule for which host gets an access token (`intake/`), extractor interface (`extraction.py`), analyzer agent (`analyzer_agent/`), the pipeline as one operation (`pipeline.py`), requesting an analysis (`request.py`), the names the API and the worker share (`workflow_contract.py`) |
 | `packages/extractors` | Extractor plugins, registered under the `openmarketer.extractors` entry point group |
 | `apps/cli` | `openmarketer analyze <repo>`, with `--save` to store the run |
 | `apps/api` | FastAPI service: projects, analyses, profile review. `openapi.json` is the contract the dashboard's types come from |
-| `apps/worker` | Temporal worker: the `AnalyzeRepository` workflow and its activities. What it shares with the API (workflow name, task queue, input) is in `packages/core`, `analysis_workflow.py` |
+| `apps/worker` | Temporal worker, one folder per product agent under `openmarketer_worker/`, each with its own wiring; above them only the process (`main.py`), its settings and the schedule that removes left-over checkpoints. `repository_analyzer/`: the `AnalyzeRepository` workflow (`workflow.py`), its wiring (`wiring.py`) and its activities, which analyse with the run's checkpoints and forget them when the run ends. What it shares with the API (workflow name, task queue, input) is in `packages/core`, `repository_analysis/workflow_contract.py` |
 | `apps/web` | Dashboard: Next.js 16, Tailwind 4, shadcn/ui, TanStack Query. Projects, analyses and the Product Profile review; the browser reaches the API only through the dashboard's own proxy route |
 | `config/models.yaml` | Model per role, through OpenRouter |
 | `docs/status.md` | What is built, how it was checked, and where the code differs from the design. Keep it current in the same change as the code |
@@ -41,7 +41,7 @@ Run `make check` before calling work done. Database tests and the worker's workf
 - Pydantic models reject unknown fields (`extra="forbid"`). `product.type` and `product.platforms` are open slug vocabularies, not closed enums.
 - Schema changes go through Alembic: edit `db/models.py`, run `make migration m="..."`, then read the generated file before committing it.
 - Never name a model in code. Every model call goes through a role in `config/models.yaml`, resolved by `ModelRouter`; agents depend on the `ChatModel` protocol.
-- Agent frameworks stay at the edge. Rules, prompts and checks live in framework-free modules (`analyzer/rules.py`); only `analyzer/graph.py` imports LangGraph.
+- Agent frameworks stay at the edge. Rules, prompts and checks live in framework-free modules (`repository_analysis/analyzer_agent/rules.py`); only `repository_analysis/analyzer_agent/graph.py` and `graph_checkpoints/` import LangGraph. The checkpoint tables are the library's: a migration runs the library's own statements, they have no model in `db/models.py`, and nothing calls the library's `setup()`.
 - Repository content is read only through `RepoFiles`, after intake has scanned and redacted it.
 - Web: pnpm inside `apps/web`. Next.js 16 differs from older versions; check the installed version's docs in `node_modules/next/dist/docs/` before relying on memory. API types are generated from `apps/api/openapi.json` (`pnpm api:types`, also run by `make openapi`), and `make lint` fails when they are stale. Tests are vitest (`pnpm test`, part of `make test`).
 - Code, comments, commit messages and documentation are in English.
@@ -52,9 +52,9 @@ The code follows clean architecture: dependencies point inwards, towards the dom
 
 | Layer | Where | May depend on |
 |---|---|---|
-| Domain | `packages/core`: `profile.py`, `extraction.py`, `analyzer/rules.py` | Other domain code and Pydantic; no framework, database or network |
+| Domain | `packages/core`: `profile.py`, and in `repository_analysis/`: `extraction.py`, `analyzer_agent/rules.py` | Other domain code and Pydantic; no framework, database or network |
 | Use cases | `packages/core`: functions that carry out one operation, such as `run_intake` | The domain, and ports |
-| Adapters | `packages/core`: `db/`, `llm.py`, `intake/git.py`, `analyzer/graph.py`; `packages/extractors` | A use case's port, plus one external thing (PostgreSQL, HTTP, git, LangGraph) |
+| Adapters | `packages/core`: `db/`, `llm.py`, `graph_checkpoints/postgres.py`, and in `repository_analysis/`: `intake/git.py`, `analyzer_agent/graph.py`; `packages/extractors` | A use case's port, plus one external thing (PostgreSQL, HTTP, git, LangGraph) |
 | Entry points | `apps/api`, `apps/cli`, `apps/worker`, `apps/web` | Use cases; they contain no business rules |
 
 - A port is a small `Protocol` owned by the code that needs it (`ChatModel`, `Extractor`). The adapter implements it; the domain never imports the adapter.
@@ -78,7 +78,7 @@ The code follows clean architecture: dependencies point inwards, towards the dom
 ## Design principles
 
 - **Safety lives outside the model.** Anything that spends money or publishes goes through the deterministic policy gate. Do not move safety rules into prompts.
-- **Untrusted text is data.** Repository files, comments, messages and web pages must never be able to cause an action. A repository URL never decides where a credential goes: a token is sent only to the host it is configured for (`intake/credentials.py`). git runs with an environment built from a short list, follows no redirect and uses HTTPS only, and what a repository host or a model provider writes is logged, never put in an error shown to a caller (`intake/git.py`, `llm.py`).
+- **Untrusted text is data.** Repository files, comments, messages and web pages must never be able to cause an action. A repository URL never decides where a credential goes: a token is sent only to the host it is configured for (`repository_analysis/intake/credentials.py`). git runs with an environment built from a short list, follows no redirect and uses HTTPS only, and what a repository host or a model provider writes is logged, never put in an error shown to a caller (`repository_analysis/intake/git.py`, `llm.py`).
 - **A human approves.** Approval is an authenticated user action, never something a model states.
 - **Official APIs only.** No scraping of private data, no fake accounts or engagement.
 - **Everything is configurable and traceable.** Models, budgets and rules are configuration; every claim in a profile carries evidence (file and lines) and a confidence.

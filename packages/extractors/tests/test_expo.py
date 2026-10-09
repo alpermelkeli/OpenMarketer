@@ -2,7 +2,7 @@
 
 import json
 
-from openmarketer_core.intake import RepoFiles
+from openmarketer_core.repository_analysis.intake import RepoFiles
 from openmarketer_extractors.expo import ExpoExtractor
 
 APP = {

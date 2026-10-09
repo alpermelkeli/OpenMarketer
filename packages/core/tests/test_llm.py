@@ -63,6 +63,28 @@ def test_request_and_reply():
     assert model.calls == [reply]
 
 
+def reply_naming(model: object) -> httpx.Response:
+    message = {"role": "assistant", "content": "hello"}
+    return httpx.Response(200, json={"model": model, "choices": [{"message": message}]})
+
+
+@pytest.mark.parametrize(
+    "reported",
+    ["fake\x00model", "fake\nmodel", "", "m" * 201, None, {"name": "fake/model"}, 7],
+    ids=["nul", "line-break", "empty", "too-long", "missing", "object", "number"],
+)
+def test_model_name_that_cannot_be_stored_is_replaced_by_the_model_asked_for(reported):
+    model = client(lambda request: reply_naming(reported))
+    reply = model.chat("repo_analyzer", [{"role": "user", "content": "hi"}])
+    assert reply.model == model.router.resolve("repo_analyzer").model
+
+
+def test_model_name_the_provider_reports_is_kept():
+    model = client(lambda request: reply_naming("provider/routed-model:free"))
+    reply = model.chat("repo_analyzer", [{"role": "user", "content": "hi"}])
+    assert reply.model == "provider/routed-model:free"
+
+
 def test_role_without_tools_capability_cannot_get_tools():
     model = client(lambda request: httpx.Response(500))
     with pytest.raises(ValueError, match="not allowed to use tools"):

@@ -18,8 +18,8 @@ from collections.abc import Iterator
 from fnmatch import fnmatch
 from typing import Any
 
-from openmarketer_core.extraction import Fact
-from openmarketer_core.intake import RepoFiles
+from openmarketer_core.repository_analysis.extraction import Fact
+from openmarketer_core.repository_analysis.intake import RepoFiles
 
 MAX_TEXT = 500
 DEPENDENCY_SECTIONS = ("dependencies", "devDependencies", "peerDependencies")

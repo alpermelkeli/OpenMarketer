@@ -11,19 +11,19 @@ from sqlalchemy.orm import Session
 from typer.testing import CliRunner
 
 from openmarketer_cli import main
-from openmarketer_core.analyzer import Analysis
 from openmarketer_core.db.models import Evidence, ProductProfileRecord, Project, RepoSnapshot
 from openmarketer_core.db.session import DatabaseError
-from openmarketer_core.extraction import ExtractedFact, ExtractionResult
-from openmarketer_core.intake import (
+from openmarketer_core.llm import LLMError, RouterChatModel
+from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.analyzer_agent import Analysis
+from openmarketer_core.repository_analysis.extraction import ExtractedFact, ExtractionResult
+from openmarketer_core.repository_analysis.intake import (
     NO_TOKENS,
     IntakeResult,
     RepoFiles,
     RepositoryTokens,
     Snapshot,
 )
-from openmarketer_core.llm import LLMError, RouterChatModel
-from openmarketer_core.profile import ProductProfile
 
 REPOSITORY = "https://example.com/acme/app.git"
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})

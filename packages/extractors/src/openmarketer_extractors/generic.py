@@ -19,8 +19,8 @@ from collections import Counter
 from collections.abc import Iterator
 from fnmatch import fnmatch
 
-from openmarketer_core.extraction import Fact, is_auxiliary
-from openmarketer_core.intake import RepoFiles
+from openmarketer_core.repository_analysis.extraction import Fact, is_auxiliary
+from openmarketer_core.repository_analysis.intake import RepoFiles
 
 MAX_TEXT = 500
 MAX_LANGUAGES = 8

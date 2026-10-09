@@ -11,7 +11,7 @@ import re
 from fnmatch import fnmatch
 from typing import Any
 
-from openmarketer_core.intake import ExcludedFileError, RepoFiles
+from openmarketer_core.repository_analysis.intake import ExcludedFileError, RepoFiles
 
 MAX_LISTED = 200
 MAX_READ_LINES = 250

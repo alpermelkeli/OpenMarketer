@@ -1,6 +1,6 @@
 """Tests for the Gradle extractor."""
 
-from openmarketer_core.intake import RepoFiles
+from openmarketer_core.repository_analysis.intake import RepoFiles
 from openmarketer_extractors.gradle import GradleExtractor
 
 SETTINGS = 'rootProject.name = "Memoria"\ninclude(":composeApp")\n'

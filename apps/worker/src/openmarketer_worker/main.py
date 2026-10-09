@@ -1,9 +1,13 @@
-"""The worker process: read the environment, build what activities need, serve the queue.
+"""The worker process: read its settings, connect, register the agents, serve until stopped.
 
-Everything an analysis depends on is built here once (database sessions, the
-model router, the extractors, the repository tokens) and handed to the
-activities. This module holds no rule: which token goes to which host, how a
-repository is analysed and how a run changes state are all in core.
+This module holds what belongs to the process and to no agent: its settings,
+the database sessions, the connection to Temporal, the ``Worker`` with its
+executor and concurrency, the signals that stop it, the schedule of checkpoint
+cleanups that runs while it serves, and the wording of a start that cannot
+happen (``StartupError``). How an agent is set up (its settings, models,
+tokens, workflows, activities and the cleanup of its runs' checkpoints) is in
+the agent's ``wiring.py``, called here by name; this module reads no agent's
+settings or policy and holds no rule.
 """
 
 from __future__ import annotations
@@ -12,22 +16,23 @@ import asyncio
 import logging
 import os
 import signal
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
+from sqlalchemy.orm import Session, sessionmaker
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from openmarketer_core.analysis_workflow import ANALYSIS_TASK_QUEUE
 from openmarketer_core.db.session import DatabaseError, session_factory
-from openmarketer_core.extraction import discover_extractors
-from openmarketer_core.intake import IntakeError, RepositoryTokens
-from openmarketer_core.llm import RouterChatModel
-from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ConfigError, ModelRouter
-from openmarketer_core.repository_analysis import RepositoryAnalysis, analyze_repository
-from openmarketer_worker.activities import AnalyseRepository, AnalysisActivities
-from openmarketer_worker.analyze_repository import AnalyzeRepository
+from openmarketer_core.llm_config import ConfigError
+from openmarketer_core.repository_analysis.intake import IntakeError
+from openmarketer_worker import AgentRegistration
+from openmarketer_worker.checkpoint_cleanup import (
+    CLEANUP_EVERY_SECONDS,
+    CheckpointCleanup,
+    keep_removing_leftover_checkpoints,
+)
+from openmarketer_worker.repository_analyzer.wiring import repository_analyzer
 from openmarketer_worker.settings import Settings, SettingsError
 
 logger = logging.getLogger(__name__)
@@ -37,47 +42,16 @@ class StartupError(Exception):
     """The worker cannot start with this environment; the message says what to change."""
 
 
-def analysis_with_configured_models(environ: Mapping[str, str]) -> AnalyseRepository:
-    """How this installation analyses a repository: its models, extractors and tokens.
-
-    The configuration is read once, so a mistake in it stops the worker at
-    start-up instead of failing every run.
-    """
-    router = ModelRouter.from_file(
-        environ.get("LLM_CONFIG_PATH") or DEFAULT_CONFIG_PATH, env=environ
-    )
-    # Asked for here, so a missing provider key stops the worker and not every run.
-    router.headers()
-    tokens = RepositoryTokens.from_environment(environ)
-    extractors = list(discover_extractors())
-
-    def analyse(repository_url: str, clone_into: Path) -> RepositoryAnalysis:
-        # A chat model per run: it keeps the replies of the run it served.
-        return analyze_repository(
-            repository_url,
-            clone_into,
-            model=RouterChatModel(router=router),
-            extractors=extractors,
-            tokens=tokens,
-        )
-
-    return analyse
-
-
 def build_worker(
-    client: Client,
-    activities: AnalysisActivities,
-    *,
-    task_queue: str,
-    max_concurrent_activities: int,
+    client: Client, agent: AgentRegistration, *, max_concurrent_activities: int
 ) -> Worker:
-    """A worker serving ``AnalyzeRepository`` and its activities on ``task_queue``."""
+    """A worker serving the agent's workflows and activities on the agent's task queue."""
     return Worker(
         client,
-        task_queue=task_queue,
-        workflows=[AnalyzeRepository],
-        activities=[activities.start_run, activities.analyse_and_store, activities.record_failure],
-        # The two short activities are blocking database calls and run in these threads.
+        task_queue=agent.task_queue,
+        workflows=agent.workflows,
+        activities=agent.activities,
+        # Activities that are blocking calls (short database writes) run in these threads.
         activity_executor=ThreadPoolExecutor(max_workers=max_concurrent_activities),
         max_concurrent_activities=max_concurrent_activities,
     )
@@ -88,7 +62,7 @@ async def serve(environ: Mapping[str, str]) -> None:
     try:
         settings = Settings.from_env(environ)
         sessions = session_factory(settings.database_url)
-        analyse = analysis_with_configured_models(environ)
+        agent = repository_analyzer(environ, sessions, settings.database_url)
     except (SettingsError, DatabaseError, ConfigError, IntakeError, OSError) as e:
         raise StartupError(str(e)) from e
     try:
@@ -102,24 +76,41 @@ async def serve(environ: Mapping[str, str]) -> None:
         ) from e
 
     worker = build_worker(
-        client,
-        AnalysisActivities(sessions, analyse, settings.analysis_policy),
-        task_queue=ANALYSIS_TASK_QUEUE,
-        max_concurrent_activities=settings.max_concurrent_activities,
+        client, agent, max_concurrent_activities=settings.max_concurrent_activities
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signal_number in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signal_number, stop.set)
-    async with worker:
-        logger.info(
-            "worker serving %s on %s (namespace %s)",
-            ANALYSIS_TASK_QUEUE,
-            settings.temporal_address,
-            settings.temporal_namespace,
+    logger.info(
+        "worker serving %s on %s (namespace %s)",
+        agent.task_queue,
+        settings.temporal_address,
+        settings.temporal_namespace,
+    )
+    await serve_until(stop, worker, sessions, agent.checkpoint_cleanups)
+
+
+async def serve_until(
+    stop: asyncio.Event,
+    worker: Worker,
+    sessions: sessionmaker[Session],
+    checkpoint_cleanups: Sequence[CheckpointCleanup],
+) -> None:
+    """Serve the worker's queue, and run the checkpoint cleanups, until ``stop`` is set."""
+    cleanup = asyncio.create_task(
+        keep_removing_leftover_checkpoints(
+            sessions, checkpoint_cleanups, every_seconds=CLEANUP_EVERY_SECONDS
         )
-        await stop.wait()
-        logger.info("stopping; the process ends when analyses in progress have returned")
+    )
+    try:
+        async with worker:
+            await stop.wait()
+            logger.info("stopping; the process ends when work in progress has returned")
+    finally:
+        cleanup.cancel()
+        # Collected, so the task does not outlive the worker; its cancellation is the outcome.
+        await asyncio.gather(cleanup, return_exceptions=True)
 
 
 def main() -> None:

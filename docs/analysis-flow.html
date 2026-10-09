@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How a repository is analysed</title>
+<!--
+  The flow of one analysis run, from the click in the dashboard to the stored draft profile,
+  with the file and function behind each step. docs/analysis-flow.png is this page rendered:
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --hide-scrollbars \
+      --force-device-scale-factor=2 --window-size=1360,2346 \
+      --screenshot=docs/analysis-flow.png docs/analysis-flow.html
+
+  Update both when a step, a file or a function named here changes.
+-->
+<style>
+  :root {
+    --ink: #1a1d21;
+    --muted: #5d6570;
+    --line: #c9cfd6;
+    --paper: #ffffff;
+    --page: #f4f5f7;
+    --web: #2f6f4f;
+    --api: #2456a6;
+    --temporal: #7a4bb3;
+    --worker: #b3541e;
+    --core: #0e7490;
+    --bad: #b42318;
+    --good: #18794e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.45 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  main { width: 1360px; margin: 0 auto; padding: 40px 48px 48px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin: 0 0 22px; max-width: 980px; }
+  code, .where {
+    font: 12.5px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 26px; font-size: 13px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
+  .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+  .lane {
+    border: 1px solid var(--line);
+    border-left: 6px solid var(--c);
+    border-radius: 10px;
+    background: var(--paper);
+    padding: 18px 22px 22px;
+  }
+  .lane > h2 {
+    margin: 0 0 14px;
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--c);
+  }
+  .lane > h2 small { color: var(--muted); letter-spacing: 0; text-transform: none; font-size: 13px; font-weight: 400; }
+
+  .step {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px 12px 52px;
+    position: relative;
+    background: #fff;
+  }
+  .step .n {
+    position: absolute; left: 12px; top: 12px;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--c); color: #fff;
+    font-weight: 700; font-size: 13px;
+    display: grid; place-items: center;
+  }
+  .step h3 { margin: 2px 0 6px; font-size: 16px; }
+  .step p { margin: 6px 0 0; color: var(--muted); }
+  .where { margin: 0; padding: 0; list-style: none; }
+  .where li { padding: 2px 0; }
+  .where b { color: var(--ink); font-weight: 600; }
+  .where .f { color: var(--c); }
+  .state {
+    display: inline-block; border-radius: 999px; padding: 1px 9px;
+    font: 600 12px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+    border: 1px solid currentColor;
+  }
+  .queued { color: #6b5d00; background: #fff8d6; }
+  .running { color: #1d4ed8; background: #e8f0ff; }
+  .succeeded { color: var(--good); background: #e6f6ee; }
+  .failed { color: var(--bad); background: #fdecea; }
+
+  .down { height: 30px; position: relative; }
+  .down::before {
+    content: ""; position: absolute; left: 50%; top: 0; bottom: 8px;
+    border-left: 2px solid var(--muted);
+  }
+  .down::after {
+    content: ""; position: absolute; left: 50%; bottom: 0; transform: translateX(-5px);
+    border: 6px solid transparent; border-top: 8px solid var(--muted); border-bottom: 0;
+  }
+  .down.label { height: 44px; }
+  .down span {
+    position: absolute; left: calc(50% + 14px); top: 8px;
+    font-size: 12.5px; color: var(--muted); white-space: nowrap;
+  }
+
+  .cols { display: grid; gap: 16px; }
+  .cols.two { grid-template-columns: 1fr 1fr; }
+  .cols.three { grid-template-columns: repeat(3, 1fr); }
+  .sub {
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #fbfcfd;
+  }
+  .sub h4 { margin: 0 0 6px; font-size: 14px; }
+  .sub h4 em { font-style: normal; color: var(--c); font-weight: 700; margin-right: 6px; }
+  .sub p { margin: 6px 0 0; color: var(--muted); font-size: 13.5px; }
+  .core { --c: var(--core); border-color: #b9dbe3; background: #f3fafc; }
+  .core h4 { color: var(--core); }
+
+  .branch { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 4px; }
+  .branch .head {
+    text-align: center; font-size: 12.5px; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; padding: 6px; border-radius: 6px 6px 0 0;
+  }
+  .ok .head { background: #e6f6ee; color: var(--good); }
+  .ko .head { background: #fdecea; color: var(--bad); }
+  .branch .step { border-radius: 0 0 8px 8px; border-top: 0; }
+  .retry {
+    border-left: 3px solid var(--temporal); padding: 2px 0 2px 12px; margin-top: 10px;
+    color: var(--muted); font-size: 13.5px;
+  }
+  .retry b { color: var(--ink); }
+  .aside {
+    margin-top: 22px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper);
+    padding: 14px 18px; display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: start;
+  }
+  .aside h2 { margin: 0; font-size: 14px; }
+  .aside p { margin: 0 0 6px; color: var(--muted); }
+  footer { margin-top: 18px; color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>How a repository is analysed</h1>
+  <p class="lede">
+    One analysis run, from the click in the dashboard to a draft Product Profile waiting for review.
+    Each step names the file and the function that does it. Paths under <code>core/</code> are
+    <code>packages/core/src/openmarketer_core/</code>, paths under <code>worker/</code> are
+    <code>apps/worker/src/openmarketer_worker/</code>.
+  </p>
+  <div class="legend">
+    <span><i style="background:var(--web)"></i>Dashboard (Next.js)</span>
+    <span><i style="background:var(--api)"></i>API (FastAPI)</span>
+    <span><i style="background:var(--temporal)"></i>Temporal workflow</span>
+    <span><i style="background:var(--worker)"></i>Worker activity</span>
+    <span><i style="background:var(--core)"></i>Core use case</span>
+    <span>Run state in PostgreSQL:
+      <b class="state queued">queued</b> <b class="state running">running</b>
+      <b class="state succeeded">succeeded</b> <b class="state failed">failed</b></span>
+  </div>
+
+  <!-- ------------------------------------------------------------------ request -->
+  <section class="lane" style="--c: var(--api)">
+    <h2>1 · The request <small>— dashboard and API; nothing is cloned and no model is called here</small></h2>
+    <div class="cols three">
+      <div class="step" style="--c: var(--web)">
+        <span class="n">1</span>
+        <h3>A person starts the analysis</h3>
+        <ul class="where">
+          <li><span class="f">apps/web/src/components/analyses/analyses-screen.tsx</span></li>
+          <li><span class="f">apps/web/src/lib/api/analyses.ts</span></li>
+          <li><b>POST /v1/projects/{id}/analyses</b> (<code>startAnalysis</code>)</li>
+        </ul>
+        <p>The browser reaches the API only through the dashboard's own proxy route.</p>
+      </div>
+      <div class="step">
+        <span class="n">2</span>
+        <h3>The run is stored first</h3>
+        <ul class="where">
+          <li><span class="f">apps/api/…/routes/analyses.py</span> <b>start()</b></li>
+          <li><span class="f">core/repository_analysis/request.py</span> <b>request_analysis()</b></li>
+          <li>→ <span class="f">db/projects.py</span> <b>get_project()</b></li>
+          <li>→ <span class="f">repository_analysis/intake/git.py</span> <b>remote_repository_url()</b> https only</li>
+          <li>→ <span class="f">db/analysis_runs.py</span> <b>request_analysis_run()</b></li>
+        </ul>
+        <p>Run is <b class="state queued">queued</b>. A project with an unfinished run answers 409.</p>
+      </div>
+      <div class="step">
+        <span class="n">3</span>
+        <h3>Its workflow is started</h3>
+        <ul class="where">
+          <li><span class="f">apps/api/…/temporal_workflows.py</span> <b>TemporalAnalysisWorkflows.start()</b></li>
+          <li><span class="f">core/repository_analysis/workflow_contract.py</span> <b>analysis_workflow_id()</b>, <b>AnalyzeRepositoryInput</b>, <b>ANALYSIS_TASK_QUEUE</b></li>
+        </ul>
+        <p>Temporal gets three identifiers (workspace, project, run) and nothing else.
+           If it cannot be reached: <b>mark_run_failed()</b>, answer 503.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="down label"><span>202 with the run · the dashboard polls it every 2 s · a worker takes the workflow</span></div>
+
+  <!-- ------------------------------------------------------------------ workflow -->
+  <section class="lane" style="--c: var(--temporal)">
+    <h2>2 · The workflow <small>— <code>worker/repository_analyzer/workflow.py</code> · <code>AnalyzeRepository.run()</code> orders three activities and decides nothing else</small></h2>
+
+    <div class="step" style="--c: var(--worker)">
+      <span class="n">4</span>
+      <h3>Activity <code>start_run</code>: the run is picked up</h3>
+      <ul class="where">
+        <li><span class="f">worker/repository_analyzer/activities.py</span> <b>AnalysisActivities.start_run()</b>
+            → <span class="f">core/db/analysis_runs.py</span> <b>mark_run_started()</b></li>
+      </ul>
+      <p>Run is <b class="state running">running</b>. Returns the <code>AnalysisPolicy</code> (time limits, attempts) the workflow uses for the next activity.</p>
+    </div>
+
+    <div class="down"></div>
+
+    <div class="step" style="--c: var(--worker)">
+      <span class="n">5</span>
+      <h3>Activity <code>analyse_and_store</code>: one attempt at the analysis</h3>
+      <ul class="where">
+        <li><span class="f">worker/repository_analyzer/activities.py</span> <b>AnalysisActivities.analyse_and_store()</b>
+            runs <b>_analyse_and_store()</b> in a thread and sends a heartbeat every 20 s</li>
+      </ul>
+
+      <div class="cols two" style="margin-top:12px">
+        <div class="sub" style="--c: var(--worker)">
+          <h4><em>5a</em>Hold the run's checkpoints</h4>
+          <ul class="where">
+            <li><b>CheckpointAccess.of_attempt(run_thread_id(run_id))</b></li>
+            <li>→ <span class="f">core/graph_checkpoints/postgres.py</span> <b>run_checkpoints()</b></li>
+          </ul>
+          <p>The thread is named <code>analysis-run:&lt;run id&gt;</code> (<code>core/db/analysis_runs.py</code>). One attempt per run at a time (advisory lock); while an earlier attempt still runs, this one is refused and retried.</p>
+        </div>
+        <div class="sub" style="--c: var(--worker)">
+          <h4><em>5b</em>Read the run and its repository</h4>
+          <ul class="where">
+            <li><b>_repository_to_analyse()</b> → <b>analysis_run()</b>, <b>get_project()</b>, <b>remote_repository_url()</b></li>
+          </ul>
+          <p>Already succeeded → nothing to do. The URL comes from the database, never from Temporal.</p>
+        </div>
+      </div>
+
+      <div class="sub core" style="margin-top:14px">
+        <h4><em>5c</em>Analyse — <code>core/repository_analysis/pipeline.py</code> <b>analyze_repository()</b>, called through
+            <code>worker/repository_analyzer/wiring.py</code> <b>analysis_with_configured_models()</b>. Paths in the three boxes are under <code>core/repository_analysis/</code></h4>
+        <div class="cols three" style="margin-top:10px">
+          <div class="sub" style="background:#fff">
+            <h4>Intake</h4>
+            <ul class="where">
+              <li><span class="f">intake/__init__.py</span> <b>run_intake()</b></li>
+              <li>→ <span class="f">intake/git.py</span> <b>clone()</b></li>
+              <li>→ <span class="f">intake/secrets.py</span> <b>scan_and_redact()</b></li>
+            </ul>
+            <p>Clone into a temporary folder; a token goes only to its own host. Secrets are redacted; files are read only through <code>RepoFiles</code>.</p>
+          </div>
+          <div class="sub" style="background:#fff">
+            <h4>Extractors</h4>
+            <ul class="where">
+              <li><span class="f">extraction.py</span> <b>run_extractors()</b></li>
+              <li>plugins in <span class="f">packages/extractors</span></li>
+            </ul>
+            <p>Deterministic facts from manifests (package.json, Gradle, pyproject …) as hints for the agent.</p>
+          </div>
+          <div class="sub" style="background:#fff">
+            <h4>Analyzer agent (LangGraph)</h4>
+            <ul class="where">
+              <li><span class="f">analyzer_agent/graph.py</span> <b>analyze()</b></li>
+              <li>→ <span class="f">analyzer_agent/rules.py</span> <b>resumption()</b></li>
+              <li>loop <b>call_model</b> ⇄ <b>run_tools</b>:</li>
+              <li>· <span class="f">core/llm.py</span> <b>RouterChatModel.chat()</b></li>
+              <li>· <span class="f">rules.py</span> <b>run_tool_calls()</b> → <span class="f">tools.py</span> <b>RepoTools</b></li>
+              <li>· submit → <b>verify()</b> / <b>repair()</b></li>
+            </ul>
+            <p>A checkpoint is stored after every step. Starts fresh, continues, starts over (new commit) or returns a finished result.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="branch" style="margin-top:16px">
+        <div class="ok">
+          <div class="head">a profile was accepted</div>
+          <div class="step" style="--c: var(--good)">
+            <span class="n">5d</span>
+            <h3>Store the draft, finish the run</h3>
+            <ul class="where">
+              <li><b>_store()</b> — one transaction:</li>
+              <li>→ <span class="f">core/db/evidence_store.py</span> <b>save_analysis_of_project()</b></li>
+              <li>→ <span class="f">core/db/analysis_runs.py</span> <b>mark_run_succeeded()</b></li>
+              <li><b>_forget_checkpoints()</b> → <span class="f">core/graph_checkpoints/postgres.py</span> <b>forget_checkpoints()</b></li>
+            </ul>
+            <p>Run is <b class="state succeeded">succeeded</b> with snapshot, evidence and profile version 1 as a draft.</p>
+          </div>
+        </div>
+        <div class="ko">
+          <div class="head">the attempt failed</div>
+          <div class="step" style="--c: var(--bad)">
+            <span class="n">!</span>
+            <h3>An <code>ApplicationError</code> with a type from <code>steps.py</code></h3>
+            <ul class="where">
+              <li><b>ModelUnavailable</b>, <b>DatabaseUnavailable</b>, <b>AttemptStillRunning</b>, <b>Unexpected</b>, a time limit, a lost heartbeat</li>
+            </ul>
+            <div class="retry">
+              <b>Temporal retries</b>: up to 5 attempts, waiting 1, 2, 4 and 8 minutes (<code>policy.py</code>).
+              The next attempt repeats step 5 and <b>continues from the checkpoints</b>.
+            </div>
+            <ul class="where" style="margin-top:10px">
+              <li><b>AnalysisFailed</b>, <b>RunUnavailable</b>, attempts used up, cancellation</li>
+            </ul>
+            <div class="retry" style="border-color: var(--bad)"><b>Not retried</b>: the workflow goes to step 6.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="down label"><span>only when steps 4 or 5 ended without a result</span></div>
+
+    <div class="step" style="--c: var(--worker)">
+      <span class="n">6</span>
+      <h3>Activity <code>record_failure</code>: the reason is written on the run</h3>
+      <ul class="where">
+        <li><span class="f">worker/repository_analyzer/activities.py</span> <b>AnalysisActivities.record_failure()</b>
+            → <span class="f">core/db/analysis_runs.py</span> <b>mark_run_failed()</b>, then <b>_forget_checkpoints()</b></li>
+      </ul>
+      <p>Run is <b class="state failed">failed</b> with a message fit to show. It no longer blocks the project.</p>
+    </div>
+  </section>
+
+  <div class="down label"><span>the next poll of the dashboard reads the run from the database</span></div>
+
+  <!-- ------------------------------------------------------------------ outcome -->
+  <section class="lane" style="--c: var(--web)">
+    <h2>3 · What the person sees <small>— <code>apps/api/…/routes/analyses.py</code> <b>get()</b> → <code>core/db/analysis_runs.py</code> <b>analysis_run()</b>; Temporal is not asked</small></h2>
+    <div class="cols two">
+      <div class="step" style="--c: var(--good)">
+        <span class="n">7</span>
+        <h3><b class="state succeeded">succeeded</b> → the profile review</h3>
+        <p>The run links to the profile version it stored. A person reads the draft with its evidence and confidence, corrects it and approves it. Approval is always a human action.</p>
+      </div>
+      <div class="step" style="--c: var(--bad)">
+        <span class="n">7</span>
+        <h3><b class="state failed">failed</b> → the reason, and a new start</h3>
+        <p>The message holds nothing a repository host or a model provider wrote. A new analysis can be started at once.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="aside">
+    <h2>Meanwhile, in every worker</h2>
+    <div>
+      <p>Checkpoints that a run left behind (a process that died, a workflow that was terminated) are removed at start-up and every 10 minutes. The schedule knows no rule: it runs the cleanups the agents' wiring hands it. The analyzer's touches only threads named <code>analysis-run:…</code>.</p>
+      <ul class="where" style="--c: var(--worker)">
+        <li><span class="f">worker/main.py</span> <b>serve_until()</b> →
+            <span class="f">worker/checkpoint_cleanup.py</span> <b>keep_removing_leftover_checkpoints()</b> runs each <b>CheckpointCleanup</b></li>
+        <li>→ <span class="f">worker/repository_analyzer/wiring.py</span> <b>cleanup_of_analysis_runs()</b> →
+            <span class="f">core/db/checkpoint_cleanup.py</span> <b>remove_checkpoints_of_analysis_runs()</b></li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    Source of this figure: <code>docs/analysis-flow.html</code>. What each part does not do is in <code>docs/status.md</code>.
+  </footer>
+</main>
+</body>
+</html>

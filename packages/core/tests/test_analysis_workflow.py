@@ -2,7 +2,8 @@
 
 import uuid
 
-from openmarketer_core.analysis_workflow import WorkflowServer, analysis_workflow_id
+from openmarketer_core.repository_analysis.workflow_contract import analysis_workflow_id
+from openmarketer_core.workflow_server import WorkflowServer
 
 
 def test_workflow_id_is_derived_from_the_run():

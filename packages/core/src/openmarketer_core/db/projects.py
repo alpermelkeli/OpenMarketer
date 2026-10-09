@@ -28,7 +28,7 @@ from openmarketer_core.db.models import (
 )
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.workspace_lock import wait_for_other_writes
-from openmarketer_core.intake import remote_repository_url
+from openmarketer_core.repository_analysis.intake import remote_repository_url
 
 
 class ProjectNotFound(Exception):

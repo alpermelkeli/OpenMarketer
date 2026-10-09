@@ -33,8 +33,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from openmarketer_core.intake.credentials import NO_TOKENS, RepositoryTokens, is_unambiguous
-from openmarketer_core.intake.errors import IntakeError
+from openmarketer_core.repository_analysis.intake.credentials import (
+    NO_TOKENS,
+    RepositoryTokens,
+    is_unambiguous,
+)
+from openmarketer_core.repository_analysis.intake.errors import IntakeError
 
 logger = logging.getLogger(__name__)
 

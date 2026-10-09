@@ -23,9 +23,9 @@ from openmarketer_core.db.models import (
     Workspace,
 )
 from openmarketer_core.db.projects import ProjectNotFound
-from openmarketer_core.extraction import ExtractedFact
-from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.extraction import ExtractedFact
+from openmarketer_core.repository_analysis.intake import Snapshot
 
 REPOSITORY = "https://example.com/acme/app.git"
 FACTS = [

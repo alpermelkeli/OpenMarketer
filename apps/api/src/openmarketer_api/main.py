@@ -19,8 +19,8 @@ from openmarketer_api.identity import current_user_id
 from openmarketer_api.routes import analyses, health, profiles, projects
 from openmarketer_api.settings import Settings
 from openmarketer_api.temporal_workflows import TemporalAnalysisWorkflows
-from openmarketer_core.analysis_workflow import ANALYSIS_TASK_QUEUE
 from openmarketer_core.db.session import session_factory
+from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
 
 API_VERSION = "0.1.0"
 

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from openmarketer_core.intake import RepoFiles
+from openmarketer_core.repository_analysis.intake import RepoFiles
 from openmarketer_extractors.package_json import PackageJsonExtractor
 
 

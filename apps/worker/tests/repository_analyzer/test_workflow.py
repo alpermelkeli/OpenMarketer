@@ -2,7 +2,7 @@
 
 They show what the workflow does with each way an activity can end. They run
 against the dev stack's Temporal server on a task queue of their own (see
-``conftest.py``): the time-skipping test server is a download, and tests use
+``conftest.py`` of the worker's tests): the time-skipping test server is a download, and tests use
 no network. Timeouts are therefore real, and short.
 """
 
@@ -18,14 +18,14 @@ from temporalio.client import Client, WorkflowFailureError, WorkflowHandle
 from temporalio.exceptions import ActivityError, ApplicationError, CancelledError
 from temporalio.worker import Worker
 
-from openmarketer_core.analysis_workflow import (
+from openmarketer_core.repository_analysis.workflow_contract import (
     ANALYZE_REPOSITORY_WORKFLOW,
     AnalyzeRepositoryInput,
     analysis_workflow_id,
 )
-from openmarketer_worker import steps
-from openmarketer_worker.analyze_repository import AnalyzeRepository
-from openmarketer_worker.policy import AnalysisPolicy
+from openmarketer_worker.repository_analyzer import steps
+from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy
+from openmarketer_worker.repository_analyzer.workflow import AnalyzeRepository
 
 QUICK = AnalysisPolicy(
     attempt_timeout_seconds=20, heartbeat_timeout_seconds=10, max_attempts=2, retry_after_seconds=1

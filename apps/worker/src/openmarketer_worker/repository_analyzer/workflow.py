@@ -32,12 +32,12 @@ from temporalio.exceptions import (
 )
 
 with workflow.unsafe.imports_passed_through():
-    from openmarketer_core.analysis_workflow import (
+    from openmarketer_core.repository_analysis.workflow_contract import (
         ANALYZE_REPOSITORY_WORKFLOW,
         AnalyzeRepositoryInput,
     )
-    from openmarketer_worker import policy, steps
-    from openmarketer_worker.policy import AnalysisPolicy, DatabaseWritePolicy
+    from openmarketer_worker.repository_analyzer import policy, steps
+    from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy, DatabaseWritePolicy
 
 
 @workflow.defn(name=ANALYZE_REPOSITORY_WORKFLOW)
@@ -55,7 +55,7 @@ class AnalyzeRepository:
                 heartbeat_timeout=timedelta(seconds=analysis_policy.heartbeat_timeout_seconds),
                 retry_policy=RetryPolicy(
                     initial_interval=timedelta(seconds=analysis_policy.retry_after_seconds),
-                    backoff_coefficient=2.0,
+                    backoff_coefficient=policy.ANALYSIS_RETRY_BACKOFF,
                     maximum_attempts=analysis_policy.max_attempts,
                     non_retryable_error_types=list(steps.NOT_RETRIED),
                 ),

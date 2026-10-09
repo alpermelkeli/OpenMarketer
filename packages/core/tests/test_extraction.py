@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from openmarketer_core.extraction import (
+from openmarketer_core.repository_analysis.extraction import (
     ExtractedFact,
     Extractor,
     Fact,
@@ -12,7 +12,7 @@ from openmarketer_core.extraction import (
     is_auxiliary,
     run_extractors,
 )
-from openmarketer_core.intake import RepoFiles
+from openmarketer_core.repository_analysis.intake import RepoFiles
 
 
 class Readme:

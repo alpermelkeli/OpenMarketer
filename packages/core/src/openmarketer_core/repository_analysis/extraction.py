@@ -18,7 +18,7 @@ from typing import Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from openmarketer_core.intake import RepoFiles
+from openmarketer_core.repository_analysis.intake import RepoFiles
 
 ENTRY_POINT_GROUP = "openmarketer.extractors"
 MANIFEST_KIND = "repo.manifest"

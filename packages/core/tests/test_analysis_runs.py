@@ -43,8 +43,8 @@ from openmarketer_core.db.pages import CreatedPosition
 from openmarketer_core.db.profile_versions import latest_draft_profile
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.session import transaction
-from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.intake import Snapshot
 
 
 @dataclass(frozen=True)

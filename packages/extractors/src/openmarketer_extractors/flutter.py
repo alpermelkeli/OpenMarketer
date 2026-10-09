@@ -17,8 +17,8 @@ from typing import Any
 
 import yaml
 
-from openmarketer_core.extraction import Fact
-from openmarketer_core.intake import RepoFiles
+from openmarketer_core.repository_analysis.extraction import Fact
+from openmarketer_core.repository_analysis.intake import RepoFiles
 
 MAX_TEXT = 500
 MAX_BYTES = 512 * 1024

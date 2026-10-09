@@ -23,12 +23,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from openmarketer_api.identity import NotLocalRequest
-from openmarketer_core.analysis_request import AnalysisNotStarted
 from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
 from openmarketer_core.db.profile_versions import ProfileAlreadyApproved, ProfileVersionNotFound
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.session import DatabaseError
-from openmarketer_core.intake import IntakeError
+from openmarketer_core.repository_analysis.intake import IntakeError
+from openmarketer_core.repository_analysis.request import AnalysisNotStarted
 
 logger = logging.getLogger(__name__)
 

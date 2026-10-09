@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 
 
 class AnalysisWorkflows(Protocol):

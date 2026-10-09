@@ -14,7 +14,7 @@ from enum import StrEnum
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 
-from openmarketer_core.intake.errors import ExcludedFileError
+from openmarketer_core.repository_analysis.intake.errors import ExcludedFileError
 
 
 class Exclusion(StrEnum):

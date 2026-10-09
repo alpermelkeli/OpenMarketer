@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from openmarketer_core.analysis_workflow import WorkflowServer
+from openmarketer_core.workflow_server import WorkflowServer
 
 
 class SettingsError(Exception):

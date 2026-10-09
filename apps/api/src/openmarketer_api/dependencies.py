@@ -22,8 +22,8 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_api.analysis_workflows import AnalysisWorkflows
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
 from openmarketer_core.db.session import transaction
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 
 
 @dataclass(frozen=True)
