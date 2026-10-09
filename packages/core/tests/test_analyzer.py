@@ -12,7 +12,12 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Engine, text
 
-from openmarketer_core.analyzer import (
+from openmarketer_core.db.session import DatabaseError
+from openmarketer_core.graph_checkpoints import RunCheckpoints
+from openmarketer_core.graph_checkpoints.postgres import forget_checkpoints, run_checkpoints
+from openmarketer_core.llm import ChatReply, LLMError
+from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.analyzer_agent import (
     Analysis,
     AnalysisError,
     Limits,
@@ -20,21 +25,16 @@ from openmarketer_core.analyzer import (
     Resumption,
     analyze,
 )
-from openmarketer_core.analyzer.rules import (
+from openmarketer_core.repository_analysis.analyzer_agent.rules import (
     SUBMIT,
     StoredProgress,
     repository_map,
     resumption,
     submit_schema,
 )
-from openmarketer_core.analyzer.tools import RepoTools
-from openmarketer_core.db.session import DatabaseError
-from openmarketer_core.extraction import ExtractedFact
-from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.graph_checkpoints.postgres import forget_checkpoints, run_checkpoints
-from openmarketer_core.intake import RepoFiles
-from openmarketer_core.llm import ChatReply, LLMError
-from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.analyzer_agent.tools import RepoTools
+from openmarketer_core.repository_analysis.extraction import ExtractedFact
+from openmarketer_core.repository_analysis.intake import RepoFiles
 
 
 def call(name: str, **arguments) -> dict:
@@ -331,7 +331,7 @@ def test_repository_map_is_bounded(files):
 def test_analyzer_is_a_langgraph_graph(files):
     from langgraph.graph.state import CompiledStateGraph
 
-    from openmarketer_core.analyzer.graph import build_graph
+    from openmarketer_core.repository_analysis.analyzer_agent.graph import build_graph
 
     graph = build_graph(ScriptedModel(), RepoTools(files), Limits())
     assert isinstance(graph, CompiledStateGraph)
@@ -341,8 +341,8 @@ def test_analyzer_is_a_langgraph_graph(files):
 def test_rules_module_does_not_depend_on_the_framework():
     import inspect
 
-    import openmarketer_core.analyzer.rules as rules
-    import openmarketer_core.analyzer.tools as tools_module
+    import openmarketer_core.repository_analysis.analyzer_agent.rules as rules
+    import openmarketer_core.repository_analysis.analyzer_agent.tools as tools_module
 
     for module in (rules, tools_module):
         assert "import langgraph" not in inspect.getsource(module)
@@ -577,7 +577,9 @@ def test_progress_on_another_commit_is_discarded_and_the_analysis_starts_over(
         attempt(files, ScriptedModel(turns[0], turns[1], OUTAGE), run, commit="old-commit")
 
     model = ScriptedModel(*turns)
-    with caplog.at_level(logging.INFO, logger="openmarketer_core.analyzer.graph"):
+    with caplog.at_level(
+        logging.INFO, logger="openmarketer_core.repository_analysis.analyzer_agent.graph"
+    ):
         result = attempt(files, model, run, commit="new-commit")
 
     assert result.resumption is Resumption.STARTED_OVER

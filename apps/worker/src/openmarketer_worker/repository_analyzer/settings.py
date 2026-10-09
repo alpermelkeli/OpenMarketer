@@ -3,8 +3,8 @@
 What an operator can change about an analysis: how long one attempt may take
 and how many attempts a run gets. The other limits and every default, with
 their reasons, are in ``policy.py``; this module only fills that policy. It
-takes the environment as an argument and is called once, by the worker's
-``main.py``; the workflow and the activities read none of it.
+takes the environment as an argument and is called once, by ``wiring.py``; the
+workflow and the activities read none of it.
 """
 
 from __future__ import annotations

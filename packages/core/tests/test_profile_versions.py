@@ -28,8 +28,8 @@ from openmarketer_core.db.profile_versions import (
     save_edited_profile,
 )
 from openmarketer_core.db.projects import ProjectNotFound
-from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.intake import Snapshot
 
 REVIEWER = uuid.UUID("11111111-1111-4111-8111-111111111111")
 

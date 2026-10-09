@@ -17,8 +17,8 @@ from openmarketer_core.db.analysis_runs import mark_run_failed, request_analysis
 from openmarketer_core.db.evidence_store import local_workspace_id, save_analysis_of_project
 from openmarketer_core.db.models import Project, Workspace
 from openmarketer_core.db.profile_versions import approve_profile_version
-from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.intake import Snapshot
 
 REPOSITORY = "https://example.com/acme/app.git"
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})

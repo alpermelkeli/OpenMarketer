@@ -16,17 +16,19 @@ import pytest
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
-from openmarketer_core.analyzer import AnalysisError
 from openmarketer_core.db.analysis_runs import mark_run_failed
+from openmarketer_core.db.checkpoint_cleanup import remove_checkpoints_of_analysis_runs
 from openmarketer_core.db.models import AnalysisRunStatus
 from openmarketer_core.db.session import DatabaseError, session_factory, transaction
 from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.intake import IntakeError
 from openmarketer_core.llm import LLMError
 from openmarketer_core.llm_config import ConfigError
-from openmarketer_core.repository_analysis import RepositoryAnalysis
+from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError
+from openmarketer_core.repository_analysis.intake import IntakeError
+from openmarketer_core.repository_analysis.pipeline import RepositoryAnalysis
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 from openmarketer_worker.checkpoint_cleanup import (
+    CheckpointCleanup,
     keep_removing_leftover_checkpoints,
     remove_leftover_checkpoints,
 )
@@ -67,6 +69,14 @@ def failing(activities_with, scripted):
         return activities_with(scripted(list(failures)))
 
     return activities
+
+
+def of_analysis_runs(lasting: timedelta) -> CheckpointCleanup:
+    """Core's rule for analysis runs, as the worker's schedule is handed it."""
+    return CheckpointCleanup(
+        runs="analysis runs",
+        remove=lambda session: remove_checkpoints_of_analysis_runs(session, longest_run=lasting),
+    )
 
 
 def cannot_forget(checkpoints: CheckpointAccess) -> CheckpointAccess:
@@ -453,7 +463,7 @@ async def test_cleanup_removes_what_a_succeeded_run_could_not_forget(
 ):
     activities = activities_with(analysis, cannot_forget(checkpoints))
     await ActivityEnvironment().run(activities.analyse_and_store, started)
-    remove_leftover_checkpoints(sessions, longest_run=A_DAY)
+    remove_leftover_checkpoints(sessions, [of_analysis_runs(lasting=A_DAY)])
     assert not database.has_checkpoints(started)
 
 
@@ -463,7 +473,7 @@ async def test_cleanup_removes_what_a_failed_run_could_not_forget(
     activities = activities_with(scripted([OUTAGE]), cannot_forget(checkpoints))
     await refused(activities.analyse_and_store, started)
     ActivityEnvironment().run(activities.record_failure, steps.RunFailure(run=started, error="no"))
-    remove_leftover_checkpoints(sessions, longest_run=A_DAY)
+    remove_leftover_checkpoints(sessions, [of_analysis_runs(lasting=A_DAY)])
     assert not database.has_checkpoints(started)
 
 
@@ -471,7 +481,7 @@ async def test_cleanup_keeps_the_checkpoints_of_a_run_that_will_be_tried_again(
     failing, sessions, started, database
 ):
     await refused(failing(OUTAGE).analyse_and_store, started)
-    remove_leftover_checkpoints(sessions, longest_run=A_DAY)
+    remove_leftover_checkpoints(sessions, [of_analysis_runs(lasting=A_DAY)])
     assert database.has_checkpoints(started)
 
 
@@ -479,7 +489,7 @@ async def test_cleanup_removes_the_checkpoints_of_a_run_that_outlasted_what_a_ru
     failing, sessions, started, database
 ):
     await refused(failing(OUTAGE).analyse_and_store, started)
-    remove_leftover_checkpoints(sessions, longest_run=timedelta(0))
+    remove_leftover_checkpoints(sessions, [of_analysis_runs(lasting=timedelta(0))])
     assert not database.has_checkpoints(started)
     assert database.run(started).status is AnalysisRunStatus.RUNNING
 
@@ -488,8 +498,8 @@ def test_cleanup_that_cannot_reach_the_database_raises_nothing(caplog):
     unreachable = session_factory(
         "postgresql+psycopg://nobody:secret@127.0.0.1:1/nothing?connect_timeout=2"
     )
-    remove_leftover_checkpoints(unreachable, longest_run=A_DAY)
-    assert "left-over checkpoints were not removed" in caplog.text
+    remove_leftover_checkpoints(unreachable, [of_analysis_runs(lasting=A_DAY)])
+    assert "left-over checkpoints of analysis runs were not removed" in caplog.text
     assert "secret" not in caplog.text
 
 
@@ -498,7 +508,9 @@ async def test_cleanup_runs_at_once_and_again_after_the_interval(
 ):
     activities = failing(OUTAGE)
     cleaning = asyncio.create_task(
-        keep_removing_leftover_checkpoints(sessions, every_seconds=0.05, longest_run=A_DAY)
+        keep_removing_leftover_checkpoints(
+            sessions, [of_analysis_runs(lasting=A_DAY)], every_seconds=0.05
+        )
     )
     try:
         await refused(activities.analyse_and_store, started)

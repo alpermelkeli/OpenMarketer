@@ -9,11 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from openmarketer_core.intake.credentials import NO_TOKENS, RepositoryTokens
-from openmarketer_core.intake.errors import ExcludedFileError, IntakeError
-from openmarketer_core.intake.files import Exclusion, RepoFiles
-from openmarketer_core.intake.git import Snapshot, clone, remote_repository_url
-from openmarketer_core.intake.secrets import SecretFinding, scan_and_redact
+from openmarketer_core.repository_analysis.intake.credentials import NO_TOKENS, RepositoryTokens
+from openmarketer_core.repository_analysis.intake.errors import ExcludedFileError, IntakeError
+from openmarketer_core.repository_analysis.intake.files import Exclusion, RepoFiles
+from openmarketer_core.repository_analysis.intake.git import Snapshot, clone, remote_repository_url
+from openmarketer_core.repository_analysis.intake.secrets import SecretFinding, scan_and_redact
 
 __all__ = [
     "ExcludedFileError",

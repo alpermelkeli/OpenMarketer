@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 
 START_RUN = "start_run"
 ANALYSE_AND_STORE = "analyse_and_store"

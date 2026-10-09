@@ -13,11 +13,11 @@ import pytest
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
-from openmarketer_core.analyzer import Resumption
 from openmarketer_core.db.models import AnalysisRunStatus
 from openmarketer_core.llm import LLMError
-from openmarketer_core.repository_analysis import RepositoryAnalysis
+from openmarketer_core.repository_analysis.analyzer_agent import Resumption
+from openmarketer_core.repository_analysis.pipeline import RepositoryAnalysis
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 from openmarketer_worker.repository_analyzer import steps
 from openmarketer_worker.repository_analyzer.activities import AnalysisActivities
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy

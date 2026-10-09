@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from openmarketer_core.intake import (
+from openmarketer_core.repository_analysis.intake import (
     ExcludedFileError,
     Exclusion,
     IntakeError,
@@ -18,7 +18,7 @@ from openmarketer_core.intake import (
     remote_repository_url,
     run_intake,
 )
-from openmarketer_core.intake.git import clone
+from openmarketer_core.repository_analysis.intake.git import clone
 
 needs_gitleaks = pytest.mark.skipif(shutil.which("gitleaks") is None, reason="needs gitleaks")
 
@@ -187,7 +187,7 @@ def test_file_whose_secret_cannot_be_blanked_out_is_excluded(intake):
 
 @needs_gitleaks
 def test_multi_line_secret_keeps_line_numbers(tmp_path):
-    from openmarketer_core.intake.secrets import scan_and_redact
+    from openmarketer_core.repository_analysis.intake.secrets import scan_and_redact
 
     body = "\n".join(
         "".join(random.Random(i).choices(string.ascii_letters + string.digits, k=64))

@@ -18,7 +18,7 @@ from temporalio.client import Client, WorkflowFailureError, WorkflowHandle
 from temporalio.exceptions import ActivityError, ApplicationError, CancelledError
 from temporalio.worker import Worker
 
-from openmarketer_core.analysis_workflow import (
+from openmarketer_core.repository_analysis.workflow_contract import (
     ANALYZE_REPOSITORY_WORKFLOW,
     AnalyzeRepositoryInput,
     analysis_workflow_id,

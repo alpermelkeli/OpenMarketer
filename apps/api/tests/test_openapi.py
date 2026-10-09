@@ -124,4 +124,4 @@ def test_routes_import_no_database_or_agent_code():
     for module in Path(openmarketer_api.routes.__file__).parent.glob("*.py"):
         source = module.read_text()
         assert "sqlalchemy" not in source, module.name
-        assert "openmarketer_core.analyzer" not in source, module.name
+        assert "openmarketer_core.repository_analysis.analyzer_agent" not in source, module.name

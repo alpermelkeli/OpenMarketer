@@ -32,7 +32,7 @@ from temporalio.exceptions import (
 )
 
 with workflow.unsafe.imports_passed_through():
-    from openmarketer_core.analysis_workflow import (
+    from openmarketer_core.repository_analysis.workflow_contract import (
         ANALYZE_REPOSITORY_WORKFLOW,
         AnalyzeRepositoryInput,
     )

@@ -61,12 +61,20 @@ UNFINISHED_RUN_INDEX = "uq_analysis_run_project_id_unfinished"
 FINISHED = (AnalysisRunStatus.SUCCEEDED, AnalysisRunStatus.FAILED)
 
 
-def run_thread_id(run_id: uuid.UUID) -> str:
-    """The thread an analysis run keeps its checkpoints under: the run's id as text.
+# What the name of every thread of an analysis run starts with. The checkpoint tables are
+# shared by every graph, and a thread's name is all they know of it; the kind in front
+# says whose it is. A colon ends it because no run id holds one, and there is no ``_`` or
+# ``%`` in it, which a pattern match would read as wildcards.
+ANALYSIS_RUN_THREADS = "analysis-run:"
 
-    ``db/checkpoint_cleanup.py`` finds the run of a thread by the same rule.
+
+def run_thread_id(run_id: uuid.UUID) -> str:
+    """The thread an analysis run keeps its checkpoints under: its kind, then the run's id.
+
+    ``db/checkpoint_cleanup.py`` finds the threads of analysis runs, and the run
+    of each, by the same prefix.
     """
-    return str(run_id)
+    return f"{ANALYSIS_RUN_THREADS}{run_id}"
 
 
 class AnalysisRunNotFound(Exception):

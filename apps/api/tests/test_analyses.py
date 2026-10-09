@@ -14,8 +14,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_api.dependencies import Services
 from openmarketer_api.identity import current_workspace_id
-from openmarketer_core.analysis_request import WORKFLOW_NOT_STARTED, WorkflowNotStarted
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
 from openmarketer_core.db.analysis_runs import (
     mark_run_failed,
     mark_run_started,
@@ -24,8 +22,10 @@ from openmarketer_core.db.analysis_runs import (
 from openmarketer_core.db.evidence_store import save_analysis_of_project
 from openmarketer_core.db.models import Project, Workspace
 from openmarketer_core.db.session import session_factory, transaction
-from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.intake import Snapshot
+from openmarketer_core.repository_analysis.request import WORKFLOW_NOT_STARTED, WorkflowNotStarted
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
 

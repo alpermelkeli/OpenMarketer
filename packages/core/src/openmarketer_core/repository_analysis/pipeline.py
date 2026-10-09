@@ -17,24 +17,28 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from openmarketer_core.analyzer import (
+from openmarketer_core.graph_checkpoints import RunCheckpoints
+from openmarketer_core.llm import ChatModel, LLMError
+from openmarketer_core.llm_config import ConfigError
+from openmarketer_core.repository_analysis.analyzer_agent import (
     Analysis,
     AnalysisError,
     Limits,
     ResumableRun,
     analyze,
 )
-from openmarketer_core.extraction import ExtractionResult, Extractor, run_extractors
-from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.intake import (
+from openmarketer_core.repository_analysis.extraction import (
+    ExtractionResult,
+    Extractor,
+    run_extractors,
+)
+from openmarketer_core.repository_analysis.intake import (
     NO_TOKENS,
     IntakeError,
     IntakeResult,
     RepositoryTokens,
     run_intake,
 )
-from openmarketer_core.llm import ChatModel, LLMError
-from openmarketer_core.llm_config import ConfigError
 
 # What a run that produced no profile raises; anything else is a defect.
 ANALYSIS_FAILURES = (IntakeError, AnalysisError, LLMError, ConfigError)

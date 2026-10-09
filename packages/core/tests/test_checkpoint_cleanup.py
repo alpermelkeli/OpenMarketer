@@ -1,4 +1,4 @@
-"""Tests for removing the checkpoints that no analysis run needs any more.
+"""Tests for removing the checkpoints that analysis runs no longer need.
 
 They need PostgreSQL (see the root ``conftest.py``). Runs and checkpoints are
 committed, the way the worker and the checkpoint store write them.
@@ -14,20 +14,21 @@ from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.db.analysis_runs import (
+    ANALYSIS_RUN_THREADS,
     mark_run_failed,
     mark_run_started,
     mark_run_succeeded,
     request_analysis_run,
     run_thread_id,
 )
-from openmarketer_core.db.checkpoint_cleanup import remove_unneeded_checkpoints
+from openmarketer_core.db.checkpoint_cleanup import remove_checkpoints_of_analysis_runs
 from openmarketer_core.db.checkpoint_schema import CHECKPOINT_TABLES_OF_THREADS
 from openmarketer_core.db.evidence_store import save_analysis_of_project
 from openmarketer_core.db.models import AnalysisRunStatus, Project, Workspace
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.graph_checkpoints.postgres import run_checkpoints
-from openmarketer_core.intake import Snapshot
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.intake import Snapshot
 
 A_DAY = timedelta(days=1)
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
@@ -104,7 +105,7 @@ def tables_holding(engine: Engine, thread_id: str) -> set[str]:
 
 def clean_up(sessions: sessionmaker[Session], longest_run: timedelta = A_DAY) -> int:
     with transaction(sessions) as session:
-        return remove_unneeded_checkpoints(session, longest_run=longest_run)
+        return remove_checkpoints_of_analysis_runs(session, longest_run=longest_run)
 
 
 def started(run_id: uuid.UUID, ago: timedelta, sessions: sessionmaker[Session]) -> None:
@@ -202,12 +203,51 @@ def test_checkpoints_of_a_run_that_does_not_exist_are_removed(sessions, database
     assert tables_holding(engine, thread) == set()
 
 
-def test_thread_that_is_not_named_after_a_run_is_removed(sessions, database_url, engine):
-    leave_checkpoints(database_url, "not-a-run-id")
+def test_thread_named_for_an_analysis_run_with_no_run_id_in_it_is_removed(
+    sessions, database_url, engine
+):
+    thread = f"{ANALYSIS_RUN_THREADS}not-a-run-id"
+    leave_checkpoints(database_url, thread)
 
     clean_up(sessions)
 
-    assert tables_holding(engine, "not-a-run-id") == set()
+    assert tables_holding(engine, thread) == set()
+
+
+@pytest.mark.parametrize(
+    "thread",
+    [
+        "not-a-run-id",
+        "campaign-plan:6f2d8c1e-0000-4000-8000-000000000000",
+        "analysis-run",
+        "analysis_run:6f2d8c1e-0000-4000-8000-000000000000",
+        "xanalysis-run:6f2d8c1e-0000-4000-8000-000000000000",
+    ],
+    ids=["no-kind", "another-kind", "prefix-cut-short", "prefix-almost", "prefix-inside"],
+)
+def test_thread_of_another_kind_is_kept_whatever_its_age(sessions, database_url, engine, thread):
+    leave_checkpoints(database_url, thread)
+
+    clean_up(sessions, longest_run=timedelta(0))
+
+    assert tables_holding(engine, thread) == CHECKPOINT_TABLES_OF_THREADS
+
+
+def test_thread_named_with_the_bare_id_of_a_finished_run_is_not_this_rules(
+    sessions, database_url, engine
+):
+    bare = str(run_that_is(AnalysisRunStatus.FAILED, sessions))
+    leave_checkpoints(database_url, bare)
+
+    clean_up(sessions)
+
+    assert tables_holding(engine, bare) == CHECKPOINT_TABLES_OF_THREADS
+
+
+def test_thread_is_named_for_its_kind_and_then_the_run():
+    run_id = uuid.UUID("6f2d8c1e-0000-4000-8000-000000000000")
+    assert run_thread_id(run_id) == "analysis-run:6f2d8c1e-0000-4000-8000-000000000000"
+    assert run_thread_id(run_id).startswith(ANALYSIS_RUN_THREADS)
 
 
 def test_cleanup_says_how_many_threads_it_removed(sessions, database_url):
@@ -224,7 +264,7 @@ def test_cleanup_is_one_statement(sessions, database_url, session, statements):
     leave_checkpoints(database_url, run_thread_id(run_that_is(AnalysisRunStatus.FAILED, sessions)))
     session.connection()
     statements.clear()
-    remove_unneeded_checkpoints(session, longest_run=A_DAY)
+    remove_checkpoints_of_analysis_runs(session, longest_run=A_DAY)
     assert len(statements) == 1
 
 
@@ -233,7 +273,7 @@ def test_cleanup_that_is_rolled_back_removes_nothing(sessions, database_url, eng
     leave_checkpoints(database_url, thread)
 
     with sessions() as session:
-        remove_unneeded_checkpoints(session, longest_run=A_DAY)
+        remove_checkpoints_of_analysis_runs(session, longest_run=A_DAY)
         session.rollback()
 
     assert tables_holding(engine, thread) == CHECKPOINT_TABLES_OF_THREADS

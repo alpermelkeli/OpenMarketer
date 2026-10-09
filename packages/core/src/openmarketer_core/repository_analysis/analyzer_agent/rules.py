@@ -22,10 +22,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from openmarketer_core.analyzer.tools import TOOL_SCHEMAS, RepoTools
-from openmarketer_core.extraction import ExtractedFact, group_by_scope
-from openmarketer_core.intake import RepoFiles
 from openmarketer_core.profile import Evidenced, FeatureStatus, ProductProfile
+from openmarketer_core.repository_analysis.analyzer_agent.tools import TOOL_SCHEMAS, RepoTools
+from openmarketer_core.repository_analysis.extraction import ExtractedFact, group_by_scope
+from openmarketer_core.repository_analysis.intake import RepoFiles
 
 ROLE = "repo_analyzer"
 SUBMIT = "submit_profile"

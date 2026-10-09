@@ -26,8 +26,8 @@ from openmarketer_core.db.projects import (
     list_projects,
     project_overview,
 )
-from openmarketer_core.intake import IntakeError, Snapshot
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.intake import IntakeError, Snapshot
 
 REPOSITORY = "https://example.com/acme/app.git"
 REVIEWER = uuid.UUID("11111111-1111-4111-8111-111111111111")

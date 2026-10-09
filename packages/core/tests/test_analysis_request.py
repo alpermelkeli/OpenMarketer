@@ -10,18 +10,18 @@ import uuid
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from openmarketer_core.analysis_request import (
+from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRun, analysis_run
+from openmarketer_core.db.models import AnalysisRunStatus, Project, Workspace
+from openmarketer_core.db.projects import ProjectNotFound
+from openmarketer_core.db.session import session_factory, transaction
+from openmarketer_core.repository_analysis.intake import IntakeError
+from openmarketer_core.repository_analysis.request import (
     WORKFLOW_NOT_STARTED,
     AnalysisNotStarted,
     WorkflowNotStarted,
     request_analysis,
 )
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
-from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRun, analysis_run
-from openmarketer_core.db.models import AnalysisRunStatus, Project, Workspace
-from openmarketer_core.db.projects import ProjectNotFound
-from openmarketer_core.db.session import session_factory, transaction
-from openmarketer_core.intake import IntakeError
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 
 
 @pytest.fixture

@@ -1,8 +1,9 @@
-"""Tests for the worker as it is assembled: the workflow with the real activities.
+"""Tests for the worker process: runs from end to end, and how it starts and serves.
 
 A run goes through Temporal (the dev stack's server, see ``conftest.py``) and
-PostgreSQL; only cloning and the model are scripted. The wiring from the
-environment is tested without either.
+PostgreSQL on a worker built the way the process builds it; only cloning and
+the model are scripted. The start-up failures are seen through ``serve`` and
+need neither. How an agent is wired is tested in the agent's folder.
 """
 
 import asyncio
@@ -14,22 +15,23 @@ from pathlib import Path
 
 import pytest
 from google.protobuf.json_format import MessageToDict
-from langgraph.checkpoint.memory import InMemorySaver
 from temporalio.client import WorkflowFailureError, WorkflowHistory
+from temporalio.worker import Worker
 
-from openmarketer_core.analysis_workflow import (
+from openmarketer_core.db.analysis_runs import run_thread_id
+from openmarketer_core.db.models import AnalysisRunStatus
+from openmarketer_core.graph_checkpoints import RunCheckpoints
+from openmarketer_core.llm import LLMError
+from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError
+from openmarketer_core.repository_analysis.intake import IntakeError
+from openmarketer_core.repository_analysis.pipeline import RepositoryAnalysis
+from openmarketer_core.repository_analysis.workflow_contract import (
     ANALYZE_REPOSITORY_WORKFLOW,
     AnalyzeRepositoryInput,
     analysis_workflow_id,
 )
-from openmarketer_core.analyzer import AnalysisError
-from openmarketer_core.db.analysis_runs import run_thread_id
-from openmarketer_core.db.models import AnalysisRunStatus
-from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.intake import IntakeError
-from openmarketer_core.llm import LLMError, RouterChatModel
-from openmarketer_core.repository_analysis import RepositoryAnalysis
 from openmarketer_worker import main
+from openmarketer_worker.repository_analyzer import wiring
 from openmarketer_worker.repository_analyzer.activities import AnalysisActivities
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy
 
@@ -51,18 +53,24 @@ def readable(history: WorkflowHistory) -> str:
 
 
 @pytest.fixture
-def execute(temporal, task_queue, sessions, checkpoints):
-    """Run the workflow of a run on a worker built the way the process builds it."""
+def worker_serving(temporal, task_queue, sessions, checkpoints):
+    """A worker built the way the process builds it, on the test's own queue."""
+
+    def worker(analyse) -> Worker:
+        activities = AnalysisActivities(sessions, analyse, checkpoints, QUICK)
+        agent = replace(wiring.registration(activities, QUICK), task_queue=task_queue)
+        return main.build_worker(temporal, agent, max_concurrent_activities=2)
+
+    return worker
+
+
+@pytest.fixture
+def execute(temporal, task_queue, worker_serving):
+    """Run the workflow of a run on such a worker."""
 
     async def execute(run: AnalyzeRepositoryInput, analyse) -> str:
         """Returns everything the workflow history holds, as text."""
-        worker = main.build_worker(
-            temporal,
-            AnalysisActivities(sessions, analyse, checkpoints, QUICK),
-            task_queue=task_queue,
-            max_concurrent_activities=2,
-        )
-        async with worker:
+        async with worker_serving(analyse):
             handle = await temporal.start_workflow(
                 ANALYZE_REPOSITORY_WORKFLOW,
                 run,
@@ -224,65 +232,10 @@ async def test_history_of_a_failed_run_does_not_name_the_clone_folder(execute, r
     assert str(clones[0].parent.resolve()) not in history
 
 
-# ------------------------------------------------------- wiring from the environment
-@pytest.fixture
-def analysed_with(monkeypatch) -> list[dict]:
-    """Replace the analysis itself and collect what the worker would have run it with."""
-    calls: list[dict] = []
-
-    def analyze_repository(source: str, clone_into: Path, **dependencies) -> None:
-        calls.append({"source": source, **dependencies})
-
-    monkeypatch.setattr(main, "analyze_repository", analyze_repository)
-    return calls
-
-
-@pytest.fixture
-def run_checkpoints() -> RunCheckpoints:
-    """Checkpoints of some run; nothing is stored in them here."""
-    return RunCheckpoints(store=InMemorySaver(), thread_id="some-run")
-
-
-def test_tokens_of_the_environment_reach_the_analysis_bound_to_their_hosts(
-    analysed_with, run_checkpoints, tmp_path
-):
-    analyse = main.analysis_with_configured_models({**MODEL, "GITHUB_TOKEN": "github-token-value"})
-    analyse("https://example.com/acme/app.git", tmp_path, run_checkpoints)
-    tokens = analysed_with[0]["tokens"]
-    assert tokens.token_for("https://github.com/acme/app.git") == "github-token-value"
-    assert tokens.token_for("https://example.com/acme/app.git") is None
-
-
-def test_checkpoints_of_the_run_reach_the_analysis(analysed_with, run_checkpoints, tmp_path):
-    analyse = main.analysis_with_configured_models(MODEL)
-    analyse("https://example.com/acme/app.git", tmp_path, run_checkpoints)
-    assert analysed_with[0]["checkpoints"] is run_checkpoints
-
-
-def test_each_attempt_gets_a_chat_model_of_its_own(analysed_with, run_checkpoints, tmp_path):
-    analyse = main.analysis_with_configured_models(MODEL)
-    analyse("https://example.com/acme/app.git", tmp_path, run_checkpoints)
-    analyse("https://example.com/acme/app.git", tmp_path, run_checkpoints)
-    first, second = (call["model"] for call in analysed_with)
-    assert isinstance(first, RouterChatModel)
-    assert first is not second
-    assert first.router is second.router
-
-
+# ---------------------------------------------------------------- the process
 async def test_worker_does_not_start_without_a_database_url():
     with pytest.raises(main.StartupError, match="DATABASE_URL"):
         await main.serve(MODEL)
-
-
-def test_database_password_is_not_in_the_text_of_what_reaches_the_checkpoints():
-    checkpoints = main.checkpoints_in("postgresql+psycopg://app:hunter2@db.internal:5432/marketer")
-    shown = [
-        repr(checkpoints),
-        str(checkpoints),
-        repr(checkpoints.of_attempt),
-        repr(checkpoints.forget),
-    ]
-    assert all("hunter2" not in text and "db.internal" not in text for text in shown)
 
 
 async def test_worker_does_not_start_with_a_database_option_the_driver_refuses():
@@ -298,19 +251,17 @@ async def test_worker_does_not_start_with_a_database_that_cannot_keep_checkpoint
 
 
 async def test_worker_removes_leftover_checkpoints_when_it_starts(
-    temporal, task_queue, sessions, checkpoints, analysis, some_run, database, tmp_path
+    worker_serving, sessions, checkpoints, analysis, some_run, database, tmp_path
 ):
     never_recorded = some_run()
     with checkpoints.of_attempt(run_thread_id(never_recorded.run_id)) as left_behind:
         analysis("https://example.com/acme/app.git", tmp_path / "repo", left_behind)
-    worker = main.build_worker(
-        temporal,
-        AnalysisActivities(sessions, analysis, checkpoints, QUICK),
-        task_queue=task_queue,
-        max_concurrent_activities=2,
-    )
     stop = asyncio.Event()
-    serving = asyncio.create_task(main.serve_until(stop, worker, sessions, QUICK))
+    serving = asyncio.create_task(
+        main.serve_until(
+            stop, worker_serving(analysis), sessions, [wiring.cleanup_of_analysis_runs(QUICK)]
+        )
+    )
     try:
         await asyncio.wait_for(database.checkpoints_gone(never_recorded), timeout=10)
     finally:

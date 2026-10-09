@@ -14,14 +14,14 @@ from pathlib import Path
 
 import pytest
 
-from openmarketer_core.analyzer import Resumption
-from openmarketer_core.analyzer.rules import SUBMIT
-from openmarketer_core.extraction import Fact
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.graph_checkpoints.postgres import run_checkpoints
-from openmarketer_core.intake import IntakeError, RepoFiles
 from openmarketer_core.llm import ChatReply
-from openmarketer_core.repository_analysis import analyze_repository
+from openmarketer_core.repository_analysis.analyzer_agent import Resumption
+from openmarketer_core.repository_analysis.analyzer_agent.rules import SUBMIT
+from openmarketer_core.repository_analysis.extraction import Fact
+from openmarketer_core.repository_analysis.intake import IntakeError, RepoFiles
+from openmarketer_core.repository_analysis.pipeline import analyze_repository
 
 pytestmark = pytest.mark.skipif(shutil.which("gitleaks") is None, reason="needs gitleaks")
 

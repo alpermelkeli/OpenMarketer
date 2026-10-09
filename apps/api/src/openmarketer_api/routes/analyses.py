@@ -16,9 +16,9 @@ from openmarketer_api.dependencies import DbSession, Sessions, StartWorkflow, no
 from openmarketer_api.errors import problems
 from openmarketer_api.identity import CurrentWorkspaceId
 from openmarketer_api.pagination import DEFAULT_PAGE_SIZE, CreatedBefore, PageLimit, created_cursor
-from openmarketer_core.analysis_request import request_analysis
 from openmarketer_core.db.analysis_runs import AnalysisRun, analysis_run, list_analysis_runs
 from openmarketer_core.db.models import AnalysisRunStatus
+from openmarketer_core.repository_analysis.request import request_analysis
 
 router = APIRouter(prefix="/projects/{project_id}/analyses", tags=["analyses"])
 

@@ -21,7 +21,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from openmarketer_core.intake.errors import IntakeError
+from openmarketer_core.repository_analysis.intake.errors import IntakeError
 
 SCAN_TIMEOUT_S = 300
 DEFAULT_RULES = "[extend]\nuseDefault = true\n"

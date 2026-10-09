@@ -15,13 +15,13 @@ import pytest
 from temporalio.client import Client, WorkflowExecutionStatus
 
 from openmarketer_api.temporal_workflows import TemporalAnalysisWorkflows
-from openmarketer_core.analysis_request import WorkflowNotStarted
-from openmarketer_core.analysis_workflow import (
+from openmarketer_core.repository_analysis.request import WorkflowNotStarted
+from openmarketer_core.repository_analysis.workflow_contract import (
     ANALYZE_REPOSITORY_WORKFLOW,
     AnalyzeRepositoryInput,
-    WorkflowServer,
     analysis_workflow_id,
 )
+from openmarketer_core.workflow_server import WorkflowServer
 
 DEV_STACK = WorkflowServer.from_environment(os.environ)
 # Port 1 is reserved and nothing listens on it.

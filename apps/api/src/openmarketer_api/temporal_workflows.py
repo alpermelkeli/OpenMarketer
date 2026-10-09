@@ -21,13 +21,13 @@ from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError
 
-from openmarketer_core.analysis_request import WorkflowNotStarted
-from openmarketer_core.analysis_workflow import (
+from openmarketer_core.repository_analysis.request import WorkflowNotStarted
+from openmarketer_core.repository_analysis.workflow_contract import (
     ANALYZE_REPOSITORY_WORKFLOW,
     AnalyzeRepositoryInput,
-    WorkflowServer,
     analysis_workflow_id,
 )
+from openmarketer_core.workflow_server import WorkflowServer
 
 logger = logging.getLogger(__name__)
 

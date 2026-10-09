@@ -16,11 +16,11 @@ from collections.abc import Callable
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
 from openmarketer_core.db.analysis_runs import AnalysisRun, mark_run_failed, request_analysis_run
 from openmarketer_core.db.projects import get_project
 from openmarketer_core.db.session import transaction
-from openmarketer_core.intake import remote_repository_url
+from openmarketer_core.repository_analysis.intake import remote_repository_url
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 
 WORKFLOW_NOT_STARTED = "the analysis could not be handed to a worker"
 

@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from openmarketer_core.intake import IntakeError, RepositoryTokens, run_intake
-from openmarketer_core.intake import git as intake_git
-from openmarketer_core.intake.git import (
+from openmarketer_core.repository_analysis.intake import IntakeError, RepositoryTokens, run_intake
+from openmarketer_core.repository_analysis.intake import git as intake_git
+from openmarketer_core.repository_analysis.intake.git import (
     CLONE_TIMED_OUT,
     HOST_UNREACHABLE,
     INHERITED_VARIABLES,

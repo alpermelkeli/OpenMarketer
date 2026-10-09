@@ -4,8 +4,8 @@ Only what the process itself needs is here: its database, its workflow server
 and how much it runs at once. Each agent reads its own settings in its folder,
 with ``positive_number`` and ``SettingsError`` from here; this module imports
 none of them. Model configuration is read by the model router and repository
-tokens by ``RepositoryTokens``, from the same environment mapping in
-``main.py``; activities read none of it.
+tokens by ``RepositoryTokens``, from the same environment mapping, in the
+wiring of the agent that uses them; activities read none of it.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from openmarketer_core.analysis_workflow import (
+from openmarketer_core.workflow_server import (
     DEFAULT_NAMESPACE,
     DEV_STACK_WORKFLOW_SERVER,
     WorkflowServer,

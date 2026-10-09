@@ -27,8 +27,6 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 from temporalio.client import Client
 
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
-from openmarketer_core.analyzer import Analysis
 from openmarketer_core.db.analysis_runs import (
     AnalysisRun,
     analysis_run,
@@ -38,13 +36,15 @@ from openmarketer_core.db.analysis_runs import (
 from openmarketer_core.db.checkpoint_schema import CHECKPOINT_TABLES_OF_THREADS
 from openmarketer_core.db.models import ProductProfileRecord, Project, Workspace
 from openmarketer_core.db.session import session_factory, transaction
-from openmarketer_core.extraction import ExtractionResult
 from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.intake import IntakeResult, RepoFiles, Snapshot
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.profile import ProductProfile
-from openmarketer_core.repository_analysis import RepositoryAnalysis, analyze_repository
-from openmarketer_worker import main
+from openmarketer_core.repository_analysis.analyzer_agent import Analysis
+from openmarketer_core.repository_analysis.extraction import ExtractionResult
+from openmarketer_core.repository_analysis.intake import IntakeResult, RepoFiles, Snapshot
+from openmarketer_core.repository_analysis.pipeline import RepositoryAnalysis, analyze_repository
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_worker.repository_analyzer import wiring
 from openmarketer_worker.repository_analyzer.activities import CheckpointAccess
 
 DEV_STACK_TEMPORAL = "localhost:7233"
@@ -208,7 +208,7 @@ def sessions(engine) -> sessionmaker[Session]:
 @pytest.fixture
 def checkpoints(engine) -> CheckpointAccess:
     """The checkpoints of runs in the test database, reached the way the worker reaches them."""
-    return main.checkpoints_in(engine.url.render_as_string(hide_password=False))
+    return wiring.checkpoints_in(engine.url.render_as_string(hide_password=False))
 
 
 @dataclass(frozen=True)

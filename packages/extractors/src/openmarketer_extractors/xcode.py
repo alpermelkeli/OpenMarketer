@@ -20,8 +20,8 @@ from collections.abc import Iterator
 
 from pydantic import JsonValue
 
-from openmarketer_core.extraction import Fact
-from openmarketer_core.intake import RepoFiles
+from openmarketer_core.repository_analysis.extraction import Fact
+from openmarketer_core.repository_analysis.intake import RepoFiles
 
 MAX_TEXT = 500
 SETTING_RE = re.compile(

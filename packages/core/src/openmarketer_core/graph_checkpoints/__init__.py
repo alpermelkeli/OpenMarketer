@@ -10,9 +10,10 @@ driver, and a graph run without checkpoints needs no database at all.
 
 Nothing here is a rule. When an attempt continues from a checkpoint and when
 it starts over is the graph's own decision (the analyzer's is
-``analyzer.rules.resumption``); which thread belongs to which run is the
+``repository_analysis.analyzer_agent.rules.resumption``); which thread belongs to which run is the
 caller's (an analysis run's is ``db.analysis_runs.run_thread_id``); which
-leftover threads may be removed is ``db/checkpoint_cleanup.py``; and the
+leftover threads may be removed is a rule of each kind of run (the analysis
+runs' is in ``db/checkpoint_cleanup.py``); and the
 tables are created by the migrations (``db/checkpoint_schema.py``).
 """
 

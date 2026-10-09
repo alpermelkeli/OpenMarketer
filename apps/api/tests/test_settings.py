@@ -3,7 +3,7 @@
 import pytest
 
 from openmarketer_api.settings import Settings, SettingsError
-from openmarketer_core.analysis_workflow import WorkflowServer
+from openmarketer_core.workflow_server import WorkflowServer
 
 DATABASE = {"DATABASE_URL": "postgresql+psycopg://u:p@localhost/db"}
 

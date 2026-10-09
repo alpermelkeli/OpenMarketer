@@ -35,7 +35,6 @@ from sqlalchemy.orm import Session, sessionmaker
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from openmarketer_core.analysis_workflow import AnalyzeRepositoryInput
 from openmarketer_core.db.analysis_runs import (
     AnalysisRunFinished,
     AnalysisRunNotFound,
@@ -51,13 +50,14 @@ from openmarketer_core.db.projects import ProjectNotFound, get_project
 from openmarketer_core.db.session import DatabaseError, transaction
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.graph_checkpoints.postgres import AttemptInProgress
-from openmarketer_core.intake import IntakeError, remote_repository_url
 from openmarketer_core.llm import LLMError
-from openmarketer_core.repository_analysis import (
+from openmarketer_core.repository_analysis.intake import IntakeError, remote_repository_url
+from openmarketer_core.repository_analysis.pipeline import (
     ANALYSIS_FAILURES,
     RepositoryAnalysis,
     failure_message,
 )
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 from openmarketer_worker.repository_analyzer import steps
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy
 
@@ -72,7 +72,7 @@ AnalyseRepository = Callable[[str, Path, RunCheckpoints], RepositoryAnalysis]
 class CheckpointAccess:
     """How the activities reach the checkpoints of a run, by its thread id.
 
-    Built from the database URL when the worker starts (the worker's ``main.py``), from
+    Built from the database URL when the worker starts (``wiring.py``), from
     core's ``run_checkpoints`` and ``forget_checkpoints``.
     """
 

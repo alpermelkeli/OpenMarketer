@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from urllib.parse import urlsplit
 
-from openmarketer_core.intake.errors import IntakeError
+from openmarketer_core.repository_analysis.intake.errors import IntakeError
 
 GITHUB_HOST = "github.com"
 GITLAB_HOST = "gitlab.com"
