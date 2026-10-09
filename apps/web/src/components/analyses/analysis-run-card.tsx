@@ -64,10 +64,14 @@ export function AnalysisRunCard({ run, elapsedMs, waitingForWorker }: AnalysisRu
               <span className="font-mono tabular-nums">{run.profile_version ?? "?"}</span>.
             </span>
             <Link
-              href={`/projects/${run.project_id}/profile`}
+              href={
+                run.profile_version === null
+                  ? `/projects/${run.project_id}/profile`
+                  : `/projects/${run.project_id}/profile?version=${run.profile_version}`
+              }
               className="inline-flex items-center gap-1 rounded-sm text-brand underline-offset-4 hover:underline"
             >
-              Review the profile
+              {run.profile_version === null ? "Review the profile" : `Open version ${run.profile_version}`}
               <ArrowRightIcon aria-hidden="true" className="size-3.5" />
             </Link>
           </p>

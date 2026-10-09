@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { evidenceLink, httpsUrlOrNull } from "./evidence-link";
+import { commitOrNull, evidenceLink, httpsUrlOrNull } from "./evidence-link";
 
 const github = "https://github.com/alpermelkeli/Memoria";
 
@@ -9,6 +9,7 @@ describe("a link to evidence", () => {
     expect(evidenceLink(github, { file: "app/src/Main.kt", lines: "12-88" })).toEqual({
       href: "https://github.com/alpermelkeli/Memoria/blob/HEAD/app/src/Main.kt#L12-L88",
       host: "github.com",
+      pinned: false,
     });
   });
 
@@ -77,6 +78,43 @@ describe("a link to evidence", () => {
     ]) {
       expect(evidenceLink(url, { file: "a.md" })).toBeNull();
     }
+  });
+});
+
+describe("a link to evidence at the analysed commit", () => {
+  const commit = "ecedeaa63b039827bbd703bf604c801395e0b507";
+  const evidence = { file: "docs/guide.md", lines: "3-9" };
+
+  it("is a permalink on each known host", () => {
+    expect(evidenceLink(github, evidence, commit)).toEqual({
+      href: `https://github.com/alpermelkeli/Memoria/blob/${commit}/docs/guide.md#L3-L9`,
+      host: "github.com",
+      pinned: true,
+    });
+    expect(evidenceLink("https://gitlab.com/group/tool", evidence, commit)?.href).toBe(
+      `https://gitlab.com/group/tool/-/blob/${commit}/docs/guide.md#L3-9`,
+    );
+    expect(evidenceLink("https://bitbucket.org/team/tool", evidence, commit)?.href).toBe(
+      `https://bitbucket.org/team/tool/src/${commit}/docs/guide.md#lines-3:9`,
+    );
+  });
+
+  it("falls back to the default branch when no commit was recorded", () => {
+    const link = evidenceLink(github, evidence, null);
+    expect(link).toMatchObject({ pinned: false });
+    expect(link?.href).toContain("/blob/HEAD/");
+  });
+
+  it("falls back to the default branch for anything that is not a full commit id", () => {
+    for (const value of ["main", "ecedeaa", "../../settings", "HEAD/../..", `${commit}/x`, `${commit}?a=b`, ""]) {
+      expect(commitOrNull(value)).toBeNull();
+      expect(evidenceLink(github, evidence, value)?.href).toContain("/blob/HEAD/");
+    }
+  });
+
+  it("accepts a SHA-256 commit id and writes it in lower case", () => {
+    const sha256 = "A".repeat(64);
+    expect(commitOrNull(sha256)).toBe("a".repeat(64));
   });
 });
 

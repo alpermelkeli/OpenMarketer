@@ -4,17 +4,13 @@ import { FolderIcon, LayoutGridIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { useProjects } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
-import { useRemembered } from "@/lib/remembered/use-remembered";
 
-import { shortId } from "@/lib/format";
-
-/** Navigation: all projects, then the projects this browser remembers. */
+/** Navigation: all projects, then the most recent ones by name. */
 export function SidebarNav() {
   const pathname = usePathname();
-  const { remembered } = useRemembered();
-  const projects = remembered?.projects ?? [];
-  const openedIds = remembered?.openedProjectIds ?? [];
+  const { data: projects = [] } = useProjects();
 
   return (
     <nav aria-label="Main" className="flex gap-1 overflow-x-auto px-3 pb-3 lg:flex-col lg:overflow-visible lg:pt-2">
@@ -22,12 +18,12 @@ export function SidebarNav() {
         <LayoutGridIcon aria-hidden="true" />
         Projects
       </NavLink>
-      {projects.length + openedIds.length > 0 && (
+      {projects.length > 0 && (
         <p className="hidden px-2.5 pt-6 pb-1.5 text-2xs tracking-widest text-muted-foreground uppercase lg:block">
-          Remembered here
+          Recent
         </p>
       )}
-      {projects.map((project) => (
+      {projects.slice(0, 8).map((project) => (
         <NavLink
           key={project.id}
           href={`/projects/${project.id}`}
@@ -35,12 +31,6 @@ export function SidebarNav() {
         >
           <FolderIcon aria-hidden="true" />
           <span className="truncate">{project.name}</span>
-        </NavLink>
-      ))}
-      {openedIds.map((id) => (
-        <NavLink key={id} href={`/projects/${id}`} current={pathname.startsWith(`/projects/${id}`)}>
-          <FolderIcon aria-hidden="true" />
-          <span className="truncate font-mono text-xs">{shortId(id)}</span>
         </NavLink>
       ))}
     </nav>

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { Evidence } from "@/lib/api/types";
 import { sectionAnchor, type SectionKey } from "@/lib/profile/attention";
+import type { EvidenceSource } from "@/lib/profile/evidence-link";
 
 import { ConfidenceMeter } from "./confidence-meter";
 import { EvidenceList } from "./evidence-list";
@@ -13,12 +14,12 @@ type ProfileSectionProps = {
   purpose: string;
   /** The section's claim, or nothing when the profile has no such section. */
   claim: { evidence?: Evidence[]; confidence: number } | undefined;
-  repositoryUrl: string | null;
+  source: EvidenceSource;
   children: ReactNode;
 };
 
 /** One section of the profile: its values, then how sure the analyzer was and why. */
-export function ProfileSection({ section, title, purpose, claim, repositoryUrl, children }: ProfileSectionProps) {
+export function ProfileSection({ section, title, purpose, claim, source, children }: ProfileSectionProps) {
   const headingId = `${sectionAnchor(section)}-heading`;
   return (
     <section id={sectionAnchor(section)} aria-labelledby={headingId} className="grid gap-5 border-t pt-8">
@@ -36,7 +37,7 @@ export function ProfileSection({ section, title, purpose, claim, repositoryUrl, 
       ) : (
         <>
           <dl className="grid gap-x-8 gap-y-5 sm:grid-cols-[10rem_minmax(0,1fr)]">{children}</dl>
-          <EvidenceList evidence={claim.evidence ?? []} repositoryUrl={repositoryUrl} />
+          <EvidenceList evidence={claim.evidence ?? []} source={source} />
         </>
       )}
     </section>

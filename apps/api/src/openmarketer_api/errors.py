@@ -4,18 +4,23 @@ Domain and persistence errors are mapped here, in one table, so routes raise
 and never build error responses themselves. Messages come from the domain
 error; database failures and anything unexpected get a fixed message, because
 their text may name hosts, statements or paths.
+
+An error body carries what a client needs to act on it as a field of its own,
+never inside the message: ``existing_project_id`` with ``project_already_exists``.
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Callable
 from enum import StrEnum
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 
 from openmarketer_api.identity import NotLocalRequest
 from openmarketer_core.analysis_request import AnalysisNotStarted
@@ -53,6 +58,14 @@ class Problem(BaseModel):
 
     code: ErrorCode
     message: str
+    # Left out of the body, never null, when the error is another one.
+    existing_project_id: uuid.UUID | SkipJsonSchema[None] = Field(
+        default=None,
+        description=(
+            "Only with `project_already_exists`: the project the workspace already has"
+            " for that repository."
+        ),
+    )
 
 
 _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
@@ -62,7 +75,6 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     AnalysisRunNotFound: (404, ErrorCode.ANALYSIS_NOT_FOUND),
     ProfileVersionNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
     ProfileNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
-    ProjectAlreadyExists: (409, ErrorCode.PROJECT_ALREADY_EXISTS),
     AnalysisAlreadyRunning: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
     AnalysisNotStarted: (503, ErrorCode.ANALYSIS_NOT_STARTED),
@@ -77,12 +89,16 @@ def problems(*statuses: int) -> dict[int | str, dict[str, Any]]:
 def register_error_handlers(app: FastAPI) -> None:
     for error_type, (status, code) in _DOMAIN_ERRORS.items():
         app.add_exception_handler(error_type, _domain_error_handler(status, code))
+    app.add_exception_handler(ProjectAlreadyExists, _project_already_exists)
     app.add_exception_handler(DatabaseError, _database_error)
     app.add_exception_handler(Exception, _unexpected_error)
 
 
-def _problem(status: int, code: ErrorCode, message: str) -> JSONResponse:
-    return JSONResponse(Problem(code=code, message=message).model_dump(mode="json"), status)
+def _problem(
+    status: int, code: ErrorCode, message: str, *, existing_project_id: uuid.UUID | None = None
+) -> JSONResponse:
+    problem = Problem(code=code, message=message, existing_project_id=existing_project_id)
+    return JSONResponse(problem.model_dump(mode="json", exclude_none=True), status)
 
 
 def _domain_error_handler(
@@ -92,6 +108,11 @@ def _domain_error_handler(
         return _problem(status, code, str(error))
 
     return handler
+
+
+def _project_already_exists(_: Request, error: Exception) -> JSONResponse:
+    existing = error.project_id if isinstance(error, ProjectAlreadyExists) else None
+    return _problem(409, ErrorCode.PROJECT_ALREADY_EXISTS, str(error), existing_project_id=existing)
 
 
 def _database_error(_: Request, error: Exception) -> JSONResponse:

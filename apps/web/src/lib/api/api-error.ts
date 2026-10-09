@@ -33,6 +33,8 @@ export class ApiError extends Error {
     readonly code: ApiErrorCode,
     message: string,
     readonly fieldErrors: FieldErrors = {},
+    /** On `project_already_exists`: the project that already has the repository. */
+    readonly existingProjectId: string | null = null,
   ) {
     super(message);
     this.name = "ApiError";
@@ -42,9 +44,9 @@ export class ApiError extends Error {
 /** Turn the body of a failed response into an `ApiError`. The body is untrusted JSON. */
 export function apiErrorFrom(status: number, body: unknown): ApiError {
   if (isRecord(body)) {
-    const { code, message, detail } = body;
+    const { code, message, detail, existing_project_id: existing } = body;
     if (typeof code === "string" && typeof message === "string" && isKnownCode(code)) {
-      return new ApiError(status, code, message);
+      return new ApiError(status, code, message, {}, typeof existing === "string" ? existing : null);
     }
     if (Array.isArray(detail)) {
       return new ApiError(status, "request_invalid", "The request was not valid.", fieldErrorsOf(detail));

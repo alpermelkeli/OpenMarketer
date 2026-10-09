@@ -10,7 +10,7 @@ export function startAnalysisProblem(error: ApiError): StartAnalysisProblem {
     case "analysis_already_running":
       return {
         title: "An analysis is already running for this project",
-        text: "A project has one unfinished analysis at a time, so the model is not paid twice. If it was started somewhere else it is not listed here: the API cannot list a project's runs yet. Try again when it has finished.",
+        text: "A project has one unfinished analysis at a time, so the model is not paid twice. The run in progress is in the list below; start another when it has finished.",
       };
     case "analysis_not_started":
       return {

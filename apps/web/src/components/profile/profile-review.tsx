@@ -1,82 +1,74 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { Notice } from "@/components/common/notice";
 import { Button } from "@/components/ui/button";
 import { useApproveProfileVersion, useSaveProfileEdit } from "@/lib/api/profiles";
-import type { ProductProfile, ProfileStatus, ProfileVersion } from "@/lib/api/types";
+import type { ProductProfile, ProfileVersion, Project } from "@/lib/api/types";
 import { attentionItems } from "@/lib/profile/attention";
-import { countChanges } from "@/lib/profile/edits";
+import { changedParts, countChanges } from "@/lib/profile/edits";
 import { approveProblem, saveEditProblems } from "@/lib/profile/review-problems";
 
 import { ApproveDialog } from "./approve-dialog";
 import { AttentionList } from "./attention-list";
 import { ProfileDocument } from "./profile-document";
 import { ProfileStateBand } from "./profile-state-band";
-import { VersionSwitch } from "./version-switch";
+import { VersionProvenance } from "./version-provenance";
 
 type ProfileReviewProps = {
-  projectId: string;
-  repositoryUrl: string | null;
-  draft: ProfileVersion | null;
-  approved: ProfileVersion | null;
+  project: Project;
+  /** The version on screen. */
+  version: ProfileVersion;
+  /** The version it was edited from, once loaded, to say what the edit changed. */
+  parent: ProfileVersion | null;
+  /** Told when editing starts and stops, so the screen can hold navigation to other versions. */
+  onEditingChange: (editing: boolean) => void;
 };
 
-type WorkingCopy = { ofVersion: number; profile: ProductProfile };
-
 /**
- * Reviewing a project's profile: choose the draft or the approved version, edit a
- * working copy into a new draft, and approve. Holds the screen's state and its two
- * mutations; what is drawn is in the components it composes.
+ * Reviewing one version of a profile: read it, edit a working copy into a new draft,
+ * and approve it. Holds the working copy and the two mutations; what is drawn is in
+ * the components it composes. Mounted once per version, so its state never outlives
+ * the version it belongs to.
  */
-export function ProfileReview({ projectId, repositoryUrl, draft, approved }: ProfileReviewProps) {
-  const saveEdit = useSaveProfileEdit(projectId);
-  const approve = useApproveProfileVersion(projectId);
-  const [chosen, setChosen] = useState<ProfileStatus | null>(null);
-  const [workingCopy, setWorkingCopy] = useState<WorkingCopy | null>(null);
+export function ProfileReview({ project, version, parent, onEditingChange }: ProfileReviewProps) {
+  const router = useRouter();
+  const saveEdit = useSaveProfileEdit(project.id);
+  const approve = useApproveProfileVersion(project.id);
+  const [workingCopy, setWorkingCopy] = useState<ProductProfile | null>(null);
   const [approveOpen, setApproveOpen] = useState(false);
 
-  // A draft newer than the approved version is what waits for the reviewer, so it is
-  // shown first; an older draft is history, and the approved version comes first.
-  const byStatus = { draft, approved };
-  const draftIsNewest = draft !== null && (approved === null || draft.version > approved.version);
-  const shown = (chosen !== null && byStatus[chosen]) || (draftIsNewest ? draft : approved) || draft;
-
-  const editing = workingCopy !== null && shown !== null && workingCopy.ofVersion === shown.version;
-  const changes = editing && shown !== null ? countChanges(shown.profile, workingCopy.profile) : 0;
+  const editing = workingCopy !== null;
+  const changes = editing ? countChanges(version.profile, workingCopy) : 0;
   useWarningBeforeLeaving(changes > 0);
 
-  if (shown === null) return null;
-
-  const profile = editing ? workingCopy.profile : shown.profile;
+  const profile = workingCopy ?? version.profile;
   const flagged = attentionItems(profile);
+  const latestApproved = project.latest_approved_version;
+
+  function setEditing(next: ProductProfile | null) {
+    setWorkingCopy(next);
+    onEditingChange(next !== null);
+  }
 
   function stopEditing() {
-    setWorkingCopy(null);
+    setEditing(null);
     saveEdit.reset();
   }
 
   function save() {
     if (workingCopy === null) return;
     saveEdit.mutate(
-      { version: workingCopy.ofVersion, profile: workingCopy.profile },
+      { version: version.version, profile: workingCopy },
       {
-        onSuccess: () => {
-          setWorkingCopy(null);
-          setChosen("draft");
+        onSuccess: (newDraft) => {
+          setEditing(null);
+          router.push(`/projects/${project.id}/profile?version=${newDraft.version}`, { scroll: false });
         },
       },
     );
-  }
-
-  function approveShown(version: number) {
-    approve.mutate(version, {
-      onSuccess: () => {
-        setApproveOpen(false);
-        setChosen("approved");
-      },
-    });
   }
 
   const actions = editing ? (
@@ -93,14 +85,10 @@ export function ProfileReview({ projectId, repositoryUrl, draft, approved }: Pro
     </>
   ) : (
     <>
-      <Button
-        variant="outline"
-        size="lg"
-        onClick={() => setWorkingCopy({ ofVersion: shown.version, profile: shown.profile })}
-      >
-        {shown.status === "approved" ? "Edit as new draft" : "Edit"}
+      <Button variant="outline" size="lg" onClick={() => setEditing(version.profile)}>
+        {version.status === "approved" ? "Edit as new draft" : "Edit"}
       </Button>
-      {shown.status === "draft" && (
+      {version.status === "draft" && (
         <Button
           size="lg"
           onClick={() => {
@@ -108,7 +96,7 @@ export function ProfileReview({ projectId, repositoryUrl, draft, approved }: Pro
             setApproveOpen(true);
           }}
         >
-          Approve version {shown.version}…
+          Approve version {version.version}…
         </Button>
       )}
     </>
@@ -116,15 +104,7 @@ export function ProfileReview({ projectId, repositoryUrl, draft, approved }: Pro
 
   return (
     <div className="grid gap-8">
-      <VersionSwitch
-        draft={draft}
-        approved={approved}
-        shown={shown.status}
-        onShow={setChosen}
-        disabled={editing}
-      />
-
-      <ProfileStateBand version={shown} editing={editing} actions={actions} />
+      <ProfileStateBand version={version} editing={editing} actions={actions} />
 
       {saveEdit.error !== null && (
         <Notice tone="danger" title="The edit was not saved" role="alert">
@@ -138,29 +118,30 @@ export function ProfileReview({ projectId, repositoryUrl, draft, approved }: Pro
         </Notice>
       )}
 
-      <AttentionList items={flagged} />
+      <VersionProvenance
+        version={version}
+        repositoryUrl={project.repository_url}
+        changesFromParent={parent === null ? null : changedParts(parent.profile, version.profile)}
+      />
 
-      <p className="max-w-prose text-xs text-pretty text-muted-foreground">
-        {repositoryUrl === null
-          ? "Evidence is shown as file and lines. The dashboard does not know this project's repository, so it cannot link to the files."
-          : "Evidence is a file and its lines. Where the repository is on a host the dashboard knows, a reference opens that file on the default branch as it is today; the analysed commit is not recorded here, so the lines may have moved since."}
-      </p>
+      <AttentionList items={flagged} />
 
       <ProfileDocument
         profile={profile}
-        repositoryUrl={repositoryUrl}
+        source={{ repositoryUrl: project.repository_url, commitSha: version.commit_sha }}
         editing={editing}
-        onChange={(next) => setWorkingCopy({ ofVersion: shown.version, profile: next })}
+        onChange={setEditing}
       />
 
       <ApproveDialog
         open={approveOpen}
         onOpenChange={setApproveOpen}
-        version={shown.version}
+        version={version.version}
         flaggedCount={flagged.length}
+        newerApprovedVersion={latestApproved !== null && latestApproved > version.version ? latestApproved : null}
         pending={approve.isPending}
         problem={approve.error === null ? null : approveProblem(approve.error)}
-        onApprove={() => approveShown(shown.version)}
+        onApprove={() => approve.mutate(version.version, { onSuccess: () => setApproveOpen(false) })}
       />
     </div>
   );

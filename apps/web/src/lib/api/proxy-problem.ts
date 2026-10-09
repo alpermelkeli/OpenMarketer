@@ -8,6 +8,7 @@
 export const PROXY_ERROR_CODES = [
   "proxy_request_refused",
   "proxy_route_not_allowed",
+  "proxy_query_rejected",
   "proxy_body_rejected",
   "api_unreachable",
   "proxy_misconfigured",

@@ -3,6 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { Feature, FeatureStatus } from "@/lib/api/types";
 import { featureAnchor } from "@/lib/profile/attention";
+import type { EvidenceSource } from "@/lib/profile/evidence-link";
 import { FEATURE_STATUSES, featureStatusDisplay, humanizeSlug } from "@/lib/profile/labels";
 
 import { ConfidenceMeter } from "./confidence-meter";
@@ -16,13 +17,13 @@ const STATUS_OPTIONS = FEATURE_STATUSES.map((status) => ({
 
 type FeatureItemProps = {
   feature: Feature;
-  repositoryUrl: string | null;
+  source: EvidenceSource;
   editing: boolean;
   onChange: (change: Partial<Pick<Feature, "description" | "status">>) => void;
 };
 
 /** One feature: what it is, whether it is released, how sure the analyzer was and why. */
-export function FeatureItem({ feature, repositoryUrl, editing, onChange }: FeatureItemProps) {
+export function FeatureItem({ feature, source, editing, onChange }: FeatureItemProps) {
   const status = featureStatusDisplay(feature.status);
   const anchor = featureAnchor(feature.id);
   const descriptionId = `${anchor}-description`;
@@ -64,7 +65,7 @@ export function FeatureItem({ feature, repositoryUrl, editing, onChange }: Featu
       )}
 
       <p className="text-xs text-muted-foreground">{status.meaning}</p>
-      <EvidenceList evidence={feature.evidence ?? []} repositoryUrl={repositoryUrl} />
+      <EvidenceList evidence={feature.evidence ?? []} source={source} />
     </li>
   );
 }

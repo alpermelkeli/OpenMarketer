@@ -3,7 +3,7 @@ import { Suspense } from "react";
 
 import { AnalysesScreen } from "@/components/analyses/analyses-screen";
 import { Skeleton } from "@/components/ui/skeleton";
-import { isProjectId } from "@/lib/remembered/remembered";
+import { isProjectId } from "@/lib/projects/project-id";
 
 export const metadata: Metadata = { title: "Analyses" };
 

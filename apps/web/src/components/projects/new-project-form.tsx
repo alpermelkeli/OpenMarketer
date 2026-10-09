@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useId, useState, type FormEvent } from "react";
 
 import { FieldErrors } from "@/components/common/field-errors";
@@ -67,6 +68,14 @@ export function NewProjectForm({ errors, pending, onSubmit, onCancel }: NewProje
           An https:// address. Nothing is cloned until you start an analysis.
         </p>
         <FieldErrors id={`${id}-url-errors`} messages={errors.repositoryUrl} />
+        {errors.existingProjectId !== null && (
+          <Link
+            href={`/projects/${encodeURIComponent(errors.existingProjectId)}`}
+            className="w-fit rounded-sm text-sm text-brand underline-offset-4 hover:underline"
+          >
+            Open the existing project
+          </Link>
+        )}
       </div>
       <FieldErrors id={`${id}-form-errors`} messages={errors.form} />
       <div className="flex gap-2">

@@ -2,41 +2,52 @@
 
 /** Query and mutation hooks for reviewing a project's Product Profile. */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ApiError } from "./api-error";
+import type { ApiError } from "./api-error";
 import { api, dataOf } from "./client";
+import { PAGE_SIZE, mergePages, nextCursor } from "./pages";
 import { queryKeys } from "./query-keys";
-import type { ProductProfile, ProfileVersion } from "./types";
+import type { ProductProfile, ProfileVersion, ProfileVersionList, ProfileVersionSummary } from "./types";
 
-/** The latest draft, or `null` when the project has none. */
-export function useDraftProfile(projectId: string) {
-  return useQuery<ProfileVersion | null, ApiError>({
-    queryKey: queryKeys.draftProfile(projectId),
-    queryFn: async () =>
-      orNoneIfMissing(async () =>
-        dataOf(
-          await api.GET("/v1/projects/{project_id}/profile/draft", {
-            params: { path: { project_id: projectId } },
-          }),
-        ),
+/** A project's profile versions without their content, newest first, a page at a time. */
+export function useProfileVersions(projectId: string) {
+  return useInfiniteQuery<
+    ProfileVersionList,
+    ApiError,
+    ProfileVersionSummary[],
+    ReturnType<typeof queryKeys.profileVersions>,
+    string | undefined
+  >({
+    queryKey: queryKeys.profileVersions(projectId),
+    queryFn: async ({ pageParam }) =>
+      dataOf(
+        await api.GET("/v1/projects/{project_id}/profile/versions", {
+          params: { path: { project_id: projectId }, query: { limit: PAGE_SIZE, cursor: pageParam } },
+        }),
+      ),
+    initialPageParam: undefined,
+    getNextPageParam: nextCursor,
+    select: (data) =>
+      mergePages(
+        data.pages.map((page) => page.versions),
+        (version) => version.version,
       ),
     retry: false,
   });
 }
 
-/** The latest approved version, or `null` when nothing has been approved. */
-export function useApprovedProfile(projectId: string) {
-  return useQuery<ProfileVersion | null, ApiError>({
-    queryKey: queryKeys.approvedProfile(projectId),
+/** One version with its content. `version` may be absent while the screen works out which to show. */
+export function useProfileVersion(projectId: string, version: number | null) {
+  return useQuery<ProfileVersion, ApiError>({
+    queryKey: queryKeys.profileVersion(projectId, version ?? 0),
     queryFn: async () =>
-      orNoneIfMissing(async () =>
-        dataOf(
-          await api.GET("/v1/projects/{project_id}/profile/approved", {
-            params: { path: { project_id: projectId } },
-          }),
-        ),
+      dataOf(
+        await api.GET("/v1/projects/{project_id}/profile/versions/{version}", {
+          params: { path: { project_id: projectId, version: version ?? 0 } },
+        }),
       ),
+    enabled: version !== null,
     retry: false,
   });
 }
@@ -59,8 +70,9 @@ export function useSaveProfileEdit(projectId: string) {
         }),
       ),
     onSuccess: (newDraft) => {
-      // A new version always has the highest number, so it is the latest draft.
-      queryClient.setQueryData(queryKeys.draftProfile(projectId), newDraft);
+      queryClient.setQueryData(queryKeys.profileVersion(projectId, newDraft.version), newDraft);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profileVersions(projectId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId) });
     },
   });
 }
@@ -75,17 +87,12 @@ export function useApproveProfileVersion(projectId: string) {
           params: { path: { project_id: projectId, version } },
         }),
       ),
-    // Which version is now the latest draft and the latest approved is the server's
-    // to say, after a refusal as much as after a success.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.profile(projectId) }),
+    // What is approved now is the server's to say, after a refusal as much as after a success.
+    onSettled: (_approved, _error, version) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profileVersion(projectId, version) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.profileVersions(projectId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.projects() });
+    },
   });
-}
-
-async function orNoneIfMissing(read: () => Promise<ProfileVersion>): Promise<ProfileVersion | null> {
-  try {
-    return await read();
-  } catch (error) {
-    if (error instanceof ApiError && error.code === "profile_not_found") return null;
-    throw error;
-  }
 }

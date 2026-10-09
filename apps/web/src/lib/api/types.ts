@@ -8,12 +8,16 @@ import type { components } from "./schema";
 type Schemas = components["schemas"];
 
 export type Project = Schemas["ProjectResponse"];
+export type ProjectList = Schemas["ProjectListResponse"];
 export type CreateProjectRequest = Schemas["CreateProjectRequest"];
 
 export type AnalysisRun = Schemas["AnalysisRunResponse"];
+export type AnalysisRunList = Schemas["AnalysisRunListResponse"];
 export type AnalysisRunStatus = Schemas["AnalysisRunStatus"];
 
 export type ProfileVersion = Schemas["ProfileVersionResponse"];
+export type ProfileVersionSummary = Schemas["ProfileVersionSummaryResponse"];
+export type ProfileVersionList = Schemas["ProfileVersionListResponse"];
 export type ProfileStatus = Schemas["ProfileStatus"];
 export type ProductProfile = Schemas["ProductProfile"];
 export type Product = Schemas["Product"];

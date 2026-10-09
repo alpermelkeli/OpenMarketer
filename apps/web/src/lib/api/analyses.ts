@@ -2,16 +2,44 @@
 
 /** Query and mutation hooks for analysis runs. */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import { isRunFinished } from "@/lib/analysis/run-status";
 
 import type { ApiError } from "./api-error";
 import { api, dataOf } from "./client";
+import { PAGE_SIZE, mergePages, nextCursor } from "./pages";
 import { queryKeys } from "./query-keys";
-import type { AnalysisRun } from "./types";
+import type { AnalysisRun, AnalysisRunList } from "./types";
 
 const POLL_INTERVAL_MS = 2_000;
+
+/** A project's runs, newest first, loaded a page at a time. */
+export function useAnalyses(projectId: string) {
+  return useInfiniteQuery<
+    AnalysisRunList,
+    ApiError,
+    AnalysisRun[],
+    ReturnType<typeof queryKeys.analyses>,
+    string | undefined
+  >({
+    queryKey: queryKeys.analyses(projectId),
+    queryFn: async ({ pageParam }) =>
+      dataOf(
+        await api.GET("/v1/projects/{project_id}/analyses", {
+          params: { path: { project_id: projectId }, query: { limit: PAGE_SIZE, cursor: pageParam } },
+        }),
+      ),
+    initialPageParam: undefined,
+    getNextPageParam: nextCursor,
+    select: (data) =>
+      mergePages(
+        data.pages.map((page) => page.runs),
+        (run) => run.id,
+      ),
+    retry: false,
+  });
+}
 
 export function useStartAnalysis(projectId: string) {
   const queryClient = useQueryClient();
@@ -25,34 +53,47 @@ export function useStartAnalysis(projectId: string) {
     onSuccess: (run) => {
       queryClient.setQueryData(queryKeys.analysisRun(projectId, run.id), run);
     },
+    // After a refusal too: a 409 means a run this screen may not know of is in progress,
+    // and a 503 leaves a failed run behind.
+    onSettled: () => refreshProject(queryClient, projectId),
   });
 }
 
-/** One run, polled until it has finished. A finished run never changes, so it is not refetched. */
-export function useAnalysisRun(projectId: string, runId: string) {
+/**
+ * One run, polled until it has finished. `listed` is the run as the list gave it, so
+ * it is on screen at once; a finished run never changes and is not asked for again.
+ */
+export function useAnalysisRun(projectId: string, listed: AnalysisRun) {
   const queryClient = useQueryClient();
   return useQuery<AnalysisRun, ApiError>({
-    queryKey: queryKeys.analysisRun(projectId, runId),
+    queryKey: queryKeys.analysisRun(projectId, listed.id),
     queryFn: async () => {
       const run = dataOf(
         await api.GET("/v1/projects/{project_id}/analyses/{run_id}", {
-          params: { path: { project_id: projectId, run_id: runId } },
+          params: { path: { project_id: projectId, run_id: listed.id } },
         }),
       );
-      if (run.status === "succeeded") {
-        // The run stored a new draft; whatever the profile screen holds is stale.
-        void queryClient.invalidateQueries({ queryKey: queryKeys.profile(projectId) });
+      if (isRunFinished(run)) {
+        // The list, the project's summary and, after a success, its versions are now stale.
+        void refreshProject(queryClient, projectId);
       }
       return run;
     },
+    initialData: listed,
+    enabled: !isRunFinished(listed),
     refetchInterval: (query) => {
       const run = query.state.data;
       return run !== undefined && isRunFinished(run) ? false : POLL_INTERVAL_MS;
     },
-    staleTime: (query) => {
-      const run = query.state.data;
-      return run !== undefined && isRunFinished(run) ? Infinity : 0;
-    },
+    staleTime: 0,
     retry: false,
+  });
+}
+
+/** Read again what the dashboard holds about a project, except the runs being polled. */
+function refreshProject(queryClient: QueryClient, projectId: string): Promise<void> {
+  return queryClient.invalidateQueries({
+    queryKey: queryKeys.projectScope(projectId),
+    predicate: (query) => query.queryKey[4] !== "run",
   });
 }

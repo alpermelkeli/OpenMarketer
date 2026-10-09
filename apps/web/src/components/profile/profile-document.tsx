@@ -2,6 +2,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { BusinessModelType, ProductProfile } from "@/lib/api/types";
 import { featuresInReviewOrder } from "@/lib/profile/attention";
+import type { EvidenceSource } from "@/lib/profile/evidence-link";
 import {
   withAudiencePrimary,
   withBrandVoice,
@@ -24,14 +25,14 @@ const BUSINESS_MODEL_OPTIONS = BUSINESS_MODEL_TYPES.map((type) => ({
 
 type ProfileDocumentProps = {
   profile: ProductProfile;
-  repositoryUrl: string | null;
+  source: EvidenceSource;
   /** While editing, values become fields and every change is reported through `onChange`. */
   editing: boolean;
   onChange: (profile: ProductProfile) => void;
 };
 
 /** The whole Product Profile, section by section. Everything in it is untrusted text. */
-export function ProfileDocument({ profile, repositoryUrl, editing, onChange }: ProfileDocumentProps) {
+export function ProfileDocument({ profile, source, editing, onChange }: ProfileDocumentProps) {
   const { product, brand, audience, business_model: businessModel, measurement } = profile;
   const features = featuresInReviewOrder(profile.features ?? []);
 
@@ -42,7 +43,7 @@ export function ProfileDocument({ profile, repositoryUrl, editing, onChange }: P
         title="Product"
         purpose="What it is and where it runs."
         claim={product}
-        repositoryUrl={repositoryUrl}
+        source={source}
       >
         <ProfileValue label="Name">
           {editing ? (
@@ -85,7 +86,7 @@ export function ProfileDocument({ profile, repositoryUrl, editing, onChange }: P
               <FeatureItem
                 key={feature.id}
                 feature={feature}
-                repositoryUrl={repositoryUrl}
+                source={source}
                 editing={editing}
                 onChange={(change) => onChange(withFeature(profile, feature.id, change))}
               />
@@ -99,7 +100,7 @@ export function ProfileDocument({ profile, repositoryUrl, editing, onChange }: P
         title="Brand"
         purpose="How the product speaks and looks."
         claim={brand}
-        repositoryUrl={repositoryUrl}
+        source={source}
       >
         <ProfileValue label="Voice">
           {editing ? (
@@ -126,7 +127,7 @@ export function ProfileDocument({ profile, repositoryUrl, editing, onChange }: P
         title="Audience"
         purpose="Who it is for and what troubles them."
         claim={audience}
-        repositoryUrl={repositoryUrl}
+        source={source}
       >
         <ProfileValue label="Primary audience">
           {editing ? (
@@ -150,7 +151,7 @@ export function ProfileDocument({ profile, repositoryUrl, editing, onChange }: P
         title="Business model"
         purpose="How the product earns."
         claim={businessModel}
-        repositoryUrl={repositoryUrl}
+        source={source}
       >
         <ProfileValue label="Type">
           {editing && businessModel !== undefined ? (
@@ -176,7 +177,7 @@ export function ProfileDocument({ profile, repositoryUrl, editing, onChange }: P
         title="Measurement"
         purpose="What the product can already measure."
         claim={measurement}
-        repositoryUrl={repositoryUrl}
+        source={source}
       >
         <ProfileValue label="Analytics">
           <TagList values={measurement?.analytics} />

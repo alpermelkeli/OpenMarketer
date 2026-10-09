@@ -41,20 +41,59 @@ export function withBusinessModelType(profile: ProductProfile, type: BusinessMod
   return { ...profile, business_model: { ...profile.business_model, type } };
 }
 
-/** How many of the editable values differ between the stored profile and the working copy. */
+/** How many values differ between the stored profile and the working copy. */
 export function countChanges(stored: ProductProfile, edited: ProductProfile): number {
-  const editedFeatures = new Map((edited.features ?? []).map((feature) => [feature.id, feature]));
-  const featureChanges = (stored.features ?? []).flatMap((feature) => {
-    const other = editedFeatures.get(feature.id);
-    return [feature.status !== other?.status, feature.description !== other?.description];
-  });
-  return [
-    stored.product.name !== edited.product.name,
-    (stored.brand?.voice ?? null) !== (edited.brand?.voice ?? null),
-    (stored.audience?.primary ?? null) !== (edited.audience?.primary ?? null),
-    stored.business_model?.type !== edited.business_model?.type,
-    ...featureChanges,
-  ].filter(Boolean).length;
+  return changedParts(stored, edited).length;
+}
+
+/**
+ * What differs between two profiles, one line per difference, for a reader: the
+ * values the dashboard can edit by name, anything else by the part it is in. Used
+ * to say what an edit changed; it is a list, not a diff of the texts.
+ */
+export function changedParts(before: ProductProfile, after: ProductProfile): string[] {
+  const changes: string[] = [];
+  const add = (differs: boolean, label: string) => {
+    if (differs) changes.push(label);
+  };
+
+  add(before.product.name !== after.product.name, "Product name");
+  add(differs(before.product, after.product, ["name"]), "Product: other values");
+
+  const afterFeatures = new Map((after.features ?? []).map((feature) => [feature.id, feature]));
+  const beforeIds = new Set((before.features ?? []).map((feature) => feature.id));
+  for (const feature of before.features ?? []) {
+    const other = afterFeatures.get(feature.id);
+    if (other === undefined) {
+      changes.push(`Feature removed: ${feature.id}`);
+      continue;
+    }
+    add(feature.status !== other.status, `Status of ${feature.id}`);
+    add(feature.description !== other.description, `Description of ${feature.id}`);
+    add(differs(feature, other, ["status", "description"]), `Evidence or confidence of ${feature.id}`);
+  }
+  for (const feature of after.features ?? []) {
+    add(!beforeIds.has(feature.id), `Feature added: ${feature.id}`);
+  }
+
+  add((before.brand?.voice ?? null) !== (after.brand?.voice ?? null), "Brand voice");
+  add(differs(before.brand, after.brand, ["voice"]), "Brand: other values");
+  add((before.audience?.primary ?? null) !== (after.audience?.primary ?? null), "Primary audience");
+  add(differs(before.audience, after.audience, ["primary"]), "Audience: other values");
+  add(before.business_model?.type !== after.business_model?.type, "Business model type");
+  add(differs(before.business_model, after.business_model, ["type"]), "Business model: other values");
+  add(differs(before.measurement, after.measurement, []), "Measurement");
+  return changes;
+}
+
+/**
+ * Whether two parts differ outside the named values. Both come from the same API, which
+ * writes a part's values in one order, so comparing their JSON is enough for display.
+ */
+function differs(before: object | undefined, after: object | undefined, named: readonly string[]): boolean {
+  const rest = (part: object | undefined) =>
+    JSON.stringify(Object.entries(part ?? {}).filter(([key]) => !named.includes(key)));
+  return rest(before) !== rest(after);
 }
 
 function textOrNone(text: string): string | null {

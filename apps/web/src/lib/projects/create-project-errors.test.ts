@@ -6,7 +6,7 @@ import { createProjectErrors } from "./create-project-errors";
 
 describe("errors of creating a project", () => {
   it("are none before anything failed", () => {
-    expect(createProjectErrors(null)).toEqual({ name: [], repositoryUrl: [], form: [] });
+    expect(createProjectErrors(null)).toEqual({ name: [], repositoryUrl: [], form: [], existingProjectId: null });
   });
 
   it("show a refused repository URL beside its field, in the API's words", () => {
@@ -14,9 +14,22 @@ describe("errors of creating a project", () => {
     expect(createProjectErrors(error).repositoryUrl).toEqual(["only https:// URLs"]);
   });
 
-  it("show a conflict beside the repository URL", () => {
+  it("show a conflict beside the repository URL, with the project that has it", () => {
+    const existing = "e060c524-cd7d-4e57-9677-5c8bc98b03e6";
+    const error = apiErrorFrom(409, {
+      code: "project_already_exists",
+      message: "exists",
+      existing_project_id: existing,
+    });
+    expect(createProjectErrors(error)).toMatchObject({
+      repositoryUrl: ["A project for this repository already exists."],
+      existingProjectId: existing,
+    });
+  });
+
+  it("show a conflict without a project to open when the API names none", () => {
     const error = apiErrorFrom(409, { code: "project_already_exists", message: "exists" });
-    expect(createProjectErrors(error).repositoryUrl[0]).toContain("already exists");
+    expect(createProjectErrors(error).existingProjectId).toBeNull();
   });
 
   it("show each validation message beside the field it names", () => {
@@ -31,6 +44,7 @@ describe("errors of creating a project", () => {
       name: ["String should have at least 1 character"],
       repositoryUrl: ["String should have at most 2000 characters"],
       form: ["Input should be a valid dictionary"],
+      existingProjectId: null,
     });
   });
 

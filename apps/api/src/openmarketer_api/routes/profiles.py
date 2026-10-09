@@ -1,8 +1,9 @@
-"""Product Profile review: read the latest draft or approved version, edit, approve.
+"""Product Profile review: read versions, list them, edit, approve.
 
 The approver is the current user. No request field names an approver, and no
-route approves on behalf of a model. Listing versions or reading one by number
-is not here.
+route approves on behalf of a model. A version is named by its number; the list
+of versions carries no profile, so it stays small however large the profiles
+are. Comparing two versions is not here.
 """
 
 from __future__ import annotations
@@ -12,17 +13,27 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from openmarketer_api.dependencies import DbSession, no_request_body
 from openmarketer_api.errors import ProfileNotFound, problems
 from openmarketer_api.identity import CurrentUserId, CurrentWorkspaceId
+from openmarketer_api.pagination import (
+    DEFAULT_PAGE_SIZE,
+    HIGHEST_VERSION,
+    PageLimit,
+    VersionBefore,
+    version_cursor,
+)
 from openmarketer_core.db.models import ProfileStatus
 from openmarketer_core.db.profile_versions import (
     ProfileVersion,
+    ProfileVersionSummary,
     approve_profile_version,
     latest_approved_profile,
     latest_draft_profile,
+    list_profile_versions,
+    profile_version,
     save_edited_profile,
 )
 from openmarketer_core.profile import ProductProfile
@@ -30,7 +41,7 @@ from openmarketer_core.profile import ProductProfile
 router = APIRouter(prefix="/projects/{project_id}/profile", tags=["profiles"])
 
 # Version numbers are a 32-bit integer column; a larger number is no version, not a database error.
-VersionNumber = Annotated[int, Path(ge=1, le=2_147_483_647)]
+VersionNumber = Annotated[int, Path(ge=1, le=HIGHEST_VERSION)]
 
 
 class SaveProfileEditRequest(BaseModel):
@@ -39,28 +50,58 @@ class SaveProfileEditRequest(BaseModel):
     profile: ProductProfile
 
 
-class ProfileVersionResponse(BaseModel):
+class ProfileVersionSummaryResponse(BaseModel):
+    """A version without its profile."""
+
     model_config = ConfigDict(extra="forbid")
 
     project_id: uuid.UUID
     version: int
     status: ProfileStatus
-    profile: ProductProfile
+    edited_from_version: int | None = Field(
+        description="The version this one is an edit of; null when an analysis stored it."
+    )
+    commit_sha: str | None = Field(
+        description=(
+            "The commit of the repository that was analysed. An edit keeps the commit of"
+            " the version it was made from."
+        )
+    )
     created_at: datetime
     approved_by: uuid.UUID | None
     approved_at: datetime | None
 
 
-def _response(stored: ProfileVersion) -> ProfileVersionResponse:
-    return ProfileVersionResponse(
+class ProfileVersionResponse(ProfileVersionSummaryResponse):
+    """A version with its profile."""
+
+    profile: ProductProfile
+
+
+class ProfileVersionListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    versions: list[ProfileVersionSummaryResponse]
+    next_cursor: str | None = Field(
+        description="Null on the last page; otherwise the `cursor` of the next request."
+    )
+
+
+def _summary(stored: ProfileVersion | ProfileVersionSummary) -> ProfileVersionSummaryResponse:
+    return ProfileVersionSummaryResponse(
         project_id=stored.project_id,
         version=stored.version,
         status=stored.status,
-        profile=stored.profile,
+        edited_from_version=stored.edited_from_version,
+        commit_sha=stored.commit_sha,
         created_at=stored.created_at,
         approved_by=stored.approved_by,
         approved_at=stored.approved_at,
     )
+
+
+def _response(stored: ProfileVersion) -> ProfileVersionResponse:
+    return ProfileVersionResponse(**_summary(stored).model_dump(), profile=stored.profile)
 
 
 @router.get(
@@ -93,6 +134,52 @@ def get_approved(
     if approved is None:
         raise ProfileNotFound(f"project {project_id} has no approved profile")
     return _response(approved)
+
+
+@router.get(
+    "/versions",
+    operation_id="listProfileVersions",
+    response_model=ProfileVersionListResponse,
+    responses=problems(404),
+)
+def list_versions(
+    project_id: uuid.UUID,
+    session: DbSession,
+    workspace_id: CurrentWorkspaceId,
+    before: VersionBefore,
+    limit: PageLimit = DEFAULT_PAGE_SIZE,
+) -> ProfileVersionListResponse:
+    """The project's versions without their profiles, highest number first, a page at a time."""
+    page = list_profile_versions(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        limit=limit,
+        before_version=before,
+    )
+    return ProfileVersionListResponse(
+        versions=[_summary(version) for version in page.items],
+        next_cursor=version_cursor(page.next_before),
+    )
+
+
+@router.get(
+    "/versions/{version}",
+    operation_id="getProfileVersion",
+    response_model=ProfileVersionResponse,
+    responses=problems(404),
+)
+def get_version(
+    project_id: uuid.UUID,
+    version: VersionNumber,
+    session: DbSession,
+    workspace_id: CurrentWorkspaceId,
+) -> ProfileVersionResponse:
+    """One version with its profile, draft or approved."""
+    stored = profile_version(
+        session, workspace_id=workspace_id, project_id=project_id, version=version
+    )
+    return _response(stored)
 
 
 @router.post(

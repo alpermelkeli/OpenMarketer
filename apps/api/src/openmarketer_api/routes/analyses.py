@@ -1,8 +1,7 @@
-"""Analyses: request the analysis of a project's repository, then poll the run.
+"""Analyses: request the analysis of a project's repository, poll the run, list the runs.
 
 The analysis runs in the worker. A run's state is read from the database only;
-no route asks the workflow engine about it. Listing runs and cancelling one
-are not here.
+no route asks the workflow engine about it. Cancelling a run is not here.
 """
 
 from __future__ import annotations
@@ -11,13 +10,14 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from openmarketer_api.dependencies import DbSession, Sessions, StartWorkflow, no_request_body
 from openmarketer_api.errors import problems
 from openmarketer_api.identity import CurrentWorkspaceId
+from openmarketer_api.pagination import DEFAULT_PAGE_SIZE, CreatedBefore, PageLimit, created_cursor
 from openmarketer_core.analysis_request import request_analysis
-from openmarketer_core.db.analysis_runs import AnalysisRun, analysis_run
+from openmarketer_core.db.analysis_runs import AnalysisRun, analysis_run, list_analysis_runs
 from openmarketer_core.db.models import AnalysisRunStatus
 
 router = APIRouter(prefix="/projects/{project_id}/analyses", tags=["analyses"])
@@ -34,6 +34,15 @@ class AnalysisRunResponse(BaseModel):
     finished_at: datetime | None
     error: str | None
     profile_version: int | None
+
+
+class AnalysisRunListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runs: list[AnalysisRunResponse]
+    next_cursor: str | None = Field(
+        description="Null on the last page; otherwise the `cursor` of the next request."
+    )
 
 
 def _response(run: AnalysisRun) -> AnalysisRunResponse:
@@ -73,6 +82,32 @@ def start(
         sessions, workspace_id=workspace_id, project_id=project_id, start_workflow=start_workflow
     )
     return _response(run)
+
+
+@router.get(
+    "",
+    operation_id="listAnalyses",
+    response_model=AnalysisRunListResponse,
+    responses=problems(404),
+)
+def list_all(
+    project_id: uuid.UUID,
+    session: DbSession,
+    workspace_id: CurrentWorkspaceId,
+    before: CreatedBefore,
+    limit: PageLimit = DEFAULT_PAGE_SIZE,
+) -> AnalysisRunListResponse:
+    """The project's runs as they are now, newest first, one page at a time.
+
+    The first one is the unfinished run, when the project has one.
+    """
+    page = list_analysis_runs(
+        session, workspace_id=workspace_id, project_id=project_id, limit=limit, before=before
+    )
+    return AnalysisRunListResponse(
+        runs=[_response(run) for run in page.items],
+        next_cursor=created_cursor(page.next_before),
+    )
 
 
 @router.get(

@@ -1,6 +1,6 @@
 # OpenMarketer dashboard
 
-The web interface of OpenMarketer: create a project, start an analysis of its repository and follow it, then review the drafted Product Profile, with the evidence and confidence behind every claim, correct it and approve it. Next.js 16, React 19, Tailwind 4, shadcn/ui (Base UI), TanStack Query.
+The web interface of OpenMarketer: see every project and where it stands, start an analysis of a repository and follow it, then review the drafted Product Profile, with the evidence and confidence behind every claim, correct it, approve it, and look back through its versions. Next.js 16, React 19, Tailwind 4, shadcn/ui (Base UI), TanStack Query.
 
 What it does, what it works around and how it was checked is in [docs/status.md](../../docs/status.md#the-dashboard).
 
@@ -45,6 +45,5 @@ There is no login. The API trusts requests from this machine, and the dashboard'
 | `src/lib/api` | Generated types, the typed client, query and mutation hooks |
 | `src/lib/server` | The proxy's rules |
 | `src/lib/profile`, `src/lib/analysis`, `src/lib/projects` | Pure display logic, with tests |
-| `src/lib/remembered` | What the browser remembers while the API cannot list projects and runs |
 
 The typefaces are Hedvig Letters Sans and Hedvig Letters Serif (SIL Open Font License 1.1) and Geist Mono (SIL Open Font License 1.1), loaded through `next/font`.

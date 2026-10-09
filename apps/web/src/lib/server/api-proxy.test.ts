@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { allowedApiPath, apiBaseUrl, assertFromDashboard, proxyToApi } from "./api-proxy";
+import { allowedApiTarget, apiBaseUrl, assertFromDashboard, proxyToApi } from "./api-proxy";
 
 const PROJECT = "8ce5e2bb-6e54-49b4-9ddc-b96f20ec1109";
 const RUN = "0b0e6c6e-1111-4222-8333-444455556666";
 const APPROVAL = ["projects", PROJECT, "profile", "versions", "3", "approval"];
 
-function request(method: string, headers: Record<string, string>, body?: string): Request {
-  return new Request("http://localhost:3000/api/v1/ignored", { method, headers, body });
+function request(method: string, headers: Record<string, string>, body?: string, query = ""): Request {
+  return new Request(`http://localhost:3000/api/v1/ignored${query}`, { method, headers, body });
+}
+
+const NO_QUERY = new URLSearchParams();
+
+function allowedApiPath(method: string, segments: readonly string[]): string {
+  return allowedApiTarget(method, segments, NO_QUERY);
 }
 
 const fromDashboard = {
@@ -130,7 +136,7 @@ describe("a read from the dashboard", () => {
     const problem = '{"code":"profile_not_found","message":"no draft"}';
     const response = await proxyToApi(
       request("GET", { host: "localhost:3000", "sec-fetch-site": "same-origin" }),
-      ["projects", PROJECT, "profile", "draft"],
+      ["projects", PROJECT, "profile", "versions"],
       "http://127.0.0.1:9999",
       apiAnswering(404, problem),
     );
@@ -166,24 +172,118 @@ describe("the routes that are forwarded", () => {
   });
 
   it("do not include other methods of a known path", () => {
-    expect(() => allowedApiPath("GET", ["projects"])).toThrow();
-    expect(() => allowedApiPath("DELETE", ["projects", PROJECT, "profile", "draft"])).toThrow();
+    expect(() => allowedApiPath("PUT", ["projects"])).toThrow();
+    expect(() => allowedApiPath("DELETE", ["projects", PROJECT])).toThrow();
     expect(() => allowedApiPath("GET", APPROVAL)).toThrow();
   });
 
   it("do not include paths outside the list", () => {
     for (const segments of [
       ["health"],
-      ["projects", "not-a-uuid", "profile", "draft"],
+      ["projects", "not-a-uuid", "profile", "versions"],
+      ["projects", PROJECT, "profile", "draft"],
+      ["projects", PROJECT, "profile", "approved"],
       ["projects", PROJECT, "profile", "versions", "0", "approval"],
       ["projects", PROJECT, "profile", "versions", "1e3", "approval"],
-      ["projects", PROJECT, "profile", "draft", ".."],
-      ["projects", `${PROJECT}/profile/draft?x=`, "profile", "draft"],
+      ["projects", PROJECT, "profile", "versions", ".."],
+      ["projects", `${PROJECT}/profile/versions?x=`, "profile", "versions"],
       ["..", "..", "admin"],
-      ["projects", `${PROJECT}\n`, "profile", "draft"],
+      ["projects", `${PROJECT}\n`, "profile", "versions"],
     ]) {
       expect(() => allowedApiPath("GET", segments)).toThrow();
     }
+  });
+});
+
+describe("the routes that read", () => {
+  it("are the lists, a project, a run and a version", () => {
+    expect(allowedApiPath("GET", ["projects"])).toBe("/v1/projects");
+    expect(allowedApiPath("GET", ["projects", PROJECT])).toBe(`/v1/projects/${PROJECT}`);
+    expect(allowedApiPath("GET", ["projects", PROJECT, "analyses"])).toBe(`/v1/projects/${PROJECT}/analyses`);
+    expect(allowedApiPath("GET", ["projects", PROJECT, "profile", "versions"])).toBe(
+      `/v1/projects/${PROJECT}/profile/versions`,
+    );
+    expect(allowedApiPath("GET", ["projects", PROJECT, "profile", "versions", "7"])).toBe(
+      `/v1/projects/${PROJECT}/profile/versions/7`,
+    );
+  });
+
+  it("cannot be used to change anything", () => {
+    expect(() => allowedApiPath("POST", ["projects", PROJECT])).toThrow();
+    expect(() => allowedApiPath("POST", ["projects", PROJECT, "profile", "versions"])).toThrow();
+    expect(() => allowedApiPath("POST", ["projects", PROJECT, "profile", "versions", "7"])).toThrow();
+    expect(() => allowedApiPath("DELETE", ["projects", PROJECT, "analyses"])).toThrow();
+  });
+});
+
+describe("the query of a list", () => {
+  const list = (query: string, segments = ["projects"]) =>
+    allowedApiTarget("GET", segments, new URLSearchParams(query));
+
+  it("forwards limit and cursor", () => {
+    expect(list("limit=20")).toBe("/v1/projects?limit=20");
+    expect(list("cursor=MjAyNi0xMC0wOV9h-b")).toBe("/v1/projects?cursor=MjAyNi0xMC0wOV9h-b");
+    expect(list("limit=100&cursor=abc", ["projects", PROJECT, "analyses"])).toBe(
+      `/v1/projects/${PROJECT}/analyses?limit=100&cursor=abc`,
+    );
+    expect(list("cursor=abc", ["projects", PROJECT, "profile", "versions"])).toBe(
+      `/v1/projects/${PROJECT}/profile/versions?cursor=abc`,
+    );
+  });
+
+  it("refuses any other parameter instead of dropping it", () => {
+    for (const query of ["workspace=other", "limit=20&debug=1", "Limit=20", "cursor[]=a"]) {
+      expect(() => list(query)).toThrow("only `limit`");
+    }
+  });
+
+  it("refuses a limit outside what the API allows", () => {
+    for (const limit of ["0", "101", "1000", "-1", "1e2", "10.0", " 10", "", "0x10"]) {
+      expect(() => list(`limit=${encodeURIComponent(limit)}`)).toThrow();
+    }
+  });
+
+  it("refuses a cursor the API could not have issued", () => {
+    const tooLong = "a".repeat(201);
+    for (const cursor of ["", tooLong, "a b", "a/b", "a+b", "a=", "a&b", "../x", "a%00"]) {
+      expect(() => list(`cursor=${encodeURIComponent(cursor)}`)).toThrow();
+    }
+  });
+
+  it("refuses a parameter given twice", () => {
+    expect(() => list("limit=5&limit=50")).toThrow();
+    expect(() => list("cursor=a&cursor=b")).toThrow();
+  });
+
+  it("refuses every query on a route that is not a paged list", () => {
+    expect(() => list("limit=5", ["projects", PROJECT])).toThrow("no query parameters");
+    expect(() => list("cursor=a", ["projects", PROJECT, "profile", "versions", "2"])).toThrow();
+    expect(() => allowedApiTarget("POST", ["projects"], new URLSearchParams("limit=5"))).toThrow();
+    expect(() => allowedApiTarget("POST", APPROVAL, new URLSearchParams("approved_by=x"))).toThrow();
+  });
+
+  it("reaches the API as the only query", async () => {
+    const api = apiAnswering(200, '{"projects":[],"next_cursor":null}');
+    await proxyToApi(
+      request("GET", { host: "localhost:3000", "sec-fetch-site": "same-origin" }, undefined, "?cursor=abc&limit=2"),
+      ["projects"],
+      undefined,
+      api,
+    );
+    expect(String(api.mock.calls[0][0])).toBe("http://127.0.0.1:8000/v1/projects?cursor=abc&limit=2");
+  });
+
+  it("is answered 400 without asking the API when it is refused", async () => {
+    const api = apiAnswering(200, "{}");
+    const response = await proxyToApi(
+      request("GET", { host: "localhost:3000" }, undefined, "?limit=5&workspace=other"),
+      ["projects"],
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "proxy_query_rejected" });
+    expect(api).not.toHaveBeenCalled();
   });
 });
 

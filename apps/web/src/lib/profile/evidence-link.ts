@@ -7,36 +7,50 @@
  * neither input can choose the scheme, the host or anything outside the
  * repository's own pages.
  *
- * The API does not say which commit was analysed, so the link points at the
- * default branch as it is today (`HEAD`), not at the lines the analyzer read.
+ * With the commit the version was analysed at, the link is a permalink: the file
+ * as the analyzer read it. Without one (a version stored before commits were
+ * recorded, or a value that is not a commit id) it points at the default branch as
+ * it is today (`HEAD`), where the lines may have moved.
  */
 
 import type { Evidence } from "@/lib/api/types";
 
-export type EvidenceLink = { href: string; host: string };
+export type EvidenceLink = {
+  href: string;
+  host: string;
+  /** Whether the link shows the analysed commit rather than today's default branch. */
+  pinned: boolean;
+};
 
 type HostFormat = {
-  filePath: (owner: string, repo: string, file: string) => string;
+  filePath: (owner: string, repo: string, ref: string, file: string) => string;
   lines: (start: number, end: number) => string;
 };
 
 const HOSTS: Record<string, HostFormat> = {
   "github.com": {
-    filePath: (owner, repo, file) => `/${owner}/${repo}/blob/HEAD/${file}`,
+    filePath: (owner, repo, ref, file) => `/${owner}/${repo}/blob/${ref}/${file}`,
     lines: (start, end) => (start === end ? `L${start}` : `L${start}-L${end}`),
   },
   "gitlab.com": {
-    filePath: (owner, repo, file) => `/${owner}/${repo}/-/blob/HEAD/${file}`,
+    filePath: (owner, repo, ref, file) => `/${owner}/${repo}/-/blob/${ref}/${file}`,
     lines: (start, end) => (start === end ? `L${start}` : `L${start}-${end}`),
   },
   "bitbucket.org": {
-    filePath: (owner, repo, file) => `/${owner}/${repo}/src/HEAD/${file}`,
+    filePath: (owner, repo, ref, file) => `/${owner}/${repo}/src/${ref}/${file}`,
     lines: (start, end) => (start === end ? `lines-${start}` : `lines-${start}:${end}`),
   },
 };
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const LINES = /^(\d{1,9})(?:-(\d{1,9}))?$/;
+// A full git object id: SHA-1 or SHA-256, in hexadecimal.
+const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+
+/** The commit id if it is one, so nothing else can become part of an address. */
+export function commitOrNull(commitSha: string | null | undefined): string | null {
+  return typeof commitSha === "string" && COMMIT.test(commitSha) ? commitSha.toLowerCase() : null;
+}
 
 /** The repository URL if it is safe to use as a link target: https and nothing else. */
 export function httpsUrlOrNull(value: string): string | null {
@@ -50,17 +64,33 @@ export function httpsUrlOrNull(value: string): string | null {
   return url.href;
 }
 
-export function evidenceLink(repositoryUrl: string, evidence: Evidence): EvidenceLink | null {
+export function evidenceLink(
+  repositoryUrl: string,
+  evidence: Evidence,
+  commitSha: string | null = null,
+): EvidenceLink | null {
   const repository = knownRepository(repositoryUrl);
   const file = encodedRelativePath(evidence.file);
   if (repository === null || file === null) return null;
 
   const { host, owner, repo } = repository;
   const format = HOSTS[host];
-  const url = new URL(format.filePath(owner, repo, file), `https://${host}`);
+  const commit = commitOrNull(commitSha);
+  const url = new URL(format.filePath(owner, repo, commit ?? "HEAD", file), `https://${host}`);
   const range = lineRange(evidence.lines);
   if (range !== null) url.hash = format.lines(range.start, range.end);
-  return { href: url.href, host };
+  return { href: url.href, host, pinned: commit !== null };
+}
+
+/** Where evidence comes from: the project's repository and the commit a version was analysed at. */
+export type EvidenceSource = {
+  repositoryUrl: string;
+  commitSha: string | null;
+};
+
+/** The host evidence can be linked on, or nothing when the repository is not on a known host. */
+export function linkableHost(repositoryUrl: string): string | null {
+  return knownRepository(repositoryUrl)?.host ?? null;
 }
 
 function knownRepository(repositoryUrl: string): { host: string; owner: string; repo: string } | null {

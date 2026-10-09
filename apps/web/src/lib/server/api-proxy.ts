@@ -8,8 +8,8 @@
  *
  * This module decides and builds; it does no I/O except through the `fetch` it is
  * given. It deliberately is not a general proxy: only the routes listed in
- * `ALLOWED_ROUTES` exist, and the upstream URL is built from validated parts, never
- * from the incoming URL.
+ * `ALLOWED_ROUTES` exist, the only query parameters are the two that page a list,
+ * and the upstream URL is built from validated parts, never from the incoming URL.
  */
 
 import type { paths } from "@/lib/api/schema";
@@ -33,25 +33,38 @@ type AllowedRoute = {
   /** The API path this route forwards to, kept in step with the contract by its type. */
   template: keyof paths;
   pattern: RegExp;
+  /** A list that is read page by page: `limit` and `cursor` are forwarded. */
+  paged: boolean;
 };
 
-function route(method: Method, template: keyof paths): AllowedRoute {
+function route(method: Method, template: keyof paths, paged = false): AllowedRoute {
   const pattern = template
     .replace(/\{(project_id|run_id)\}/g, UUID)
     .replace(/\{version\}/g, VERSION);
-  return { method, template, pattern: new RegExp(`^${pattern}$`) };
+  return { method, template, pattern: new RegExp(`^${pattern}$`), paged };
 }
+
+const PAGED = true;
 
 /** Every API route the dashboard uses. Nothing else is forwarded. */
 export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
+  route("GET", "/v1/projects", PAGED),
   route("POST", "/v1/projects"),
+  route("GET", "/v1/projects/{project_id}"),
+  route("GET", "/v1/projects/{project_id}/analyses", PAGED),
   route("POST", "/v1/projects/{project_id}/analyses"),
   route("GET", "/v1/projects/{project_id}/analyses/{run_id}"),
-  route("GET", "/v1/projects/{project_id}/profile/draft"),
-  route("GET", "/v1/projects/{project_id}/profile/approved"),
+  route("GET", "/v1/projects/{project_id}/profile/versions", PAGED),
+  route("GET", "/v1/projects/{project_id}/profile/versions/{version}"),
   route("POST", "/v1/projects/{project_id}/profile/versions/{version}/edits"),
   route("POST", "/v1/projects/{project_id}/profile/versions/{version}/approval"),
 ];
+
+// What a page of a list may be asked for, as the contract has it: 1 to 100 items,
+// and the API's own opaque cursor (URL-safe base64, at most 200 characters).
+const MAX_PAGE_SIZE = 100;
+const LIMIT = /^[1-9][0-9]{0,2}$/;
+const CURSOR = /^[A-Za-z0-9_-]{1,200}$/;
 
 export class ProxyRefusal extends Error {
   constructor(
@@ -103,18 +116,52 @@ export function assertFromDashboard(method: string, headers: Headers): void {
   }
 }
 
-/** The API path for an allowed request; refuses every other method and path. */
-export function allowedApiPath(method: string, pathSegments: readonly string[]): string {
+/**
+ * The API path and query for an allowed request; refuses every other method and path.
+ *
+ * A query is refused rather than dropped, so a caller learns that what it sent had
+ * no effect: only a paged list takes one, only `limit` and `cursor`, each once and
+ * each in the form the API issues.
+ */
+export function allowedApiTarget(
+  method: string,
+  pathSegments: readonly string[],
+  query: URLSearchParams,
+): string {
   const path = `/v1/${pathSegments.join("/")}`;
-  const allowed = ALLOWED_ROUTES.some((r) => r.method === method && r.pattern.test(path));
-  if (!allowed) {
+  const matched = ALLOWED_ROUTES.find((r) => r.method === method && r.pattern.test(path));
+  if (matched === undefined) {
     throw new ProxyRefusal(
       404,
       "proxy_route_not_allowed",
       "the dashboard does not forward this method and path",
     );
   }
-  return path;
+  const forwarded = pageQuery(query, matched.paged);
+  return forwarded === "" ? path : `${path}?${forwarded}`;
+}
+
+function pageQuery(query: URLSearchParams, paged: boolean): string {
+  const forwarded = new URLSearchParams();
+  for (const name of new Set(query.keys())) {
+    const values = query.getAll(name);
+    const valid =
+      paged &&
+      values.length === 1 &&
+      ((name === "limit" && LIMIT.test(values[0]) && Number(values[0]) <= MAX_PAGE_SIZE) ||
+        (name === "cursor" && CURSOR.test(values[0])));
+    if (!valid) {
+      throw new ProxyRefusal(
+        400,
+        "proxy_query_rejected",
+        paged
+          ? "a list takes only `limit` (1 to 100) and `cursor` (as the API issued it), each once"
+          : "this route takes no query parameters",
+      );
+    }
+    forwarded.set(name, values[0]);
+  }
+  return forwarded.toString();
 }
 
 /** The API's base URL from server configuration: an http(s) origin and nothing more. */
@@ -156,8 +203,8 @@ export async function readJsonBody(request: Request): Promise<string | undefined
 /**
  * Check a request and forward it to the API, or answer with the refusal.
  *
- * Only the method, the validated path and the JSON body travel upstream: no cookie,
- * no query string and no header of the browser's.
+ * Only the method, the validated path, a list's page parameters and the JSON body
+ * travel upstream: no cookie, no other query and no header of the browser's.
  */
 export async function proxyToApi(
   request: Request,
@@ -167,9 +214,10 @@ export async function proxyToApi(
 ): Promise<Response> {
   try {
     assertFromDashboard(request.method, request.headers);
-    const path = allowedApiPath(request.method, pathSegments);
+    const query = new URL(request.url).searchParams;
+    const pathAndQuery = allowedApiTarget(request.method, pathSegments, query);
     const body = await readJsonBody(request);
-    const target = new URL(path, apiBaseUrl(configuredApiUrl));
+    const target = new URL(pathAndQuery, apiBaseUrl(configuredApiUrl));
     return await forward(send, target, request.method, body);
   } catch (error) {
     if (error instanceof ProxyRefusal) return error.toResponse();

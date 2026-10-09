@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ProductProfile } from "@/lib/api/types";
 
 import {
+  changedParts,
   countChanges,
   withAudiencePrimary,
   withBrandVoice,
@@ -70,5 +71,45 @@ describe("counting changes", () => {
 
   it("does not count clearing a text that had no value", () => {
     expect(countChanges(stored, withAudiencePrimary(stored, ""))).toBe(0);
+  });
+});
+
+describe("what an edit changed", () => {
+  it("names each edited value", () => {
+    let edited = withFeature(stored, "sync", { status: "live", description: "Sync over Wi-Fi" });
+    edited = withBusinessModelType(withAudiencePrimary(withProductName(edited, "Memoria 2"), "Families"), "free");
+    expect(changedParts(stored, edited)).toEqual([
+      "Product name",
+      "Status of sync",
+      "Description of sync",
+      "Primary audience",
+      "Business model type",
+    ]);
+  });
+
+  it("is nothing for the same content", () => {
+    expect(changedParts(stored, structuredClone(stored))).toEqual([]);
+  });
+
+  it("points at the part when a value the dashboard cannot edit differs", () => {
+    const edited: ProductProfile = {
+      ...stored,
+      product: { ...stored.product, platforms: ["ios", "android"] },
+      measurement: { ...claim, analytics: ["posthog"], attribution: null, deep_links: null },
+      features: [{ ...stored.features![0], confidence: 0.4 }, stored.features![1]],
+    };
+    expect(changedParts(stored, edited)).toEqual([
+      "Product: other values",
+      "Evidence or confidence of rooms",
+      "Measurement",
+    ]);
+  });
+
+  it("says when a feature was added or removed", () => {
+    const edited: ProductProfile = {
+      ...stored,
+      features: [stored.features![1], { ...claim, id: "export", description: "Export", status: "unknown" }],
+    };
+    expect(changedParts(stored, edited)).toEqual(["Feature removed: rooms", "Feature added: export"]);
   });
 });

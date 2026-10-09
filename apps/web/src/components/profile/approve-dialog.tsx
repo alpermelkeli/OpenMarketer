@@ -17,6 +17,8 @@ type ApproveDialogProps = {
   version: number;
   /** How many parts are still listed under "Needs your attention". */
   flaggedCount: number;
+  /** A newer version that is already approved, if there is one. */
+  newerApprovedVersion: number | null;
   pending: boolean;
   /** Why the last attempt failed, in words for the reviewer. */
   problem: string | null;
@@ -29,6 +31,7 @@ export function ApproveDialog({
   onOpenChange,
   version,
   flaggedCount,
+  newerApprovedVersion,
   pending,
   problem,
   onApprove,
@@ -47,6 +50,13 @@ export function ApproveDialog({
           <p className="rounded-md border border-warning/45 bg-warning/8 px-3 py-2 text-sm text-pretty">
             {flaggedCount === 1 ? "1 part is" : `${flaggedCount} parts are`} still listed under &ldquo;Needs your
             attention&rdquo;. Approving accepts them as they are.
+          </p>
+        )}
+        {newerApprovedVersion !== null && (
+          <p className="rounded-md border px-3 py-2 text-sm text-pretty text-muted-foreground">
+            Version {newerApprovedVersion} is newer and already approved. The latest approved version is the one
+            with the highest number, so approving version {version} records your approval of it without making it
+            the current profile.
           </p>
         )}
         {problem !== null && (

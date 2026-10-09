@@ -28,13 +28,37 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List All
+         * @description The workspace's projects, newest first, one page at a time.
+         */
+        get: operations["listProjects"];
         put?: never;
         /**
          * Create
          * @description Register a repository. Only https:// URLs are accepted; nothing is cloned yet.
          */
         post: operations["createProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get
+         * @description One project of the workspace, with where its review stands now.
+         */
+        get: operations["getProject"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -48,7 +72,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List All
+         * @description The project's runs as they are now, newest first, one page at a time.
+         *
+         *     The first one is the unfinished run, when the project has one.
+         */
+        get: operations["listAnalyses"];
         put?: never;
         /**
          * Start
@@ -125,6 +155,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/profile/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Versions
+         * @description The project's versions without their profiles, highest number first, a page at a time.
+         */
+        get: operations["listProfileVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/profile/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Version
+         * @description One version with its profile, draft or approved.
+         */
+        get: operations["getProfileVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{project_id}/profile/versions/{version}/approval": {
         parameters: {
             query?: never;
@@ -169,6 +239,16 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AnalysisRunListResponse */
+        AnalysisRunListResponse: {
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+            /** Runs */
+            runs: components["schemas"]["AnalysisRunResponse"][];
+        };
         /** AnalysisRunResponse */
         AnalysisRunResponse: {
             /**
@@ -329,6 +409,12 @@ export interface components {
          */
         Problem: {
             code: components["schemas"]["ErrorCode"];
+            /**
+             * Existing Project Id
+             * Format: uuid
+             * @description Only with `project_already_exists`: the project the workspace already has for that repository.
+             */
+            existing_project_id?: string;
             /** Message */
             message: string;
         };
@@ -371,17 +457,40 @@ export interface components {
          * @enum {string}
          */
         ProfileStatus: "draft" | "approved";
-        /** ProfileVersionResponse */
+        /** ProfileVersionListResponse */
+        ProfileVersionListResponse: {
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+            /** Versions */
+            versions: components["schemas"]["ProfileVersionSummaryResponse"][];
+        };
+        /**
+         * ProfileVersionResponse
+         * @description A version with its profile.
+         */
         ProfileVersionResponse: {
             /** Approved At */
             approved_at: string | null;
             /** Approved By */
             approved_by: string | null;
             /**
+             * Commit Sha
+             * @description The commit of the repository that was analysed. An edit keeps the commit of the version it was made from.
+             */
+            commit_sha: string | null;
+            /**
              * Created At
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Edited From Version
+             * @description The version this one is an edit of; null when an analysis stored it.
+             */
+            edited_from_version: number | null;
             profile: components["schemas"]["ProductProfile"];
             /**
              * Project Id
@@ -391,6 +500,49 @@ export interface components {
             status: components["schemas"]["ProfileStatus"];
             /** Version */
             version: number;
+        };
+        /**
+         * ProfileVersionSummaryResponse
+         * @description A version without its profile.
+         */
+        ProfileVersionSummaryResponse: {
+            /** Approved At */
+            approved_at: string | null;
+            /** Approved By */
+            approved_by: string | null;
+            /**
+             * Commit Sha
+             * @description The commit of the repository that was analysed. An edit keeps the commit of the version it was made from.
+             */
+            commit_sha: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Edited From Version
+             * @description The version this one is an edit of; null when an analysis stored it.
+             */
+            edited_from_version: number | null;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            status: components["schemas"]["ProfileStatus"];
+            /** Version */
+            version: number;
+        };
+        /** ProjectListResponse */
+        ProjectListResponse: {
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+            /** Projects */
+            projects: components["schemas"]["ProjectResponse"][];
         };
         /** ProjectResponse */
         ProjectResponse: {
@@ -404,10 +556,25 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Latest Approved Version
+             * @description The highest approved version.
+             */
+            latest_approved_version: number | null;
+            /**
+             * Latest Draft Version
+             * @description The highest draft version. It can be lower than `latest_approved_version`.
+             */
+            latest_draft_version: number | null;
             /** Name */
             name: string;
             /** Repository Url */
             repository_url: string;
+            /**
+             * Unfinished Run Id
+             * @description The analysis run that is queued or running; a project has at most one.
+             */
+            unfinished_run_id: string | null;
         };
         /** SaveProfileEditRequest */
         SaveProfileEditRequest: {
@@ -455,6 +622,58 @@ export interface operations {
             };
         };
     };
+    listProjects: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     createProject: {
         parameters: {
             query?: never;
@@ -497,6 +716,127 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listAnalyses: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisRunListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -723,6 +1063,128 @@ export interface operations {
             header?: never;
             path: {
                 project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileVersionResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listProfileVersions: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileVersionListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getProfileVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                version: number;
             };
             cookie?: never;
         };
