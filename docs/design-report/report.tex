@@ -249,21 +249,26 @@ The first design used a small in-house agent loop. Two things changed that decis
 \midrule
 \endhead
 Time & Schedules, timers, waits of hours or days & Not used for long waits\\
-Reliability & Retries, idempotent side effects, recovery after crashes & Checkpoints within a task so a graph can resume after a failure\\
+Reliability & Decides when and how often an attempt is made: retries, time limits, heartbeats, recovery after crashes & Checkpoints within a task decide where the next attempt continues\\
 Human involvement & Approval waits resumed by a signal & Short interrupts inside a chat turn\\
 Reasoning flow & Not used & Nodes, conditional edges, loops, subgraphs, tool-calling agents\\
 Scope & Across tasks and projects & Inside one task\\
 \bottomrule
 \end{longtable}
 
-\textbf{How they fit.} A Temporal activity starts a graph with an input and a thread identifier, streams its events and returns a structured result. A workflow that needs a human decision ends the activity and waits for a Temporal signal instead of keeping a graph paused for days.
+\textbf{How they fit.} A graph runs inside a Temporal activity. The workflow passes the activity the identifiers of the run and nothing else; the activity runs the graph under a thread that is the run itself and returns or stores a structured result. Temporal decides when and how often an attempt is made, through the activity's retry policy, heartbeat and time limit; the checkpoint decides where an attempt continues. Only one attempt at a time works on a thread: a later attempt is refused while an earlier one that Temporal has given up on is still running, and is tried again after the usual wait. The workflow history holds identifiers, limits and short messages, never graph state, because the history is stored and readable in Temporal's interface. A workflow that needs a human decision ends the activity and waits for a Temporal signal instead of keeping a graph paused for days.
+
+\textbf{How a graph resumes.} A checkpoint is stored after every step of a graph, before the next step starts. An attempt continues after the last finished step. The step that was running when the earlier attempt stopped is run again, so a step must be safe to repeat: it either only reads, or repeats one model call, or reaches the outside world through a policy-gated tool whose side effect is idempotent. Limits such as the number of steps and the cost are part of the state, so they hold across attempts instead of starting again with each one. A graph that had finished returns its stored result without calling a model. What counts as the same input is a rule of each graph, checked before continuing. For the repository analyzer it is the commit: an attempt that finds the repository at another commit discards the stored progress and starts over, with its limits, because the evidence in the stored conversation cites lines that may have changed.
+
+\textbf{Checkpoints are working state, not a record.} They live in PostgreSQL, in the checkpoint library's own tables, which are created through the project's migrations and not by the library at run time. They are keyed by the thread, that is, by the run the graph belongs to. They are removed when the run ends, successfully or not, and a periodic cleanup removes what that missed: threads of finished runs, threads no run can be named for, and threads of runs that started longer ago than a run can last. What must be kept of a run (its result, its evidence, its audit entries) is written to the project's own tables. The library stores a graph's whole state at each step, so a thread grows with the square of the number of steps; this is acceptable because threads are temporary.
 
 \textbf{Boundaries we keep.}
 \begin{enumerate}
   \item Graphs are thin wiring; domain logic lives in plain Python modules that can be tested without the framework.
   \item Nodes call our model router (Section~\ref{sec:llm}) directly. LangChain model wrappers are optional, so the role-to-model configuration stays the single source of truth.
   \item Graph nodes cannot reach connectors, media providers or the sandbox except through policy-gated tools. The gate is part of the tool wrapper, not a node a graph could skip.
-  \item Checkpoints are stored in PostgreSQL with the project identifier, under the same row-level security as other data.
+  \item Checkpoints are stored in PostgreSQL in the checkpoint library's own tables, keyed by a thread that is the run they belong to, and removed when the run ends. These tables carry no project identifier: a thread is tied to a project through its run. A row-level security policy for them, joining a thread to its run, is part of the row-level security work of Section~\ref{sec:data}.
+  \item What is read back from the checkpoint tables is data. Graph state is plain data, and the store refuses to construct anything else on load, so a row written by someone else cannot name code to run.
   \item The library version is pinned behind a small adapter, so graphs can be rewritten or replaced if the framework changes direction.
 \end{enumerate}
 
@@ -594,6 +599,7 @@ Credential theft & Tokens leaked through logs or prompts & Envelope encryption, 
 Runaway spend & Bug or loop creates many campaigns & Atomic ledger, per-day caps, platform-side limits, kill switch\\
 Leak of private information & Unreleased feature appears in a public post & Publishable flags, content filter, secret scanning, mandatory profile approval\\
 Cross-project leakage & One project's memory used in another & Row-level security on every table, namespaced vector search, separate secrets\\
+Tampered graph state & A row written into the checkpoint tables names code to run when a graph resumes & Checkpoints are read back as plain data only (Section~\ref{sec:graphs}); they are removed when the run ends\\
 Malicious plugin & Third-party connector exfiltrates data & Declared scopes, risk class per action, sandbox tests for core inclusion, signed releases, optional plugin allow-list\\
 Account bans & Automation flagged by a platform & Official APIs only, rate limits per connector, no policy-violating automation (Section~\ref{sec:abuse})\\
 Tampering with history & Attempt to hide an action & Append-only, hash-chained audit log\\
@@ -754,9 +760,9 @@ Video generation is the most expensive step, so the studio prefers to verify the
 Each round is saved as an asset version with its code, prompts, parameters, provider and model, verifier report and cost. Approval cards in the dashboard show the final asset and a short summary of how it was made; generated media carries the platform's AI label where one exists. Quality is measured on a set of recurring briefs: first-pass success rate, rounds per accepted asset, cost per accepted asset, human acceptance rate, and agreement between the verifier and human reviewers.
 
 % ---------------------------------------------------------------- 9
-\section{Data Model}
+\section{Data Model}\label{sec:data}
 
-The data model (Figure~\ref{fig:er}) separates project configuration, decisions, execution results, safety records and learning. Every table carries a project identifier, and PostgreSQL row-level security binds each database session to one project, so a bug in application code cannot read across projects.
+The data model (Figure~\ref{fig:er}) separates project configuration, decisions, execution results, safety records and learning. Every table of the application carries a project identifier, and PostgreSQL row-level security binds each database session to one project, so a bug in application code cannot read across projects. The tables of the graph checkpoint library are the one exception to the identifier: their rows are tied to a project through the run a thread is named after (Section~\ref{sec:graphs}), they hold temporary working state, and their policy has to join a thread to its run.
 
 \figland{fig_er}{Core entities. Proposals are the central record: each has a risk level, the profile version it used, zero or more approvals, and links to produced content, media assets or campaigns.}{fig:er}
 
@@ -1014,7 +1020,7 @@ Legal and compliance & High & Varies by market & Policy packs, disclosure labels
   \item \textbf{Commercial model.} Pure services, or services plus a hosted offering later? Which first client profile to target?
   \item \textbf{Attribution.} Which attribution source to support first (Firebase, AppsFlyer, Adjust, or store data only).
   \item \textbf{Name and trademark.} Replace the working name before a public release.
-  \item \textbf{Graph integration.} How graph checkpoints and Temporal history relate in practice, and which graphs are worth the framework (studio and chat first).
+  \item \textbf{Graph integration.} How graph checkpoints and Temporal history relate is settled (Section~\ref{sec:graphs}). Still open: how large a thread may get before the conversation has to be stored another way, since a thread grows with the square of the number of steps; how a running graph reports progress to the user; and which graphs are worth the framework (studio and chat first).
   \item \textbf{Sandbox technology.} Docker is the default; decide whether hosted or client deployments need gVisor or microVMs.
   \item \textbf{Studio providers.} Which image and video models and edit endpoints to support first, and how to confirm Higgsfield's programmatic access.
   \item \textbf{Golden repository set.} Which open-source apps will be used as the first benchmark.
