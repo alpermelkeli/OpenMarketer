@@ -23,6 +23,7 @@ RUN_UNAVAILABLE = "RunUnavailable"  # the run does not exist or is already finis
 RUN_NOT_FOUND_YET = "RunNotFoundYet"  # the run may not have been committed yet
 MODEL_UNAVAILABLE = "ModelUnavailable"  # the provider failed or limited the rate
 DATABASE_UNAVAILABLE = "DatabaseUnavailable"  # the database refused or was unreachable
+ATTEMPT_STILL_RUNNING = "AttemptStillRunning"  # an attempt given up on has not returned yet
 UNEXPECTED = "Unexpected"
 NOT_RETRIED = (ANALYSIS_FAILED, RUN_UNAVAILABLE)
 # Failures raised by the activities below carry a message written for the run's reader.
@@ -32,6 +33,7 @@ WORDED_BY_THE_ACTIVITY = (
     RUN_NOT_FOUND_YET,
     MODEL_UNAVAILABLE,
     DATABASE_UNAVAILABLE,
+    ATTEMPT_STILL_RUNNING,
     UNEXPECTED,
 )
 
@@ -42,6 +44,7 @@ WORKER_STOPPED = "the worker running the analysis stopped responding"
 CANCELLED = "the analysis was cancelled"
 NOT_STORED = "the analysis finished, but its profile could not be stored"
 DATABASE_FAILED = "the database could not be reached"
+EARLIER_ATTEMPT_RUNNING = "an earlier attempt at the analysis is still running"
 
 
 @dataclass(frozen=True)

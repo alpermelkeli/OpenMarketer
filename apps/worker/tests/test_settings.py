@@ -1,8 +1,10 @@
-"""Tests for the settings the worker process reads at start-up."""
+"""Tests for the settings of the worker process itself, read at start-up.
+
+The settings of an agent are tested in its folder.
+"""
 
 import pytest
 
-from openmarketer_worker.policy import AnalysisPolicy
 from openmarketer_worker.settings import Settings, SettingsError
 
 DATABASE = {"DATABASE_URL": "postgresql+psycopg://u:p@localhost/db"}
@@ -37,27 +39,16 @@ def test_temporal_address_and_namespace_are_read_from_the_environment():
     )
 
 
-def test_analysis_limits_have_defaults():
-    assert Settings.from_env(DATABASE).analysis_policy == AnalysisPolicy()
+def test_activities_run_at_once_have_a_default():
+    assert Settings.from_env(DATABASE).max_concurrent_activities == 4
 
 
-def test_analysis_limits_are_read_from_the_environment():
-    settings = Settings.from_env(
-        {**DATABASE, "ANALYSIS_TIMEOUT_MINUTES": "45", "ANALYSIS_MAX_ATTEMPTS": "1"}
-    )
-    assert settings.analysis_policy.attempt_timeout_seconds == 45 * 60
-    assert settings.analysis_policy.max_attempts == 1
+def test_activities_run_at_once_are_read_from_the_environment():
+    settings = Settings.from_env({**DATABASE, "WORKER_MAX_CONCURRENT_ACTIVITIES": "8"})
+    assert settings.max_concurrent_activities == 8
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["ANALYSIS_TIMEOUT_MINUTES", "ANALYSIS_MAX_ATTEMPTS", "WORKER_MAX_CONCURRENT_ACTIVITIES"],
-)
 @pytest.mark.parametrize("value", ["0", "-1", "soon"])
-def test_limit_that_is_not_a_positive_number_is_refused_by_name(name, value):
-    with pytest.raises(SettingsError, match=name):
-        Settings.from_env({**DATABASE, name: value})
-
-
-def test_heartbeats_are_sent_three_times_within_their_timeout():
-    assert AnalysisPolicy(heartbeat_timeout_seconds=60).heartbeat_every_seconds == 20
+def test_limit_that_is_not_a_positive_number_is_refused_by_name(value):
+    with pytest.raises(SettingsError, match="WORKER_MAX_CONCURRENT_ACTIVITIES"):
+        Settings.from_env({**DATABASE, "WORKER_MAX_CONCURRENT_ACTIVITIES": value})

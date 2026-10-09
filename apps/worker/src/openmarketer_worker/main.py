@@ -1,9 +1,10 @@
 """The worker process: read the environment, build what activities need, serve the queue.
 
 Everything an analysis depends on is built here once (database sessions, the
-model router, the extractors, the repository tokens) and handed to the
-activities. This module holds no rule: which token goes to which host, how a
-repository is analysed and how a run changes state are all in core.
+checkpoint store's address, the model router, the extractors, the repository
+tokens) and handed to the activities. This module holds no rule: which token
+goes to which host, how a repository is analysed, how a run changes state and
+which checkpoints may be removed are all in core.
 """
 
 from __future__ import annotations
@@ -14,20 +15,42 @@ import os
 import signal
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager
+from datetime import timedelta
 from pathlib import Path
 
+from sqlalchemy.orm import Session, sessionmaker
 from temporalio.client import Client
 from temporalio.worker import Worker
 
 from openmarketer_core.analysis_workflow import ANALYSIS_TASK_QUEUE
 from openmarketer_core.db.session import DatabaseError, session_factory
 from openmarketer_core.extraction import discover_extractors
+from openmarketer_core.graph_checkpoints import RunCheckpoints
+from openmarketer_core.graph_checkpoints.postgres import (
+    driver_connection_string,
+    forget_checkpoints,
+    run_checkpoints,
+)
 from openmarketer_core.intake import IntakeError, RepositoryTokens
 from openmarketer_core.llm import RouterChatModel
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ConfigError, ModelRouter
 from openmarketer_core.repository_analysis import RepositoryAnalysis, analyze_repository
-from openmarketer_worker.activities import AnalyseRepository, AnalysisActivities
-from openmarketer_worker.analyze_repository import AnalyzeRepository
+from openmarketer_worker.repository_analyzer.activities import (
+    AnalyseRepository,
+    AnalysisActivities,
+    CheckpointAccess,
+)
+from openmarketer_worker.repository_analyzer.checkpoint_cleanup import (
+    keep_removing_leftover_checkpoints,
+)
+from openmarketer_worker.repository_analyzer.policy import (
+    CHECKPOINT_CLEANUP_EVERY_SECONDS,
+    AnalysisPolicy,
+    longest_analysis_seconds,
+)
+from openmarketer_worker.repository_analyzer.settings import RepositoryAnalyzerSettings
+from openmarketer_worker.repository_analyzer.workflow import AnalyzeRepository
 from openmarketer_worker.settings import Settings, SettingsError
 
 logger = logging.getLogger(__name__)
@@ -51,17 +74,36 @@ def analysis_with_configured_models(environ: Mapping[str, str]) -> AnalyseReposi
     tokens = RepositoryTokens.from_environment(environ)
     extractors = list(discover_extractors())
 
-    def analyse(repository_url: str, clone_into: Path) -> RepositoryAnalysis:
-        # A chat model per run: it keeps the replies of the run it served.
+    def analyse(
+        repository_url: str, clone_into: Path, checkpoints: RunCheckpoints
+    ) -> RepositoryAnalysis:
+        # A chat model per attempt: it keeps the replies of the attempt it served.
         return analyze_repository(
             repository_url,
             clone_into,
             model=RouterChatModel(router=router),
             extractors=extractors,
             tokens=tokens,
+            checkpoints=checkpoints,
         )
 
     return analyse
+
+
+def checkpoints_in(database_url: str) -> CheckpointAccess:
+    """The checkpoints of analysis runs, kept in the database the runs themselves are in."""
+    # Asked for here, so a URL the checkpoint store cannot use stops the worker and not every run.
+    driver_connection_string(database_url)
+
+    # Functions, not ``functools.partial``: the text of a partial shows its arguments,
+    # and the URL holds the password.
+    def of_attempt(thread_id: str) -> AbstractContextManager[RunCheckpoints]:
+        return run_checkpoints(database_url, thread_id)
+
+    def forget(thread_id: str) -> None:
+        forget_checkpoints(database_url, thread_id)
+
+    return CheckpointAccess(of_attempt=of_attempt, forget=forget)
 
 
 def build_worker(
@@ -87,7 +129,9 @@ async def serve(environ: Mapping[str, str]) -> None:
     """Run the worker until the process is asked to stop."""
     try:
         settings = Settings.from_env(environ)
+        analyzer = RepositoryAnalyzerSettings.from_env(environ)
         sessions = session_factory(settings.database_url)
+        checkpoints = checkpoints_in(settings.database_url)
         analyse = analysis_with_configured_models(environ)
     except (SettingsError, DatabaseError, ConfigError, IntakeError, OSError) as e:
         raise StartupError(str(e)) from e
@@ -103,7 +147,7 @@ async def serve(environ: Mapping[str, str]) -> None:
 
     worker = build_worker(
         client,
-        AnalysisActivities(sessions, analyse, settings.analysis_policy),
+        AnalysisActivities(sessions, analyse, checkpoints, analyzer.policy),
         task_queue=ANALYSIS_TASK_QUEUE,
         max_concurrent_activities=settings.max_concurrent_activities,
     )
@@ -111,15 +155,37 @@ async def serve(environ: Mapping[str, str]) -> None:
     loop = asyncio.get_running_loop()
     for signal_number in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signal_number, stop.set)
-    async with worker:
-        logger.info(
-            "worker serving %s on %s (namespace %s)",
-            ANALYSIS_TASK_QUEUE,
-            settings.temporal_address,
-            settings.temporal_namespace,
+    logger.info(
+        "worker serving %s on %s (namespace %s)",
+        ANALYSIS_TASK_QUEUE,
+        settings.temporal_address,
+        settings.temporal_namespace,
+    )
+    await serve_until(stop, worker, sessions, analyzer.policy)
+
+
+async def serve_until(
+    stop: asyncio.Event,
+    worker: Worker,
+    sessions: sessionmaker[Session],
+    analysis_policy: AnalysisPolicy,
+) -> None:
+    """Serve the worker's queue, and remove left-over checkpoints, until ``stop`` is set."""
+    cleanup = asyncio.create_task(
+        keep_removing_leftover_checkpoints(
+            sessions,
+            every_seconds=CHECKPOINT_CLEANUP_EVERY_SECONDS,
+            longest_run=timedelta(seconds=longest_analysis_seconds(analysis_policy)),
         )
-        await stop.wait()
-        logger.info("stopping; the process ends when analyses in progress have returned")
+    )
+    try:
+        async with worker:
+            await stop.wait()
+            logger.info("stopping; the process ends when analyses in progress have returned")
+    finally:
+        cleanup.cancel()
+        # Collected, so the task does not outlive the worker; its cancellation is the outcome.
+        await asyncio.gather(cleanup, return_exceptions=True)
 
 
 def main() -> None:
