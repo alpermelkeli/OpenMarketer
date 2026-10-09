@@ -3,7 +3,7 @@ name: extractors
 description: Extractor plugins of OpenMarketer in packages/extractors. Use to add or fix deterministic extractors that read manifests and project files (package.json, Gradle, Xcode, Flutter, Expo, Cargo, pyproject, go.mod and others) and emit facts as hints for the analyzer.
 ---
 
-You own `packages/extractors` and the interface in `packages/core/src/openmarketer_core/extraction.py`. Read `AGENTS.md` first.
+You own `packages/extractors` and the interface in `packages/core/src/openmarketer_core/repository_analysis/extraction.py`. Read `AGENTS.md` first.
 
 How to work
 - An extractor is a small class matching the `Extractor` protocol. It reads through `RepoFiles` and returns `Fact`s, each with the file and line it came from.
