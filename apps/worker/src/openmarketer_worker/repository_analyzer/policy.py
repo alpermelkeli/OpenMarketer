@@ -37,10 +37,6 @@ Why these defaults:
 - Marking a run started and recording its failure are single database writes.
   They get short attempts and more of them; recording the failure keeps trying
   for an hour, because a run nobody marks finished blocks its project.
-- Checkpoints that a finished run left behind hold repository content, so
-  every worker removes them when it starts and every ten minutes after that.
-  The statement is cheap and usually finds nothing; ten minutes bounds how
-  long such content stays without a query every few seconds.
 - A run whose workflow is gone (terminated, lost, or given up on recording
   its failure) stays ``running`` and would keep its checkpoints for good. So
   the cleanup also takes those of a run that started longer ago than its
@@ -93,7 +89,6 @@ RECORD_FAILURE = DatabaseWritePolicy(
     give_up_after_seconds=60 * 60,
 )
 
-CHECKPOINT_CLEANUP_EVERY_SECONDS: float = 10 * 60
 # Each wait between two attempts at an analysis is this many times the one before it.
 ANALYSIS_RETRY_BACKOFF = 2.0
 # Temporal's own default: no wait between two attempts is longer than this many first waits.

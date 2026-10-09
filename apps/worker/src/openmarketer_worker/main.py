@@ -36,16 +36,16 @@ from openmarketer_core.intake import IntakeError, RepositoryTokens
 from openmarketer_core.llm import RouterChatModel
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ConfigError, ModelRouter
 from openmarketer_core.repository_analysis import RepositoryAnalysis, analyze_repository
+from openmarketer_worker.checkpoint_cleanup import (
+    CLEANUP_EVERY_SECONDS,
+    keep_removing_leftover_checkpoints,
+)
 from openmarketer_worker.repository_analyzer.activities import (
     AnalyseRepository,
     AnalysisActivities,
     CheckpointAccess,
 )
-from openmarketer_worker.repository_analyzer.checkpoint_cleanup import (
-    keep_removing_leftover_checkpoints,
-)
 from openmarketer_worker.repository_analyzer.policy import (
-    CHECKPOINT_CLEANUP_EVERY_SECONDS,
     AnalysisPolicy,
     longest_analysis_seconds,
 )
@@ -174,7 +174,7 @@ async def serve_until(
     cleanup = asyncio.create_task(
         keep_removing_leftover_checkpoints(
             sessions,
-            every_seconds=CHECKPOINT_CLEANUP_EVERY_SECONDS,
+            every_seconds=CLEANUP_EVERY_SECONDS,
             longest_run=timedelta(seconds=longest_analysis_seconds(analysis_policy)),
         )
     )

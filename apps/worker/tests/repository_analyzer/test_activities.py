@@ -26,12 +26,12 @@ from openmarketer_core.intake import IntakeError
 from openmarketer_core.llm import LLMError
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.repository_analysis import RepositoryAnalysis
-from openmarketer_worker.repository_analyzer import steps
-from openmarketer_worker.repository_analyzer.activities import AnalysisActivities, CheckpointAccess
-from openmarketer_worker.repository_analyzer.checkpoint_cleanup import (
+from openmarketer_worker.checkpoint_cleanup import (
     keep_removing_leftover_checkpoints,
     remove_leftover_checkpoints,
 )
+from openmarketer_worker.repository_analyzer import steps
+from openmarketer_worker.repository_analyzer.activities import AnalysisActivities, CheckpointAccess
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy
 
 POLICY = AnalysisPolicy(attempt_timeout_seconds=600, max_attempts=3)
