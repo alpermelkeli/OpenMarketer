@@ -1,0 +1,396 @@
+{
+  "schema_version": 1,
+  "product": {
+    "name": "Excalidraw",
+    "type": "consumer_app",
+    "platforms": [
+      "web"
+    ],
+    "languages": [],
+    "evidence": [
+      {
+        "file": "README.md",
+        "lines": "15-21"
+      },
+      {
+        "file": "README.md",
+        "lines": "71-79"
+      },
+      {
+        "file": "excalidraw-app/vite.config.mts",
+        "lines": "228-230"
+      },
+      {
+        "file": "packages/excalidraw/package.json",
+        "lines": "41"
+      }
+    ],
+    "confidence": 0.7
+  },
+  "features": [
+    {
+      "id": "drawing-tools",
+      "description": "Draw on an infinite canvas in a hand-drawn style with rectangle, diamond, ellipse, arrow, line, free-draw, text, sticky note and eraser tools.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "packages/excalidraw/components/Toolbar.tsx",
+          "lines": "290-310"
+        },
+        {
+          "file": "README.md",
+          "lines": "57-66"
+        }
+      ],
+      "confidence": 0.9
+    },
+    {
+      "id": "images-frames-and-embeds",
+      "description": "Insert images, group content in frames, embed web content, and point with a laser pointer, from the toolbar's extra tools menu.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "packages/excalidraw/components/Toolbar.tsx",
+          "lines": "123-173"
+        }
+      ],
+      "confidence": 0.85
+    },
+    {
+      "id": "export-image",
+      "description": "Export the drawing as a PNG or SVG file, or copy it to the clipboard as PNG.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "packages/excalidraw/components/ImageExportDialog.tsx",
+          "lines": "303-345"
+        }
+      ],
+      "confidence": 0.9
+    },
+    {
+      "id": "save-and-open-files",
+      "description": "Save a drawing to an .excalidraw file on disk and open it again later.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "packages/excalidraw/data/json.ts",
+          "lines": "77-113"
+        },
+        {
+          "file": "excalidraw-app/components/AppMainMenu.tsx",
+          "lines": "29-32"
+        }
+      ],
+      "confidence": 0.9
+    },
+    {
+      "id": "shape-libraries",
+      "description": "Keep reusable shapes in a library: load a library file, export your own, and publish it.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "packages/excalidraw/components/LibraryMenuHeaderContent.tsx",
+          "lines": "205-231"
+        }
+      ],
+      "confidence": 0.8
+    },
+    {
+      "id": "live-collaboration",
+      "description": "Start a live session and draw together with others in real time through a shared room link.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "excalidraw-app/share/ShareDialog.tsx",
+          "lines": "186-206"
+        },
+        {
+          "file": "excalidraw-app/collab/Collab.tsx",
+          "lines": "481-520"
+        }
+      ],
+      "confidence": 0.9
+    },
+    {
+      "id": "end-to-end-encryption",
+      "description": "Collaboration data and shared drawings are encrypted in the browser; the key stays in the link's hash and is never sent to the server.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "excalidraw-app/collab/Portal.tsx",
+          "lines": "85-101"
+        },
+        {
+          "file": "excalidraw-app/data/index.ts",
+          "lines": "148-164"
+        },
+        {
+          "file": "excalidraw-app/data/index.ts",
+          "lines": "253-285"
+        }
+      ],
+      "confidence": 0.85
+    },
+    {
+      "id": "shareable-links",
+      "description": "Export the drawing to a link that others can open, without starting a live session.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "excalidraw-app/share/ShareDialog.tsx",
+          "lines": "221-240"
+        },
+        {
+          "file": "excalidraw-app/data/index.ts",
+          "lines": "248-293"
+        }
+      ],
+      "confidence": 0.85
+    },
+    {
+      "id": "local-autosave",
+      "description": "The drawing is saved automatically in the browser's storage, so it is there when you come back.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "excalidraw-app/data/LocalData.ts",
+          "lines": "90-97"
+        },
+        {
+          "file": "excalidraw-app/data/LocalData.ts",
+          "lines": "117-147"
+        },
+        {
+          "file": "packages/excalidraw/locales/en.json",
+          "lines": "608-610"
+        }
+      ],
+      "confidence": 0.9
+    },
+    {
+      "id": "dark-mode",
+      "description": "Switch between light and dark theme, or follow the system setting.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "excalidraw-app/components/AppMainMenu.tsx",
+          "lines": "82"
+        },
+        {
+          "file": "excalidraw-app/useHandleAppTheme.ts",
+          "lines": "8-46"
+        }
+      ],
+      "confidence": 0.9
+    },
+    {
+      "id": "localization",
+      "description": "Use the interface in many languages, chosen from the main menu.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "packages/excalidraw/i18n.ts",
+          "lines": "19-30"
+        },
+        {
+          "file": "excalidraw-app/components/AppMainMenu.tsx",
+          "lines": "83-85"
+        }
+      ],
+      "confidence": 0.9
+    },
+    {
+      "id": "mermaid-to-diagram",
+      "description": "Paste a Mermaid definition and insert it as an editable Excalidraw diagram.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "packages/excalidraw/components/Toolbar.tsx",
+          "lines": "199-205"
+        },
+        {
+          "file": "packages/excalidraw/components/TTDDialog/MermaidToExcalidraw.tsx",
+          "lines": "96-109"
+        }
+      ],
+      "confidence": 0.85
+    },
+    {
+      "id": "text-to-diagram-ai",
+      "description": "Describe a diagram in a chat and have AI generate it (marked as beta in the dialog).",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "packages/excalidraw/components/TTDDialog/TTDDialog.tsx",
+          "lines": "100-123"
+        },
+        {
+          "file": "excalidraw-app/components/AI.tsx",
+          "lines": "153-170"
+        },
+        {
+          "file": "excalidraw-app/App.tsx",
+          "lines": "1062-1064"
+        }
+      ],
+      "confidence": 0.65
+    },
+    {
+      "id": "wireframe-to-code-ai",
+      "description": "Draw a wireframe inside an AI frame and have it turned into HTML code.",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "packages/excalidraw/components/Toolbar.tsx",
+          "lines": "206-216"
+        },
+        {
+          "file": "packages/excalidraw/components/App.tsx",
+          "lines": "2531-2549"
+        },
+        {
+          "file": "excalidraw-app/components/AI.tsx",
+          "lines": "26-69"
+        }
+      ],
+      "confidence": 0.6
+    },
+    {
+      "id": "installable-offline-app",
+      "description": "Install the web app and keep using it offline (progressive web app with a service worker).",
+      "status": "live",
+      "evidence": [
+        {
+          "file": "excalidraw-app/vite.config.mts",
+          "lines": "157-162"
+        },
+        {
+          "file": "excalidraw-app/vite.config.mts",
+          "lines": "228-257"
+        },
+        {
+          "file": "excalidraw-app/index.tsx",
+          "lines": "3-12"
+        },
+        {
+          "file": "README.md",
+          "lines": "75"
+        }
+      ],
+      "confidence": 0.7
+    },
+    {
+      "id": "complex-arrow-bindings",
+      "description": "A new way arrows bind to shapes while their endpoints are dragged. It is behind the COMPLEX_BINDINGS feature flag, which is off by default and has no switch in the interface.",
+      "status": "unreleased",
+      "evidence": [
+        {
+          "file": "packages/common/src/utils.ts",
+          "lines": "1191-1215"
+        },
+        {
+          "file": "packages/element/src/binding.ts",
+          "lines": "631-640"
+        }
+      ],
+      "confidence": 0.8
+    },
+    {
+      "id": "comments",
+      "description": "Comment on a drawing. Not available in this app: the sidebar's comments tab only advertises it as part of the paid Excalidraw+ product.",
+      "status": "unreleased",
+      "evidence": [
+        {
+          "file": "excalidraw-app/components/AppSidebar.tsx",
+          "lines": "87-106"
+        }
+      ],
+      "confidence": 0.8
+    },
+    {
+      "id": "presentations",
+      "description": "Present a drawing as slides. Not available in this app: the sidebar's presentation tab only advertises it as part of the paid Excalidraw+ product.",
+      "status": "unreleased",
+      "evidence": [
+        {
+          "file": "excalidraw-app/components/AppSidebar.tsx",
+          "lines": "108-127"
+        }
+      ],
+      "confidence": 0.8
+    }
+  ],
+  "brand": {
+    "voice": "Plain, friendly and brief, with a hand-drawn feel: short imperatives and slogans (\"Diagrams. Made. Simple.\", \"Pick a tool & Start drawing!\") and candid notes about privacy and about where drawings are stored.",
+    "palette": [
+      "#6965DB",
+      "#5B57D1",
+      "#A8A5FF"
+    ],
+    "do_not_mention": [],
+    "evidence": [
+      {
+        "file": "packages/excalidraw/locales/en.json",
+        "lines": "606-618"
+      },
+      {
+        "file": "packages/excalidraw/css/theme.scss",
+        "lines": "82-87"
+      },
+      {
+        "file": "packages/excalidraw/css/theme.scss",
+        "lines": "231-232"
+      }
+    ],
+    "confidence": 0.55
+  },
+  "audience": {
+    "primary": "People who sketch diagrams and wireframes, alone or together with others, and developers who embed the editor in their own apps",
+    "pains": [],
+    "evidence": [
+      {
+        "file": "README.md",
+        "lines": "44-48"
+      },
+      {
+        "file": "README.md",
+        "lines": "85-93"
+      }
+    ],
+    "confidence": 0.35
+  },
+  "business_model": {
+    "type": "free",
+    "trial_days": null,
+    "evidence": [
+      {
+        "file": "README.md",
+        "lines": "56"
+      },
+      {
+        "file": "README.md",
+        "lines": "114"
+      }
+    ],
+    "confidence": 0.6
+  },
+  "measurement": {
+    "analytics": [
+      "Simple Analytics"
+    ],
+    "attribution": null,
+    "deep_links": null,
+    "evidence": [
+      {
+        "file": "excalidraw-app/index.html",
+        "lines": "217-234"
+      },
+      {
+        "file": "packages/excalidraw/analytics.ts",
+        "lines": "12-46"
+      }
+    ],
+    "confidence": 0.65
+  }
+}

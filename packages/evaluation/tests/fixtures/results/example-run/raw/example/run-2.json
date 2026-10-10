@@ -1,0 +1,16 @@
+{
+  "case": "example",
+  "run": 2,
+  "repository": "https://example.com/acme/notes",
+  "commit": "1111111111111111111111111111111111111111",
+  "ending": "no_profile",
+  "error": "no profile after 40 steps",
+  "profile": null,
+  "model": "vendor/analyzer",
+  "cost_usd": 0.05,
+  "model_calls": 40,
+  "steps": null,
+  "tool_calls": [],
+  "notes": [],
+  "seconds": 120.0
+}

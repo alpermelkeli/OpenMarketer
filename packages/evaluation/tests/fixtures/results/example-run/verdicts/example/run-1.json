@@ -1,0 +1,71 @@
+{
+  "case": "example",
+  "run": 1,
+  "feature_matching": {
+    "state": "judged",
+    "model": "vendor/judge",
+    "cost_usd": 0.02,
+    "problem": null,
+    "proposed": [
+      {
+        "expected_id": "write-notes",
+        "drafted_id": "editor",
+        "kind": "partial"
+      },
+      {
+        "expected_id": "sync-notes",
+        "drafted_id": "cloud-sync",
+        "kind": "same"
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "state": "judged",
+      "model": "vendor/judge",
+      "cost_usd": 0.02,
+      "problem": null,
+      "claim": "product",
+      "support": "supported",
+      "reason": "the app is named there"
+    },
+    {
+      "state": "judged",
+      "model": "vendor/judge",
+      "cost_usd": 0.02,
+      "problem": null,
+      "claim": "feature:editor",
+      "support": "not_supported",
+      "reason": "an empty type"
+    },
+    {
+      "state": "malformed",
+      "model": "vendor/judge",
+      "cost_usd": 0.02,
+      "problem": "the reply is not JSON",
+      "claim": "feature:cloud-sync",
+      "support": null,
+      "reason": ""
+    }
+  ],
+  "sections": [
+    {
+      "state": "judged",
+      "model": "vendor/judge",
+      "cost_usd": 0.02,
+      "problem": null,
+      "section": "brand_voice",
+      "agreement": "agrees",
+      "reason": "both quiet"
+    },
+    {
+      "state": "not_asked",
+      "model": null,
+      "cost_usd": 0.0,
+      "problem": null,
+      "section": "audience",
+      "agreement": null,
+      "reason": ""
+    }
+  ]
+}

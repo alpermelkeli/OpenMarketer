@@ -1,0 +1,39 @@
+{
+  "benchmark_id": "example-run",
+  "started_at": "2026-01-01T00:00:00+00:00",
+  "code_commit": null,
+  "code_has_uncommitted_changes": null,
+  "runs_per_case": 2,
+  "limits": {
+    "max_steps": 40,
+    "max_cost_usd": 0.5,
+    "max_submissions": 3
+  },
+  "max_evidence_judgements": 30,
+  "analyzer": {
+    "role": "repo_analyzer",
+    "model": "vendor/analyzer",
+    "source": "role",
+    "fallbacks": [],
+    "temperature": 0.0,
+    "max_tokens": 1024
+  },
+  "judge": {
+    "role": "judge",
+    "model": "vendor/judge",
+    "source": "role",
+    "fallbacks": [],
+    "temperature": 0.0,
+    "max_tokens": 1024
+  },
+  "cases": [
+    {
+      "name": "example",
+      "repository": "https://example.com/acme/notes",
+      "commit": "1111111111111111111111111111111111111111",
+      "label_provenance": "written_by_person",
+      "expected_sha256": "0c2e6167cbb3444777744072cbb99746deef4928c8cf58dc8a419303f563ee18",
+      "notes": "Made up for the tests of re-scoring."
+    }
+  ]
+}

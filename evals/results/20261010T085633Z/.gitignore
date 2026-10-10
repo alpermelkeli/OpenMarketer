@@ -1,0 +1,4 @@
+# Written by the evaluation. These folders repeat lines of the evaluated repositories
+# and raw model replies; the rest of this folder is small and can be committed.
+/excerpts/
+/malformed_replies/

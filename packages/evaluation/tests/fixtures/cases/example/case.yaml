@@ -1,0 +1,5 @@
+# A made-up case for the tests: the repository does not exist and is never cloned.
+repository: https://example.com/acme/notes
+commit: 1111111111111111111111111111111111111111
+label_provenance: written_by_person
+notes: Made up for the tests of re-scoring.

@@ -1,0 +1,55 @@
+{
+  "benchmark_id": "20261010T085633Z",
+  "started_at": "2026-10-10T08:56:33+00:00",
+  "code_commit": "f193fd6f645c12b3744b55d109dfe1ce5df18b1e",
+  "code_has_uncommitted_changes": true,
+  "runs_per_case": 1,
+  "limits": {
+    "max_steps": 40,
+    "max_cost_usd": 0.5,
+    "max_submissions": 3
+  },
+  "max_evidence_judgements": 30,
+  "analyzer": {
+    "role": "repo_analyzer",
+    "model": "apodex/apodex-1.1-mini:free",
+    "source": "tier:fast",
+    "fallbacks": [
+      "anthropic/claude-haiku-5.5"
+    ],
+    "temperature": 0.1,
+    "max_tokens": 8192
+  },
+  "judge": {
+    "role": "judge",
+    "model": "anthropic/claude-opus-5.5",
+    "source": "tier:strong",
+    "fallbacks": [
+      "anthropic/claude-haiku-5.5"
+    ],
+    "temperature": 0.0,
+    "max_tokens": 4096
+  },
+  "judge_route": {
+    "route": "claude_code",
+    "spends": "Claude Code subscription usage",
+    "cost_known": false,
+    "requested_model": null,
+    "role_settings_not_applied": [
+      "temperature",
+      "max_tokens",
+      "structured_output",
+      "fallbacks"
+    ]
+  },
+  "cases": [
+    {
+      "name": "excalidraw",
+      "repository": "https://github.com/excalidraw/excalidraw",
+      "commit": "4c00f31ddcc20086bac1020428819fe0b9a30bce",
+      "label_provenance": "written_by_ai_assistant_unreviewed",
+      "expected_sha256": "36e005e5fc40e2c1577f8b7a129e675199871b96cb884a6435f90b79733a4af1",
+      "notes": "The label was written by an AI assistant (Claude, working as a coding agent on this\nevaluation) from the repository at the pinned commit, read through intake. It is not an\nanalyzer draft and did not start from one, and it is NOT a human label: no person has reviewed\nit. Treat disagreement with it as a question, not as an analyzer error, until someone has.\n\nThe assistant that wrote the label is of the same model family as the judge on the Claude Code\nroute. Agreement between this label and that judge's reading is therefore weaker evidence\nthan it looks: the two may share the same blind spots.\n\nThe commit was the head of the default branch when the case was added.\n\nWhat the label covers: the web app in `excalidraw-app/` (excalidraw.com) and the editor it is\nbuilt from. It is not an inventory of the monorepo; the docs site and the examples are left out.\n\nWhat the writer was unsure of:\n- product.type: `consumer_app` for the hosted whiteboard. The same code is also shipped as a\n  React component for developers, so `dev_tool` is defensible.\n- `comments` and `presentations` are `unreleased` here because this app only advertises them\n  (they belong to the paid Excalidraw+). The schema has no status for \"a feature of another\n  product\"; what matters is that they must not be called `live`.\n- `complex-arrow-bindings` is behind a flag that is off by default; whether it counts as a\n  feature a user would recognise is a judgement.\n- The two AI features and the offline app are `live` because the shipped interface reaches\n  them, but they depend on a backend address and build settings in `.env` files, which intake\n  does not read. Their confidence is lower for that reason.\n- product.languages is left empty although the interface is translated into about forty\n  languages; that is recorded as the feature `localization`.\n- business_model is `free` for this app; the 14-day trial in the sidebar is Excalidraw+'s.\n- measurement names Simple Analytics, loaded in production builds; whether event tracking is\n  switched on depends on a build setting that could not be read. Sentry (error reports) is\n  not listed as analytics.\n- The audience is inferred from the README, with low confidence; pains are left empty."
+    }
+  ]
+}

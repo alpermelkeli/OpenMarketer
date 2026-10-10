@@ -1,0 +1,10 @@
+{
+  "product": {"name": "Notes", "type": "consumer_app", "platforms": ["ios", "android"]},
+  "features": [
+    {"id": "write-notes", "description": "Write and edit notes", "status": "live"},
+    {"id": "sync-notes", "description": "Sync notes between devices", "status": "unreleased"},
+    {"id": "share-notes", "description": "Share a note with a link", "status": "live"}
+  ],
+  "brand": {"voice": "Calm and plain"},
+  "business_model": {"type": "free"}
+}

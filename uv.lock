@@ -8,6 +8,7 @@ members = [
     "openmarketer-api",
     "openmarketer-cli",
     "openmarketer-core",
+    "openmarketer-evaluation",
     "openmarketer-extractors",
     "openmarketer-worker",
 ]
@@ -632,6 +633,7 @@ dependencies = [
     { name = "openmarketer-api" },
     { name = "openmarketer-cli" },
     { name = "openmarketer-core" },
+    { name = "openmarketer-evaluation" },
     { name = "openmarketer-extractors" },
     { name = "openmarketer-worker" },
 ]
@@ -650,6 +652,7 @@ requires-dist = [
     { name = "openmarketer-api", editable = "apps/api" },
     { name = "openmarketer-cli", editable = "apps/cli" },
     { name = "openmarketer-core", editable = "packages/core" },
+    { name = "openmarketer-evaluation", editable = "packages/evaluation" },
     { name = "openmarketer-extractors", editable = "packages/extractors" },
     { name = "openmarketer-worker", editable = "apps/worker" },
 ]
@@ -692,6 +695,7 @@ version = "0.0.0"
 source = { editable = "apps/cli" }
 dependencies = [
     { name = "openmarketer-core" },
+    { name = "openmarketer-evaluation" },
     { name = "openmarketer-extractors" },
     { name = "typer" },
 ]
@@ -699,6 +703,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "openmarketer-core", editable = "packages/core" },
+    { name = "openmarketer-evaluation", editable = "packages/evaluation" },
     { name = "openmarketer-extractors", editable = "packages/extractors" },
     { name = "typer", specifier = ">=0.27.3" },
 ]
@@ -738,6 +743,23 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.15.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2" },
+]
+
+[[package]]
+name = "openmarketer-evaluation"
+version = "0.0.0"
+source = { editable = "packages/evaluation" }
+dependencies = [
+    { name = "openmarketer-core" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "openmarketer-core", editable = "packages/core" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 
 [[package]]

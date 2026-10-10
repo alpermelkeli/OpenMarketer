@@ -1,0 +1,630 @@
+{
+  "case": "excalidraw",
+  "run": 1,
+  "repository": "https://github.com/excalidraw/excalidraw",
+  "commit": "4c00f31ddcc20086bac1020428819fe0b9a30bce",
+  "ending": "profile",
+  "error": null,
+  "profile": {
+    "schema_version": 1,
+    "product": {
+      "evidence": [
+        {
+          "file": "README.md",
+          "lines": "1-50"
+        },
+        {
+          "file": "packages/excalidraw/package.json",
+          "lines": "1-80"
+        },
+        {
+          "file": "excalidraw-app/package.json",
+          "lines": "1-57"
+        }
+      ],
+      "confidence": 0.95,
+      "name": "Excalidraw",
+      "type": "consumer_app",
+      "platforms": [
+        "web"
+      ],
+      "languages": []
+    },
+    "features": [
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "52-70"
+          },
+          {
+            "file": "packages/excalidraw/components/Tools.tsx",
+            "lines": "69-160"
+          }
+        ],
+        "confidence": 0.95,
+        "id": "infinite-hand-drawn-canvas",
+        "description": "Infinite canvas whiteboard with a hand-drawn visual style",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/components/Tools.tsx",
+            "lines": "69-160"
+          },
+          {
+            "file": "packages/excalidraw/components/HelpDialog.tsx",
+            "lines": "148-200"
+          }
+        ],
+        "confidence": 0.95,
+        "id": "drawing-shape-tools",
+        "description": "Tools for rectangles, diamonds, ellipses, arrows, lines, freehand drawing, text, sticky notes, images, eraser, frames, embeddable elements, laser pointer, bucket fill and lasso",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "64-65"
+          },
+          {
+            "file": "packages/excalidraw/actions/actionToggleArrowBinding.tsx",
+            "lines": "1-26"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "arrow-binding",
+        "description": "Arrow binding and labeled arrows that stay connected to elements",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "66-67"
+          },
+          {
+            "file": "packages/excalidraw/actions/actionHistory.tsx",
+            "lines": "1-30"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "undo-redo",
+        "description": "Undo and redo for all edits",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "68-69"
+          },
+          {
+            "file": "packages/excalidraw/components/App.pan.ts",
+            "lines": "1-20"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "zoom-pan",
+        "description": "Zoom and panning of the canvas",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "60-61"
+          },
+          {
+            "file": "packages/excalidraw/components/ImageExportDialog.tsx",
+            "lines": "192-345"
+          }
+        ],
+        "confidence": 0.95,
+        "id": "export-png-svg-clipboard",
+        "description": "Export drawings to PNG, SVG and clipboard, with options for selection-only, background and dark mode",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "62-63"
+          },
+          {
+            "file": "packages/excalidraw/components/JSONExportDialog.tsx",
+            "lines": "47-98"
+          }
+        ],
+        "confidence": 0.95,
+        "id": "open-json-format",
+        "description": "Save and open drawings as .excalidraw JSON files (open format)",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "75-76"
+          },
+          {
+            "file": "excalidraw-app/collab/Collab.tsx",
+            "lines": "1-250"
+          },
+          {
+            "file": "excalidraw-app/data/firebase.ts",
+            "lines": "1-250"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "realtime-collaboration",
+        "description": "Real-time multi-user collaboration in end-to-end encrypted rooms, with live cursors and usernames",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "78-79"
+          },
+          {
+            "file": "excalidraw-app/share/ShareDialog.tsx",
+            "lines": "181-248"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "shareable-links",
+        "description": "Export a drawing to a read-only shareable link",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "77-78"
+          },
+          {
+            "file": "excalidraw-app/data/LocalData.ts",
+            "lines": "1-130"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "local-first-autosave",
+        "description": "Local-first autosave to the browser (localStorage and IndexedDB)",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "74-75"
+          },
+          {
+            "file": "excalidraw-app/index.tsx",
+            "lines": "1-16"
+          }
+        ],
+        "confidence": 0.85,
+        "id": "pwa-offline",
+        "description": "Progressive web app that works offline via service workers",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "59-60"
+          },
+          {
+            "file": "packages/excalidraw/components/DefaultSidebar.tsx",
+            "lines": "1-127"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "shape-libraries",
+        "description": "Custom shape libraries browsable in a sidebar",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "58-59"
+          },
+          {
+            "file": "packages/excalidraw/i18n.ts",
+            "lines": "1-87"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "localization",
+        "description": "Interface and UI translated into 40+ languages",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/actions/actionToggleGridMode.tsx",
+            "lines": "1-20"
+          },
+          {
+            "file": "packages/excalidraw/actions/actionToggleZenMode.tsx",
+            "lines": "1-20"
+          }
+        ],
+        "confidence": 0.85,
+        "id": "grid-zen-modes",
+        "description": "Grid snapping mode and zen mode for distraction-free drawing",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/components/Tools.tsx",
+            "lines": "133-140"
+          },
+          {
+            "file": "packages/excalidraw/actions/actionFrame.ts",
+            "lines": "1-20"
+          }
+        ],
+        "confidence": 0.85,
+        "id": "frames",
+        "description": "Frames and magic frames to group and present content",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/components/PasteChartDialog.tsx",
+            "lines": "1-270"
+          },
+          {
+            "file": "packages/excalidraw/charts/charts.types.ts",
+            "lines": "1-18"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "charts-from-spreadsheet",
+        "description": "Paste spreadsheet data to generate bar, line and radar charts",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/components/TTDDialog/MermaidToExcalidraw.tsx",
+            "lines": "1-30"
+          },
+          {
+            "file": "packages/excalidraw/mermaid.ts",
+            "lines": "1-30"
+          }
+        ],
+        "confidence": 0.85,
+        "id": "mermaid-import",
+        "description": "Import Mermaid diagram syntax into Excalidraw elements",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "excalidraw-app/components/AI.tsx",
+            "lines": "1-174"
+          },
+          {
+            "file": "packages/excalidraw/components/TTDDialog/TTDDialog.tsx",
+            "lines": "1-133"
+          }
+        ],
+        "confidence": 0.8,
+        "id": "ai-text-to-diagram",
+        "description": "AI text-to-diagram and diagram-to-code generation behind a dialog",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "excalidraw-app/components/AppMainMenu.tsx",
+            "lines": "1-88"
+          },
+          {
+            "file": "packages/excalidraw/components/SearchMenu.tsx",
+            "lines": "1-30"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "command-palette",
+        "description": "Command palette and search menu to find and run actions",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/actions/actionElementLink.ts",
+            "lines": "1-20"
+          },
+          {
+            "file": "packages/excalidraw/components/ElementLinkDialog.tsx",
+            "lines": "1-30"
+          }
+        ],
+        "confidence": 0.85,
+        "id": "element-linking",
+        "description": "Create links between elements and external URLs",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/actions/actionGroup.tsx",
+            "lines": "1-20"
+          },
+          {
+            "file": "packages/excalidraw/actions/actionAlign.tsx",
+            "lines": "1-20"
+          }
+        ],
+        "confidence": 0.85,
+        "id": "grouping-alignment",
+        "description": "Group, ungroup, align and distribute selected elements",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/actions/actionElementLock.ts",
+            "lines": "1-20"
+          }
+        ],
+        "confidence": 0.85,
+        "id": "element-locking",
+        "description": "Lock elements to prevent accidental edits",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "55-56"
+          },
+          {
+            "file": "packages/excalidraw/css/theme.scss",
+            "lines": "178-278"
+          }
+        ],
+        "confidence": 0.95,
+        "id": "dark-mode",
+        "description": "Light and dark theme with system preference support",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/components/Tools.tsx",
+            "lines": "141-145"
+          },
+          {
+            "file": "packages/excalidraw/components/App.tsx",
+            "lines": "1120-1160"
+          }
+        ],
+        "confidence": 0.85,
+        "id": "embeddable-elements",
+        "description": "Embed iframes and video (YouTube, Vimeo) directly on the canvas",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/components/Stats/index.tsx",
+            "lines": "1-30"
+          }
+        ],
+        "confidence": 0.8,
+        "id": "stats-panel",
+        "description": "Stats panel showing canvas and selection metrics",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/components/EyeDropper.tsx",
+            "lines": "1-30"
+          }
+        ],
+        "confidence": 0.8,
+        "id": "eye-dropper",
+        "description": "Eye dropper tool to pick colors from the canvas",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "README.md",
+            "lines": "10-12"
+          },
+          {
+            "file": "excalidraw-app/components/AppSidebar.tsx",
+            "lines": "37-40"
+          },
+          {
+            "file": "excalidraw-app/app_constants.ts",
+            "lines": "1-59"
+          }
+        ],
+        "confidence": 0.8,
+        "id": "excalidraw-plus",
+        "description": "Excalidraw+ paid tier offering comments, presentations and AI features, with a 14-day free trial",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "packages/excalidraw/package.json",
+            "lines": "1-80"
+          },
+          {
+            "file": "packages/excalidraw/README.md",
+            "lines": "1-43"
+          }
+        ],
+        "confidence": 0.95,
+        "id": "react-component-library",
+        "description": "Distributable React component library (@excalidraw/excalidraw) for embedding the editor in other apps",
+        "status": "live"
+      }
+    ],
+    "brand": {
+      "evidence": [
+        {
+          "file": "README.md",
+          "lines": "1-37"
+        },
+        {
+          "file": "packages/excalidraw/css/theme.scss",
+          "lines": "82-163"
+        },
+        {
+          "file": "packages/excalidraw/css/theme.scss",
+          "lines": "195-278"
+        }
+      ],
+      "confidence": 0.7,
+      "voice": "Friendly, open and community-driven; plain-spoken and encouraging, with a hand-drawn, informal charm. The README frames the product as a free, open-source tool and invites contributions, PRs and translations.",
+      "palette": [
+        "#6965DB",
+        "#A8A5FF",
+        "#121212",
+        "#FFFFFF",
+        "#DB6965",
+        "#F5C354"
+      ],
+      "do_not_mention": []
+    },
+    "audience": {
+      "evidence": [
+        {
+          "file": "README.md",
+          "lines": "15-21"
+        },
+        {
+          "file": "README.md",
+          "lines": "52-70"
+        },
+        {
+          "file": "packages/excalidraw/README.md",
+          "lines": "1-43"
+        }
+      ],
+      "confidence": 0.6,
+      "primary": "creators, designers, developers and teams who need quick, hand-drawn style diagrams and whiteboards",
+      "pains": [
+        "Need a simple, fast whiteboard for brainstorming, wireframing and diagrams without a steep learning curve",
+        "Want diagrams that look hand-drawn and informal rather than rigid corporate graphics",
+        "Need to collaborate in real time with others without account friction",
+        "Want to embed a diagram editor inside their own web app"
+      ]
+    },
+    "business_model": {
+      "evidence": [
+        {
+          "file": "LICENSE",
+          "lines": "1-13"
+        },
+        {
+          "file": "README.md",
+          "lines": "52-70"
+        },
+        {
+          "file": "excalidraw-app/components/AppSidebar.tsx",
+          "lines": "37-40"
+        }
+      ],
+      "confidence": 0.85,
+      "type": "free",
+      "trial_days": 14
+    },
+    "measurement": {
+      "evidence": [
+        {
+          "file": "packages/excalidraw/analytics.ts",
+          "lines": "1-40"
+        },
+        {
+          "file": "excalidraw-app/data/firebase.ts",
+          "lines": "1-40"
+        },
+        {
+          "file": "excalidraw-app/package.json",
+          "lines": "1-41"
+        }
+      ],
+      "confidence": 0.6,
+      "analytics": [
+        "Simple analytics via window.sa_event (Sentry Analytics), gated by VITE_APP_ENABLE_TRACKING and a whitelist of categories (command_palette, export, ai)"
+      ],
+      "attribution": "Firebase (Firestore + Storage) for collaboration and file storage; Vercel for hosting",
+      "deep_links": false
+    }
+  },
+  "model": "apodex/apodex-1.1-mini:free",
+  "cost_usd": 0.0,
+  "model_calls": 29,
+  "steps": 29,
+  "tool_calls": [
+    "read_file",
+    "read_file",
+    "read_file",
+    "list_files",
+    "list_files",
+    "read_file",
+    "read_file",
+    "list_files",
+    "list_files",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "list_files",
+    "read_file",
+    "read_file",
+    "read_file",
+    "list_files",
+    "read_file",
+    "search",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "search",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "list_files",
+    "read_file",
+    "submit_profile",
+    "submit_profile"
+  ],
+  "notes": [],
+  "seconds": 169.1
+}

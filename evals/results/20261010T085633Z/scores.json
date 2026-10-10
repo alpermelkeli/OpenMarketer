@@ -1,0 +1,1106 @@
+{
+  "benchmark_id": "20261010T085633Z",
+  "rescored": {
+    "at": "2026-10-10T09:41:34+00:00",
+    "code_commit": "f193fd6f645c12b3744b55d109dfe1ce5df18b1e",
+    "code_has_uncommitted_changes": true
+  },
+  "limits_of_this_result": [
+    "The golden set is one repository (excalidraw). It does not show how the analyzer does on other repositories, stacks or shapes.",
+    "The label of excalidraw was written by an AI assistant and has not been reviewed by a person: it can be wrong, and disagreement with it is a question, not an analyzer error.",
+    "The label of excalidraw does not list every feature of the product. A drafted feature it lacks is not an error by that alone, and there is no precision for this case.",
+    "Feature matching, evidence support and section agreement are a model's judgements. They vary between judge models and between the routes a judge is reached by, and can be wrong; the lists matter more than the ratios. Compare runs only when judge and route are the same.",
+    "Features are matched one to one. A drafted feature that covers two expected ones matches one and leaves the other among the missed.",
+    "The judge saw cited lines up to a size limit, at most 30 claims per run, and was not asked whether a feature marked live is reachable by users.",
+    "With one run per case, min, median and max are that run's value and say nothing about how much runs differ."
+  ],
+  "cases": [
+    {
+      "case": "excalidraw",
+      "label_provenance": "written_by_ai_assistant_unreviewed",
+      "label_is_exhaustive": false,
+      "runs": 1,
+      "endings": {
+        "profile": 1
+      },
+      "metrics": {
+        "product_name_matches": {
+          "values": [
+            1.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        },
+        "product_type_matches": {
+          "values": [
+            1.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        },
+        "platforms_exact": {
+          "values": [
+            1.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        },
+        "platforms_missed": {
+          "values": [
+            0.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 0.0,
+          "median": 0.0,
+          "max": 0.0
+        },
+        "platforms_extra": {
+          "values": [
+            0.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 0.0,
+          "median": 0.0,
+          "max": 0.0
+        },
+        "features_drafted": {
+          "values": [
+            28.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 28.0,
+          "median": 28.0,
+          "max": 28.0
+        },
+        "features_drafted_live": {
+          "values": [
+            28.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 28.0,
+          "median": 28.0,
+          "max": 28.0
+        },
+        "features_matched": {
+          "values": [
+            13.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 13.0,
+          "median": 13.0,
+          "max": 13.0
+        },
+        "features_missed": {
+          "values": [
+            5.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 5.0,
+          "median": 5.0,
+          "max": 5.0
+        },
+        "features_not_in_label": {
+          "values": [
+            15.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 15.0,
+          "median": 15.0,
+          "max": 15.0
+        },
+        "features_live_but_expected_not_live": {
+          "values": [
+            0.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 0.0,
+          "median": 0.0,
+          "max": 0.0
+        },
+        "features_live_and_not_in_label": {
+          "values": [
+            15.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 15.0,
+          "median": 15.0,
+          "max": 15.0
+        },
+        "feature_recall": {
+          "values": [
+            0.7222222222222222
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 0.7222222222222222,
+          "median": 0.7222222222222222,
+          "max": 0.7222222222222222
+        },
+        "feature_precision_exhaustive_label_only": {
+          "values": [
+            null
+          ],
+          "runs": 1,
+          "counted": 0,
+          "min": null,
+          "median": null,
+          "max": null
+        },
+        "status_agreement": {
+          "values": [
+            1.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        },
+        "claims_with_evidence": {
+          "values": [
+            1.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        },
+        "evidence_supported": {
+          "values": [
+            0.4666666666666667
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 0.4666666666666667,
+          "median": 0.4666666666666667,
+          "max": 0.4666666666666667
+        },
+        "evidence_at_least_partly_supported": {
+          "values": [
+            1.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        },
+        "evidence_claims_supported": {
+          "values": [
+            14.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 14.0,
+          "median": 14.0,
+          "max": 14.0
+        },
+        "evidence_claims_partly_supported": {
+          "values": [
+            16.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 16.0,
+          "median": 16.0,
+          "max": 16.0
+        },
+        "evidence_claims_not_supported": {
+          "values": [
+            0.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 0.0,
+          "median": 0.0,
+          "max": 0.0
+        },
+        "evidence_claims_not_asked": {
+          "values": [
+            3.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 3.0,
+          "median": 3.0,
+          "max": 3.0
+        },
+        "business_model_type_matches": {
+          "values": [
+            1.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        },
+        "analytics_tools_missed": {
+          "values": [
+            0.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 0.0,
+          "median": 0.0,
+          "max": 0.0
+        },
+        "analytics_entries_not_names": {
+          "values": [
+            1.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        },
+        "analyzer_cost_usd": {
+          "values": [
+            0.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 0.0,
+          "median": 0.0,
+          "max": 0.0
+        },
+        "analyzer_model_calls": {
+          "values": [
+            29.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 29.0,
+          "median": 29.0,
+          "max": 29.0
+        },
+        "analyzer_seconds": {
+          "values": [
+            169.1
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 169.1,
+          "median": 169.1,
+          "max": 169.1
+        },
+        "judge_cost_usd": {
+          "values": [
+            null
+          ],
+          "runs": 1,
+          "counted": 0,
+          "min": null,
+          "median": null,
+          "max": null
+        },
+        "judge_calls": {
+          "values": [
+            33.0
+          ],
+          "runs": 1,
+          "counted": 1,
+          "min": 33.0,
+          "median": 33.0,
+          "max": 33.0
+        }
+      },
+      "live_but_expected_not_live_in_any_run": [],
+      "live_and_not_in_label_in_any_run": [
+        "infinite-hand-drawn-canvas",
+        "arrow-binding",
+        "undo-redo",
+        "zoom-pan",
+        "grid-zen-modes",
+        "frames",
+        "charts-from-spreadsheet",
+        "command-palette",
+        "element-linking",
+        "grouping-alignment",
+        "element-locking",
+        "stats-panel",
+        "eye-dropper",
+        "excalidraw-plus",
+        "react-component-library"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "case": "excalidraw",
+      "run": 1,
+      "ending": "profile",
+      "error": null,
+      "model": "apodex/apodex-1.1-mini:free",
+      "cost_usd": 0.0,
+      "model_calls": 29,
+      "steps": 29,
+      "seconds": 169.1,
+      "judge_route": "claude_code",
+      "judge_cost_usd": null,
+      "judge_calls": 33,
+      "judge_models": [
+        "claude-sonnet-5-5"
+      ],
+      "judged_by_evaluated_model": false,
+      "profile": {
+        "product": {
+          "expected_name": "Excalidraw",
+          "drafted_name": "Excalidraw",
+          "name_matches": true,
+          "expected_type": "consumer_app",
+          "drafted_type": "consumer_app",
+          "type_matches": true,
+          "platforms": {
+            "expected": [
+              "web"
+            ],
+            "drafted": [
+              "web"
+            ],
+            "missed": [],
+            "extra": [],
+            "exact": true
+          },
+          "languages": {
+            "expected": [],
+            "drafted": [],
+            "missed": [],
+            "extra": [],
+            "exact": true
+          }
+        },
+        "label_is_exhaustive": false,
+        "expected_statuses": {
+          "live": 15,
+          "unreleased": 3,
+          "unknown": 0
+        },
+        "drafted_statuses": {
+          "live": 28,
+          "unreleased": 0,
+          "unknown": 0
+        },
+        "feature_matching_state": "judged",
+        "features": {
+          "matching": {
+            "matched": [
+              {
+                "expected_id": "export-image",
+                "drafted_id": "export-png-svg-clipboard",
+                "kind": "same",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.95
+              },
+              {
+                "expected_id": "save-and-open-files",
+                "drafted_id": "open-json-format",
+                "kind": "same",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.95
+              },
+              {
+                "expected_id": "live-collaboration",
+                "drafted_id": "realtime-collaboration",
+                "kind": "same",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.9
+              },
+              {
+                "expected_id": "shareable-links",
+                "drafted_id": "shareable-links",
+                "kind": "same",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.9
+              },
+              {
+                "expected_id": "local-autosave",
+                "drafted_id": "local-first-autosave",
+                "kind": "same",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.9
+              },
+              {
+                "expected_id": "dark-mode",
+                "drafted_id": "dark-mode",
+                "kind": "same",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.95
+              },
+              {
+                "expected_id": "localization",
+                "drafted_id": "localization",
+                "kind": "same",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.9
+              },
+              {
+                "expected_id": "mermaid-to-diagram",
+                "drafted_id": "mermaid-import",
+                "kind": "same",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.85
+              },
+              {
+                "expected_id": "installable-offline-app",
+                "drafted_id": "pwa-offline",
+                "kind": "same",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.85
+              },
+              {
+                "expected_id": "drawing-tools",
+                "drafted_id": "drawing-shape-tools",
+                "kind": "partial",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.95
+              },
+              {
+                "expected_id": "images-frames-and-embeds",
+                "drafted_id": "embeddable-elements",
+                "kind": "partial",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.85
+              },
+              {
+                "expected_id": "shape-libraries",
+                "drafted_id": "shape-libraries",
+                "kind": "partial",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.9
+              },
+              {
+                "expected_id": "text-to-diagram-ai",
+                "drafted_id": "ai-text-to-diagram",
+                "kind": "partial",
+                "expected_status": "live",
+                "drafted_status": "live",
+                "drafted_confidence": 0.8
+              }
+            ],
+            "missed": [
+              {
+                "id": "end-to-end-encryption",
+                "status": "live"
+              },
+              {
+                "id": "wireframe-to-code-ai",
+                "status": "live"
+              },
+              {
+                "id": "complex-arrow-bindings",
+                "status": "unreleased"
+              },
+              {
+                "id": "comments",
+                "status": "unreleased"
+              },
+              {
+                "id": "presentations",
+                "status": "unreleased"
+              }
+            ],
+            "not_in_label": [
+              "infinite-hand-drawn-canvas",
+              "arrow-binding",
+              "undo-redo",
+              "zoom-pan",
+              "grid-zen-modes",
+              "frames",
+              "charts-from-spreadsheet",
+              "command-palette",
+              "element-linking",
+              "grouping-alignment",
+              "element-locking",
+              "stats-panel",
+              "eye-dropper",
+              "excalidraw-plus",
+              "react-component-library"
+            ],
+            "discarded": []
+          },
+          "recall": {
+            "count": 13,
+            "of": 18,
+            "ratio": 0.7222222222222222
+          },
+          "precision": null,
+          "partial_matches": 4,
+          "live_but_expected_not_live": [],
+          "live_and_not_in_label": [
+            "infinite-hand-drawn-canvas",
+            "arrow-binding",
+            "undo-redo",
+            "zoom-pan",
+            "grid-zen-modes",
+            "frames",
+            "charts-from-spreadsheet",
+            "command-palette",
+            "element-linking",
+            "grouping-alignment",
+            "element-locking",
+            "stats-panel",
+            "eye-dropper",
+            "excalidraw-plus",
+            "react-component-library"
+          ],
+          "status_agreement": {
+            "count": 13,
+            "of": 13,
+            "ratio": 1.0
+          },
+          "status_disagreements": []
+        },
+        "evidence": {
+          "claims_with_evidence": {
+            "count": 33,
+            "of": 33,
+            "ratio": 1.0
+          },
+          "supported": {
+            "count": 14,
+            "of": 30,
+            "ratio": 0.4666666666666667
+          },
+          "at_least_partly_supported": {
+            "count": 30,
+            "of": 30,
+            "ratio": 1.0
+          },
+          "supported_claims": [
+            "product",
+            "business_model",
+            "feature:infinite-hand-drawn-canvas",
+            "feature:drawing-shape-tools",
+            "feature:zoom-pan",
+            "feature:shareable-links",
+            "feature:local-first-autosave",
+            "feature:pwa-offline",
+            "feature:grid-zen-modes",
+            "feature:charts-from-spreadsheet",
+            "feature:mermaid-import",
+            "feature:ai-text-to-diagram",
+            "feature:command-palette",
+            "feature:embeddable-elements"
+          ],
+          "partly_supported": [
+            {
+              "claim": "brand",
+              "confidence": 0.7,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The theme.scss lines confirm all six colours (#6965db, #a8a5ff is not shown but #121212, #fff, #db6965, #f5c354 are), and the README shows an open-source, hand-drawn whiteboard with a 'PRs welcome' badge, but it does not show free pricing, translations, or the friendly, encouraging voice described."
+            },
+            {
+              "claim": "audience",
+              "confidence": 0.6,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited lines show a hand-drawn whiteboard, collaboration, and embeddability as a React component, but they say nothing about the target audience, brainstorming/wireframing use, or real-time collaboration without account friction (only 'collaborative' and encrypted)."
+            },
+            {
+              "claim": "measurement",
+              "confidence": 0.6,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited lines confirm window.sa_event tracking gated by VITE_APP_ENABLE_TRACKING and the three whitelisted categories, and Firebase Firestore/Storage imports, but nothing shows that sa_event is Sentry Analytics (it is a Simple Analytics function; Sentry is only a dependency), nothing shows Vercel "
+            },
+            {
+              "claim": "feature:arrow-binding",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The action file shows an arrow binding toggle (arrows can bind to elements), but nothing shows labeled arrows, and the README lines cited are about export formats."
+            },
+            {
+              "claim": "feature:undo-redo",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The actionHistory file imports UndoIcon, RedoIcon and a History module and defines history actions, so undo/redo exists, but the cited lines don't show that it covers all edits, and the README lines are about drawing tools and arrows."
+            },
+            {
+              "claim": "feature:export-png-svg-clipboard",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The export dialog code shows toggles for selection-only, background and dark mode, but the shown lines do not mention PNG, SVG or clipboard output formats."
+            },
+            {
+              "claim": "feature:open-json-format",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The JSON export dialog shows a save-to-disk action (actionSaveFileToDisk), which suggests saving drawings to a file, but the cited lines never mention the .excalidraw extension, JSON format, or opening files, and the README lines are about shape libraries and localization."
+            },
+            {
+              "claim": "feature:realtime-collaboration",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The README only says 'Real-time collaboration', while the Collab.tsx and firebase.ts excerpts show real-time sync with encryption (decryptData/encryptData), cursor-related constants (CURSOR_SYNC_TIMEOUT) and a Collaborator type, but the shown lines don't explicitly confirm end-to-end encrypted rooms"
+            },
+            {
+              "claim": "feature:shape-libraries",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The README lines only say 'Customizable', but DefaultSidebar.tsx imports LibraryMenu and LibraryIcon and defines a sidebar with a library tab (LIBRARY_SIDEBAR_TAB), which makes a browsable shape library in a sidebar likely, though the shown code does not explicitly show custom libraries."
+            },
+            {
+              "claim": "feature:localization",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited README lines cover only hand-drawn style and dark mode, but the i18n.ts file lists English plus 44 candidate languages; these are filtered by an 85% completion threshold, so the final count of 40+ is likely but not shown."
+            },
+            {
+              "claim": "feature:frames",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The lines show a frame tool (key F) and frame-related actions that add/remove elements to frames, supporting grouping via frames, but nothing shown mentions 'magic frames' or presenting content."
+            },
+            {
+              "claim": "feature:element-linking",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited lines show an element-link action and a link dialog that imports normalizeLink (suggesting URL handling), but they only show copying links to elements and the start of a dialog, not explicitly creating links from elements to external URLs."
+            },
+            {
+              "claim": "feature:grouping-alignment",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited lines are only imports from actionGroup.tsx and actionAlign.tsx (e.g. alignElements, group-related helpers like getSelectedGroupIds), which make grouping and aligning likely but show no implementation, and nothing about ungrouping or distributing."
+            },
+            {
+              "claim": "feature:element-locking",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The file name actionElementLock.ts and the imports of LockedIcon/UnlockedIcon, newElementWith and group-selection helpers strongly suggest an element lock/unlock action, but these lines are only imports and do not show the locking behavior or that it prevents edits."
+            },
+            {
+              "claim": "feature:dark-mode",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The theme.scss lines define a dark theme with its own color variables (implying a light default), but they show nothing about system preference detection, and the README lines cited are only about being free and open-source."
+            },
+            {
+              "claim": "feature:stats-panel",
+              "confidence": 0.8,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The lines are only imports for a Stats component (STATS_PANELS, CanvasGrid, Dimension, MultiDimension, getCommonBounds, selection-related helpers), which strongly suggest a stats panel with canvas and selection metrics but do not show the rendered panel itself."
+            }
+          ],
+          "not_supported": [],
+          "not_asked": [
+            "feature:eye-dropper",
+            "feature:excalidraw-plus",
+            "feature:react-component-library"
+          ],
+          "without_usable_verdict": [],
+          "outcomes": [
+            {
+              "claim": "product",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The README names Excalidraw as a web-hosted whiteboard editor at excalidraw.com, aimed at end users, and the app package shows browser-based dependencies (react-dom, browserslist, @sentry/browser), which together fit a consumer web app."
+            },
+            {
+              "claim": "brand",
+              "confidence": 0.7,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The theme.scss lines confirm all six colours (#6965db, #a8a5ff is not shown but #121212, #fff, #db6965, #f5c354 are), and the README shows an open-source, hand-drawn whiteboard with a 'PRs welcome' badge, but it does not show free pricing, translations, or the friendly, encouraging voice described."
+            },
+            {
+              "claim": "audience",
+              "confidence": 0.6,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited lines show a hand-drawn whiteboard, collaboration, and embeddability as a React component, but they say nothing about the target audience, brainstorming/wireframing use, or real-time collaboration without account friction (only 'collaborative' and encrypted)."
+            },
+            {
+              "claim": "business_model",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The README and MIT license show the editor is free and open-source, and AppSidebar.tsx shows a '14 days of free trial' note, so both the free model and the 14-day trial are shown (though they sit side by side as the free editor and a trial promo)."
+            },
+            {
+              "claim": "measurement",
+              "confidence": 0.6,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited lines confirm window.sa_event tracking gated by VITE_APP_ENABLE_TRACKING and the three whitelisted categories, and Firebase Firestore/Storage imports, but nothing shows that sa_event is Sentry Analytics (it is a Simple Analytics function; Sentry is only a dependency), nothing shows Vercel "
+            },
+            {
+              "claim": "feature:infinite-hand-drawn-canvas",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The README features list explicitly states 'Infinite, canvas-based whiteboard' and 'Hand-drawn like style', matching both parts of the claim."
+            },
+            {
+              "claim": "feature:drawing-shape-tools",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "Tools.tsx defines rectangle, diamond, ellipse, arrow, line, freedraw, text, stickynote, image, eraser, frame, embeddable and laser tools, and HelpDialog lists bucket fill (B) shortcut; lasso isn't visible in the shown lines (Tools.tsx is cut off after laser), so lasso is not directly shown, but near"
+            },
+            {
+              "claim": "feature:arrow-binding",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The action file shows an arrow binding toggle (arrows can bind to elements), but nothing shows labeled arrows, and the README lines cited are about export formats."
+            },
+            {
+              "claim": "feature:undo-redo",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The actionHistory file imports UndoIcon, RedoIcon and a History module and defines history actions, so undo/redo exists, but the cited lines don't show that it covers all edits, and the README lines are about drawing tools and arrows."
+            },
+            {
+              "claim": "feature:zoom-pan",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The README explicitly lists 'Zoom and panning support', and App.pan.ts implements drag-panning of the canvas (wheel, secondary button, space, hand tool)."
+            },
+            {
+              "claim": "feature:export-png-svg-clipboard",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The export dialog code shows toggles for selection-only, background and dark mode, but the shown lines do not mention PNG, SVG or clipboard output formats."
+            },
+            {
+              "claim": "feature:open-json-format",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The JSON export dialog shows a save-to-disk action (actionSaveFileToDisk), which suggests saving drawings to a file, but the cited lines never mention the .excalidraw extension, JSON format, or opening files, and the README lines are about shape libraries and localization."
+            },
+            {
+              "claim": "feature:realtime-collaboration",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The README only says 'Real-time collaboration', while the Collab.tsx and firebase.ts excerpts show real-time sync with encryption (decryptData/encryptData), cursor-related constants (CURSOR_SYNC_TIMEOUT) and a Collaborator type, but the shown lines don't explicitly confirm end-to-end encrypted rooms"
+            },
+            {
+              "claim": "feature:shareable-links",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The README states shareable links export to a readonly link, and ShareDialog code provides a link-export button that calls onExportToBackend, matching the claimed feature."
+            },
+            {
+              "claim": "feature:local-first-autosave",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The README cites local-first autosave to the browser, and LocalData.ts explicitly saves state locally using both localStorage and IndexedDB (idb-keyval), matching the claim."
+            },
+            {
+              "claim": "feature:pwa-offline",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The README states PWA support with offline use, and index.tsx imports and calls registerSW from virtual:pwa-register, which registers a service worker, so both the PWA and service-worker parts of the claim are shown."
+            },
+            {
+              "claim": "feature:shape-libraries",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The README lines only say 'Customizable', but DefaultSidebar.tsx imports LibraryMenu and LibraryIcon and defines a sidebar with a library tab (LIBRARY_SIDEBAR_TAB), which makes a browsable shape library in a sidebar likely, though the shown code does not explicitly show custom libraries."
+            },
+            {
+              "claim": "feature:localization",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited README lines cover only hand-drawn style and dark mode, but the i18n.ts file lists English plus 44 candidate languages; these are filtered by an 85% completion threshold, so the final count of 40+ is likely but not shown."
+            },
+            {
+              "claim": "feature:grid-zen-modes",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The cited files define actions for toggling grid mode (with a 'snap' keyword, gridModeEnabled state) and zen mode (zenModeEnabled state, coffee icon), matching the two features claimed, though 'distraction-free' is inferred from the name."
+            },
+            {
+              "claim": "feature:frames",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The lines show a frame tool (key F) and frame-related actions that add/remove elements to frames, supporting grouping via frames, but nothing shown mentions 'magic frames' or presenting content."
+            },
+            {
+              "claim": "feature:charts-from-spreadsheet",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "PasteChartDialog handles pasted spreadsheet data, with chart types bar, line and radar, and renders previews via renderSpreadsheet from a Spreadsheet structure with labels and series."
+            },
+            {
+              "claim": "feature:mermaid-import",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The MermaidToExcalidraw component imports convertMermaidToExcalidraw and insertToEditor, and mermaid.ts detects Mermaid chart definitions, which together show Mermaid syntax being converted into Excalidraw elements and inserted into the editor."
+            },
+            {
+              "claim": "feature:ai-text-to-diagram",
+              "confidence": 0.8,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "AI.tsx wires a DiagramToCodePlugin that posts a frame image and text to a diagram-to-code AI backend and renders a TTDDialog, and TTDDialog.tsx defines the text-to-diagram dialog (opened via the 'ttd' dialog state) with a text-submit handler."
+            },
+            {
+              "claim": "feature:command-palette",
+              "confidence": 0.9,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "AppMainMenu.tsx includes MainMenu.DefaultItems.CommandPalette and SearchMenu entries, and SearchMenu.tsx exists as a search component, showing a command palette and search menu are present, though the actual run-actions logic isn't shown."
+            },
+            {
+              "claim": "feature:element-linking",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited lines show an element-link action and a link dialog that imports normalizeLink (suggesting URL handling), but they only show copying links to elements and the start of a dialog, not explicitly creating links from elements to external URLs."
+            },
+            {
+              "claim": "feature:grouping-alignment",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The cited lines are only imports from actionGroup.tsx and actionAlign.tsx (e.g. alignElements, group-related helpers like getSelectedGroupIds), which make grouping and aligning likely but show no implementation, and nothing about ungrouping or distributing."
+            },
+            {
+              "claim": "feature:element-locking",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The file name actionElementLock.ts and the imports of LockedIcon/UnlockedIcon, newElementWith and group-selection helpers strongly suggest an element lock/unlock action, but these lines are only imports and do not show the locking behavior or that it prevents edits."
+            },
+            {
+              "claim": "feature:dark-mode",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The theme.scss lines define a dark theme with its own color variables (implying a light default), but they show nothing about system preference detection, and the README lines cited are only about being free and open-source."
+            },
+            {
+              "claim": "feature:embeddable-elements",
+              "confidence": 0.85,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "supported",
+              "reason": "The cited code defines an 'embeddable' tool in the toolbar and handles messages from embedded iframes (class excalidraw__embeddable) including YouTube player state and play/pause control, showing iframe and video embedding on the canvas (Vimeo is only implied by the 'play'/'pause' handler above the "
+            },
+            {
+              "claim": "feature:stats-panel",
+              "confidence": 0.8,
+              "cites_evidence": true,
+              "judged": "judged",
+              "support": "partly_supported",
+              "reason": "The lines are only imports for a Stats component (STATS_PANELS, CanvasGrid, Dimension, MultiDimension, getCommonBounds, selection-related helpers), which strongly suggest a stats panel with canvas and selection metrics but do not show the rendered panel itself."
+            },
+            {
+              "claim": "feature:eye-dropper",
+              "confidence": 0.8,
+              "cites_evidence": true,
+              "judged": "not_asked",
+              "support": null,
+              "reason": ""
+            },
+            {
+              "claim": "feature:excalidraw-plus",
+              "confidence": 0.8,
+              "cites_evidence": true,
+              "judged": "not_asked",
+              "support": null,
+              "reason": ""
+            },
+            {
+              "claim": "feature:react-component-library",
+              "confidence": 0.95,
+              "cites_evidence": true,
+              "judged": "not_asked",
+              "support": null,
+              "reason": ""
+            }
+          ]
+        },
+        "sections": {
+          "presence": {
+            "brand": "both_filled",
+            "audience": "both_filled",
+            "business_model": "both_filled",
+            "measurement": "both_filled"
+          },
+          "business_model_type": {
+            "expected": "free",
+            "drafted": "free",
+            "same": true
+          },
+          "trial_days": {
+            "expected": null,
+            "drafted": 14,
+            "same": false
+          },
+          "attribution": {
+            "expected": null,
+            "drafted": "Firebase (Firestore + Storage) for collaboration and file storage; Vercel for hosting",
+            "same": false
+          },
+          "deep_links": {
+            "expected": null,
+            "drafted": false,
+            "same": false
+          },
+          "palette": {
+            "expected": [
+              "#5B57D1",
+              "#6965DB",
+              "#A8A5FF"
+            ],
+            "drafted": [
+              "#121212",
+              "#6965DB",
+              "#A8A5FF",
+              "#DB6965",
+              "#F5C354",
+              "#FFFFFF"
+            ],
+            "missed": [
+              "#5B57D1"
+            ],
+            "extra": [
+              "#121212",
+              "#DB6965",
+              "#F5C354",
+              "#FFFFFF"
+            ],
+            "exact": false
+          },
+          "analytics": {
+            "expected": [
+              "simple analytics"
+            ],
+            "drafted": [
+              "Simple analytics via window.sa_event (Sentry Analytics), gated by VITE_APP_ENABLE_TRACKING and a whitelist of categories (command_palette, export, ai)"
+            ],
+            "found": [
+              "simple analytics"
+            ],
+            "missed": [],
+            "extra": [],
+            "not_names": [
+              "Simple analytics via window.sa_event (Sentry Analytics), gated by VITE_APP_ENABLE_TRACKING and a whitelist of categories (command_palette, export, ai)"
+            ]
+          },
+          "judged": {
+            "brand_voice": {
+              "state": "judged",
+              "agreement": "partly_agrees",
+              "reason": "Both describe a friendly, plain, hand-drawn tone, but the first stresses brevity, short imperative slogans and candid privacy/storage notes, while the second instead emphasizes open-source, community-driven contribution invitations, which the first does not mention."
+            },
+            "audience": {
+              "state": "judged",
+              "agreement": "agrees",
+              "reason": "Both describe people who sketch diagrams/wireframes/whiteboards alone or collaboratively plus developers embedding the editor; the second adds hand-drawn style and pain points but the core audience matches."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

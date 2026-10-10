@@ -1,5 +1,9 @@
 """Read-only shallow clone of the repository to analyse.
 
+By default the clone is of the default branch. A caller that needs one known
+state of the repository (the evaluation pins its cases) names a commit, and
+that commit alone is fetched; everything below holds for both.
+
 The repository and the host it is on are untrusted, so the clone is locked
 down:
 
@@ -27,7 +31,9 @@ import base64
 import logging
 import os
 import re
+import shutil
 import subprocess
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,6 +65,19 @@ CLONE_TIMED_OUT = f"cloning the repository did not finish within {CLONE_TIMEOUT_
 HOST_UNREACHABLE = "the repository host could not be reached"
 NOT_SECURE = "the connection to the repository host could not be secured (TLS)"
 NOT_CLONED = "the repository could not be cloned"
+COMMIT_NOT_FETCHED = (
+    "the requested commit could not be fetched from the repository: it may not have "
+    "that commit, or its host may not serve single commits"
+)
+NOT_A_COMMIT_ID = "commit must be a full commit id: 40 lowercase hexadecimal characters"
+
+# A full SHA-1 object name and nothing else, so that what is handed to git as the commit
+# can be neither an option nor a ref that moves. A 64-character (SHA-256) id is not accepted:
+# the repository made for the fetch is a SHA-1 one, where git would read it as a ref name.
+_COMMIT_ID = re.compile(r"[0-9a-f]{40}")
+
+# For every git command that writes the working tree: links stay text, no hook runs.
+_NO_LINKS_NO_HOOKS = ["-c", "core.symlinks=false", "-c", f"core.hooksPath={os.devnull}"]
 
 # What git's own messages (in the C locale) say for each cause, tried in this order.
 _CAUSES: tuple[tuple[str, str], ...] = (
@@ -220,9 +239,17 @@ def _without(secrets: Sequence[str], text: str) -> str:
 
 
 def _git(
-    args: list[str], *, env: dict[str, str], cwd: Path | None = None, secrets: Sequence[str] = ()
+    args: list[str],
+    *,
+    env: dict[str, str],
+    cwd: Path | None = None,
+    secrets: Sequence[str] = (),
+    timeout_s: float | None = None,
 ) -> str:
-    """Run git and return what it printed. ``secrets`` are removed from what a failure carries."""
+    """Run git and return what it printed. ``secrets`` are removed from what a failure carries.
+
+    git is stopped after ``timeout_s`` seconds, or after ``CLONE_TIMEOUT_S`` when none is given.
+    """
     try:
         done = subprocess.run(
             ["git", *args],
@@ -232,7 +259,7 @@ def _git(
             # A remote host chooses some of these bytes; they need not be valid text.
             encoding="utf-8",
             errors="replace",
-            timeout=CLONE_TIMEOUT_S,
+            timeout=CLONE_TIMEOUT_S if timeout_s is None else timeout_s,
             check=False,
         )
     except FileNotFoundError as e:
@@ -262,46 +289,101 @@ def _cause(git_output: str) -> str:
     return NOT_CLONED
 
 
-def clone(source: str, dest: Path, *, tokens: RepositoryTokens = NO_TOKENS) -> Snapshot:
-    """Shallow-clone the default branch of ``source`` into ``dest``.
+def _discard_partial_fetch(dest: Path, commit: str | None) -> None:
+    """Remove what a failed fetch of a commit left in ``dest``, as ``git clone`` does itself."""
+    if commit is not None:
+        shutil.rmtree(dest, ignore_errors=True)
+
+
+def _clone_default_branch(
+    url: str, dest: Path, *, env: dict[str, str], secrets: Sequence[str]
+) -> None:
+    _git(
+        [
+            *_NO_LINKS_NO_HOOKS,
+            "clone",
+            "--depth", "1",
+            "--single-branch",
+            "--no-tags",
+            "--no-recurse-submodules",
+            "--",
+            url,
+            str(dest),
+        ],
+        env=env,
+        secrets=secrets,
+    )  # fmt: skip
+
+
+def _fetch_commit(
+    url: str, dest: Path, commit: str, *, env: dict[str, str], secrets: Sequence[str]
+) -> None:
+    """Fetch ``commit`` alone from ``url`` into a new repository at ``dest`` and check it out.
+
+    The URL is given to ``fetch`` directly, so no remote is written to the new
+    repository's configuration. The three commands share one ``CLONE_TIMEOUT_S``,
+    so a pinned clone is stopped as soon as a clone of the default branch is.
+    """
+    deadline = time.monotonic() + CLONE_TIMEOUT_S
+    steps: tuple[tuple[list[str], Path | None], ...] = (
+        (["init", "--quiet", "--", str(dest)], None),
+        (
+            ["fetch", "--depth", "1", "--no-tags", "--no-recurse-submodules", "--", url, commit],
+            dest,
+        ),
+        (["checkout", "--quiet", "--detach", "FETCH_HEAD"], dest),
+    )
+    for args, cwd in steps:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise _GitTimedOut
+        _git([*_NO_LINKS_NO_HOOKS, *args], env=env, cwd=cwd, secrets=secrets, timeout_s=left)
+
+
+def clone(
+    source: str, dest: Path, *, tokens: RepositoryTokens = NO_TOKENS, commit: str | None = None
+) -> Snapshot:
+    """Shallow-clone the default branch of ``source``, or ``commit`` alone, into ``dest``.
 
     A token from ``tokens`` is used only if it is configured for the host of ``source``.
+    ``commit`` is a full commit id; the snapshot is then of exactly that commit
+    and has no ``ref``.
     """
     url = _clone_url(source)
+    if commit is not None and not _COMMIT_ID.fullmatch(commit):
+        raise IntakeError(NOT_A_COMMIT_ID)
     if dest.exists() and any(dest.iterdir()):
         raise IntakeError(f"destination is not empty: {dest}")
 
     token = tokens.token_for(url)
     env = _git_env(token, url)
+    secrets = (token, _authorization(token)) if token else ()
     try:
-        _git(
-            [
-                "-c", "core.symlinks=false",
-                "-c", f"core.hooksPath={os.devnull}",
-                "clone",
-                "--depth", "1",
-                "--single-branch",
-                "--no-tags",
-                "--no-recurse-submodules",
-                "--",
-                url,
-                str(dest),
-            ],
-            env=env,
-            secrets=(token, _authorization(token)) if token else (),
-        )  # fmt: skip
+        if commit is None:
+            _clone_default_branch(url, dest, env=env, secrets=secrets)
+        else:
+            _fetch_commit(url, dest, commit, env=env, secrets=secrets)
     except _GitTimedOut:
         logger.warning("git clone of %s was stopped after %ss", url, CLONE_TIMEOUT_S)
+        _discard_partial_fetch(dest, commit)
         raise IntakeError(CLONE_TIMED_OUT) from None
     except _GitFailed as e:
         # For the operator. The error itself carries none of it: see _cause.
         logger.warning("git clone of %s failed: %r", url, e.output[-2000:])
-        raise IntakeError(_cause(e.output)) from None
+        _discard_partial_fetch(dest, commit)
+        cause = _cause(e.output)
+        if commit is not None and cause == NOT_CLONED:
+            cause = COMMIT_NOT_FETCHED
+        raise IntakeError(cause) from None
 
     try:
         commit_sha = _git(["rev-parse", "HEAD"], env=env, cwd=dest)
     except (_GitFailed, _GitTimedOut):
         raise IntakeError("repository has no commits") from None
+    if commit is not None and commit_sha != commit:
+        # What is checked out is a commit nobody asked for; none of it is left behind.
+        _discard_partial_fetch(dest, commit)
+        raise IntakeError(COMMIT_NOT_FETCHED)
     try:
         ref = _git(["symbolic-ref", "--short", "-q", "HEAD"], env=env, cwd=dest) or None
     except (_GitFailed, _GitTimedOut):
