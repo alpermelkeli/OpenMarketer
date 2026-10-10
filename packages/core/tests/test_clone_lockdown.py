@@ -24,6 +24,7 @@ from openmarketer_core.repository_analysis.intake import IntakeError, Repository
 from openmarketer_core.repository_analysis.intake import git as intake_git
 from openmarketer_core.repository_analysis.intake.git import (
     CLONE_TIMED_OUT,
+    COMMIT_NOT_FETCHED,
     HOST_UNREACHABLE,
     INHERITED_VARIABLES,
     NOT_CLONED,
@@ -41,6 +42,7 @@ GITHUB = "github-token-value"
 GITLAB = "gitlab-token-value"
 TOKENS = RepositoryTokens({"github.com": GITHUB, "gitlab.com": GITLAB})
 REPOSITORY = "https://github.com/acme/app.git"
+COMMIT = "849bbfb6358417e576fc8e499baeb88482f2a46a"
 HOST_TEXT = "TEXT WRITTEN BY THE HOST"
 
 
@@ -173,7 +175,7 @@ def git_environments(monkeypatch) -> list[dict[str, str]]:
     """Stop ``clone`` at its first git call and collect the environment it would have used."""
     environments: list[dict[str, str]] = []
 
-    def record(args, *, env, cwd=None, secrets=()):
+    def record(args, *, env, cwd=None, secrets=(), timeout_s=None):
         environments.append(env)
         raise GitWasCalled
 
@@ -204,6 +206,115 @@ def test_clone_without_tokens_carries_none(git_environments, tmp_path):
     with pytest.raises(GitWasCalled):
         clone(REPOSITORY, tmp_path / "clone")
     assert "extraHeader" not in "\n".join(git_environments[0].values())
+
+
+def test_clone_of_a_commit_runs_git_in_the_same_environment(git_environments, tmp_path):
+    with pytest.raises(GitWasCalled):
+        clone(REPOSITORY, tmp_path / "branch", tokens=TOKENS)
+    with pytest.raises(GitWasCalled):
+        clone(REPOSITORY, tmp_path / "commit", tokens=TOKENS, commit=COMMIT)
+    of_the_branch, of_the_commit = git_environments
+    assert of_the_commit == of_the_branch
+
+
+def test_clone_of_a_commit_from_another_host_carries_no_token(git_environments, tmp_path):
+    with pytest.raises(GitWasCalled):
+        run_intake(
+            "https://github.com.evil.example/acme/app.git",
+            tmp_path / "clone",
+            tokens=TOKENS,
+            commit=COMMIT,
+        )
+    environment = "\n".join(f"{k}={v}" for k, v in git_environments[0].items())
+    assert "extraHeader" not in environment
+    assert GITHUB not in environment
+    assert basic(GITHUB) not in environment
+
+
+@dataclass
+class GitCommand:
+    args: list[str]
+    secrets: tuple[str, ...]
+    timeout_s: float | None
+
+
+@pytest.fixture
+def git_commands(monkeypatch) -> list[GitCommand]:
+    """Run ``clone`` without git and collect every git command it makes.
+
+    ``init`` leaves a folder behind as the real one does, and ``rev-parse``
+    answers ``COMMIT``.
+    """
+    commands: list[GitCommand] = []
+
+    def record(args, *, env, cwd=None, secrets=(), timeout_s=None):
+        commands.append(GitCommand(args, tuple(secrets), timeout_s))
+        if "init" in args:
+            (Path(args[-1]) / ".git").mkdir(parents=True)
+        return COMMIT
+
+    monkeypatch.setattr(intake_git, "_git", record)
+    return commands
+
+
+def writing(commands: list[GitCommand]) -> list[GitCommand]:
+    return [command for command in commands if {"init", "fetch", "checkout"} & set(command.args)]
+
+
+def test_every_command_that_writes_the_working_tree_keeps_links_and_hooks_off(
+    git_commands, tmp_path
+):
+    clone(REPOSITORY, tmp_path / "clone", commit=COMMIT)
+    assert len(writing(git_commands)) == 3
+    for command in writing(git_commands):
+        assert command.args[:4] == ["-c", "core.symlinks=false", "-c", "core.hooksPath=/dev/null"]
+
+
+def test_fetch_of_a_commit_takes_no_tags_and_no_submodules_and_ends_the_options(
+    git_commands, tmp_path
+):
+    clone(REPOSITORY, tmp_path / "clone", commit=COMMIT)
+    (fetch,) = [command for command in git_commands if "fetch" in command.args]
+    assert fetch.args[4:] == [
+        "fetch", "--depth", "1", "--no-tags", "--no-recurse-submodules", "--", REPOSITORY, COMMIT,
+    ]  # fmt: skip
+
+
+def test_token_is_removed_from_what_any_command_of_a_pinned_clone_reports(git_commands, tmp_path):
+    clone(REPOSITORY, tmp_path / "clone", tokens=TOKENS, commit=COMMIT)
+    for command in writing(git_commands):
+        assert command.secrets == (GITHUB, basic(GITHUB))
+
+
+def test_commands_of_a_pinned_clone_share_one_time_limit(git_commands, tmp_path):
+    clone(REPOSITORY, tmp_path / "clone", commit=COMMIT)
+    limits = [command.timeout_s or 0.0 for command in writing(git_commands)]
+    assert all(0 < limit <= intake_git.CLONE_TIMEOUT_S for limit in limits)
+    assert limits == sorted(limits, reverse=True)
+
+
+def test_pinned_clone_out_of_time_starts_no_further_command(git_commands, monkeypatch, tmp_path):
+    monkeypatch.setattr(intake_git, "CLONE_TIMEOUT_S", 0)
+    with pytest.raises(IntakeError) as failure:
+        clone(REPOSITORY, tmp_path / "clone", commit=COMMIT)
+    assert str(failure.value) == intake_git.CLONE_TIMED_OUT
+    assert git_commands == []
+
+
+def test_checkout_of_another_commit_than_asked_for_leaves_nothing(git_commands, tmp_path):
+    another = "f" * 40
+    with pytest.raises(IntakeError) as failure:
+        clone(REPOSITORY, tmp_path / "clone", commit=another)
+    assert str(failure.value) == COMMIT_NOT_FETCHED
+    assert any("checkout" in command.args for command in git_commands)
+    assert not (tmp_path / "clone").exists()
+
+
+def test_commit_id_of_64_characters_is_refused_before_git_is_called(git_commands, tmp_path):
+    with pytest.raises(IntakeError) as failure:
+        clone(REPOSITORY, tmp_path / "clone", commit="a" * 64)
+    assert str(failure.value) == intake_git.NOT_A_COMMIT_ID
+    assert git_commands == []
 
 
 def test_failure_of_git_does_not_carry_a_secret():
@@ -384,9 +495,11 @@ def advertisement(tmp_path) -> bytes:
     return b"%04x" % (len(service) + 4) + service + b"0000" + refs
 
 
-def refused(url: str, dest: Path, tokens: RepositoryTokens | None = None) -> str:
+def refused(
+    url: str, dest: Path, tokens: RepositoryTokens | None = None, commit: str | None = None
+) -> str:
     with pytest.raises(IntakeError) as failure:
-        clone(url, dest / "clone", tokens=tokens or RepositoryTokens({}))
+        clone(url, dest / "clone", tokens=tokens or RepositoryTokens({}), commit=commit)
     return str(failure.value)
 
 
@@ -479,6 +592,22 @@ def test_token_does_not_follow_a_redirect_to_another_host(serve, tmp_path):
     assert not target.contacted
 
 
+def test_redirect_is_not_followed_for_a_commit_and_the_token_stays(serve, tmp_path):
+    target = serve(answering(404))
+    origin = serve(redirecting_to(f"https://localhost:{target.port}"))
+    tokens = RepositoryTokens({f"localhost:{origin.port}": GITHUB})
+    assert refused(origin.url, tmp_path, tokens, commit=COMMIT) == REDIRECTED
+    assert origin.authorizations == [f"Basic {basic(GITHUB)}"]
+    assert not target.contacted
+
+
+def test_plain_http_is_not_contacted_for_a_commit(serve, tmp_path):
+    target = serve(answering(404, HOST_TEXT.encode()), tls=False)
+    origin = serve(redirecting_to(f"http://127.0.0.1:{target.port}"))
+    assert refused(origin.url, tmp_path, commit=COMMIT) == REDIRECTED
+    assert not target.contacted
+
+
 def test_scoping_the_header_alone_would_not_stop_it(serve, advertisement, tmp_path):
     # Why redirects are refused: with the header configured for the first host only,
     # git still repeats it to the second host once it has been redirected there.
@@ -520,6 +649,24 @@ def test_no_transport_but_https_is_allowed_for_a_remote_repository(tmp_path, adv
 def test_text_written_by_the_host_is_not_in_the_error(serve, tmp_path):
     host = serve(answering(404, HOST_TEXT.encode()))
     assert refused(host.url, tmp_path) == NOT_FOUND
+
+
+def test_text_written_by_the_host_is_not_in_the_error_for_a_commit(serve, tmp_path):
+    host = serve(answering(404, HOST_TEXT.encode()))
+    assert refused(host.url, tmp_path, commit=COMMIT) == NOT_FOUND
+    assert not (tmp_path / "clone").exists()
+
+
+def test_unrecognised_failure_while_fetching_a_commit_names_the_commit(serve, tmp_path):
+    host = serve(answering(500, HOST_TEXT.encode()))
+    assert refused(host.url, tmp_path, commit=COMMIT) == COMMIT_NOT_FETCHED
+
+
+def test_host_that_demands_a_password_for_a_commit_gets_none(serve, askpass, tmp_path):
+    host = serve(answering(401, WWW_Authenticate='Basic realm="repository"'))
+    assert refused(host.url, tmp_path, commit=COMMIT) == NOT_FOUND
+    assert not askpass.exists()
+    assert set(host.authorizations) == {None}
 
 
 def test_text_written_by_the_host_is_logged_for_the_operator(serve, tmp_path, caplog):

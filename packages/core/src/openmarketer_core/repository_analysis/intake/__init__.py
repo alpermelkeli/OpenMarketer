@@ -37,12 +37,20 @@ class IntakeResult:
     findings: list[SecretFinding]
 
 
-def run_intake(source: str, dest: Path, *, tokens: RepositoryTokens = NO_TOKENS) -> IntakeResult:
+def run_intake(
+    source: str,
+    dest: Path,
+    *,
+    tokens: RepositoryTokens = NO_TOKENS,
+    commit: str | None = None,
+) -> IntakeResult:
     """Clone ``source`` into ``dest`` and return a safe view of its files.
 
     ``tokens`` are the configured access tokens; one is sent only to its own host.
+    With ``commit`` (a full commit id) that commit is read instead of the
+    default branch.
     """
-    snapshot = clone(source, dest, tokens=tokens)
+    snapshot = clone(source, dest, tokens=tokens, commit=commit)
     findings = scan_and_redact(snapshot.root)
     files = RepoFiles(snapshot.root, secret_files={f.file for f in findings if not f.redacted})
     return IntakeResult(snapshot=snapshot, files=files, findings=findings)

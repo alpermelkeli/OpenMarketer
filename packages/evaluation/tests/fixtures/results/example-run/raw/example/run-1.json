@@ -1,0 +1,99 @@
+{
+  "case": "example",
+  "run": 1,
+  "repository": "https://example.com/acme/notes",
+  "commit": "1111111111111111111111111111111111111111",
+  "ending": "profile",
+  "error": null,
+  "profile": {
+    "schema_version": 1,
+    "product": {
+      "evidence": [
+        {
+          "file": "app/Notes.swift",
+          "lines": "1-2"
+        }
+      ],
+      "confidence": 0.9,
+      "name": "notes",
+      "type": "consumer_app",
+      "platforms": [
+        "ios"
+      ],
+      "languages": []
+    },
+    "features": [
+      {
+        "evidence": [
+          {
+            "file": "app/Notes.swift",
+            "lines": "1-2"
+          }
+        ],
+        "confidence": 0.9,
+        "id": "editor",
+        "description": "Write notes",
+        "status": "live"
+      },
+      {
+        "evidence": [
+          {
+            "file": "app/Notes.swift",
+            "lines": "1-2"
+          }
+        ],
+        "confidence": 0.6,
+        "id": "cloud-sync",
+        "description": "Sync across devices",
+        "status": "live"
+      },
+      {
+        "evidence": [],
+        "confidence": 0.3,
+        "id": "dark-mode",
+        "description": "Dark theme",
+        "status": "live"
+      }
+    ],
+    "brand": {
+      "evidence": [],
+      "confidence": 0.5,
+      "voice": "Quiet",
+      "palette": [],
+      "do_not_mention": []
+    },
+    "audience": {
+      "evidence": [],
+      "confidence": 0.0,
+      "primary": null,
+      "pains": []
+    },
+    "business_model": {
+      "evidence": [],
+      "confidence": 0.0,
+      "type": "unknown",
+      "trial_days": null
+    },
+    "measurement": {
+      "evidence": [],
+      "confidence": 0.0,
+      "analytics": [],
+      "attribution": null,
+      "deep_links": null
+    }
+  },
+  "model": "vendor/analyzer",
+  "cost_usd": 0.012,
+  "model_calls": 6,
+  "steps": 6,
+  "tool_calls": [
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "read_file",
+    "submit_profile"
+  ],
+  "notes": [],
+  "seconds": 41.5
+}

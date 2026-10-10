@@ -18,7 +18,11 @@ from openmarketer_core.repository_analysis.intake import (
     remote_repository_url,
     run_intake,
 )
-from openmarketer_core.repository_analysis.intake.git import clone
+from openmarketer_core.repository_analysis.intake.git import (
+    COMMIT_NOT_FETCHED,
+    NOT_A_COMMIT_ID,
+    clone,
+)
 
 needs_gitleaks = pytest.mark.skipif(shutil.which("gitleaks") is None, reason="needs gitleaks")
 
@@ -143,6 +147,80 @@ def test_destination_must_be_empty(source_repo, tmp_path):
     (dest / "existing.txt").write_text("x")
     with pytest.raises(IntakeError, match="not empty"):
         clone(str(source_repo), dest)
+
+
+# ------------------------------------------------------- one commit, not the branch
+@pytest.fixture
+def first_commit(source_repo: Path) -> str:
+    """The commit of ``source_repo`` before its default branch moved on."""
+    first = git(source_repo, "rev-parse", "HEAD")
+    (source_repo / "README.md").write_text("# v2\n")
+    git(source_repo, "commit", "-q", "-am", "second")
+    return first
+
+
+def test_clone_of_a_commit_reads_that_commit_and_not_the_branch(
+    source_repo, first_commit, tmp_path
+):
+    snapshot = clone(str(source_repo), tmp_path / "clone", commit=first_commit)
+    assert snapshot.commit_sha == first_commit
+    assert snapshot.ref is None
+    assert (snapshot.root / "README.md").read_text() == "# Example App\n"
+
+
+def test_clone_of_a_commit_is_shallow(source_repo, tmp_path):
+    (source_repo / "README.md").write_text("# v2\n")
+    git(source_repo, "commit", "-q", "-am", "second")
+    second = git(source_repo, "rev-parse", "HEAD")
+    snapshot = clone(str(source_repo), tmp_path / "clone", commit=second)
+    assert git(snapshot.root, "rev-list", "--count", "HEAD") == "1"
+
+
+def test_clone_of_a_commit_writes_no_remote_to_the_configuration(
+    source_repo, first_commit, tmp_path
+):
+    snapshot = clone(str(source_repo), tmp_path / "clone", commit=first_commit)
+    assert git(snapshot.root, "remote") == ""
+
+
+def test_symlinks_are_not_followed_in_a_clone_of_a_commit(source_repo, first_commit, tmp_path):
+    snapshot = clone(str(source_repo), tmp_path / "clone", commit=first_commit)
+    link = snapshot.root / "hosts-link"
+    assert not link.is_symlink()
+    assert link.read_text() == "/etc/hosts"
+
+
+def test_intake_of_a_commit_reads_that_commit(source_repo, first_commit, tmp_path):
+    intake = run_intake(str(source_repo), tmp_path / "clone", commit=first_commit)
+    assert intake.snapshot.commit_sha == first_commit
+    assert intake.files.read_text("README.md") == "# Example App\n"
+
+
+@pytest.mark.parametrize(
+    "commit",
+    [
+        "main",
+        "HEAD",
+        "refs/heads/main",
+        "849bbfb",
+        "849BBFB6358417E576FC8E499BAEB88482F2A46A",
+        "--upload-pack=touch /tmp/pwned",
+        "849bbfb6358417e576fc8e499baeb88482f2a46a\n",
+        "",
+    ],
+)
+def test_commit_must_be_a_full_commit_id(source_repo, tmp_path, commit):
+    with pytest.raises(IntakeError) as failure:
+        clone(str(source_repo), tmp_path / "clone", commit=commit)
+    assert str(failure.value) == NOT_A_COMMIT_ID
+    assert not (tmp_path / "clone").exists()
+
+
+def test_commit_the_repository_does_not_have_is_reported_and_leaves_nothing(source_repo, tmp_path):
+    with pytest.raises(IntakeError) as failure:
+        clone(str(source_repo), tmp_path / "clone", commit="0123456789" * 4)
+    assert str(failure.value) == COMMIT_NOT_FETCHED
+    assert not (tmp_path / "clone").exists()
 
 
 # ------------------------------------------------------------ secret scan

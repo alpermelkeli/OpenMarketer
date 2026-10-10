@@ -63,10 +63,13 @@ def analyze_repository(
     tokens: RepositoryTokens = NO_TOKENS,
     limits: Limits | None = None,
     checkpoints: RunCheckpoints | None = None,
+    commit: str | None = None,
 ) -> RepositoryAnalysis:
     """Clone ``source`` into ``clone_into`` and draft a Product Profile from it.
 
     Of ``tokens``, only the one configured for the host of ``source`` is sent.
+    With ``commit`` (a full commit id) that commit is analysed instead of the
+    default branch.
 
     With ``checkpoints`` (a run's, from ``graph_checkpoints.postgres.run_checkpoints``)
     the analyzer continues what an earlier attempt at the same run left behind,
@@ -78,7 +81,7 @@ def analyze_repository(
     ``AnalysisError`` or ``LLMError`` when the analyzer does not produce a
     profile, and ``DatabaseError`` when the checkpoints cannot be read or written.
     """
-    intake = run_intake(source, clone_into, tokens=tokens)
+    intake = run_intake(source, clone_into, tokens=tokens, commit=commit)
     extraction = run_extractors(intake.files, extractors)
     resume = (
         ResumableRun(checkpoints, commit_sha=intake.snapshot.commit_sha) if checkpoints else None

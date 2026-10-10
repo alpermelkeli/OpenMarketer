@@ -8,6 +8,7 @@ license = "Apache-2.0"
 dependencies = [
     "openmarketer-core",
     "openmarketer-extractors",
+    "openmarketer-evaluation",
     "openmarketer-api",
     "openmarketer-worker",
     "openmarketer-cli",
@@ -22,6 +23,7 @@ members = ["apps/api", "apps/worker", "apps/cli", "packages/*"]
 [tool.uv.sources]
 openmarketer-core = { workspace = true }
 openmarketer-extractors = { workspace = true }
+openmarketer-evaluation = { workspace = true }
 openmarketer-api = { workspace = true }
 openmarketer-worker = { workspace = true }
 openmarketer-cli = { workspace = true }
@@ -45,6 +47,7 @@ select = ["E", "F", "I", "UP", "B"]
 known-first-party = [
     "openmarketer_core",
     "openmarketer_extractors",
+    "openmarketer_evaluation",
     "openmarketer_api",
     "openmarketer_worker",
     "openmarketer_cli",

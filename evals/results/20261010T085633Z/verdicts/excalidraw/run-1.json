@@ -1,0 +1,398 @@
+{
+  "case": "excalidraw",
+  "run": 1,
+  "route": "claude_code",
+  "cost_known": false,
+  "feature_matching": {
+    "state": "judged",
+    "model": "claude-sonnet-5-5",
+    "cost_usd": 0.0,
+    "problem": null,
+    "proposed": [
+      {
+        "expected_id": "drawing-tools",
+        "drafted_id": "drawing-shape-tools",
+        "kind": "partial"
+      },
+      {
+        "expected_id": "images-frames-and-embeds",
+        "drafted_id": "embeddable-elements",
+        "kind": "partial"
+      },
+      {
+        "expected_id": "export-image",
+        "drafted_id": "export-png-svg-clipboard",
+        "kind": "same"
+      },
+      {
+        "expected_id": "save-and-open-files",
+        "drafted_id": "open-json-format",
+        "kind": "same"
+      },
+      {
+        "expected_id": "shape-libraries",
+        "drafted_id": "shape-libraries",
+        "kind": "partial"
+      },
+      {
+        "expected_id": "live-collaboration",
+        "drafted_id": "realtime-collaboration",
+        "kind": "same"
+      },
+      {
+        "expected_id": "shareable-links",
+        "drafted_id": "shareable-links",
+        "kind": "same"
+      },
+      {
+        "expected_id": "local-autosave",
+        "drafted_id": "local-first-autosave",
+        "kind": "same"
+      },
+      {
+        "expected_id": "dark-mode",
+        "drafted_id": "dark-mode",
+        "kind": "same"
+      },
+      {
+        "expected_id": "localization",
+        "drafted_id": "localization",
+        "kind": "same"
+      },
+      {
+        "expected_id": "mermaid-to-diagram",
+        "drafted_id": "mermaid-import",
+        "kind": "same"
+      },
+      {
+        "expected_id": "text-to-diagram-ai",
+        "drafted_id": "ai-text-to-diagram",
+        "kind": "partial"
+      },
+      {
+        "expected_id": "installable-offline-app",
+        "drafted_id": "pwa-offline",
+        "kind": "same"
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "product",
+      "support": "supported",
+      "reason": "The README names Excalidraw as a web-hosted whiteboard editor at excalidraw.com, aimed at end users, and the app package shows browser-based dependencies (react-dom, browserslist, @sentry/browser), which together fit a consumer web app."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "brand",
+      "support": "partly_supported",
+      "reason": "The theme.scss lines confirm all six colours (#6965db, #a8a5ff is not shown but #121212, #fff, #db6965, #f5c354 are), and the README shows an open-source, hand-drawn whiteboard with a 'PRs welcome' badge, but it does not show free pricing, translations, or the friendly, encouraging voice described."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "audience",
+      "support": "partly_supported",
+      "reason": "The cited lines show a hand-drawn whiteboard, collaboration, and embeddability as a React component, but they say nothing about the target audience, brainstorming/wireframing use, or real-time collaboration without account friction (only 'collaborative' and encrypted)."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "business_model",
+      "support": "supported",
+      "reason": "The README and MIT license show the editor is free and open-source, and AppSidebar.tsx shows a '14 days of free trial' note, so both the free model and the 14-day trial are shown (though they sit side by side as the free editor and a trial promo)."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "measurement",
+      "support": "partly_supported",
+      "reason": "The cited lines confirm window.sa_event tracking gated by VITE_APP_ENABLE_TRACKING and the three whitelisted categories, and Firebase Firestore/Storage imports, but nothing shows that sa_event is Sentry Analytics (it is a Simple Analytics function; Sentry is only a dependency), nothing shows Vercel "
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:infinite-hand-drawn-canvas",
+      "support": "supported",
+      "reason": "The README features list explicitly states 'Infinite, canvas-based whiteboard' and 'Hand-drawn like style', matching both parts of the claim."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:drawing-shape-tools",
+      "support": "supported",
+      "reason": "Tools.tsx defines rectangle, diamond, ellipse, arrow, line, freedraw, text, stickynote, image, eraser, frame, embeddable and laser tools, and HelpDialog lists bucket fill (B) shortcut; lasso isn't visible in the shown lines (Tools.tsx is cut off after laser), so lasso is not directly shown, but near"
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:arrow-binding",
+      "support": "partly_supported",
+      "reason": "The action file shows an arrow binding toggle (arrows can bind to elements), but nothing shows labeled arrows, and the README lines cited are about export formats."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:undo-redo",
+      "support": "partly_supported",
+      "reason": "The actionHistory file imports UndoIcon, RedoIcon and a History module and defines history actions, so undo/redo exists, but the cited lines don't show that it covers all edits, and the README lines are about drawing tools and arrows."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:zoom-pan",
+      "support": "supported",
+      "reason": "The README explicitly lists 'Zoom and panning support', and App.pan.ts implements drag-panning of the canvas (wheel, secondary button, space, hand tool)."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:export-png-svg-clipboard",
+      "support": "partly_supported",
+      "reason": "The export dialog code shows toggles for selection-only, background and dark mode, but the shown lines do not mention PNG, SVG or clipboard output formats."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:open-json-format",
+      "support": "partly_supported",
+      "reason": "The JSON export dialog shows a save-to-disk action (actionSaveFileToDisk), which suggests saving drawings to a file, but the cited lines never mention the .excalidraw extension, JSON format, or opening files, and the README lines are about shape libraries and localization."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:realtime-collaboration",
+      "support": "partly_supported",
+      "reason": "The README only says 'Real-time collaboration', while the Collab.tsx and firebase.ts excerpts show real-time sync with encryption (decryptData/encryptData), cursor-related constants (CURSOR_SYNC_TIMEOUT) and a Collaborator type, but the shown lines don't explicitly confirm end-to-end encrypted rooms"
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:shareable-links",
+      "support": "supported",
+      "reason": "The README states shareable links export to a readonly link, and ShareDialog code provides a link-export button that calls onExportToBackend, matching the claimed feature."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:local-first-autosave",
+      "support": "supported",
+      "reason": "The README cites local-first autosave to the browser, and LocalData.ts explicitly saves state locally using both localStorage and IndexedDB (idb-keyval), matching the claim."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:pwa-offline",
+      "support": "supported",
+      "reason": "The README states PWA support with offline use, and index.tsx imports and calls registerSW from virtual:pwa-register, which registers a service worker, so both the PWA and service-worker parts of the claim are shown."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:shape-libraries",
+      "support": "partly_supported",
+      "reason": "The README lines only say 'Customizable', but DefaultSidebar.tsx imports LibraryMenu and LibraryIcon and defines a sidebar with a library tab (LIBRARY_SIDEBAR_TAB), which makes a browsable shape library in a sidebar likely, though the shown code does not explicitly show custom libraries."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:localization",
+      "support": "partly_supported",
+      "reason": "The cited README lines cover only hand-drawn style and dark mode, but the i18n.ts file lists English plus 44 candidate languages; these are filtered by an 85% completion threshold, so the final count of 40+ is likely but not shown."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:grid-zen-modes",
+      "support": "supported",
+      "reason": "The cited files define actions for toggling grid mode (with a 'snap' keyword, gridModeEnabled state) and zen mode (zenModeEnabled state, coffee icon), matching the two features claimed, though 'distraction-free' is inferred from the name."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:frames",
+      "support": "partly_supported",
+      "reason": "The lines show a frame tool (key F) and frame-related actions that add/remove elements to frames, supporting grouping via frames, but nothing shown mentions 'magic frames' or presenting content."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:charts-from-spreadsheet",
+      "support": "supported",
+      "reason": "PasteChartDialog handles pasted spreadsheet data, with chart types bar, line and radar, and renders previews via renderSpreadsheet from a Spreadsheet structure with labels and series."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:mermaid-import",
+      "support": "supported",
+      "reason": "The MermaidToExcalidraw component imports convertMermaidToExcalidraw and insertToEditor, and mermaid.ts detects Mermaid chart definitions, which together show Mermaid syntax being converted into Excalidraw elements and inserted into the editor."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:ai-text-to-diagram",
+      "support": "supported",
+      "reason": "AI.tsx wires a DiagramToCodePlugin that posts a frame image and text to a diagram-to-code AI backend and renders a TTDDialog, and TTDDialog.tsx defines the text-to-diagram dialog (opened via the 'ttd' dialog state) with a text-submit handler."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:command-palette",
+      "support": "supported",
+      "reason": "AppMainMenu.tsx includes MainMenu.DefaultItems.CommandPalette and SearchMenu entries, and SearchMenu.tsx exists as a search component, showing a command palette and search menu are present, though the actual run-actions logic isn't shown."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:element-linking",
+      "support": "partly_supported",
+      "reason": "The cited lines show an element-link action and a link dialog that imports normalizeLink (suggesting URL handling), but they only show copying links to elements and the start of a dialog, not explicitly creating links from elements to external URLs."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:grouping-alignment",
+      "support": "partly_supported",
+      "reason": "The cited lines are only imports from actionGroup.tsx and actionAlign.tsx (e.g. alignElements, group-related helpers like getSelectedGroupIds), which make grouping and aligning likely but show no implementation, and nothing about ungrouping or distributing."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:element-locking",
+      "support": "partly_supported",
+      "reason": "The file name actionElementLock.ts and the imports of LockedIcon/UnlockedIcon, newElementWith and group-selection helpers strongly suggest an element lock/unlock action, but these lines are only imports and do not show the locking behavior or that it prevents edits."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:dark-mode",
+      "support": "partly_supported",
+      "reason": "The theme.scss lines define a dark theme with its own color variables (implying a light default), but they show nothing about system preference detection, and the README lines cited are only about being free and open-source."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:embeddable-elements",
+      "support": "supported",
+      "reason": "The cited code defines an 'embeddable' tool in the toolbar and handles messages from embedded iframes (class excalidraw__embeddable) including YouTube player state and play/pause control, showing iframe and video embedding on the canvas (Vimeo is only implied by the 'play'/'pause' handler above the "
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:stats-panel",
+      "support": "partly_supported",
+      "reason": "The lines are only imports for a Stats component (STATS_PANELS, CanvasGrid, Dimension, MultiDimension, getCommonBounds, selection-related helpers), which strongly suggest a stats panel with canvas and selection metrics but do not show the rendered panel itself."
+    },
+    {
+      "state": "not_asked",
+      "model": null,
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:eye-dropper",
+      "support": null,
+      "reason": ""
+    },
+    {
+      "state": "not_asked",
+      "model": null,
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:excalidraw-plus",
+      "support": null,
+      "reason": ""
+    },
+    {
+      "state": "not_asked",
+      "model": null,
+      "cost_usd": 0.0,
+      "problem": null,
+      "claim": "feature:react-component-library",
+      "support": null,
+      "reason": ""
+    }
+  ],
+  "sections": [
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "section": "brand_voice",
+      "agreement": "partly_agrees",
+      "reason": "Both describe a friendly, plain, hand-drawn tone, but the first stresses brevity, short imperative slogans and candid privacy/storage notes, while the second instead emphasizes open-source, community-driven contribution invitations, which the first does not mention."
+    },
+    {
+      "state": "judged",
+      "model": "claude-sonnet-5-5",
+      "cost_usd": 0.0,
+      "problem": null,
+      "section": "audience",
+      "agreement": "agrees",
+      "reason": "Both describe people who sketch diagrams/wireframes/whiteboards alone or collaboratively plus developers embedding the editor; the second adds hand-drawn style and pain points but the core audience matches."
+    }
+  ]
+}
