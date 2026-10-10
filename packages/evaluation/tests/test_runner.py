@@ -1,5 +1,7 @@
 """Tests for running the analyzer on a case: a scripted model on a local repository."""
 
+import shutil
+
 import pytest
 
 from openmarketer_core.llm import LLMError
@@ -9,6 +11,8 @@ from openmarketer_core.repository_analysis.intake import RepoFiles
 from openmarketer_evaluation import runner
 from openmarketer_evaluation.results import RunEnding
 from openmarketer_evaluation.runner import AnalyzerSetup, cited_claims, excerpt, run_analyzer
+
+needs_gitleaks = pytest.mark.skipif(shutil.which("gitleaks") is None, reason="needs gitleaks")
 
 
 def setup(model, **limits) -> AnalyzerSetup:
@@ -23,6 +27,7 @@ def read_then_submit(submission, drafted):
     return read, submission(drafted)
 
 
+@needs_gitleaks
 def test_run_analyses_the_pinned_commit_not_the_branch(
     golden_case, scripted, submission, profile, feature
 ):
@@ -33,6 +38,7 @@ def test_run_analyses_the_pinned_commit_not_the_branch(
     assert "Renamed since" not in readme
 
 
+@needs_gitleaks
 def test_run_records_the_draft_and_what_it_cost(
     golden_case, scripted, submission, profile, feature
 ):
@@ -46,6 +52,7 @@ def test_run_records_the_draft_and_what_it_cost(
     assert run.tool_calls == ["read_file", "submit_profile"]
 
 
+@needs_gitleaks
 def test_run_keeps_the_lines_the_draft_cites(golden_case, scripted, submission, profile, feature):
     model = scripted(submission(profile(feature("sharing"))))
     _, cited = run_analyzer(golden_case, 1, setup(model))
@@ -56,6 +63,7 @@ def test_run_keeps_the_lines_the_draft_cites(golden_case, scripted, submission, 
     assert sharing.excerpts[0].complete
 
 
+@needs_gitleaks
 def test_run_that_reaches_its_step_limit_is_a_result(golden_case, scripted):
     listing = [
         {"id": "l", "type": "function", "function": {"name": "list_files", "arguments": "{}"}}
@@ -72,6 +80,7 @@ def test_run_that_reaches_its_step_limit_is_a_result(golden_case, scripted):
     assert cited.claims == []
 
 
+@needs_gitleaks
 def test_run_whose_model_provider_fails_is_a_result(golden_case, scripted):
     model = scripted(LLMError("the model provider answered HTTP 402", status=402))
     run, _ = run_analyzer(golden_case, 1, setup(model))

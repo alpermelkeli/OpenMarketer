@@ -34,6 +34,7 @@ from openmarketer_evaluation.runner import AnalyzerSetup
 from openmarketer_evaluation.verdicts import VerdictState
 
 FIXTURES = Path(__file__).parent / "fixtures"
+needs_gitleaks = pytest.mark.skipif(shutil.which("gitleaks") is None, reason="needs gitleaks")
 MATCH = json.dumps({"matches": [{"expected": "E1", "drafted": "D1", "kind": "same"}]})
 SUPPORTED = '{"support": "supported", "reason": "shown"}'
 
@@ -87,6 +88,7 @@ def test_plan_never_expects_more_evidence_questions_than_the_limit(golden_case):
 
 
 # ---------------------------------------------------------------------- run
+@needs_gitleaks
 def test_benchmark_runs_each_case_as_often_as_asked_and_stores_everything(
     golden_case, scripted, submission, profile, feature, tmp_path
 ):
@@ -120,6 +122,7 @@ def test_benchmark_runs_each_case_as_often_as_asked_and_stores_everything(
     assert any("judging" in line for line in said)
 
 
+@needs_gitleaks
 def test_benchmark_goes_on_after_a_run_whose_provider_failed(
     golden_case, scripted, submission, profile, feature, tmp_path
 ):
@@ -142,6 +145,7 @@ def test_benchmark_goes_on_after_a_run_whose_provider_failed(
     assert scores.cases[0].metrics["feature_recall"].counted == 1
 
 
+@needs_gitleaks
 def test_run_judged_by_the_model_that_drafted_it_is_marked(
     golden_case, scripted, submission, profile, feature, tmp_path
 ):
@@ -173,6 +177,7 @@ def on_another_route(config: BenchmarkConfig, requested_model: str | None) -> Be
     return config.model_copy(update={"judge_route": route})
 
 
+@needs_gitleaks
 def test_route_of_the_judge_is_recorded_and_its_cost_is_unknown_not_zero(
     golden_case, scripted, submission, profile, feature, tmp_path
 ):
@@ -216,6 +221,7 @@ def test_judge_on_another_route_is_compared_by_the_model_asked_of_it(
         )
 
 
+@needs_gitleaks
 def test_run_judged_by_the_drafting_model_under_another_spelling_is_marked(
     golden_case, scripted, submission, profile, feature, tmp_path
 ):
@@ -270,6 +276,7 @@ def test_benchmark_does_not_start_with_a_judge_that_is_the_analyzers_model(
 
 
 # ----------------------------------------------------- what is kept out of git
+@needs_gitleaks
 def test_reply_that_could_not_be_read_is_stored_apart_from_the_verdicts(
     golden_case, scripted, submission, profile, feature, tmp_path
 ):
@@ -292,6 +299,7 @@ def test_reply_that_could_not_be_read_is_stored_apart_from_the_verdicts(
     assert quoted in apart and "evidence:product" in apart
 
 
+@needs_gitleaks
 def test_git_ignores_excerpts_and_unread_replies_wherever_the_results_folder_is(
     golden_case, scripted, submission, profile, feature, tmp_path
 ):
@@ -352,6 +360,7 @@ def test_configuration_records_the_cases_the_limits_and_both_roles(golden_case, 
 
 
 # ------------------------------------------------------------------ rescore
+@needs_gitleaks
 def test_scoring_again_from_the_stored_run_gives_the_same_scores_without_a_model(
     golden_case, scripted, submission, profile, feature, tmp_path
 ):

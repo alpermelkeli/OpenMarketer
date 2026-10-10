@@ -2,7 +2,7 @@
 
 Open-source, self-hosted marketing agent: it reads a product's repository, drafts a Product Profile for human review, and later plans, writes and publishes marketing under a deterministic policy gate. The design is in `docs/design-report/report.pdf` (source: `report.tex`).
 
-Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API creates projects, starts analyses, and reads, edits and approves profiles. The worker runs each analysis as a Temporal workflow that the API starts; the run's state is in the database, and the analyzer's graph stores a checkpoint in PostgreSQL after every step, so a retried attempt continues instead of starting over (the CLI runs it in memory). The dashboard has three screens on top of the API: projects, analyses and the profile review. The evaluation is not built yet. `docs/status.md` has the details and the differences from the design report.
+Phase 1 is in progress. Intake, extractors and the analyzer agent run from the CLI, and `--save` stores a run in PostgreSQL as a draft. The API creates projects, starts analyses, and reads, edits and approves profiles. The worker runs each analysis as a Temporal workflow that the API starts; the run's state is in the database, and the analyzer's graph stores a checkpoint in PostgreSQL after every step, so a retried attempt continues instead of starting over (the CLI runs it in memory). The dashboard has three screens on top of the API: projects, analyses and the profile review. The golden-repository benchmark runs from the CLI (`openmarketer evaluate`) against cases in `evals/cases`; there is one case so far, with a label no person has reviewed. `docs/status.md` has the details and the differences from the design report.
 
 ## Layout
 
@@ -10,11 +10,13 @@ Phase 1 is in progress. Intake, extractors and the analyzer agent run from the C
 |---|---|
 | `packages/core` | Domain: Product Profile schema (`profile.py`), database models, migrations, session factory, evidence store, profile versions and project store, the graph checkpointer's tables and their cleanup (`db/`), model router and chat client (`llm_config.py`, `llm.py`), the checkpoint store every graph uses (`graph_checkpoints/`), the Temporal address the API and the worker share (`workflow_server.py`). Organised by feature, as the worker is by agent: what one feature owns is in its folder, what several share stays above, and a feature package's `__init__` imports nothing. `repository_analysis/`: intake, with the rule for which host gets an access token (`intake/`), extractor interface (`extraction.py`), analyzer agent (`analyzer_agent/`), the pipeline as one operation (`pipeline.py`), requesting an analysis (`request.py`), the names the API and the worker share (`workflow_contract.py`) |
 | `packages/extractors` | Extractor plugins, registered under the `openmarketer.extractors` entry point group |
-| `apps/cli` | `openmarketer analyze <repo>`, with `--save` to store the run |
+| `packages/evaluation` | Golden-repository benchmark of the analyzer: loading cases (`cases.py`), running the analyzer on a pinned commit (`runner.py`), the judge's questions (`judge.py`, and `claude_code_judge.py` for the Claude Code route), scoring as pure functions (`scoring.py`), the results folder and the report. Nothing of the product imports it |
+| `apps/cli` | `openmarketer analyze <repo>`, with `--save` to store the run; `openmarketer evaluate` runs the benchmark |
 | `apps/api` | FastAPI service: projects, analyses, profile review. `openapi.json` is the contract the dashboard's types come from |
 | `apps/worker` | Temporal worker, one folder per product agent under `openmarketer_worker/`, each with its own wiring; above them only the process (`main.py`), its settings and the schedule that removes left-over checkpoints. `repository_analyzer/`: the `AnalyzeRepository` workflow (`workflow.py`), its wiring (`wiring.py`) and its activities, which analyse with the run's checkpoints and forget them when the run ends. What it shares with the API (workflow name, task queue, input) is in `packages/core`, `repository_analysis/workflow_contract.py` |
 | `apps/web` | Dashboard: Next.js 16, Tailwind 4, shadcn/ui, TanStack Query. Projects, analyses and the Product Profile review; the browser reaches the API only through the dashboard's own proxy route |
 | `config/models.yaml` | Model per role, through OpenRouter |
+| `evals/` | Golden cases (`cases/<name>/case.yaml` and `expected_profile.json`) and committed benchmark results (`results/<id>/`) |
 | `docs/status.md` | What is built, how it was checked, and where the code differs from the design. Keep it current in the same change as the code |
 | `deploy/compose/dev.yml` | Dev stack: PostgreSQL + pgvector (5433), Temporal (7233, UI 8233), S3-compatible storage (9000/9001) |
 
@@ -26,6 +28,7 @@ make up          # start the dev stack
 make migrate     # apply database migrations
 make check       # lint, type-check, tests: what CI runs
 make analyze repo=https://github.com/owner/name          # add save=1 to store the run (needs make up, make migrate)
+make evaluate    # benchmark the analyzer on evals/cases; spends nothing unless live=1 (see make help)
 make worker      # run the Temporal worker (needs make up, make migrate)
 make api         # serve the API on http://127.0.0.1:8000 (needs make up, make migrate; analyses also need make worker)
 make openapi     # rewrite apps/api/openapi.json and the dashboard's types after changing a route or a model

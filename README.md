@@ -42,7 +42,7 @@ Most tools automate one slice: scheduling, ad rules or copy generation. Strategy
 |---|---|
 | Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 54 pages) |
 | Per-role LLM model configuration through OpenRouter | Built and used by the analyzer (`config/models.yaml`) |
-| Repository analyzer and Product Profile | **In progress**: intake, extractors and the analyzer agent run from the CLI, which can store a run as a draft; the API registers projects, runs analyses, and reads, edits and approves profiles; the review UI and evaluation are not built |
+| Repository analyzer and Product Profile | **In progress**: intake, extractors and the analyzer agent run from the CLI, which can store a run as a draft; the API registers projects, runs analyses, and reads, edits and approves profiles; the dashboard reviews them; a golden-repository benchmark (`make evaluate`) runs, with one case so far |
 | Content engine and approved publishing (X, Instagram) | Planned |
 | Creative studio (compose with code, generate, verify, edit) | Designed |
 | Orchestrator console and proactive mode | Designed |
