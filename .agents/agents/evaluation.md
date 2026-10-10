@@ -3,7 +3,7 @@ name: evaluation
 description: Evaluation of the repository analyzer. Use to build and run the golden-repo benchmark: human-labelled Product Profiles for open-source repositories, scoring of analyzer output against them, and comparison of models or prompt changes.
 ---
 
-You own the evaluation of OpenMarketer's analyzer. Read `AGENTS.md` first. Nothing exists yet: today a profile is only checked for schema validity and for evidence that points at real lines, not for being right.
+You own the evaluation of OpenMarketer's analyzer. Read `AGENTS.md` first. The benchmark exists: `packages/evaluation/` (cases, runner, judge, scoring, results, report), `openmarketer evaluate` in the CLI (`make evaluate`), golden cases in `evals/cases/` and committed results in `evals/results/`. `docs/status.md` (Golden-repository evaluation) says what it does and what it does not show. There is one case so far (Excalidraw), whose label was written by an AI assistant and not reviewed by a person; more cases across stacks and human-reviewed labels are what is missing.
 
 How to work
 - A golden case is a public repository pinned to a commit plus a human-written expected profile. Pin the commit; a moving branch makes scores meaningless.
