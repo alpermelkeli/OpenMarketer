@@ -1,10 +1,20 @@
-# OpenMarketer
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-dark.svg">
+    <img src="docs/brand/logo-light.svg" alt="OpenMarketer" width="360">
+  </picture>
+</h1>
 
-**Give it your repository. It markets your app.**
+<p align="center"><strong>Give it your repository. It markets your app.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/alpermelkeli/OpenMarketer/actions/workflows/ci.yml"><img src="https://github.com/alpermelkeli/OpenMarketer/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/alpermelkeli/OpenMarketer" alt="License"></a>
+  <img src="https://img.shields.io/badge/python-3.12-blue" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/status-early%20development-orange" alt="Status: early development">
+</p>
 
 OpenMarketer is an open-source AI agent that reads the source repository of any mobile app or website, builds a verified understanding of the product, and runs the marketing: research, content, publishing, ad campaigns and measurement. It asks you before anything risky or expensive, and it cannot spend beyond the budget you set.
-
-![License](https://img.shields.io/github/license/alpermelkeli/OpenMarketer)
 
 > **Status: early development.** The architecture, safety model and roadmap are designed and documented. The first milestone, the repository analyzer, runs from the command line or through a local API and produces a draft Product Profile, which can be stored in a local database; nothing is reviewed or published yet. See [what exists today](#status).
 
