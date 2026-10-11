@@ -1,7 +1,7 @@
 """What the workflow of any agent needs to call a database write and to word a failure.
 
 ``database_write`` runs an activity that is one short transaction, with the
-timeouts and retries of its policy. ``shown`` turns whatever stopped an
+timeouts and retries of its policy. ``reason_shown`` turns whatever stopped an
 activity (or the workflow itself) into a text that may be stored on a run and
 shown to the person who asked for it.
 
@@ -62,7 +62,7 @@ async def database_write(
     )
 
 
-def shown(
+def reason_shown(
     failure: BaseException,
     texts: FailureTexts,
     *,

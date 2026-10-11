@@ -24,14 +24,12 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
-# Imported plainly, so that the sandbox loads it itself (see ``agent_runtime/driver.py``).
-from openmarketer_worker.agent_runtime.workflow_support import database_write, shown
-
 with workflow.unsafe.imports_passed_through():
     from openmarketer_core.repository_analysis.workflow_contract import (
         ANALYZE_REPOSITORY_WORKFLOW,
         AnalyzeRepositoryInput,
     )
+    from openmarketer_worker.agent_runtime.workflow_support import database_write, reason_shown
     from openmarketer_worker.repository_analyzer import policy, steps
     from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy
 
@@ -61,7 +59,9 @@ class AnalyzeRepository:
                 ),
             )
         except (ActivityError, asyncio.CancelledError) as failure:
-            reason = shown(failure, steps.ANALYSIS_TEXTS, worded_types=steps.WORDED_BY_THE_ACTIVITY)
+            reason = reason_shown(
+                failure, steps.ANALYSIS_TEXTS, worded_types=steps.WORDED_BY_THE_ACTIVITY
+            )
             failed = steps.RunFailure(run=run, error=reason)
             # Shielded: when the workflow was cancelled, the record must still be written.
             await asyncio.shield(

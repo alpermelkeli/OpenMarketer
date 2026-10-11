@@ -6,29 +6,34 @@ the activities behave when Temporal retries them, is in ``test_driver.py``.
 
 import asyncio
 import logging
+import uuid
+from dataclasses import replace
+from datetime import timedelta
 
 import pytest
-from scripted_work import (
-    SEND_THEN_PUBLISH,
+from scripted_actions import (
     BlockingAction,
+    ScriptedAction,
+    SendEmail,
+    nested,
+    routes_of,
+)
+from scripted_graphs import (
+    SEND_THEN_PUBLISH,
+    Ask,
     BlockingGraph,
     RaisingGraph,
-    ScriptedAction,
+    ReturningGraph,
     ScriptedGraph,
-    SendEmail,
-    happened,
-    route,
-    routes_of,
-    some_run,
-    thread_of,
 )
+from scripted_rig import happened, some_run, thread_of
+from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
-from openmarketer_core.agent_runtime.steps import MissingInitialState
+from openmarketer_core.agent_runtime.steps import GraphRunRef, MissingInitialState, StepOutcome
 from openmarketer_core.db.session import DatabaseError
-from openmarketer_worker.agent_runtime.routes import ActionRoutes
 from openmarketer_worker.agent_runtime.vocabulary import (
     ACTION_TEXTS,
     ATTEMPT_STILL_RUNNING,
@@ -37,11 +42,11 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     INVALID_ACTION_PAYLOAD,
     INVALID_ACTION_RESULT,
     MAX_RESULT_BYTES,
+    MAX_STEP_BYTES,
     RUN_TEXTS,
     STEP_REFUSED,
     UNEXPECTED,
     UNKNOWN_ACTION,
-    ActionPolicy,
     StepInput,
 )
 
@@ -52,6 +57,11 @@ def asking_for(name: str, payload: dict, *, run=None) -> ActionRequest:
     return ActionRequest(
         action_id=f"{thread_of(run or some_run())}:0123456789abcdef", name=name, payload=payload
     )
+
+
+def with_a_heartbeat_timeout(environment: ActivityEnvironment, *, seconds: float):
+    """The activity info of ``environment`` as a workflow that set a heartbeat timeout gives it."""
+    return replace(environment.info, heartbeat_timeout=timedelta(seconds=seconds))
 
 
 async def refused(activity, argument) -> ApplicationError:
@@ -105,13 +115,21 @@ async def test_step_gives_the_graph_the_thread_of_its_run(runtime, checkpoints):
     assert seen == [thread_of(run)]
 
 
-async def test_step_sends_a_heartbeat_while_the_graph_works(runtime):
-    environment = ActivityEnvironment()
-    heartbeats: list[object] = []
+async def test_step_sends_heartbeats_while_the_graph_works_as_the_workflow_asked(runtime):
+    environment, heartbeats = ActivityEnvironment(), []
+    environment.info = with_a_heartbeat_timeout(environment, seconds=3)
     environment.on_heartbeat = lambda *details: heartbeats.append(details)
     activities = runtime(ScriptedGraph([]), routes_of(ScriptedAction(), ScriptedAction()))
     await environment.run(activities.run_graph_step, StepInput(some_run(), None))
     assert heartbeats
+
+
+async def test_step_scheduled_without_a_heartbeat_timeout_sends_no_heartbeat(runtime):
+    environment, heartbeats = ActivityEnvironment(), []
+    environment.on_heartbeat = lambda *details: heartbeats.append(details)
+    activities = runtime(ScriptedGraph([]), routes_of(ScriptedAction(), ScriptedAction()))
+    await environment.run(activities.run_graph_step, StepInput(some_run(), None))
+    assert heartbeats == []
 
 
 async def test_step_that_is_refused_for_good_says_why_and_is_not_worth_another_attempt(runtime):
@@ -138,7 +156,11 @@ async def test_failure_the_graph_worded_passes_as_it_is(runtime):
     worded = ApplicationError("the repository is empty", type="EmptyRepository", non_retryable=True)
     activities = runtime(RaisingGraph(worded), routes_of(ScriptedAction(), ScriptedAction()))
     failure = await refused(activities.run_graph_step, StepInput(some_run(), None))
-    assert failure is worded
+    assert (failure.type, failure.message, failure.non_retryable) == (
+        "EmptyRepository",
+        "the repository is empty",
+        True,
+    )
 
 
 async def test_error_nobody_worded_is_reported_without_its_detail_and_tried_again(runtime):
@@ -158,9 +180,7 @@ async def test_failure_of_the_database_is_reported_as_one_worth_another_attempt(
     assert not failure.non_retryable
 
 
-async def test_step_is_refused_while_an_earlier_attempt_holds_the_thread(
-    runtime, checkpoints, caplog
-):
+async def test_step_is_refused_while_an_earlier_attempt_holds_the_thread(runtime, checkpoints):
     graph, run = ScriptedGraph([]), some_run()
     activities = runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))
     with checkpoints.of_attempt(thread_of(run)):
@@ -181,6 +201,7 @@ async def test_thread_is_free_again_once_the_step_has_returned(runtime):
 async def test_step_that_is_cancelled_while_the_graph_works_says_so_in_the_log(runtime, caplog):
     blocked = BlockingGraph()
     environment = ActivityEnvironment()
+    environment.info = with_a_heartbeat_timeout(environment, seconds=3)
     activities = runtime(blocked, routes_of(ScriptedAction(), ScriptedAction()))
     running = asyncio.create_task(
         environment.run(activities.run_graph_step, StepInput(some_run(), None))
@@ -194,6 +215,52 @@ async def test_step_that_is_cancelled_while_the_graph_works_says_so_in_the_log(r
     finally:
         blocked.release.set()
     assert "was cancelled while its work was running" in caplog.text
+
+
+# ------------------------------------------- what a step may hand over to the history
+BULK = "BULK" * (MAX_STEP_BYTES // 4 + 1)
+
+
+async def test_step_that_asks_with_a_payload_over_the_limit_is_refused_for_good(runtime):
+    graph = ScriptedGraph([Ask("send_email", {"to": BULK})])
+    activities = runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))
+    failure = await refused(activities.run_graph_step, StepInput(some_run(), None))
+    assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
+    assert str(MAX_STEP_BYTES) in failure.message
+    assert "BULK" not in failure.message
+
+
+async def test_step_that_finishes_with_an_output_over_the_limit_is_refused_for_good(runtime):
+    activities = runtime(
+        ScriptedGraph([], note=BULK), routes_of(ScriptedAction(), ScriptedAction())
+    )
+    failure = await refused(activities.run_graph_step, StepInput(some_run(), None))
+    assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
+    assert str(MAX_STEP_BYTES) in failure.message
+    assert "BULK" not in failure.message
+
+
+@pytest.mark.parametrize(
+    "output",
+    [{"x": float("nan")}, {"x": float("inf")}, nested(20000), {"x": {"a", "b"}}],
+    ids=["nan", "inf", "deep", "set"],
+)
+async def test_step_that_finishes_with_an_output_that_is_not_json_is_refused_for_good(
+    runtime, output
+):
+    graph = ReturningGraph(StepOutcome.finished(output))
+    activities = runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))
+    failure = await refused(activities.run_graph_step, StepInput(some_run(), None))
+    assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
+
+
+async def test_step_whose_kind_of_run_cannot_name_a_thread_is_refused_for_good(runtime):
+    graph = ScriptedGraph([])
+    activities = runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))
+    unnamed = GraphRunRef(kind="Not a kind!", run_id=uuid.uuid4())
+    failure = await refused(activities.run_graph_step, StepInput(unnamed, None))
+    assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
+    assert graph.advanced == []
 
 
 # ------------------------------------------------------------------ run_action
@@ -246,7 +313,11 @@ async def test_failure_a_handler_worded_passes_as_it_is(runtime):
     )
     activities = runtime(ScriptedGraph([]), routes_of(ScriptedAction([worded]), ScriptedAction()))
     failure = await refused(activities.run_action, asking_for("send_email", {"to": "ada"}))
-    assert failure is worded
+    assert (failure.type, failure.message, failure.non_retryable) == (
+        "Refused",
+        "the mail server refused the address",
+        True,
+    )
 
 
 async def test_failure_of_the_database_in_a_handler_is_worth_another_attempt(runtime):
@@ -257,24 +328,26 @@ async def test_failure_of_the_database_in_a_handler_is_worth_another_attempt(run
     assert not failure.non_retryable
 
 
-def a_result_of(json_bytes: int) -> dict[str, str]:
-    """A result whose JSON is exactly ``json_bytes`` long (``{"b":""}`` is 8 of them)."""
-    return {"b": "x" * (json_bytes - 8)}
+def a_result_making_an_outcome_of(request: ActionRequest, size: int) -> dict[str, str]:
+    """A result that makes the outcome of ``request`` exactly ``size`` bytes, as encoded."""
+    encoder = DataConverter.default.payload_converter
+    empty = ActionOutcome(request.action_id, succeeded=True, result={"b": ""}, error="")
+    return {"b": "x" * (size - len(encoder.to_payload(empty).data))}
 
 
-async def test_result_of_exactly_the_largest_size_is_returned(runtime):
-    send = ScriptedAction([a_result_of(MAX_RESULT_BYTES)])
+async def test_outcome_of_exactly_the_largest_size_is_returned(runtime):
+    request = asking_for("send_email", {"to": "ada"})
+    send = ScriptedAction([a_result_making_an_outcome_of(request, MAX_RESULT_BYTES)])
     activities = runtime(ScriptedGraph([]), routes_of(send, ScriptedAction()))
-    outcome = await ActivityEnvironment().run(
-        activities.run_action, asking_for("send_email", {"to": "ada"})
-    )
+    outcome = await ActivityEnvironment().run(activities.run_action, request)
     assert outcome.succeeded
 
 
-async def test_result_one_byte_over_is_refused_for_good_and_does_not_repeat_the_content(runtime):
-    send = ScriptedAction([a_result_of(MAX_RESULT_BYTES + 1)])
+async def test_outcome_one_byte_over_is_refused_for_good_and_does_not_repeat_the_content(runtime):
+    request = asking_for("send_email", {"to": "ada"})
+    send = ScriptedAction([a_result_making_an_outcome_of(request, MAX_RESULT_BYTES + 1)])
     activities = runtime(ScriptedGraph([]), routes_of(send, ScriptedAction()))
-    failure = await refused(activities.run_action, asking_for("send_email", {"to": "ada"}))
+    failure = await refused(activities.run_action, request)
     assert failure.type == "ActionResultTooLarge"
     assert failure.non_retryable
     assert failure.message == f"the result of action send_email is over {MAX_RESULT_BYTES} bytes"
@@ -289,32 +362,28 @@ async def test_result_that_is_not_json_is_refused_for_good(runtime):
     assert failure.message == "the result of action send_email is not JSON"
 
 
-async def test_action_without_a_heartbeat_timeout_sends_no_heartbeat(runtime):
-    environment = ActivityEnvironment()
-    heartbeats: list[object] = []
+async def test_action_scheduled_without_a_heartbeat_timeout_sends_no_heartbeat(runtime):
+    environment, heartbeats = ActivityEnvironment(), []
     environment.on_heartbeat = lambda *details: heartbeats.append(details)
     activities = runtime(ScriptedGraph([]), routes_of(ScriptedAction(), ScriptedAction()))
     await environment.run(activities.run_action, asking_for("send_email", {"to": "ada"}))
     assert heartbeats == []
 
 
-async def test_action_with_a_heartbeat_timeout_sends_heartbeats_while_it_runs(runtime):
-    environment = ActivityEnvironment()
-    heartbeats: list[object] = []
+async def test_action_sends_heartbeats_while_it_runs_as_the_workflow_asked(runtime):
+    environment, heartbeats = ActivityEnvironment(), []
+    environment.info = with_a_heartbeat_timeout(environment, seconds=3)
     environment.on_heartbeat = lambda *details: heartbeats.append(details)
-    watched = ActionPolicy(30, 2, 0.2, heartbeat_timeout_seconds=3)
-    routes = ActionRoutes([route("send_email", SendEmail, ScriptedAction(), watched)])
-    activities = runtime(ScriptedGraph([]), routes)
+    activities = runtime(ScriptedGraph([]), routes_of(ScriptedAction(), ScriptedAction()))
     await environment.run(activities.run_action, asking_for("send_email", {"to": "ada"}))
     assert heartbeats
 
 
 async def test_action_that_is_cancelled_while_it_runs_says_so_in_the_log(runtime, caplog):
     blocked = BlockingAction()
-    watched = ActionPolicy(30, 2, 0.2, heartbeat_timeout_seconds=3)
-    routes = ActionRoutes([route("send_email", SendEmail, blocked, watched)])
-    activities = runtime(ScriptedGraph([]), routes)
+    activities = runtime(ScriptedGraph([]), routes_of(blocked, ScriptedAction()))
     environment = ActivityEnvironment()
+    environment.info = with_a_heartbeat_timeout(environment, seconds=3)
     request = asking_for("send_email", {"to": "ada"})
     running = asyncio.create_task(environment.run(activities.run_action, request))
     try:
@@ -326,3 +395,18 @@ async def test_action_that_is_cancelled_while_it_runs_says_so_in_the_log(runtime
     finally:
         blocked.release.set()
     assert f"action {request.action_id} was cancelled" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "result",
+    [nested(1000), nested(5000), nested(20000), {"x": float("nan")}, {"x": float("inf")}],
+    ids=["depth-1000", "depth-5000", "depth-20000", "nan", "inf"],
+)
+async def test_result_the_history_cannot_hold_is_refused_for_good_and_the_action_ran_once(
+    runtime, result
+):
+    send = ScriptedAction([result, {"message_id": "m-1"}])
+    activities = runtime(ScriptedGraph([]), routes_of(send, ScriptedAction()))
+    failure = await refused(activities.run_action, asking_for("send_email", {"to": "ada"}))
+    assert (failure.type, failure.non_retryable) == (INVALID_ACTION_RESULT, True)
+    assert len(send.calls) == 1

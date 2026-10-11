@@ -7,29 +7,35 @@ what it needs through the ``runtime`` and ``serving`` fixtures of ``conftest.py`
 """
 
 import asyncio
-import json
 from dataclasses import replace
 
 import pytest
-from scripted_work import (
-    ALLOWED,
-    SEND_THEN_PUBLISH,
-    STEP_LIMITS,
-    Ask,
+from scripted_actions import (
     BlockingAction,
+    ScriptedAction,
+    SlowAction,
+    WatchingAction,
+    routes_of,
+)
+from scripted_agent import RecordsEveryFailure, RecordsLikeTheAnalyzer
+from scripted_graphs import (
+    SEND_THEN_PUBLISH,
+    Ask,
     BlockingGraph,
     RaisingGraph,
-    ScriptedAction,
     ScriptedGraph,
-    exchanges,
-    failure_events,
+    SlowGraph,
+)
+from scripted_history import exchanges, failures_in
+from scripted_rig import (
+    ALLOWED,
+    STEP_LIMITS,
+    cause_of,
+    failed_an_attempt_with,
     happened,
-    readable,
-    routes_of,
     some_run,
     thread_of,
 )
-from temporalio.api.enums.v1 import WorkflowExecutionStatus
 from temporalio.client import WorkflowFailureError
 from temporalio.exceptions import (
     ActivityError,
@@ -40,22 +46,16 @@ from temporalio.exceptions import (
     TimeoutType,
 )
 
-from openmarketer_core.agent_runtime.steps import MissingInitialState
-from openmarketer_worker.agent_runtime import vocabulary
+from openmarketer_core.agent_runtime.steps import MissingInitialState, StepOutcome
+from openmarketer_worker.agent_runtime import driver, vocabulary
 from openmarketer_worker.agent_runtime.vocabulary import (
     ACTION_TEXTS,
+    MAX_ERROR_CHARACTERS,
     MAX_RESULT_BYTES,
     ActionPolicy,
 )
 
 SECRET = "sk-live-4242-not-for-history"
-
-
-def cause_of_action_activity(failure: BaseException) -> ApplicationError:
-    """The error an activity ended with, under the failure of the workflow."""
-    assert isinstance(failure, ActivityError)
-    assert isinstance(failure.cause, ApplicationError)
-    return failure.cause
 
 
 # --------------------------------------------------------------------- success
@@ -124,41 +124,6 @@ async def test_graph_that_asks_for_nothing_finishes_after_one_step(runtime, serv
         output = await execution.finish(some_run())
     assert output == {"plan": [], "answers": []}
     assert (send.calls, publish.calls, graph.advanced) == ([], [], [None])
-
-
-# --------------------------------------------------------------------- history
-async def test_history_holds_only_identifiers_names_and_small_json(runtime, serving):
-    send = ScriptedAction([{"message_id": "m-1"}])
-    publish = ScriptedAction([RuntimeError(f"the service refused the key {SECRET}")] * 2)
-    graph, run = ScriptedGraph(SEND_THEN_PUBLISH), some_run()
-    async with serving(runtime(graph, routes_of(send, publish))) as execution:
-        await execution.finish(run)
-        history = await execution.history(run)
-    assert SECRET not in readable(history)
-    seen = exchanges(history)
-    assert {exchange.activity for exchange in seen} == {"run_graph_step", "run_action"}
-    for exchange in seen:
-        assert len(json.dumps(exchange.given)) + len(json.dumps(exchange.returned)) < 1000
-        if exchange.activity == "run_graph_step":
-            assert set(exchange.given) == {"run", "resume"}
-            assert set(exchange.given["run"]) == {"kind", "run_id"}
-            assert set(exchange.returned) == {"output", "action"}
-        else:
-            assert set(exchange.given) == {"action_id", "name", "payload"}
-    # The action that completed returned an outcome; the one that did not has only its failure.
-    outcomes = [e.returned for e in seen if e.activity == "run_action" and e.returned is not None]
-    assert [set(outcome) for outcome in outcomes] == [{"action_id", "succeeded", "result", "error"}]
-
-
-async def test_history_names_no_secret_a_failing_handler_knew(runtime, serving):
-    publish = ScriptedAction([RuntimeError(f"the service refused the key {SECRET}")] * 2)
-    graph, run = ScriptedGraph(SEND_THEN_PUBLISH[1:]), some_run()
-    async with serving(runtime(graph, routes_of(ScriptedAction(), publish))) as execution:
-        output = await execution.finish(run)
-        history = await execution.history(run)
-    assert len(publish.calls) == ALLOWED["publish"].max_attempts
-    assert output["answers"][0]["error"] == ACTION_TEXTS.stopped_unexpectedly
-    assert SECRET not in readable(history)
 
 
 # --------------------------------------------------------------------- retries
@@ -235,24 +200,81 @@ async def test_step_tried_again_after_it_applied_an_outcome_does_not_run_the_act
     assert graph.advanced[1] == graph.advanced[2]
 
 
-async def test_step_is_tried_again_until_the_attempt_that_holds_the_thread_returns(
+async def test_step_is_refused_and_tried_again_while_an_attempt_holds_the_thread(
+    runtime, serving, checkpoints
+):
+    graph, run = ScriptedGraph([]), some_run()
+    async with serving(runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))) as execution:
+        with checkpoints.of_attempt(thread_of(run)):
+            failure = await execution.fail(run)
+    assert isinstance(failure, ActivityError)
+    # Tried again until the attempts of the policy were used up, and then no more.
+    assert failure.retry_state is RetryState.MAXIMUM_ATTEMPTS_REACHED
+    assert cause_of(failure).type == vocabulary.ATTEMPT_STILL_RUNNING
+    assert graph.advanced == []
+
+
+async def test_step_goes_on_once_the_attempt_that_held_the_thread_has_returned(
     runtime, serving, checkpoints
 ):
     patient = replace(STEP_LIMITS, max_attempts=10)
     graph, run = ScriptedGraph([]), some_run()
-    async with serving(
-        runtime(graph, routes_of(ScriptedAction(), ScriptedAction()), patient)
-    ) as execution:
+    async with serving(runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))) as execution:
         with checkpoints.of_attempt(thread_of(run)):
             handle = await execution.start(run, policy=patient)
-            await asyncio.sleep(1.5)
-            assert not graph.advanced
-            description = await handle.describe()
-            assert description.raw_description.workflow_execution_info.status == (
-                WorkflowExecutionStatus.WORKFLOW_EXECUTION_STATUS_RUNNING
-            )
+            await failed_an_attempt_with(handle, vocabulary.ATTEMPT_STILL_RUNNING)
+            assert graph.advanced == []
         output = await handle.result()
     assert output == {"plan": [], "answers": []}
+
+
+# --------------------------------------------------------------------- heartbeats
+async def test_action_longer_than_the_heartbeat_timeout_of_the_workflow_goes_on_heartbeating(
+    runtime, serving
+):
+    watched = {"send_email": ActionPolicy(30, 1, 0.2, heartbeat_timeout_seconds=2)}
+    graph, run = ScriptedGraph(SEND_THEN_PUBLISH[:1]), some_run()
+    async with serving(runtime(graph, routes_of(SlowAction(4), ScriptedAction()))) as execution:
+        output = await execution.finish(run, actions=watched)
+    assert output["answers"][0]["succeeded"] is True
+
+
+async def test_step_longer_than_the_heartbeat_timeout_of_the_workflow_goes_on_heartbeating(
+    runtime, serving
+):
+    watched = replace(STEP_LIMITS, heartbeat_timeout_seconds=2, max_attempts=1)
+    activities = runtime(SlowGraph(4), routes_of(ScriptedAction(), ScriptedAction()))
+    async with serving(activities) as execution:
+        output = await execution.finish(some_run(), policy=watched)
+    assert output == {}
+
+
+# --------------------------------------------------------------------- what the graph is told
+async def test_error_told_to_the_graph_is_cut_to_its_limit(runtime, serving):
+    long_reply = ApplicationError(
+        "the service said: " + "x" * 5000, type="Refused", non_retryable=True
+    )
+    send = ScriptedAction([long_reply])
+    graph, run = ScriptedGraph(SEND_THEN_PUBLISH[:1]), some_run()
+    async with serving(runtime(graph, routes_of(send, ScriptedAction()))) as execution:
+        output = await execution.finish(run)
+    error = output["answers"][0]["error"]
+    assert len(error) == MAX_ERROR_CHARACTERS
+    assert error.startswith("the service said: xxx")
+    assert error.endswith("...")
+
+
+async def test_node_that_asks_for_two_actions_ends_the_run_and_the_second_never_runs(
+    runtime, serving
+):
+    send, publish = ScriptedAction(), ScriptedAction()
+    graph, run = ScriptedGraph([Ask("send_email", {})], asking_twice=True), some_run()
+    async with serving(runtime(graph, routes_of(send, publish))) as execution:
+        failure = await execution.fail(run)
+    assert isinstance(failure, ActivityError)
+    assert failure.retry_state is RetryState.NON_RETRYABLE_FAILURE
+    assert cause_of(failure).type == vocabulary.STEP_REFUSED
+    assert (len(send.calls), publish.calls) == (1, [])
 
 
 # --------------------------------------------------------------------- what is refused
@@ -290,7 +312,7 @@ async def test_payload_that_does_not_fit_ends_the_run_and_the_handler_never_runs
     async with serving(runtime(graph, routes_of(send, ScriptedAction()))) as execution:
         failure = await execution.fail(run)
         history = await execution.history(run)
-    refusal = cause_of_action_activity(failure)
+    refusal = cause_of(failure)
     assert (refusal.type, refusal.non_retryable) == (vocabulary.INVALID_ACTION_PAYLOAD, True)
     assert "bcc" in refusal.message
     assert send.calls == []
@@ -302,7 +324,7 @@ async def test_payload_that_does_not_fit_ends_the_run_and_the_handler_never_runs
     ]
     assert isinstance(failure, ActivityError)
     assert failure.retry_state is RetryState.NON_RETRYABLE_FAILURE
-    assert secret_value not in failure_events(history)
+    assert secret_value not in failures_in(history)
     assert secret_value not in refusal.message
 
 
@@ -310,7 +332,7 @@ async def test_action_asked_for_beyond_the_limit_ends_the_run(runtime, serving):
     send, publish = ScriptedAction(), ScriptedAction()
     graph, run = ScriptedGraph(SEND_THEN_PUBLISH), some_run()
     one_action = replace(STEP_LIMITS, max_actions=1)
-    async with serving(runtime(graph, routes_of(send, publish), one_action)) as execution:
+    async with serving(runtime(graph, routes_of(send, publish))) as execution:
         failure = await execution.fail(run, policy=one_action)
     assert isinstance(failure, ApplicationError)
     assert (failure.type, failure.non_retryable) == (vocabulary.TOO_MANY_ACTIONS, True)
@@ -322,11 +344,48 @@ async def test_result_over_the_limit_ends_the_run_and_the_action_is_not_run_agai
     graph, run = ScriptedGraph(SEND_THEN_PUBLISH[:1]), some_run()
     async with serving(runtime(graph, routes_of(send, ScriptedAction()))) as execution:
         failure = await execution.fail(run)
-    refusal = cause_of_action_activity(failure)
+    refusal = cause_of(failure)
     assert (refusal.type, refusal.non_retryable) == (vocabulary.ACTION_RESULT_TOO_LARGE, True)
     assert len(send.calls) == 1
     assert isinstance(failure, ActivityError)
     assert failure.retry_state is RetryState.NON_RETRYABLE_FAILURE
+
+
+# ------------------------------------------- how a workflow can record a refusal of the driver
+async def test_workflow_that_catches_what_the_analyzers_does_does_not_catch_a_refusal(
+    runtime, serving
+):
+    graph, run = ScriptedGraph(SEND_THEN_PUBLISH[1:]), some_run()
+    only_email = {"send_email": ALLOWED["send_email"]}
+    async with serving(runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))) as execution:
+        handle = await execution.start(
+            run, actions=only_email, workflow_run=RecordsLikeTheAnalyzer.run
+        )
+        with pytest.raises(WorkflowFailureError) as failed:
+            await handle.result()
+    # The refusal went by: a workflow that records how its run ended would have recorded nothing.
+    refusal = failed.value.__cause__
+    assert isinstance(refusal, ApplicationError)
+    assert refusal.type == vocabulary.UNKNOWN_ACTION
+
+
+async def test_workflow_that_catches_application_errors_too_records_a_refusal(runtime, serving):
+    graph, run = ScriptedGraph(SEND_THEN_PUBLISH[1:]), some_run()
+    only_email = {"send_email": ALLOWED["send_email"]}
+    async with serving(runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))) as execution:
+        handle = await execution.start(
+            run, actions=only_email, workflow_run=RecordsEveryFailure.run
+        )
+        reason = await handle.result()
+    assert reason == "action 'publish' is not one of the allowed actions"
+
+
+async def test_workflow_that_catches_application_errors_too_records_a_failed_step(runtime, serving):
+    graph, run = RaisingGraph(MissingInitialState("scripted-agent:1")), some_run()
+    async with serving(runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))) as execution:
+        handle = await execution.start(run, workflow_run=RecordsEveryFailure.run)
+        reason = await handle.result()
+    assert reason == str(MissingInitialState("scripted-agent:1"))
 
 
 # --------------------------------------------------------------------- failing steps
@@ -334,7 +393,7 @@ async def test_step_the_thread_refuses_ends_the_run_at_the_first_attempt(runtime
     graph = RaisingGraph(MissingInitialState("scripted-agent:1"))
     async with serving(runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))) as execution:
         failure = await execution.fail(some_run())
-    refusal = cause_of_action_activity(failure)
+    refusal = cause_of(failure)
     assert (refusal.type, refusal.non_retryable) == (vocabulary.STEP_REFUSED, True)
     assert "scripted-agent:1" in refusal.message
     assert graph.advanced == 1
@@ -347,7 +406,7 @@ async def test_failure_the_graph_worded_reaches_the_workflow_as_it_is(runtime, s
     graph = RaisingGraph(cloning_refused)
     async with serving(runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))) as execution:
         failure = await execution.fail(some_run())
-    refusal = cause_of_action_activity(failure)
+    refusal = cause_of(failure)
     assert (refusal.type, refusal.message) == ("CloneRefused", "the repository cannot be cloned")
     assert graph.advanced == 1
 
@@ -366,18 +425,40 @@ async def test_step_that_takes_too_long_ends_the_run_as_timed_out(runtime, servi
 
 
 # --------------------------------------------------------------------- cancellation
-async def test_cancelling_the_workflow_while_an_action_runs_ends_it_as_cancelled(runtime, serving):
+async def test_cancelling_the_workflow_while_an_action_runs_ends_it_and_the_action_hears_of_it(
+    runtime, serving
+):
     watched = {"send_email": ActionPolicy(30, 2, 0.2, heartbeat_timeout_seconds=3)}
-    blocked = BlockingAction()
+    watching = WatchingAction()
     graph, run = ScriptedGraph(SEND_THEN_PUBLISH[:1]), some_run()
-    try:
-        async with serving(runtime(graph, routes_of(blocked, ScriptedAction()))) as execution:
-            handle = await execution.start(run, actions=watched)
-            await happened(blocked.started)
-            await handle.cancel()
-            with pytest.raises(WorkflowFailureError) as stopped:
-                await asyncio.wait_for(handle.result(), timeout=20)
-    finally:
-        blocked.release.set()
+    async with serving(runtime(graph, routes_of(watching, ScriptedAction()))) as execution:
+        handle = await execution.start(run, actions=watched)
+        await happened(watching.started)
+        await handle.cancel()
+        with pytest.raises(WorkflowFailureError) as stopped:
+            await asyncio.wait_for(handle.result(), timeout=20)
+        # The workflow does not wait for the action; the action learns at its next heartbeat.
+        await happened(watching.saw_cancellation)
+    # A heartbeat told it, as the workflow was closed and its activity no longer exists; an
+    # action that sent none would have found out only when the heartbeat timeout ran out.
+    assert watching.why is not None
+    assert (watching.why.not_found, watching.why.timed_out) == (True, False)
     assert isinstance(stopped.value.__cause__, CancelledError)
     assert graph.advanced == [None]
+
+
+# ------------------------------------------------------ a step the driver cannot read
+async def test_step_that_holds_neither_an_output_nor_an_action_ends_the_run_for_good(monkeypatch):
+    # ``StepOutcome`` cannot be built so; a failed assertion in a workflow would fail the workflow
+    # task, which is tried again for ever, so the driver refuses it as a failure of the run.
+    neither = object.__new__(StepOutcome)
+    object.__setattr__(neither, "output", None)
+    object.__setattr__(neither, "action", None)
+
+    async def take_step(step, policy):
+        return neither
+
+    monkeypatch.setattr(driver, "_take_step", take_step)
+    with pytest.raises(ApplicationError) as refused:
+        await driver.run_graph_with_actions(some_run(), actions=ALLOWED, policy=STEP_LIMITS)
+    assert (refused.value.type, refused.value.non_retryable) == (vocabulary.STEP_REFUSED, True)

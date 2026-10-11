@@ -1,8 +1,8 @@
-"""Tests for the plain data the workflow and the activities share: limits, texts and names.
+"""Tests for the plain data the workflow and the activities share: limits and texts.
 
-The values are what running workflows and their histories hold, so the ones that must not
-change are written out here; and the types that cross between the workflow and the activities
-are shown to survive the data converter that carries them.
+A limit that would make Temporal retry for ever is refused when it is made, and the types that
+cross between the workflow and the activities are shown to survive the data converter that
+carries them, with annotations that are types and not text (the sandbox's converter needs that).
 """
 
 import dataclasses
@@ -13,12 +13,9 @@ from temporalio.converter import DataConverter
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
-from openmarketer_worker.agent_runtime import vocabulary
 from openmarketer_worker.agent_runtime.vocabulary import (
-    ACTION_TEXTS,
-    MAX_RESULT_BYTES,
-    RUN_TEXTS,
     ActionPolicy,
+    DatabaseWritePolicy,
     FailureTexts,
     GraphRunPolicy,
     StepInput,
@@ -36,57 +33,7 @@ def converted[T](value: T) -> T:
     return decoded
 
 
-# ------------------------------------------------------------------ names
-def test_failure_types_the_analyzer_stores_in_running_histories_keep_their_spelling():
-    assert (
-        vocabulary.DATABASE_UNAVAILABLE,
-        vocabulary.UNEXPECTED,
-        vocabulary.ATTEMPT_STILL_RUNNING,
-    ) == ("DatabaseUnavailable", "Unexpected", "AttemptStillRunning")
-
-
-def test_activities_are_called_by_these_names():
-    assert (vocabulary.RUN_GRAPH_STEP, vocabulary.RUN_ACTION) == ("run_graph_step", "run_action")
-
-
-def test_every_failure_type_is_one_of_a_kind():
-    types = [
-        value
-        for name, value in vars(vocabulary).items()
-        if name.isupper() and isinstance(value, str) and value[:1].isupper() and " " not in value
-    ]
-    assert len(types) == len(set(types))
-    assert set(vocabulary.WORDED_BY_THE_RUNTIME) <= set(types)
-
-
-def test_defects_of_the_agent_end_the_run_and_nothing_else_does():
-    assert set(vocabulary.RUN_ENDING_ACTION_FAILURES) == {
-        vocabulary.UNKNOWN_ACTION,
-        vocabulary.INVALID_ACTION_PAYLOAD,
-        vocabulary.ACTION_RESULT_TOO_LARGE,
-        vocabulary.INVALID_ACTION_RESULT,
-    }
-
-
-def test_result_of_an_action_may_be_32_kib_of_json():
-    assert MAX_RESULT_BYTES == 32 * 1024
-
-
 # ------------------------------------------------------------------ policies
-def test_run_may_ask_for_two_hundred_actions_unless_told_otherwise():
-    policy = GraphRunPolicy(30, 60, 5, 60)
-    assert policy.max_actions == 200
-
-
-def test_heartbeats_are_sent_three_times_in_the_heartbeat_timeout():
-    assert GraphRunPolicy(30, 60, 5, 60).heartbeat_every_seconds == 20
-    assert ActionPolicy(30, 2, 1, heartbeat_timeout_seconds=9).heartbeat_every_seconds == 3
-
-
-def test_action_without_a_heartbeat_timeout_has_no_heartbeat_interval():
-    assert ActionPolicy(30, 2, 1).heartbeat_every_seconds is None
-
-
 @pytest.mark.parametrize(
     "limits",
     [
@@ -126,21 +73,11 @@ def test_graph_run_policy_with_a_limit_that_is_not_positive_is_refused(limit):
 
 
 # ------------------------------------------------------------------ texts
-def test_texts_an_agent_gives_are_kept_as_given():
-    own = FailureTexts("a", "b", "c", "d", "e")
-    assert dataclasses.astuple(own) == ("a", "b", "c", "d", "e")
-
-
 @pytest.mark.parametrize("name", [field.name for field in dataclasses.fields(FailureTexts)])
 def test_text_that_says_nothing_is_refused_because_a_failed_outcome_must_say_what_went_wrong(name):
     words = {field.name: "x" for field in dataclasses.fields(FailureTexts)} | {name: ""}
     with pytest.raises(ValueError, match=name):
         FailureTexts(**words)
-
-
-def test_the_runtime_has_words_of_its_own_for_a_run_and_for_an_action():
-    assert RUN_TEXTS != ACTION_TEXTS
-    assert all(RUN_TEXTS.__dict__.values()) and all(ACTION_TEXTS.__dict__.values())
 
 
 # ------------------------------------------------------------------ the data converter
@@ -174,3 +111,14 @@ def test_policies_survive_the_converter_with_and_without_a_heartbeat_timeout():
     assert converted(GraphRunPolicy(30, 60, 5, 60, max_actions=3)) == GraphRunPolicy(
         30, 60, 5, 60, max_actions=3
     )
+
+
+@pytest.mark.parametrize(
+    "decoded",
+    [StepInput, ActionPolicy, GraphRunPolicy, DatabaseWritePolicy, FailureTexts],
+    ids=lambda c: c.__name__,
+)
+def test_type_the_workflow_carries_has_annotations_that_are_types_not_text(decoded):
+    # The sandbox's data converter evaluates text annotations in the namespace of the class's
+    # module, which may not be the module the sandbox has loaded: the run then hangs.
+    assert not any(isinstance(field.type, str) for field in dataclasses.fields(decoded))

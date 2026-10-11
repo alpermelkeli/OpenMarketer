@@ -1,18 +1,21 @@
-"""The actions an agent can run: for each, its name and payload model, what runs it and its limits.
+"""The actions an agent can run: for each, its name and payload model, and what runs it.
 
 A graph asks for an action by name, with a payload the model may have shaped.
 ``ActionRoutes`` is what the worker holds to answer: the ``ActionCatalog`` that
-decides whether the name and the payload are allowed (core's rule), the
-handler that runs the action, and the policy it runs under. One route holds
-all three so that an action cannot be allowed without a handler or run without
-limits.
+decides whether the name and the payload are allowed (core's rule) and the
+handler that runs the action. One route holds both so that an action cannot be
+allowed without a handler.
+
+The limits an action runs under (timeouts, attempts, heartbeats) are not here but in the
+workflow, which is the one place they are set: its ``actions`` mapping names the actions a
+run may ask for, with an ``ActionPolicy`` each. A name in one and not in the other is refused
+where it is found: the workflow refuses a name it does not list before anything runs, and
+the activity refuses one its routes do not hold.
 
 Built when the worker starts, by the wiring of the agent whose actions these
 are: a handler is handed what it needs (a session factory, a client of a
 service) like any activity. It holds no action of its own and runs none:
 ``activities.py`` validates a request with the catalog and calls the handler.
-The workflow does not load this module; it is given ``policies``, which is
-plain data.
 """
 
 from __future__ import annotations
@@ -24,7 +27,6 @@ from typing import Any
 from pydantic import BaseModel
 
 from openmarketer_core.agent_runtime.actions import ActionCatalog, ActionDefinition
-from openmarketer_worker.agent_runtime.vocabulary import ActionPolicy
 
 
 @dataclass(frozen=True)
@@ -41,18 +43,20 @@ class ActionContext:
 
 
 # Runs the action with its validated payload and answers with small JSON. It is blocking and
-# runs in a thread. What it raises that is not an ``ApplicationError`` it worded is logged and
-# replaced by a failure that is tried again; one it worded passes as it is.
+# runs in a thread, where ``temporalio.activity.is_cancelled()`` says whether the workflow gave
+# up on it. What it raises that is not an ``ApplicationError`` it worded is logged and replaced
+# by a failure that is tried again. One it worded leaves with its type and message and nothing
+# it was raised from, and its message is what the graph is told of the failure (cut to
+# ``MAX_ERROR_CHARACTERS``): it holds nothing the model must not see.
 ActionHandler = Callable[[BaseModel, ActionContext], Mapping[str, Any]]
 
 
 @dataclass(frozen=True)
 class ActionRoute:
-    """One allowed action: what it is called and takes, what runs it, and under which limits."""
+    """One allowed action: what it is called and takes, and what runs it."""
 
     definition: ActionDefinition
     handler: ActionHandler
-    policy: ActionPolicy
 
 
 class ActionRoutes:
@@ -63,10 +67,6 @@ class ActionRoutes:
         held = tuple(routes)
         self.catalog = ActionCatalog(route.definition for route in held)
         self._by_name = {route.definition.name: route for route in held}
-        # The plain mapping an agent's workflow gives the driver: names with their limits.
-        self.policies: Mapping[str, ActionPolicy] = {
-            name: route.policy for name, route in self._by_name.items()
-        }
 
     def route(self, name: str) -> ActionRoute:
         """The route of the action ``name``, which a request that passed the catalog names."""

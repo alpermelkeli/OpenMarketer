@@ -14,13 +14,12 @@ import pytest
 
 from openmarketer_worker.agent_runtime.activities import AgentGraph, RuntimeActivities
 from openmarketer_worker.agent_runtime.routes import ActionRoutes
-from openmarketer_worker.agent_runtime.vocabulary import GraphRunPolicy
 
 # The workflow sandbox imports the module of a workflow by name, and the test folders are not
 # packages: this makes ``scripted_agent`` importable the way an agent's workflow module is.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from scripted_work import STEP_LIMITS, Execution, serving_runs  # noqa: E402
+from scripted_rig import Execution, serving_runs  # noqa: E402
 
 Serving = Callable[[RuntimeActivities], AbstractAsyncContextManager[Execution]]
 
@@ -29,10 +28,8 @@ Serving = Callable[[RuntimeActivities], AbstractAsyncContextManager[Execution]]
 def runtime(checkpoints) -> Callable[..., RuntimeActivities]:
     """The runtime's activities for a graph and routes, on the test database."""
 
-    def activities(
-        graph: AgentGraph, routes: ActionRoutes, policy: GraphRunPolicy = STEP_LIMITS
-    ) -> RuntimeActivities:
-        return RuntimeActivities(checkpoints, graph, routes, policy)
+    def activities(graph: AgentGraph, routes: ActionRoutes) -> RuntimeActivities:
+        return RuntimeActivities(checkpoints, graph, routes)
 
     return activities
 

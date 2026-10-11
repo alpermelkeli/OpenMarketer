@@ -57,7 +57,6 @@ from openmarketer_core.repository_analysis.pipeline import (
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 from openmarketer_worker.agent_runtime.activity_support import (
     CheckpointAccess,
-    failure,
     forget_quietly,
     run_with_heartbeats,
     worded_failures,
@@ -242,4 +241,4 @@ def _subject(run: AnalyzeRepositoryInput) -> str:
 
 def _failure(kind: str, message: str) -> ApplicationError:
     """The failure of ``kind``, which is not tried again when the analysis cannot go on."""
-    return failure(kind, message, non_retryable=kind in steps.NOT_RETRIED)
+    return ApplicationError(message, type=kind, non_retryable=kind in steps.NOT_RETRIED)

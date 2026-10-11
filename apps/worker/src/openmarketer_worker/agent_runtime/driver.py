@@ -18,20 +18,33 @@ a request and its side effect stands here:
   the agent decides what to do. Only a defect of the agent ends the run
   (``RUN_ENDING_ACTION_FAILURES``).
 
-Everything that enters the history is an identifier, a name or small JSON: the
-step's input, its outcome, the request and what came of it. A failure's
-message is one somebody chose; the driver never takes wording from an error
-that nobody worded.
+What the graph is told of a failure is the message of the error the action's handler worded,
+or a fixed text (``ACTION_TEXTS``) for a timeout or an error nobody worded, cut to
+``MAX_ERROR_CHARACTERS``. It goes into the model's context and into the next step's input, so a
+handler words its failures for the model to read: it does not put in one the reply text of a
+service, or anything the model must not see. Any ``ApplicationError`` of ``run_action`` is
+told this way, whatever its type, including one the SDK makes itself (an activity that is not
+registered on the worker, say); the cut is the limit.
 
-It raises ``ActivityError`` when a step fails or an action ends the run,
-``ApplicationError`` when it refuses a request itself, and lets cancellation
-through. It records nothing on a run and does not forget its checkpoints: what
-a run owes when it ends is the agent's workflow.
+Everything that enters the history is an identifier, a name or small JSON, and the activities
+refuse what is larger (``MAX_STEP_BYTES``, ``MAX_RESULT_BYTES``). A failure's message is one
+somebody chose; the driver never takes wording from an error that nobody worded.
 
-This is workflow code, loaded by the sandbox. An agent's workflow module may
-import it plainly or inside ``workflow.unsafe.imports_passed_through()``: core's
-outcomes and requests, which the workflow decodes, carry real annotations
-(see ``actions.py``), so the data converter reads them either way.
+What it raises, which an agent's workflow that records how its runs end has to catch all of:
+``ActivityError`` when a step fails or an action ends the run, and ``ApplicationError`` when
+the driver refuses a request itself (an action the workflow does not list, too many
+actions), which is not an ``ActivityError``. An ``except (ActivityError,
+asyncio.CancelledError)`` as the analyzer's workflow has would let a refusal pass and leave the
+run unrecorded; catch ``ApplicationError`` as well. Cancellation passes through. The driver
+records nothing on a run and does not forget its checkpoints: what a run owes when it ends is
+the agent's workflow.
+
+``ActionPolicy`` and ``GraphRunPolicy`` check their values when they are made. They are
+constants of the agent's workflow module and not its input: a ``ValueError`` while Temporal
+decodes a workflow's input fails the workflow task, which is tried again for ever.
+
+This is workflow code, loaded by the sandbox. An agent's workflow module may import it plainly
+or inside ``workflow.unsafe.imports_passed_through()``; both work, and the tests run both.
 """
 
 from __future__ import annotations
@@ -49,6 +62,7 @@ with workflow.unsafe.imports_passed_through():
     from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
     from openmarketer_worker.agent_runtime.vocabulary import (
         ACTION_TEXTS,
+        MAX_ERROR_CHARACTERS,
         RETRY_BACKOFF,
         RUN_ACTION,
         RUN_ENDING_ACTION_FAILURES,
@@ -60,7 +74,7 @@ with workflow.unsafe.imports_passed_through():
         GraphRunPolicy,
         StepInput,
     )
-    from openmarketer_worker.agent_runtime.workflow_support import shown
+    from openmarketer_worker.agent_runtime.workflow_support import reason_shown
 
 
 async def run_graph_with_actions(
@@ -76,17 +90,27 @@ async def run_graph_with_actions(
     asked = 0
     while True:
         step = await _take_step(StepInput(run=run, resume=resume), policy)
+        if step.output is not None:
+            return step.output
         request = step.action
         if request is None:
-            # A step holds exactly one of the two (``StepOutcome``).
-            assert step.output is not None
-            return step.output
+            # ``StepOutcome`` cannot be made so. An assertion here would fail the workflow task,
+            # which is tried again for ever.
+            raise ApplicationError(
+                "a step reported neither an output nor an action",
+                type=STEP_REFUSED,
+                non_retryable=True,
+            )
         limits = actions.get(request.name)
         if limits is None:
-            raise _refused(UNKNOWN_ACTION, str(UnknownAction(request.name)))
+            raise ApplicationError(
+                str(UnknownAction(request.name)), type=UNKNOWN_ACTION, non_retryable=True
+            )
         if asked >= policy.max_actions:
-            raise _refused(
-                TOO_MANY_ACTIONS, f"the run asked for more than {policy.max_actions} actions"
+            raise ApplicationError(
+                f"the run asked for more than {policy.max_actions} actions",
+                type=TOO_MANY_ACTIONS,
+                non_retryable=True,
             )
         asked += 1
         resume = await _take_action(request, limits)
@@ -128,13 +152,11 @@ async def _take_action(request: ActionRequest, limits: ActionPolicy) -> ActionOu
     except ActivityError as failure:
         if is_cancelled_exception(failure) or _ends_the_run(failure):
             raise
-        # Every failure of ``run_action`` is one of its own, with a message somebody wrote,
-        # or a timeout; ``shown`` words it for the graph.
         return ActionOutcome(
             action_id=request.action_id,
             succeeded=False,
             result={},
-            error=shown(failure, ACTION_TEXTS),
+            error=_cut(reason_shown(failure, ACTION_TEXTS)),
         )
 
 
@@ -143,5 +165,8 @@ def _ends_the_run(failure: ActivityError) -> bool:
     return isinstance(cause, ApplicationError) and cause.type in RUN_ENDING_ACTION_FAILURES
 
 
-def _refused(kind: str, message: str) -> ApplicationError:
-    return ApplicationError(message, type=kind, non_retryable=True)
+def _cut(text: str) -> str:
+    """``text``, or its start and "..." when it is longer than the graph is told of a failure."""
+    if len(text) <= MAX_ERROR_CHARACTERS:
+        return text
+    return text[: MAX_ERROR_CHARACTERS - 3] + "..."

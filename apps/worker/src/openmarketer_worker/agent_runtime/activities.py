@@ -4,7 +4,7 @@
 from where it stands until it finishes or asks for an action. ``run_action``
 runs one action the graph asked for, through the handler of its route. Both
 are the generic half of the agent runtime (``driver.py`` is the workflow's);
-the agent hands in its graph, its routes and its limits when the worker starts.
+the agent hands in its graph and its routes when the worker starts.
 
 They hold no rule of their own. A step is core's ``GraphThread``, behind the
 agent's ``AgentGraph``. An action is checked against the catalog of the routes
@@ -12,7 +12,13 @@ before anything runs, because its name and payload are text the model may have
 shaped, and what the catalog says names the action and the fields at fault,
 never their values. Every failure is raised with a type that says whether
 another attempt is worth its cost and a message that may be stored and shown
-(``activity_support.worded_failures``); the original error is logged.
+(``activity_support.worded_failures``, in the runtime's own words: ``RUN_TEXTS`` for a
+step, ``ACTION_TEXTS`` for an action); the original error is logged.
+
+What an activity returns enters the workflow history, so both refuse what is too large or is
+not JSON, for good: a step's outcome over ``MAX_STEP_BYTES`` and an action's over
+``MAX_RESULT_BYTES``. A retry could not make either smaller, and an action's result is
+checked after the handler ran, so a retry would run it again.
 
 Activities run at least once. A step is safe to run again: an outcome that an
 earlier attempt applied is not applied twice (``GraphThread.advance``). An
@@ -27,18 +33,20 @@ graph works, even after Temporal has given up on it, and a second attempt is
 refused and retried (``ATTEMPT_STILL_RUNNING``), never allowed to write the same
 thread. Nothing here forgets a run's checkpoints when the run ends: that is the
 agent's own activity at the end of its run (``activity_support.forget_quietly``).
+
+How often the activities heartbeat is not set here: it is a third of the heartbeat timeout
+the workflow scheduled them with (``activity_support.run_in_thread``).
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 from collections.abc import Mapping
 from typing import Any, Protocol
 
 from pydantic import BaseModel
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from openmarketer_core.agent_runtime.actions import (
     ActionOutcome,
@@ -52,8 +60,9 @@ from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.graph_checkpoints.postgres import AttemptInProgress
 from openmarketer_worker.agent_runtime.activity_support import (
     CheckpointAccess,
-    failure,
-    run_with_heartbeats,
+    NotStorable,
+    run_in_thread,
+    stored_size,
     worded_failures,
 )
 from openmarketer_worker.agent_runtime.routes import ActionContext, ActionRoute, ActionRoutes
@@ -65,12 +74,12 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     INVALID_ACTION_PAYLOAD,
     INVALID_ACTION_RESULT,
     MAX_RESULT_BYTES,
+    MAX_STEP_BYTES,
     RUN_ACTION,
     RUN_GRAPH_STEP,
     RUN_TEXTS,
     STEP_REFUSED,
     UNKNOWN_ACTION,
-    GraphRunPolicy,
     StepInput,
 )
 
@@ -86,6 +95,12 @@ class AgentGraph(Protocol):
     of the action it waited for. It blocks, and runs in a thread. A failure it
     worded (an ``ApplicationError``) passes as it is; any other is logged and
     reported as unexpected.
+
+    What ``advance`` returns is what enters the workflow history, and the
+    runtime refuses an outcome over ``MAX_STEP_BYTES``. So it is a small projection
+    of the graph's state, never the state: ``GraphThread.advance`` hands over the whole
+    final state, with whatever conversation a model has had in it, and the wiring keeps
+    only what the workflow and the run's reader need.
     """
 
     def advance(
@@ -95,16 +110,11 @@ class AgentGraph(Protocol):
 
 class RuntimeActivities:
     def __init__(
-        self,
-        checkpoints: CheckpointAccess,
-        graph: AgentGraph,
-        routes: ActionRoutes,
-        policy: GraphRunPolicy,
+        self, checkpoints: CheckpointAccess, graph: AgentGraph, routes: ActionRoutes
     ) -> None:
         self._checkpoints = checkpoints
         self._graph = graph
         self._routes = routes
-        self._policy = policy
 
     @activity.defn(name=RUN_GRAPH_STEP)
     async def run_graph_step(self, step: StepInput) -> StepOutcome:
@@ -115,11 +125,8 @@ class RuntimeActivities:
         """
         subject = f"{step.run.kind} run {step.run.run_id}"
         with worded_failures(RUN_TEXTS, subject=subject):
-            return await run_with_heartbeats(
-                lambda: self._advance(step, subject),
-                every_seconds=self._policy.heartbeat_every_seconds,
-                subject=subject,
-            )
+            outcome = await run_in_thread(lambda: self._advance(step, subject), subject=subject)
+            return _within_history_bounds(outcome)
 
     @activity.defn(name=RUN_ACTION)
     async def run_action(self, request: ActionRequest) -> ActionOutcome:
@@ -137,34 +144,41 @@ class RuntimeActivities:
             result = await self._run_handler(
                 route, payload, ActionContext(request.action_id), subject
             )
-            return ActionOutcome(
-                action_id=request.action_id,
-                succeeded=True,
-                result=_small_json(request.name, result),
-                error="",
-            )
+            return _outcome_within_bounds(request, result)
 
     def _advance(self, step: StepInput, subject: str) -> StepOutcome:
-        thread = thread_id(step.run.kind, step.run.run_id)
+        try:
+            thread = thread_id(step.run.kind, step.run.run_id)
+        except ValueError:
+            # The kind comes from the agent's workflow: it is a defect, and another attempt
+            # would meet it again. Its text is not repeated, as it names the kind.
+            raise ApplicationError(
+                "the kind of this run cannot name a thread: it is lower-case letters, digits "
+                "and hyphens",
+                type=STEP_REFUSED,
+                non_retryable=True,
+            ) from None
         try:
             with self._checkpoints.of_attempt(thread) as checkpoints:
                 return self._graph.advance(step.run, checkpoints, step.resume)
         except AttemptInProgress:
             logger.info("%s: an earlier attempt is still running", subject)
-            raise failure(ATTEMPT_STILL_RUNNING, EARLIER_ATTEMPT_RUNNING) from None
+            raise ApplicationError(EARLIER_ATTEMPT_RUNNING, type=ATTEMPT_STILL_RUNNING) from None
         except StepError as e:
             logger.warning("%s: its graph cannot take the step: %s", subject, e)
-            raise failure(STEP_REFUSED, str(e), non_retryable=True) from None
+            raise ApplicationError(str(e), type=STEP_REFUSED, non_retryable=True) from None
 
     def _validated(self, request: ActionRequest, subject: str) -> BaseModel:
         try:
             return self._routes.catalog.validate(request)
         except UnknownAction as e:
             logger.warning("%s was refused: %s", subject, e)
-            raise failure(UNKNOWN_ACTION, str(e), non_retryable=True) from None
+            raise ApplicationError(str(e), type=UNKNOWN_ACTION, non_retryable=True) from None
         except InvalidActionPayload as e:
             logger.warning("%s was refused: %s", subject, e)
-            raise failure(INVALID_ACTION_PAYLOAD, str(e), non_retryable=True) from None
+            raise ApplicationError(
+                str(e), type=INVALID_ACTION_PAYLOAD, non_retryable=True
+            ) from None
 
     async def _run_handler(
         self, route: ActionRoute, payload: BaseModel, context: ActionContext, subject: str
@@ -172,32 +186,48 @@ class RuntimeActivities:
         def work() -> Mapping[str, Any]:
             return route.handler(payload, context)
 
-        every_seconds = route.policy.heartbeat_every_seconds
-        if every_seconds is None:
-            return await asyncio.to_thread(work)
-        return await run_with_heartbeats(work, every_seconds=every_seconds, subject=subject)
+        return await run_in_thread(work, subject=subject)
 
 
-def _small_json(action_name: str, result: Mapping[str, Any]) -> dict[str, Any]:
-    """``result`` as the dict an outcome carries, or a failure for good when it cannot be.
-
-    The outcome is kept in the workflow history, so it is bounded by what the
-    history stores of it: its JSON as the default converter writes it.
-    """
+def _within_history_bounds(outcome: StepOutcome) -> StepOutcome:
+    """``outcome`` itself, or a failure for good when the history could not hold it."""
     try:
-        plain = dict(result)
-        stored = json.dumps(plain, separators=(",", ":"))
-    except (TypeError, ValueError):
-        raise failure(
-            INVALID_ACTION_RESULT,
-            f"the result of action {action_name} is not JSON",
-            non_retryable=True,
+        size = stored_size(outcome)
+    except NotStorable:
+        raise ApplicationError(
+            "the outcome of the step is not JSON", type=STEP_REFUSED, non_retryable=True
         ) from None
-    # The converter's JSON is ASCII, so its length in characters is its length in bytes.
-    if len(stored) > MAX_RESULT_BYTES:
-        raise failure(
-            ACTION_RESULT_TOO_LARGE,
-            f"the result of action {action_name} is over {MAX_RESULT_BYTES} bytes",
+    if size > MAX_STEP_BYTES:
+        raise ApplicationError(
+            f"the outcome of the step is over {MAX_STEP_BYTES} bytes: "
+            "a graph reports a small projection of its state",
+            type=STEP_REFUSED,
             non_retryable=True,
         )
-    return plain
+    return outcome
+
+
+def _outcome_within_bounds(request: ActionRequest, result: Mapping[str, Any]) -> ActionOutcome:
+    """The outcome of a successful action, or a failure for good when the history cannot hold it.
+
+    The outcome is built and measured here, as the data converter will write it, because the
+    converter writes it only when the activity returns, after the handler ran: a result it
+    cannot write would fail the activity then, and be tried again, and run the handler again.
+    """
+    name = request.name
+    try:
+        outcome = ActionOutcome(request.action_id, succeeded=True, result=dict(result), error="")
+        size = stored_size(outcome)
+    except (NotStorable, TypeError, ValueError):
+        raise ApplicationError(
+            f"the result of action {name} is not JSON",
+            type=INVALID_ACTION_RESULT,
+            non_retryable=True,
+        ) from None
+    if size > MAX_RESULT_BYTES:
+        raise ApplicationError(
+            f"the result of action {name} is over {MAX_RESULT_BYTES} bytes",
+            type=ACTION_RESULT_TOO_LARGE,
+            non_retryable=True,
+        )
+    return outcome
