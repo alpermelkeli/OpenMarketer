@@ -8,6 +8,12 @@ it paused at. ``advance`` is safe to call again after an attempt that died: a
 paused thread answers with the same request without running anything, and an
 outcome that an earlier attempt already applied is not applied twice.
 
+An outcome is delivered with the digest of the request it answers
+(``actions.request_digest``). The node runs again from its start when the
+outcome arrives, so ``request_action`` compares the digest with what the node
+asks for now and refuses to hand the outcome to a node that asks for anything
+else: an outcome belongs to the request it answered, not to the next call.
+
 This is the third module that imports LangGraph, with ``graph_checkpoints/`` and
 the analyzer's ``graph.py``. The graph is compiled by its owner with the run's
 store (``graph_checkpoints/postgres.py`` opens it, and holds the thread for one
@@ -23,6 +29,7 @@ checkpoints either, except when asked to ``forget`` them.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -31,12 +38,14 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, Durability, Interrupt, interrupt
 from pydantic import BaseModel
 
-from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
+from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest, request_digest
 from openmarketer_core.agent_runtime.steps import (
     MalformedActionRequest,
     MissingInitialState,
+    RequestChangedOnResume,
     StepOutcome,
     TooManyPendingActions,
+    TwoActionsInOneNode,
     UnexpectedResume,
 )
 from openmarketer_core.graph_checkpoints import RunCheckpoints
@@ -46,6 +55,12 @@ CHECKPOINT_DURABILITY: Durability = "sync"
 
 CompiledGraph = CompiledStateGraph[Any, Any, Any, Any]
 
+# The action this run of the node has been answered, if any. The library runs each execution of
+# a node in a context of its own, so this tells ``request_action`` that it is being asked a
+# second time in one run of one node, which neither the library nor the thread would notice:
+# both asks would carry the same id.
+_answered_in_this_node: ContextVar[str | None] = ContextVar("answered_in_this_node", default=None)
+
 
 def request_action(name: str, payload: BaseModel) -> ActionOutcome:
     """Ask the workflow to run the action ``name`` and wait for what came of it.
@@ -54,15 +69,29 @@ def request_action(name: str, payload: BaseModel) -> ActionOutcome:
     advanced with it, and a failed action is an outcome like any other: the
     node reads ``succeeded`` and ``error`` and decides what to do.
 
-    Two rules for the node that calls it:
+    Three rules for the node that calls it:
 
-    - One action per node. A node that needs two is two nodes; a graph that
-      waits for several actions at once is refused.
+    - One action per node. A node that needs two is two nodes: asking a second
+      time in one run of a node raises ``TwoActionsInOneNode``, and so does a
+      graph that waits for several actions at once.
     - No side effect before the call. When the outcome arrives the node runs
       again from its start, so anything it did before this line is done twice.
+    - Ask for the same thing every time the node runs. The outcome is for the
+      request that was asked, and a node that now asks for something else
+      (a draft made again by a model, say) raises ``RequestChangedOnResume``
+      and is not given it. Work that is not repeatable belongs in an earlier
+      node, whose result the state keeps.
     """
-    answer = interrupt({"name": name, "payload": payload.model_dump(mode="json")})
-    return ActionOutcome(**answer)
+    answered = _answered_in_this_node.get()
+    if answered is not None:
+        raise TwoActionsInOneNode(answered)
+    asked = payload.model_dump(mode="json")
+    answer = interrupt({"name": name, "payload": asked})
+    outcome = ActionOutcome(**answer["outcome"])
+    if answer["request"] != request_digest(name, asked):
+        raise RequestChangedOnResume(outcome.action_id)
+    _answered_in_this_node.set(outcome.action_id)
+    return outcome
 
 
 @dataclass(frozen=True)
@@ -82,21 +111,22 @@ class GraphThread:
         graph: CompiledGraph,
         checkpoints: RunCheckpoints,
         *,
-        recursion_limit: int | None = None,
+        recursion_limit: int,
     ) -> None:
         """``graph`` must be compiled with ``checkpointer=checkpoints.store``.
 
-        ``recursion_limit`` bounds the graph steps of one ``advance``; the
-        library's own limit applies when it is ``None``.
+        ``recursion_limit`` bounds the graph steps of one ``advance``. It has
+        no default because the library's is 10000 steps, and a loop that
+        never ends would spend them before anything noticed.
         """
         if graph.checkpointer is not checkpoints.store:
             raise ValueError("the graph must be compiled with the checkpoint store of the run")
         self._graph = graph
         self._checkpoints = checkpoints
-        config: RunnableConfig = {"configurable": {"thread_id": checkpoints.thread_id}}
-        if recursion_limit is not None:
-            config["recursion_limit"] = recursion_limit
-        self._config = config
+        self._config: RunnableConfig = {
+            "configurable": {"thread_id": checkpoints.thread_id},
+            "recursion_limit": recursion_limit,
+        }
 
     def state(self) -> ThreadState:
         """The latest checkpoint of the thread. Raises ``StepError`` when it waits wrongly."""
@@ -122,7 +152,8 @@ class GraphThread:
         - waiting for an action, no ``resume``: the same request is returned and
           nothing runs, so an attempt that is repeated learns what to wait for;
         - waiting for an action, and ``resume`` answers it: the graph continues
-          with the outcome;
+          with the outcome, which is delivered with the digest of the pending
+          request;
         - ``resume`` answers an action that was asked and is no longer pending: an
           earlier attempt applied it and died before saying so. It is not applied
           again; the graph continues from where it stands, or, when it already
@@ -132,15 +163,25 @@ class GraphThread:
           was running when an earlier attempt died runs again.
 
         Raises ``UnexpectedResume`` for an outcome the thread never asked for,
-        ``MissingInitialState`` when there is nothing to start from, and
+        ``MissingInitialState`` when there is nothing to start from,
         ``TooManyPendingActions`` or ``MalformedActionRequest`` when the graph
-        pauses in a way this runtime does not support.
+        pauses in a way this runtime does not support, and ``TwoActionsInOneNode``
+        or ``RequestChangedOnResume`` when a node breaks a rule of ``request_action``.
         """
         state = self.state()
         pending = state.pending_action
         if resume is not None:
             if pending is not None and resume.action_id == pending.action_id:
-                return self._run(Command(resume=asdict(resume)))
+                answer = {
+                    "request": request_digest(pending.name, pending.payload),
+                    "outcome": asdict(resume),
+                }
+                step = self._run(Command(resume=answer))
+                # The same id again means the same node asked once more: ``request_action``
+                # refuses that when it can see it, and this is for when it could not.
+                if step.action is not None and step.action.action_id == resume.action_id:
+                    raise TwoActionsInOneNode(resume.action_id)
+                return step
             if not self._was_asked(resume.action_id):
                 raise UnexpectedResume(self._checkpoints.thread_id, resume.action_id)
         if pending is not None:
@@ -188,6 +229,9 @@ class GraphThread:
         It reads the whole history of the thread, which is why it is only asked
         when an outcome is not for the action that is pending.
         """
+        # This deserialises every checkpoint of the thread, conversation and all. That is
+        # acceptable only because it runs when an outcome is not for the pending action: after
+        # an attempt that died, never on the way of a step that goes well.
         prefix = f"{self._checkpoints.thread_id}:"
         if not action_id.startswith(prefix):
             return False

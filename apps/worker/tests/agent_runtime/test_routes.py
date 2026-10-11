@@ -3,7 +3,11 @@
 import pytest
 from scripted_work import Publish, ScriptedAction, SendEmail, route
 
-from openmarketer_core.agent_runtime.actions import ActionRequest, InvalidActionDefinition
+from openmarketer_core.agent_runtime.actions import (
+    ActionRequest,
+    InvalidActionDefinition,
+    UnknownAction,
+)
 from openmarketer_worker.agent_runtime.routes import ActionContext, ActionRoutes
 from openmarketer_worker.agent_runtime.vocabulary import ActionPolicy
 
@@ -33,9 +37,10 @@ def test_policies_are_the_names_of_the_actions_with_their_own_limits():
     assert routes.policies == {"send_email": QUICK, "publish": LONG}
 
 
-def test_catalog_allows_the_names_of_the_routes_and_no_other():
+def test_catalog_refuses_a_name_that_is_not_one_of_the_routes():
     routes = ActionRoutes([route("send_email", SendEmail, ScriptedAction(), QUICK)])
-    assert routes.catalog.names == {"send_email"}
+    with pytest.raises(UnknownAction):
+        routes.catalog.validate(ActionRequest("run:1:2", "publish", {"post": 7}))
 
 
 def test_catalog_checks_the_payload_against_the_model_of_the_route():
@@ -52,6 +57,8 @@ def test_route_of_a_name_holds_the_handler_that_runs_it():
     assert held.policy is QUICK
 
 
-def test_agent_with_no_actions_has_no_routes():
+def test_agent_with_no_actions_allows_none():
     routes = ActionRoutes([])
-    assert (routes.catalog.names, routes.policies) == (frozenset(), {})
+    assert routes.policies == {}
+    with pytest.raises(UnknownAction):
+        routes.catalog.validate(ActionRequest("run:1:2", "publish", {"post": 7}))

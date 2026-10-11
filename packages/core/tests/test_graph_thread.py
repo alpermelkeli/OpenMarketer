@@ -6,6 +6,7 @@ ones use the PostgreSQL store (fixtures in the ``conftest.py`` at the
 repository root), which stores them with the strict serializer.
 """
 
+import contextvars
 import operator
 import uuid
 from dataclasses import asdict
@@ -29,7 +30,9 @@ from openmarketer_core.agent_runtime.langgraph_steps import (
 from openmarketer_core.agent_runtime.steps import (
     MalformedActionRequest,
     MissingInitialState,
+    RequestChangedOnResume,
     TooManyPendingActions,
+    TwoActionsInOneNode,
     UnexpectedResume,
 )
 from openmarketer_core.agent_runtime.threads import thread_id
@@ -37,6 +40,8 @@ from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.graph_checkpoints.postgres import run_checkpoints
 
 START_STATE = {"log": [], "answers": []}
+# Far more graph steps than any test graph takes in one advance.
+RECURSION_LIMIT = 50
 
 
 class State(TypedDict):
@@ -61,6 +66,42 @@ def asks_to_send(name: str, runs: list[str]) -> Node:
         runs.append(name)
         outcome = request_action("send_email", SendEmail(to=name))
         return {"log": [f"{name} done"], "answers": [asdict(outcome)]}
+
+    return node
+
+
+def asks_twice(name: str, runs: list[str]) -> Node:
+    """A node that asks for two e-mails one after the other, which a node may not."""
+
+    def node(state: State) -> dict[str, Any]:
+        runs.append(name)
+        first = request_action("send_email", SendEmail(to="first"))
+        second = request_action("send_email", SendEmail(to="second"))
+        return {"answers": [asdict(first), asdict(second)]}
+
+    return node
+
+
+def asks_twice_from_a_context_that_does_not_know_of_the_first(name: str, runs: list[str]) -> Node:
+    """Like ``asks_twice``, the second time from a context copied before the first answer."""
+
+    def node(state: State) -> dict[str, Any]:
+        runs.append(name)
+        before_the_first = contextvars.copy_context()
+        first = request_action("send_email", SendEmail(to="first"))
+        second = before_the_first.run(request_action, "send_email", SendEmail(to="second"))
+        return {"answers": [asdict(first), asdict(second)]}
+
+    return node
+
+
+def asks_for_a_new_draft_each_time(name: str, runs: list[str]) -> Node:
+    """A node that does not ask for the same thing each time it runs, as one that drafts would."""
+
+    def node(state: State) -> dict[str, Any]:
+        runs.append(name)
+        outcome = request_action("send_email", SendEmail(to=f"draft-{len(runs)}"))
+        return {"answers": [asdict(outcome)]}
 
     return node
 
@@ -113,6 +154,7 @@ def paused(store, runs) -> GraphThread:
     thread = GraphThread(
         chain(store, prepare=records("prepare", runs), send=asks_to_send("send", runs)),
         checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
     )
     assert thread.advance(initial=START_STATE).action is not None
     return thread
@@ -120,7 +162,11 @@ def paused(store, runs) -> GraphThread:
 
 # ----------------------------------------------------------- pausing at an action
 def test_graph_pauses_at_the_action_a_node_asks_for(store, runs):
-    thread = GraphThread(chain(store, send=asks_to_send("ada", runs)), checkpoints_in(store))
+    thread = GraphThread(
+        chain(store, send=asks_to_send("ada", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
 
     step = thread.advance(initial=START_STATE)
 
@@ -148,6 +194,7 @@ def test_id_of_the_action_is_the_same_from_a_graph_built_again_on_the_same_store
     rebuilt = GraphThread(
         chain(store, prepare=records("prepare", runs), send=asks_to_send("send", runs)),
         checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
     )
     assert rebuilt.state().pending_action == asked
     assert rebuilt.advance().action == asked
@@ -163,7 +210,12 @@ def test_id_of_the_action_is_the_same_when_the_step_that_asked_runs_again(store,
     graph.invoke(None, {"configurable": {"thread_id": "test:test-run"}})
 
     assert len(runs) == runs_before + 1
-    assert GraphThread(graph, checkpoints_in(store)).state().pending_action == asked
+    assert (
+        GraphThread(graph, checkpoints_in(store), recursion_limit=RECURSION_LIMIT)
+        .state()
+        .pending_action
+        == asked
+    )
 
 
 def test_attempt_repeated_on_a_paused_thread_runs_nothing(paused, runs):
@@ -241,7 +293,9 @@ def test_node_that_failed_after_it_was_answered_gets_the_same_answer_when_attemp
             raise RuntimeError("the worker died")
         return {"log": ["sent"], "answers": [asdict(outcome)]}
 
-    thread = GraphThread(chain(store, send=asks_then_breaks), checkpoints_in(store))
+    thread = GraphThread(
+        chain(store, send=asks_then_breaks), checkpoints_in(store), recursion_limit=RECURSION_LIMIT
+    )
     request = thread.advance(initial=START_STATE).action
     assert request is not None
     outcome = success(request, message_id="m-1")
@@ -259,6 +313,7 @@ def test_outcome_of_an_action_that_is_no_longer_pending_returns_the_next_request
     thread = GraphThread(
         chain(store, first=asks_to_send("first", runs), second=asks_to_send("second", runs)),
         checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
     )
     first = thread.advance(initial=START_STATE).action
     assert first is not None
@@ -273,6 +328,77 @@ def test_outcome_of_an_action_that_is_no_longer_pending_returns_the_next_request
     assert again.action == second
     assert runs == runs_before
     assert thread.advance(resume=success(second)).output is not None
+
+
+# ------------------------------------------- one action per node, and what an outcome answers
+def test_node_that_asks_for_a_second_action_is_refused_when_the_first_is_answered(store, runs):
+    thread = GraphThread(
+        chain(store, twice=asks_twice("twice", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
+    first = thread.advance(initial=START_STATE).action
+    assert first is not None
+
+    with pytest.raises(TwoActionsInOneNode, match=first.action_id):
+        thread.advance(resume=success(first, sent="first"))
+
+
+def test_second_action_of_a_node_is_not_given_the_outcome_of_the_first_when_attempted_again(
+    store, runs
+):
+    thread = GraphThread(
+        chain(store, twice=asks_twice("twice", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
+    first = thread.advance(initial=START_STATE).action
+    assert first is not None
+    outcome = success(first, sent="first")
+    with pytest.raises(TwoActionsInOneNode):
+        thread.advance(resume=outcome)
+
+    # The attempt that applied the outcome died; the next one is given the same outcome.
+    with pytest.raises(TwoActionsInOneNode):
+        thread.advance(resume=outcome)
+
+    state = thread.state()
+    assert state.values["answers"] == []
+    assert state.pending_action == first, "the second request was asked as well"
+
+
+def test_second_action_asked_where_the_node_cannot_be_watched_is_refused_when_the_step_waits(
+    store, runs
+):
+    node = asks_twice_from_a_context_that_does_not_know_of_the_first("twice", runs)
+    thread = GraphThread(
+        chain(store, twice=node), checkpoints_in(store), recursion_limit=RECURSION_LIMIT
+    )
+    first = thread.advance(initial=START_STATE).action
+    assert first is not None
+
+    with pytest.raises(TwoActionsInOneNode, match=first.action_id):
+        thread.advance(resume=success(first))
+
+
+def test_outcome_is_not_delivered_to_a_node_that_asks_for_something_else_when_it_runs_again(
+    store, runs
+):
+    thread = GraphThread(
+        chain(store, draft=asks_for_a_new_draft_each_time("draft", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
+    asked = thread.advance(initial=START_STATE).action
+    assert asked is not None and asked.payload == {"to": "draft-1"}
+
+    with pytest.raises(RequestChangedOnResume, match=asked.action_id) as refused:
+        thread.advance(resume=success(asked, sent="draft-1"))
+
+    assert "draft" not in str(refused.value)
+    state = thread.state()
+    assert state.values["answers"] == []
+    assert state.pending_action == asked
 
 
 # --------------------------------------------------------------------- refusals
@@ -311,7 +437,11 @@ def test_outcome_for_an_action_that_was_never_asked_is_refused(paused):
 
 
 def test_outcome_on_a_thread_that_asked_for_nothing_is_refused(store, runs):
-    thread = GraphThread(chain(store, send=asks_to_send("ada", runs)), checkpoints_in(store))
+    thread = GraphThread(
+        chain(store, send=asks_to_send("ada", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
     outcome = ActionOutcome(action_id="test:test-run:abc", succeeded=True, result={}, error="")
 
     with pytest.raises(UnexpectedResume):
@@ -328,7 +458,9 @@ def test_graph_that_waits_for_two_actions_at_once_is_refused(store, runs):
     builder.add_edge(START, "grace")
     builder.add_edge("ada", END)
     builder.add_edge("grace", END)
-    thread = GraphThread(builder.compile(checkpointer=store), checkpoints_in(store))
+    thread = GraphThread(
+        builder.compile(checkpointer=store), checkpoints_in(store), recursion_limit=RECURSION_LIMIT
+    )
 
     with pytest.raises(TooManyPendingActions, match="2 actions"):
         thread.advance(initial=START_STATE)
@@ -341,14 +473,20 @@ def test_node_that_pauses_for_anything_but_an_action_request_is_refused(store):
         interrupt("shall I go on?")
         return {}
 
-    thread = GraphThread(chain(store, approve=approves), checkpoints_in(store))
+    thread = GraphThread(
+        chain(store, approve=approves), checkpoints_in(store), recursion_limit=RECURSION_LIMIT
+    )
 
     with pytest.raises(MalformedActionRequest):
         thread.advance(initial=START_STATE)
 
 
 def test_empty_thread_cannot_start_without_an_initial_state(store, runs):
-    thread = GraphThread(chain(store, step=records("step", runs)), checkpoints_in(store))
+    thread = GraphThread(
+        chain(store, step=records("step", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
 
     with pytest.raises(MissingInitialState, match="test:test-run"):
         thread.advance()
@@ -356,15 +494,25 @@ def test_empty_thread_cannot_start_without_an_initial_state(store, runs):
     assert runs == []
 
 
+def test_steps_of_an_advance_must_be_bounded_by_the_caller(store, runs):
+    graph = chain(store, step=records("step", runs))
+    with pytest.raises(TypeError, match="recursion_limit"):
+        GraphThread(graph, checkpoints_in(store))  # pyright: ignore[reportCallIssue]
+
+
 def test_graph_compiled_with_another_store_is_refused(store, runs):
     graph = chain(InMemorySaver(), step=records("step", runs))
     with pytest.raises(ValueError, match="checkpoint store"):
-        GraphThread(graph, checkpoints_in(store))
+        GraphThread(graph, checkpoints_in(store), recursion_limit=RECURSION_LIMIT)
 
 
 # ------------------------------------------------- a thread without a pause, and its end
 def test_thread_that_was_never_started_has_no_checkpoint(store, runs):
-    thread = GraphThread(chain(store, step=records("step", runs)), checkpoints_in(store))
+    thread = GraphThread(
+        chain(store, step=records("step", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
 
     state = thread.state()
 
@@ -372,7 +520,11 @@ def test_thread_that_was_never_started_has_no_checkpoint(store, runs):
 
 
 def test_graph_that_asks_for_nothing_finishes_in_one_step(store, runs):
-    thread = GraphThread(chain(store, step=records("step", runs)), checkpoints_in(store))
+    thread = GraphThread(
+        chain(store, step=records("step", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
 
     step = thread.advance(initial=START_STATE)
 
@@ -381,7 +533,11 @@ def test_graph_that_asks_for_nothing_finishes_in_one_step(store, runs):
 
 
 def test_step_on_a_finished_thread_returns_its_output_and_runs_nothing(store, runs):
-    thread = GraphThread(chain(store, step=records("step", runs)), checkpoints_in(store))
+    thread = GraphThread(
+        chain(store, step=records("step", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
     finished = thread.advance(initial=START_STATE)
 
     assert thread.advance() == finished
@@ -447,7 +603,7 @@ def test_pause_and_resume_survive_the_store_and_a_new_connection(database_url, r
 
     def graph_on(run: RunCheckpoints) -> GraphThread:
         nodes = {"prepare": records("prepare", runs), "send": asks_to_send("send", runs)}
-        return GraphThread(chain(run.store, **nodes), run)
+        return GraphThread(chain(run.store, **nodes), run, recursion_limit=RECURSION_LIMIT)
 
     with run_checkpoints(database_url, run_thread) as run:
         asked = graph_on(run).advance(initial=START_STATE).action
@@ -484,7 +640,7 @@ def test_second_action_waits_across_attempts_and_the_first_outcome_is_not_applie
 
     def graph_on(run: RunCheckpoints) -> GraphThread:
         nodes = {"first": asks_to_send("first", runs), "second": asks_to_send("second", runs)}
-        return GraphThread(chain(run.store, **nodes), run)
+        return GraphThread(chain(run.store, **nodes), run, recursion_limit=RECURSION_LIMIT)
 
     with run_checkpoints(database_url, run_thread) as run:
         first = graph_on(run).advance(initial=START_STATE).action
@@ -506,12 +662,86 @@ def test_second_action_waits_across_attempts_and_the_first_outcome_is_not_applie
     ]
 
 
+class Rich(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ratio: float
+    count: int
+    flag: bool
+    note: str | None
+    tags: list[str]
+    nested: dict[str, list[int]]
+
+
+def asks_with_a_payload_of_many_kinds(runs: list[str]) -> Node:
+    def node(state: State) -> dict[str, Any]:
+        runs.append("rich")
+        payload = Rich(
+            ratio=0.1 + 0.2,
+            count=2**40,
+            flag=False,
+            note=None,
+            tags=["ünï", "\u2603"],
+            nested={"b": [3, 1], "a": []},
+        )
+        return {"answers": [asdict(request_action("publish", payload))]}
+
+    return node
+
+
+def test_request_of_a_payload_of_many_kinds_of_values_is_still_the_same_after_the_store(
+    database_url, run_thread
+):
+    runs: list[str] = []
+
+    def thread_on(run: RunCheckpoints) -> GraphThread:
+        graph = chain(run.store, rich=asks_with_a_payload_of_many_kinds(runs))
+        return GraphThread(graph, run, recursion_limit=RECURSION_LIMIT)
+
+    with run_checkpoints(database_url, run_thread) as run:
+        asked = thread_on(run).advance(initial=START_STATE).action
+    assert asked is not None
+
+    with run_checkpoints(database_url, run_thread) as run:
+        thread = thread_on(run)
+        assert thread.state().pending_action == asked
+        finished = thread.advance(resume=success(asked))
+        thread.forget()
+
+    assert finished.output is not None and len(finished.output["answers"]) == 1
+
+
+def test_node_that_asks_twice_is_refused_again_by_the_next_attempt_on_the_store(
+    database_url, run_thread
+):
+    runs: list[str] = []
+
+    def thread_on(run: RunCheckpoints) -> GraphThread:
+        graph = chain(run.store, twice=asks_twice("twice", runs))
+        return GraphThread(graph, run, recursion_limit=RECURSION_LIMIT)
+
+    with run_checkpoints(database_url, run_thread) as run:
+        first = thread_on(run).advance(initial=START_STATE).action
+        assert first is not None
+        with pytest.raises(TwoActionsInOneNode):
+            thread_on(run).advance(resume=success(first))
+
+    with run_checkpoints(database_url, run_thread) as run:
+        thread = thread_on(run)
+        with pytest.raises(TwoActionsInOneNode):
+            thread.advance(resume=success(first))
+        assert thread.state().pending_action == first
+        thread.forget()
+
+
 def test_forgetting_through_the_graph_thread_removes_the_stored_checkpoints(
     database_url, run_thread, engine
 ):
     runs: list[str] = []
     with run_checkpoints(database_url, run_thread) as run:
-        thread = GraphThread(chain(run.store, send=asks_to_send("send", runs)), run)
+        thread = GraphThread(
+            chain(run.store, send=asks_to_send("send", runs)), run, recursion_limit=RECURSION_LIMIT
+        )
         thread.advance(initial=START_STATE)
         assert run_thread in stored_threads(engine)
         thread.forget()

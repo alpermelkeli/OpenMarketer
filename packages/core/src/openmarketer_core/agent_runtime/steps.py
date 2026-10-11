@@ -91,3 +91,23 @@ class MalformedActionRequest(StepError):
             f"thread {thread_id} paused on something that is not an action request: "
             "nodes ask for an action with request_action"
         )
+
+
+class TwoActionsInOneNode(StepError):
+    """A node asked for a second action while it ran with the outcome of the first."""
+
+    def __init__(self, action_id: str) -> None:
+        super().__init__(
+            f"a node asked for a second action after action {action_id} was answered: "
+            "a node asks for one action, and a second needs a node of its own"
+        )
+
+
+class RequestChangedOnResume(StepError):
+    """A node asked for something else when it ran with the outcome of its request."""
+
+    def __init__(self, action_id: str) -> None:
+        super().__init__(
+            f"a node asked for something other than action {action_id} when it ran again "
+            "with that action's outcome: a node must ask for the same thing every time it runs"
+        )

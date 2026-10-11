@@ -58,6 +58,8 @@ STEP_LIMITS = GraphRunPolicy(
 )
 ACTION_LIMITS = ActionPolicy(attempt_timeout_seconds=30, max_attempts=2, retry_after_seconds=0.2)
 ALLOWED = {"send_email": ACTION_LIMITS, "publish": ACTION_LIMITS}
+# Graph steps of one advance: far more than a plan of a few actions takes.
+GRAPH_STEPS = 100
 
 
 class SendEmail(BaseModel):
@@ -134,9 +136,8 @@ class ScriptedGraph:
     ) -> StepOutcome:
         self.advanced.append(resume)
         initial = {"plan": [asdict(ask) for ask in self._plan], "answers": []}
-        step = GraphThread(compiled(checkpoints), checkpoints).advance(
-            initial=initial, resume=resume
-        )
+        thread = GraphThread(compiled(checkpoints), checkpoints, recursion_limit=GRAPH_STEPS)
+        step = thread.advance(initial=initial, resume=resume)
         if resume is not None and self._deaths_left:
             self._deaths_left -= 1
             # The outcome is applied and stored; what the step found out is lost with the worker.

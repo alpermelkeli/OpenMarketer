@@ -241,12 +241,16 @@ def _stored_progress(stored: ThreadState) -> StoredProgress | None:
         return None
     # A checkpoint from before the first step holds no state yet, so no commit either.
     commit_sha = stored.values.get("commit_sha", "")
+    # Finished is read from the profile in the state and not from the checkpoint's ``next``,
+    # which is also empty when a step ran and its checkpoint was not stored.
     return StoredProgress(commit_sha=commit_sha, finished=stored.values.get("profile") is not None)
 
 
 def _finished(step: StepOutcome) -> dict[str, Any]:
     """The final state of a step of the analyzer graph, which has no action to wait for."""
-    assert step.output is not None, "the analyzer graph asked for an action; it has none to ask for"
+    # Not an assertion: ``python -O`` removes it, and ``None`` would go on to be read as a result.
+    if step.output is None:
+        raise AnalysisError("the analyzer graph asked for an action, which it has none to ask for")
     return step.output
 
 

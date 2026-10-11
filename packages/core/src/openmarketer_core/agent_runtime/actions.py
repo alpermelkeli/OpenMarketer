@@ -10,8 +10,16 @@ keeps of the work.
 The name and the payload are text the model may have shaped, so they are data,
 never a decision: ``ActionCatalog`` is the allowlist. An action that is not in
 it does not run, and a payload that does not fit the action's model does not
-run either. What the catalog says about a refusal names the action and the
-fields at fault, never the values, which may hold a secret or an instruction.
+run either. A payload is read as strict JSON: no value is converted to the
+type the model wants (``"yes"`` is not true, ``"7"`` is not 7), nothing JSON
+cannot write (NaN, infinity) passes, and every model of the payload forbids
+fields it does not declare, so a misspelt or invented field is a refusal and
+not a silent default. What the catalog says about a refusal names the action
+and the fields at fault, never the values, which may hold a secret or an
+instruction.
+
+``request_digest`` says what a request is, so that the outcome of a request
+is delivered only to a node that asks for the same thing again.
 
 This module runs nothing and knows no workflow engine, graph framework or
 database. Which activity runs an action, how often it is retried and whether a
@@ -24,9 +32,11 @@ always the one the sandbox has loaded. Hence no ``from __future__ import
 annotations`` here or in ``steps.py``.
 """
 
-from collections.abc import Iterable
+import hashlib
+import json
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import BaseModel, ValidationError
 
@@ -105,12 +115,14 @@ class ActionDefinition:
     payload: type[BaseModel]
 
     def __post_init__(self) -> None:
-        # Without this a payload with a misspelled or invented field would pass unnoticed.
-        if self.payload.model_config.get("extra") != "forbid":
-            raise InvalidActionDefinition(
-                f"payload model {self.payload.__name__} of action {self.name!r} "
-                "must forbid extra fields (model_config extra='forbid')"
-            )
+        # Without this a payload with a misspelled or invented field would pass unnoticed, and
+        # the library's default for a nested model is to drop what it does not know.
+        for model in _models_of(self.payload, set()):
+            if model.model_config.get("extra") != "forbid":
+                raise InvalidActionDefinition(
+                    f"model {model.__name__} in the payload of action {self.name!r} "
+                    "must forbid extra fields (model_config extra='forbid')"
+                )
 
 
 class ActionCatalog:
@@ -124,10 +136,6 @@ class ActionCatalog:
             by_name[definition.name] = definition
         self._by_name = by_name
 
-    @property
-    def names(self) -> frozenset[str]:
-        return frozenset(self._by_name)
-
     def validate(self, request: ActionRequest) -> BaseModel:
         """The payload of ``request`` as the model of its action.
 
@@ -138,10 +146,54 @@ class ActionCatalog:
         if definition is None:
             raise UnknownAction(request.name)
         try:
-            return definition.payload.model_validate(request.payload)
+            text = json.dumps(request.payload, allow_nan=False)
+        except (TypeError, ValueError, RecursionError):
+            raise InvalidActionPayload(request.name, _fields_not_json(request.payload)) from None
+        try:
+            # Strict, and from JSON text: nothing is converted to the type the model wants, and
+            # the library still reads a UUID, a date or an enum value from the string JSON has.
+            return definition.payload.model_validate_json(text, strict=True)
         except ValidationError as e:
             # ``from None``: the library's error holds the values it refused.
             raise InvalidActionPayload(request.name, _fields_at_fault(e)) from None
+
+
+def request_digest(name: str, payload: Mapping[str, Any]) -> str:
+    """What a request is, as text: the same for the same action name and payload, and no other.
+
+    The payload is read as JSON and written with sorted keys and no spaces, so
+    the order its keys were built in does not matter. The graph adapter takes
+    this digest of a request when it delivers the request's outcome, and a node
+    takes it again of what it asks for when it runs again with that outcome.
+    """
+    canonical = json.dumps(
+        {"name": name, "payload": payload}, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _models_of(annotation: Any, seen: set[type[BaseModel]]) -> Iterator[type[BaseModel]]:
+    """Each model that ``annotation`` is or holds, at any depth, once; ``seen`` stops a cycle."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        if annotation not in seen:
+            seen.add(annotation)
+            yield annotation
+            for field in annotation.model_fields.values():
+                yield from _models_of(field.annotation, seen)
+        return
+    for argument in get_args(annotation):
+        yield from _models_of(argument, seen)
+
+
+def _fields_not_json(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    """The fields of a payload that JSON cannot hold, to name them without showing them."""
+    not_json: list[str] = []
+    for field, value in payload.items():
+        try:
+            json.dumps(value, allow_nan=False)
+        except (TypeError, ValueError, RecursionError):
+            not_json.append(str(field))
+    return tuple(not_json)
 
 
 def _fields_at_fault(error: ValidationError) -> tuple[str, ...]:

@@ -4,13 +4,17 @@
 """
 
 import ast
+import datetime
+import enum
+import hashlib
 import inspect
 import subprocess
 import sys
 import uuid
+from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from openmarketer_core import agent_runtime
 from openmarketer_core.agent_runtime import actions, steps, threads
@@ -24,6 +28,7 @@ from openmarketer_core.agent_runtime.actions import (
     InvalidActionDefinition,
     InvalidActionPayload,
     UnknownAction,
+    request_digest,
 )
 from openmarketer_core.agent_runtime.steps import StepOutcome
 from openmarketer_core.agent_runtime.threads import thread_id
@@ -68,10 +73,6 @@ def test_valid_request_is_returned_as_the_model_of_its_action():
     assert payload == SendEmail(
         to=[Recipient(address="a@example.com")], subject="Hello", attempts=3
     )
-
-
-def test_catalog_names_every_action_it_allows():
-    assert CATALOG.names == {"send_email", "publish"}
 
 
 def test_action_that_is_not_in_the_catalog_is_refused():
@@ -166,6 +167,208 @@ def test_payload_model_that_forbids_extra_fields_through_a_parent_is_accepted():
         pass
 
     assert ActionDefinition("child", Child).payload is Child
+
+
+# ------------------------------------------------- a payload is read as strict JSON
+class Color(enum.Enum):
+    RED = "red"
+
+
+class Schedule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    post_id: uuid.UUID
+    at: datetime.datetime
+    on: datetime.date
+    color: Color
+    enabled: bool
+    count: int
+    ratio: float
+
+
+SCHEDULE = ActionCatalog([ActionDefinition("schedule", Schedule)])
+JSON_OF_A_SCHEDULE = {
+    "post_id": "5908bdbd-68bf-4c0b-bc64-7c881d190276",
+    "at": "2026-10-11T08:00:00Z",
+    "on": "2026-10-11",
+    "color": "red",
+    "enabled": True,
+    "count": 7,
+    "ratio": 2,
+}
+
+
+def schedule(**changes) -> ActionRequest:
+    return ActionRequest("t:i", "schedule", JSON_OF_A_SCHEDULE | changes)
+
+
+def test_text_is_accepted_for_the_types_that_are_text_in_json():
+    payload = SCHEDULE.validate(schedule())
+    assert isinstance(payload, Schedule)
+    assert payload.post_id == uuid.UUID("5908bdbd-68bf-4c0b-bc64-7c881d190276")
+    assert payload.at == datetime.datetime(2026, 10, 11, 8, tzinfo=datetime.UTC)
+    assert payload.on == datetime.date(2026, 10, 11)
+    assert payload.color is Color.RED
+    assert payload.ratio == 2.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("enabled", "yes"),
+        ("enabled", 1),
+        ("count", "7"),
+        ("count", 7.0),
+        ("count", True),
+        ("ratio", "0.5"),
+        ("post_id", 7),
+        ("color", "blue"),
+    ],
+)
+def test_value_of_another_type_is_refused_and_not_converted(field, value):
+    with pytest.raises(InvalidActionPayload) as refused:
+        SCHEDULE.validate(schedule(**{field: value}))
+    assert refused.value.fields == (field,)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), float("-inf")],
+    ids=["nan", "inf", "-inf"],
+)
+def test_number_that_json_has_no_way_to_write_is_refused(value):
+    with pytest.raises(InvalidActionPayload) as refused:
+        SCHEDULE.validate(schedule(ratio=value))
+    assert refused.value.fields == ("ratio",)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [b"bytes", {1, 2}, object(), {"nested": [float("nan")]}],
+    ids=["bytes", "set", "object", "nan deep inside"],
+)
+def test_value_that_is_not_json_is_refused_as_a_payload_and_not_as_a_crash(value):
+    with pytest.raises(InvalidActionPayload) as refused:
+        SCHEDULE.validate(schedule(color=value))
+    assert refused.value.fields == ("color",)
+
+
+def test_refusal_of_a_payload_that_is_not_json_does_not_repeat_what_was_sent():
+    with pytest.raises(InvalidActionPayload) as refused:
+        SCHEDULE.validate(schedule(color={"key": SECRET, "number": float("nan")}))
+    assert SECRET not in str(refused.value)
+    assert refused.value.__cause__ is None
+
+
+# ----------------------------------------- every model of a payload forbids extra fields
+class Lenient(BaseModel):
+    """Unknown keys are silently dropped, which is the library's default."""
+
+    value: str
+
+
+class Forbidding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: str
+
+
+class Tree(BaseModel):
+    """Lenient, and refers to itself."""
+
+    children: list["Tree"] = []
+
+
+class StrictTree(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    children: list["StrictTree"] = []
+
+
+def holding(annotation) -> type[BaseModel]:
+    return create_model("Holder", __config__=ConfigDict(extra="forbid"), field=(annotation, ...))
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        Lenient,
+        Lenient | None,
+        list[Lenient],
+        dict[str, Lenient],
+        tuple[Lenient, ...],
+        Forbidding | Lenient,
+        Annotated[Lenient, Field(description="a nested model")],
+        list[dict[str, list[Lenient | None]]],
+    ],
+    ids=[
+        "plain",
+        "optional",
+        "list",
+        "dict",
+        "tuple",
+        "union",
+        "annotated",
+        "deeply nested",
+    ],
+)
+def test_nested_model_that_allows_extra_fields_is_refused_wherever_it_is_held(annotation):
+    with pytest.raises(InvalidActionDefinition, match="Lenient.*forbid extra fields"):
+        ActionDefinition("holder", holding(annotation))
+
+
+def test_model_that_is_nested_two_levels_down_is_refused():
+    middle = create_model("Middle", __config__=ConfigDict(extra="forbid"), inner=(Lenient, ...))
+    with pytest.raises(InvalidActionDefinition, match="Lenient"):
+        ActionDefinition("holder", holding(list[middle]))
+
+
+def test_nested_models_that_forbid_extra_fields_are_accepted():
+    definition = ActionDefinition("holder", holding(list[Forbidding] | None))
+    assert definition.name == "holder"
+
+
+def test_model_that_refers_to_itself_is_checked_once_and_does_not_loop():
+    assert ActionDefinition("tree", StrictTree).payload is StrictTree
+    with pytest.raises(InvalidActionDefinition, match="Tree"):
+        ActionDefinition("tree", Tree)
+
+
+def test_unknown_key_in_a_nested_model_of_a_payload_is_refused_when_it_is_asked():
+    catalog = ActionCatalog([ActionDefinition("holder", holding(list[Forbidding]))])
+    request = ActionRequest("t:i", "holder", {"field": [{"value": "a", "key": SECRET}]})
+    with pytest.raises(InvalidActionPayload) as refused:
+        catalog.validate(request)
+    assert refused.value.fields == ("field.0.key",)
+    assert SECRET not in str(refused.value)
+
+
+# ------------------------------------------------------- what a request is, as a digest
+def test_digest_of_a_request_is_the_sha256_of_its_name_and_payload_as_compact_sorted_json():
+    digest = request_digest("send_email", {"to": "ada", "attempts": 2})
+    canonical = b'{"name":"send_email","payload":{"attempts":2,"to":"ada"}}'
+    assert digest == hashlib.sha256(canonical).hexdigest()
+
+
+def test_digest_of_a_request_does_not_depend_on_the_order_of_keys():
+    one = request_digest("send_email", {"to": "ada", "cc": {"b": 1, "a": 2}})
+    other = request_digest("send_email", {"cc": {"a": 2, "b": 1}, "to": "ada"})
+    assert one == other
+
+
+@pytest.mark.parametrize(
+    ("name", "payload"),
+    [
+        ("publish", {"to": "ada"}),
+        ("send_email", {"to": "grace"}),
+        ("send_email", {"to": "ada", "cc": None}),
+        ("send_email", {"to": ["ada"]}),
+        ("send_email", {"to": "ada "}),
+        ("send_email", {"to": 1}),
+    ],
+)
+def test_digest_of_a_request_differs_when_its_name_or_payload_does(name, payload):
+    assert request_digest(name, payload) != request_digest("send_email", {"to": "ada"})
 
 
 # ----------------------------------------------------------------- the outcome

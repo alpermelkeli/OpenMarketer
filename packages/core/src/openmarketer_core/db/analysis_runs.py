@@ -66,8 +66,9 @@ FINISHED = (AnalysisRunStatus.SUCCEEDED, AnalysisRunStatus.FAILED)
 ANALYSIS_RUN_KIND = "analysis-run"
 # What the name of every thread of an analysis run starts with. The checkpoint tables are
 # shared by every graph, and a thread's name is all they know of it; the kind in front
-# says whose it is. A colon ends it because no run id holds one, and there is no ``_`` or
-# ``%`` in it, which a pattern match would read as wildcards.
+# says whose it is. A colon ends it because no run id holds one. A kind is only lower-case
+# letters, digits and hyphens (``agent_runtime.threads``), so no name holds a character that
+# is special to a pattern match or ends the kind early; the cleanup escapes the prefix anyway.
 ANALYSIS_RUN_THREADS = f"{ANALYSIS_RUN_KIND}:"
 
 

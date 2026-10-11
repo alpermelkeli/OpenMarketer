@@ -12,6 +12,9 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import Engine, text
 
+from openmarketer_core.agent_runtime.actions import ActionRequest
+from openmarketer_core.agent_runtime.langgraph_steps import GraphThread
+from openmarketer_core.agent_runtime.steps import StepOutcome
 from openmarketer_core.db.session import DatabaseError
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.graph_checkpoints.postgres import forget_checkpoints, run_checkpoints
@@ -681,3 +684,12 @@ def test_checkpoint_that_cannot_be_stored_stops_the_run_before_the_next_step(
     with pytest.raises(DatabaseError, match="connection lost"):
         attempt(files, model, run)
     assert model.requests == []
+
+
+def test_step_that_waits_for_an_action_is_an_error_of_the_analysis(files, run, monkeypatch):
+    # The analyzer's graph has no node that asks for an action, so this is a defect, but one
+    # that must not pass as a result: ``python -O`` removes assertions.
+    request = ActionRequest(action_id="t:i", name="send_email", payload={})
+    monkeypatch.setattr(GraphThread, "advance", lambda self, **_: StepOutcome.waiting_for(request))
+    with pytest.raises(AnalysisError, match="asked for an action"):
+        attempt(files, ScriptedModel(), run)

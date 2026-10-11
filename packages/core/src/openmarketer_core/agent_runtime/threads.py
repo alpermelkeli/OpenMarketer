@@ -4,7 +4,7 @@ The checkpoint tables are shared by every graph and know a run by its thread's
 name alone, so the name says whose it is: the kind of run, a colon, the run's
 id. The cleanup of left-over checkpoints finds the threads of one kind by that
 prefix (see ``db/checkpoint_cleanup.py``), which is why a kind is limited to
-characters a pattern match cannot read as anything else.
+characters that are not special to a pattern match and cannot end the kind early.
 
 This module only names threads. It opens no store and decides nothing about
 when checkpoints are kept or removed.
@@ -15,7 +15,8 @@ from __future__ import annotations
 import re
 import uuid
 
-# A colon ends the kind, and ``_`` and ``%`` are wildcards to the pattern match of the cleanup.
+# The kind never holds a colon, which ends it, nor ``_`` or ``%``, which are special to a
+# pattern match; the cleanup escapes them too, so a thread's name needs no care from it.
 _KIND = re.compile(r"[a-z0-9-]+")
 
 
