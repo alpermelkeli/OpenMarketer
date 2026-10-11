@@ -20,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from openmarketer_core.agent_runtime.actions import ActionRequest
+from openmarketer_core.agent_runtime.actions import ActionRequest, shown
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,16 @@ class StepOutcome:
 
 class StepError(Exception):
     """A thread cannot take the step it was asked to; asking again will not change that."""
+
+
+class RunOfAnotherKind(StepError):
+    """The run is of another kind than the agent whose graph was asked to take its step."""
+
+    def __init__(self, run_kind: str, agent_kind: str) -> None:
+        super().__init__(
+            f"a run of kind {shown(run_kind)} cannot be taken by the graph of "
+            f"agent {shown(agent_kind)}"
+        )
 
 
 class MissingInitialState(StepError):

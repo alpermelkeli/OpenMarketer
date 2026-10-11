@@ -14,9 +14,9 @@ from dataclasses import asdict, dataclass
 from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, create_model
 
-from openmarketer_core.agent_runtime.actions import ActionOutcome
+from openmarketer_core.agent_runtime.actions import ActionOutcome, mark_as_action
 from openmarketer_core.agent_runtime.langgraph_steps import (
     CompiledGraph,
     GraphThread,
@@ -29,10 +29,12 @@ from openmarketer_core.graph_checkpoints import RunCheckpoints
 GRAPH_STEPS = 100
 
 
-class Anything(BaseModel):
-    """What the graph asks with: any payload, so a test can ask for what no model fits."""
-
-    model_config = ConfigDict(extra="allow")
+def asking_for(name: str, payload: dict[str, Any]) -> BaseModel:
+    """What the graph asks with: any payload for the action ``name``, so that a test can ask for
+    what no model fits."""
+    anything = create_model("Anything", __config__=ConfigDict(extra="allow"))
+    mark_as_action(anything, name)
+    return anything(**payload)
 
 
 @dataclass(frozen=True)
@@ -54,14 +56,14 @@ class State(TypedDict):
 
 def asks_for_the_next_action(state: State) -> dict[str, Any]:
     ask = state["plan"][len(state["answers"])]
-    outcome = request_action(ask["name"], Anything(**ask["payload"]))
+    outcome = request_action(asking_for(ask["name"], ask["payload"]))
     return {"answers": [asdict(outcome)]}
 
 
 def asks_twice(state: State) -> dict[str, Any]:
     """A node that breaks the rule of one action per node: it asks again once answered."""
-    first = request_action("send_email", Anything(**{"to": "ada@example.com"}))
-    second = request_action("publish", Anything(**{"post": 7}))
+    first = request_action(asking_for("send_email", {"to": "ada@example.com"}))
+    second = request_action(asking_for("publish", {"post": 7}))
     return {"answers": [asdict(first), asdict(second)]}
 
 

@@ -14,8 +14,9 @@ outcome arrives, so ``request_action`` compares the digest with what the node
 asks for now and refuses to hand the outcome to a node that asks for anything
 else: an outcome belongs to the request it answered, not to the next call.
 
-This is the third module that imports LangGraph, with ``graph_checkpoints/`` and
-the analyzer's ``graph.py``. The graph is compiled by its owner with the run's
+This is one of four places that import LangGraph, with ``graph_checkpoints/``, the
+analyzer's ``graph.py`` and ``langgraph_agent.py``, which compiles an agent's
+declared parts into a graph. The graph is compiled by its owner with the run's
 store (``graph_checkpoints/postgres.py`` opens it, and holds the thread for one
 attempt). Interrupts, resume values and the graph's state are written by the
 store's strict serializer, which rebuilds only plain values, so they must be
@@ -38,7 +39,12 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, Durability, Interrupt, interrupt
 from pydantic import BaseModel
 
-from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest, request_digest
+from openmarketer_core.agent_runtime.actions import (
+    ActionOutcome,
+    ActionRequest,
+    action_name_of,
+    request_digest,
+)
 from openmarketer_core.agent_runtime.steps import (
     MalformedActionRequest,
     MissingInitialState,
@@ -62,8 +68,12 @@ CompiledGraph = CompiledStateGraph[Any, Any, Any, Any]
 _answered_in_this_node: ContextVar[str | None] = ContextVar("answered_in_this_node", default=None)
 
 
-def request_action(name: str, payload: BaseModel) -> ActionOutcome:
-    """Ask the workflow to run the action ``name`` and wait for what came of it.
+def request_action(payload: BaseModel) -> ActionOutcome:
+    """Ask the workflow to run the action ``payload`` is for and wait for what came of it.
+
+    The action is the one the payload's model was declared as (``Agent.action``),
+    so a node cannot ask for it by a misspelt name; ``NotAnAction`` is raised for
+    a model that was not declared, before anything is asked.
 
     The graph pauses here. The outcome is given back when the thread is
     advanced with it, and a failed action is an outcome like any other: the
@@ -85,6 +95,7 @@ def request_action(name: str, payload: BaseModel) -> ActionOutcome:
     answered = _answered_in_this_node.get()
     if answered is not None:
         raise TwoActionsInOneNode(answered)
+    name = action_name_of(payload)
     asked = payload.model_dump(mode="json")
     answer = interrupt({"name": name, "payload": asked})
     outcome = ActionOutcome(**answer["outcome"])

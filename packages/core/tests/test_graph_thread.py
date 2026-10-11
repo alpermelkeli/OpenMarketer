@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Engine, text
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
+from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.agent_runtime.langgraph_steps import (
     CompiledGraph,
     GraphThread,
@@ -49,6 +50,10 @@ class State(TypedDict):
     answers: Annotated[list[dict[str, Any]], operator.add]
 
 
+agent = Agent("graph-thread-test", state=State)
+
+
+@agent.action("send_email")
 class SendEmail(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -64,7 +69,7 @@ def asks_to_send(name: str, runs: list[str]) -> Node:
 
     def node(state: State) -> dict[str, Any]:
         runs.append(name)
-        outcome = request_action("send_email", SendEmail(to=name))
+        outcome = request_action(SendEmail(to=name))
         return {"log": [f"{name} done"], "answers": [asdict(outcome)]}
 
     return node
@@ -75,8 +80,8 @@ def asks_twice(name: str, runs: list[str]) -> Node:
 
     def node(state: State) -> dict[str, Any]:
         runs.append(name)
-        first = request_action("send_email", SendEmail(to="first"))
-        second = request_action("send_email", SendEmail(to="second"))
+        first = request_action(SendEmail(to="first"))
+        second = request_action(SendEmail(to="second"))
         return {"answers": [asdict(first), asdict(second)]}
 
     return node
@@ -88,8 +93,8 @@ def asks_twice_from_a_context_that_does_not_know_of_the_first(name: str, runs: l
     def node(state: State) -> dict[str, Any]:
         runs.append(name)
         before_the_first = contextvars.copy_context()
-        first = request_action("send_email", SendEmail(to="first"))
-        second = before_the_first.run(request_action, "send_email", SendEmail(to="second"))
+        first = request_action(SendEmail(to="first"))
+        second = before_the_first.run(request_action, SendEmail(to="second"))
         return {"answers": [asdict(first), asdict(second)]}
 
     return node
@@ -100,7 +105,7 @@ def asks_for_a_new_draft_each_time(name: str, runs: list[str]) -> Node:
 
     def node(state: State) -> dict[str, Any]:
         runs.append(name)
-        outcome = request_action("send_email", SendEmail(to=f"draft-{len(runs)}"))
+        outcome = request_action(SendEmail(to=f"draft-{len(runs)}"))
         return {"answers": [asdict(outcome)]}
 
     return node
@@ -287,7 +292,7 @@ def test_node_that_failed_after_it_was_answered_gets_the_same_answer_when_attemp
     broken = [True]
 
     def asks_then_breaks(state: State) -> dict[str, Any]:
-        outcome = request_action("send_email", SendEmail(to="ada"))
+        outcome = request_action(SendEmail(to="ada"))
         if broken:
             broken.pop()
             raise RuntimeError("the worker died")
@@ -662,6 +667,7 @@ def test_second_action_waits_across_attempts_and_the_first_outcome_is_not_applie
     ]
 
 
+@agent.action("publish")
 class Rich(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -684,7 +690,7 @@ def asks_with_a_payload_of_many_kinds(runs: list[str]) -> Node:
             tags=["ünï", "\u2603"],
             nested={"b": [3, 1], "a": []},
         )
-        return {"answers": [asdict(request_action("publish", payload))]}
+        return {"answers": [asdict(request_action(payload))]}
 
     return node
 

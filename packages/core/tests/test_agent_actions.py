@@ -1,29 +1,33 @@
 """Tests for the framework-free half of the agent runtime: actions, steps and thread names.
 
-``test_graph_thread.py`` covers the LangGraph half.
+``test_agent.py`` covers ``Agent``, and ``test_graph_thread.py`` and ``test_langgraph_agent.py``
+the LangGraph half.
 """
 
 import ast
 import datetime
 import enum
 import hashlib
+import importlib
 import inspect
 import subprocess
 import sys
 import uuid
+from pathlib import Path
 from typing import Annotated
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from openmarketer_core import agent_runtime
-from openmarketer_core.agent_runtime import actions, steps, threads
+from openmarketer_core.agent_runtime import actions, agent, steps, threads
 from openmarketer_core.agent_runtime.actions import (
     MAX_SHOWN_CHARACTERS,
     MAX_SHOWN_FIELDS,
     ActionCatalog,
     ActionDefinition,
     ActionOutcome,
+    ActionPolicy,
     ActionRequest,
     InvalidActionDefinition,
     InvalidActionPayload,
@@ -343,6 +347,34 @@ def test_unknown_key_in_a_nested_model_of_a_payload_is_refused_when_it_is_asked(
     assert SECRET not in str(refused.value)
 
 
+# ------------------------------------------------------------- how an action is tried
+def test_action_policy_without_a_heartbeat_has_none():
+    assert ActionPolicy(30, 2, 1).heartbeat_timeout_seconds is None
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"attempt_timeout_seconds": 0},
+        {"attempt_timeout_seconds": -1},
+        {"max_attempts": 0},  # Temporal reads 0 attempts as no limit, which an action must not have
+        {"retry_after_seconds": 0},
+        {"heartbeat_timeout_seconds": 0},
+        {"heartbeat_timeout_seconds": -1},
+    ],
+)
+def test_action_policy_with_a_limit_that_is_not_positive_is_refused(limits):
+    given = {"attempt_timeout_seconds": 30, "max_attempts": 2, "retry_after_seconds": 1} | limits
+    with pytest.raises(ValueError, match=next(iter(limits))):
+        ActionPolicy(**given)
+
+
+def test_action_policy_cannot_be_changed_once_it_is_made():
+    policy = ActionPolicy(30, 2, 1)
+    with pytest.raises(AttributeError):
+        policy.max_attempts = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+
 # ------------------------------------------------------- what a request is, as a digest
 def test_digest_of_a_request_is_the_sha256_of_its_name_and_payload_as_compact_sorted_json():
     digest = request_digest("send_email", {"to": "ada", "attempts": 2})
@@ -411,7 +443,7 @@ def test_step_with_neither_an_output_nor_an_action_is_refused():
 # ---------------------------------------------- what a workflow decodes is typed
 @pytest.mark.parametrize(
     "decoded",
-    [ActionRequest, ActionOutcome, StepOutcome, steps.GraphRunRef],
+    [ActionRequest, ActionOutcome, StepOutcome, steps.GraphRunRef, ActionPolicy],
     ids=lambda c: c.__name__,
 )
 def test_type_a_workflow_decodes_has_annotations_that_are_types_not_text(decoded):
@@ -447,13 +479,18 @@ def test_kind_with_anything_but_lower_case_letters_digits_and_hyphens_is_refused
 
 
 # ------------------------------------------------- no framework in the contract
-FRAMEWORK_FREE = (agent_runtime, actions, steps, threads)
+FRAMEWORK_FREE = (agent_runtime, actions, agent, steps, threads)
+# The modules of the package, those that import LangGraph and those that do not.
+LANGGRAPH_MODULES = {"langgraph_steps", "langgraph_agent"}
+PLAIN_MODULES = {"__init__", "actions", "agent", "steps", "threads"}
 FRAMEWORKS = (
     "langgraph",
     "langchain",
     "temporalio",
     "sqlalchemy",
     "psycopg",
+    # Core never imports an application.
+    "openmarketer_worker",
     # These load LangGraph and the database driver.
     "openmarketer_core.graph_checkpoints",
     "openmarketer_core.db",
@@ -480,14 +517,33 @@ def test_package_init_imports_nothing():
     assert imported_names(agent_runtime) == set()
 
 
+def test_only_the_langgraph_modules_of_the_runtime_import_langgraph():
+    folder = Path(agent_runtime.__file__).parent
+    stems = {path.stem for path in folder.glob("*.py")}
+    # A module the lists above do not know has not been looked at: add it to one of them.
+    assert stems == PLAIN_MODULES | LANGGRAPH_MODULES
+
+    importing_langgraph = {
+        stem
+        for stem in stems
+        if any(
+            name == "langgraph" or name.startswith("langgraph.")
+            for name in imported_names(importlib.import_module(f"{agent_runtime.__name__}.{stem}"))
+        )
+    }
+    assert importing_langgraph == LANGGRAPH_MODULES
+
+
 def test_loading_the_contract_loads_no_framework():
     # A fresh interpreter: this one has loaded LangGraph for other tests.
     code = (
         "import sys\n"
         "import openmarketer_core.agent_runtime.actions\n"
+        "import openmarketer_core.agent_runtime.agent\n"
         "import openmarketer_core.agent_runtime.steps\n"
         "import openmarketer_core.agent_runtime.threads\n"
-        "frameworks = ('langgraph', 'langchain_core', 'temporalio', 'sqlalchemy', 'psycopg')\n"
+        "frameworks = ('langgraph', 'langchain_core', 'temporalio', 'sqlalchemy', 'psycopg',\n"
+        "              'openmarketer_worker')\n"
         "loaded = [name for name in frameworks if name in sys.modules]\n"
         "assert not loaded, loaded\n"
     )
