@@ -10,9 +10,12 @@ is needed.
 - ``vocabulary.py``: names, failure types, fixed texts and policies, as plain
   data that the workflow and the activities share.
 - ``workflow_support.py`` and ``driver.py``: what an agent's workflow calls.
-- ``routes.py``: the actions an agent can run: name, payload model, handler
-  and policy.
+- ``workflow_dsl.py``: ``agent_workflow``, which makes a class with optional hooks the
+  agent's workflow (workflow code, loaded by the sandbox).
+- ``routes.py``: the actions an agent can run: name, payload model and handler.
 - ``activity_support.py`` and ``activities.py``: what the worker registers.
+- ``agent_worker.py``: ``AgentWorker``, where an agent's handlers are declared and its
+  registration is made, with the start-up checks (for the worker's process only).
 
 The workflow sandbox loads this package, so this module imports nothing.
 """

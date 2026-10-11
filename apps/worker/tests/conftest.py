@@ -257,8 +257,12 @@ class Database:
             ).scalar_one()
 
     def has_checkpoints(self, run: AnalyzeRepositoryInput) -> bool:
-        """Whether any checkpoint table holds a row of the run's thread."""
-        thread = {"thread": run_thread_id(run.run_id)}
+        """Whether any checkpoint table holds a row of the analysis run's thread."""
+        return self.thread_has_checkpoints(run_thread_id(run.run_id))
+
+    def thread_has_checkpoints(self, thread_id: str) -> bool:
+        """Whether any checkpoint table holds a row of the thread, of a run of any kind."""
+        thread = {"thread": thread_id}
         with transaction(self.sessions) as session:
             return any(
                 session.execute(

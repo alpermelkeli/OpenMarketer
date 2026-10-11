@@ -8,7 +8,8 @@ allowed without a handler.
 
 The limits an action runs under (timeouts, attempts, heartbeats) are not here but in the
 workflow, which is the one place they are set: its ``actions`` mapping names the actions a
-run may ask for, with an ``ActionPolicy`` each. A name in one and not in the other is refused
+run may ask for, with a core ``ActionPolicy`` each (``Agent.policies`` is one, made by the
+agent's ``action`` decorators). A name in one and not in the other is refused
 where it is found: the workflow refuses a name it does not list before anything runs, and
 the activity refuses one its routes do not hold.
 

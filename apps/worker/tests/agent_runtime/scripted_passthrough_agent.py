@@ -16,9 +16,10 @@ from typing import Any
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
+    from openmarketer_core.agent_runtime.actions import ActionPolicy
     from openmarketer_core.agent_runtime.steps import GraphRunRef
     from openmarketer_worker.agent_runtime.driver import run_graph_with_actions
-    from openmarketer_worker.agent_runtime.vocabulary import ActionPolicy, GraphRunPolicy
+    from openmarketer_worker.agent_runtime.vocabulary import GraphRunPolicy
 
 
 @dataclass(frozen=True)

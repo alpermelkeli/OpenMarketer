@@ -27,10 +27,11 @@ from temporalio.client import Client, WorkflowFailureError, WorkflowHandle, Work
 from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.worker import Worker
 
+from openmarketer_core.agent_runtime.actions import ActionPolicy
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_worker.agent_runtime.activities import RuntimeActivities
-from openmarketer_worker.agent_runtime.vocabulary import ActionPolicy, GraphRunPolicy
+from openmarketer_worker.agent_runtime.vocabulary import GraphRunPolicy
 
 KIND = "scripted-agent"
 STEP_LIMITS = GraphRunPolicy(

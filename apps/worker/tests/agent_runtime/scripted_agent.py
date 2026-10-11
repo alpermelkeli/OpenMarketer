@@ -24,10 +24,10 @@ from openmarketer_worker.agent_runtime.driver import run_graph_with_actions
 from openmarketer_worker.agent_runtime.workflow_support import database_write, reason_shown
 
 with workflow.unsafe.imports_passed_through():
+    from openmarketer_core.agent_runtime.actions import ActionPolicy
     from openmarketer_core.agent_runtime.steps import GraphRunRef
     from openmarketer_worker.agent_runtime.vocabulary import (
         RUN_TEXTS,
-        ActionPolicy,
         DatabaseWritePolicy,
         GraphRunPolicy,
     )

@@ -1,18 +1,21 @@
-"""The two activities every agent that runs a graph with actions registers.
+"""The three activities every agent that runs a graph with actions registers.
 
 ``run_graph_step`` takes one step of the agent's graph on the run's thread:
 from where it stands until it finishes or asks for an action. ``run_action``
-runs one action the graph asked for, through the handler of its route. Both
-are the generic half of the agent runtime (``driver.py`` is the workflow's);
-the agent hands in its graph and its routes when the worker starts.
+runs one action the graph asked for, through the handler of its route.
+``forget_run`` removes the checkpoints of a run that is over. They are the generic
+half of the agent runtime (``driver.py`` is the workflow's); the agent hands in its
+graph and its routes when the worker starts.
 
 They hold no rule of their own. A step is core's ``GraphThread``, behind the
 agent's ``AgentGraph``. An action is checked against the catalog of the routes
 before anything runs, because its name and payload are text the model may have
 shaped, and what the catalog says names the action and the fields at fault,
-never their values. Every failure is raised with a type that says whether
-another attempt is worth its cost and a message that may be stored and shown
-(``activity_support.worded_failures``, in the runtime's own words: ``RUN_TEXTS`` for a
+never their values. A graph's own defects (a node that asks with a model no action was
+declared for, a route that chooses a node it was not given) end the run at once, like a thread
+that refuses the step: another attempt would meet them again. Every failure is raised with a
+type that says whether another attempt is worth its cost and a message that may be stored and
+shown (``activity_support.worded_failures``, in the runtime's own words: ``RUN_TEXTS`` for a
 step, ``ACTION_TEXTS`` for an action); the original error is logged.
 
 What an activity returns enters the workflow history, so both refuse what is too large or is
@@ -31,8 +34,9 @@ the two from doing the work twice.
 Checkpoints: an attempt at a step holds the run's thread for as long as its
 graph works, even after Temporal has given up on it, and a second attempt is
 refused and retried (``ATTEMPT_STILL_RUNNING``), never allowed to write the same
-thread. Nothing here forgets a run's checkpoints when the run ends: that is the
-agent's own activity at the end of its run (``activity_support.forget_quietly``).
+thread. A step and an action forget nothing: when the run ends, the agent's workflow calls
+``forget_run`` (``activity_support.forget_quietly``, so the activity never fails for a
+database that is down), whether the run finished, failed or was cancelled.
 
 How often the activities heartbeat is not set here: it is a third of the heartbeat timeout
 the workflow scheduled them with (``activity_support.run_in_thread``).
@@ -40,6 +44,7 @@ the workflow scheduled them with (``activity_support.run_in_thread``).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from typing import Any, Protocol
@@ -52,8 +57,10 @@ from openmarketer_core.agent_runtime.actions import (
     ActionOutcome,
     ActionRequest,
     InvalidActionPayload,
+    NotAnAction,
     UnknownAction,
 )
+from openmarketer_core.agent_runtime.agent import InvalidRouteChoice
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepError, StepOutcome
 from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.graph_checkpoints import RunCheckpoints
@@ -61,6 +68,7 @@ from openmarketer_core.graph_checkpoints.postgres import AttemptInProgress
 from openmarketer_worker.agent_runtime.activity_support import (
     CheckpointAccess,
     NotStorable,
+    forget_quietly,
     run_in_thread,
     stored_size,
     worded_failures,
@@ -71,6 +79,7 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     ACTION_TEXTS,
     ATTEMPT_STILL_RUNNING,
     EARLIER_ATTEMPT_RUNNING,
+    FORGET_RUN,
     INVALID_ACTION_PAYLOAD,
     INVALID_ACTION_RESULT,
     MAX_RESULT_BYTES,
@@ -146,25 +155,29 @@ class RuntimeActivities:
             )
             return _outcome_within_bounds(request, result)
 
+    @activity.defn(name=FORGET_RUN)
+    async def forget_run(self, run: GraphRunRef) -> None:
+        """Remove the checkpoints of a run that is over, however it ended.
+
+        Forgetting never fails the activity for a database that is down: the run's outcome is
+        recorded by then, and the rows are left to a cleanup. A run whose kind cannot name a
+        thread is refused for good, as a step is.
+        """
+        subject = f"{run.kind} run {run.run_id}"
+        with worded_failures(RUN_TEXTS, subject=subject):
+            thread = _thread_of(run)
+            await asyncio.to_thread(forget_quietly, self._checkpoints, thread, subject=subject)
+
     def _advance(self, step: StepInput, subject: str) -> StepOutcome:
-        try:
-            thread = thread_id(step.run.kind, step.run.run_id)
-        except ValueError:
-            # The kind comes from the agent's workflow: it is a defect, and another attempt
-            # would meet it again. Its text is not repeated, as it names the kind.
-            raise ApplicationError(
-                "the kind of this run cannot name a thread: it is lower-case letters, digits "
-                "and hyphens",
-                type=STEP_REFUSED,
-                non_retryable=True,
-            ) from None
+        thread = _thread_of(step.run)
         try:
             with self._checkpoints.of_attempt(thread) as checkpoints:
                 return self._graph.advance(step.run, checkpoints, step.resume)
         except AttemptInProgress:
             logger.info("%s: an earlier attempt is still running", subject)
             raise ApplicationError(EARLIER_ATTEMPT_RUNNING, type=ATTEMPT_STILL_RUNNING) from None
-        except StepError as e:
+        except (StepError, NotAnAction, InvalidRouteChoice) as e:
+            # The messages of all three name what is wrong and never a value the graph held.
             logger.warning("%s: its graph cannot take the step: %s", subject, e)
             raise ApplicationError(str(e), type=STEP_REFUSED, non_retryable=True) from None
 
@@ -187,6 +200,20 @@ class RuntimeActivities:
             return route.handler(payload, context)
 
         return await run_in_thread(work, subject=subject)
+
+
+def _thread_of(run: GraphRunRef) -> str:
+    try:
+        return thread_id(run.kind, run.run_id)
+    except ValueError:
+        # The kind comes from the agent's workflow: it is a defect, and another attempt
+        # would meet it again. Its text is not repeated, as it names the kind.
+        raise ApplicationError(
+            "the kind of this run cannot name a thread: it is lower-case letters, digits "
+            "and hyphens",
+            type=STEP_REFUSED,
+            non_retryable=True,
+        ) from None
 
 
 def _within_history_bounds(outcome: StepOutcome) -> StepOutcome:

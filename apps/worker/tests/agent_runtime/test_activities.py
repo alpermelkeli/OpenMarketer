@@ -1,4 +1,4 @@
-"""Tests for the runtime's two activities as plain functions, against PostgreSQL.
+"""Tests for the runtime's three activities as plain functions, against PostgreSQL.
 
 They run in Temporal's activity environment, which needs no server. The workflow side, and how
 the activities behave when Temporal retries them, is in ``test_driver.py``.
@@ -7,6 +7,7 @@ the activities behave when Temporal retries them, is in ``test_driver.py``.
 import asyncio
 import logging
 import uuid
+from contextlib import AbstractContextManager
 from dataclasses import replace
 from datetime import timedelta
 
@@ -22,9 +23,12 @@ from scripted_graphs import (
     SEND_THEN_PUBLISH,
     Ask,
     BlockingGraph,
+    GraphOfNode,
     RaisingGraph,
     ReturningGraph,
     ScriptedGraph,
+    asks_with_an_unregistered_model,
+    steps_of_an_agent_whose_route_chooses_outside_its_targets,
 )
 from scripted_rig import happened, some_run, thread_of
 from temporalio.converter import DataConverter
@@ -34,6 +38,9 @@ from temporalio.testing import ActivityEnvironment
 from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef, MissingInitialState, StepOutcome
 from openmarketer_core.db.session import DatabaseError
+from openmarketer_core.graph_checkpoints import RunCheckpoints
+from openmarketer_worker.agent_runtime.activities import RuntimeActivities
+from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess
 from openmarketer_worker.agent_runtime.vocabulary import (
     ACTION_TEXTS,
     ATTEMPT_STILL_RUNNING,
@@ -57,6 +64,10 @@ def asking_for(name: str, payload: dict, *, run=None) -> ActionRequest:
     return ActionRequest(
         action_id=f"{thread_of(run or some_run())}:0123456789abcdef", name=name, payload=payload
     )
+
+
+def two_handlers() -> tuple[ScriptedAction, ScriptedAction]:
+    return ScriptedAction(), ScriptedAction()
 
 
 def with_a_heartbeat_timeout(environment: ActivityEnvironment, *, seconds: float):
@@ -215,6 +226,29 @@ async def test_step_that_is_cancelled_while_the_graph_works_says_so_in_the_log(r
     finally:
         blocked.release.set()
     assert "was cancelled while its work was running" in caplog.text
+
+
+async def test_node_that_asks_with_a_model_no_action_was_declared_for_is_refused_for_good(runtime):
+    activities = runtime(GraphOfNode(asks_with_an_unregistered_model), routes_of(*two_handlers()))
+    failure = await refused(activities.run_graph_step, StepInput(some_run(), None))
+    assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
+    assert failure.message == (
+        "model Unregistered is not the payload of any action: "
+        "register it with the agent's action decorator"
+    )
+    assert failure.__cause__ is None
+
+
+async def test_route_that_chooses_outside_its_targets_is_refused_for_good(runtime):
+    graph = steps_of_an_agent_whose_route_chooses_outside_its_targets()
+    activities = runtime(graph, routes_of(*two_handlers()))
+    run = GraphRunRef(kind="scripted-route", run_id=uuid.uuid4())
+    failure = await refused(activities.run_graph_step, StepInput(run, None))
+    assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
+    assert failure.message == (
+        "the route after node 'first' chose something that is not one of its targets: second"
+    )
+    assert "elsewhere" not in failure.message
 
 
 # ------------------------------------------- what a step may hand over to the history
@@ -410,3 +444,72 @@ async def test_result_the_history_cannot_hold_is_refused_for_good_and_the_action
     failure = await refused(activities.run_action, asking_for("send_email", {"to": "ada"}))
     assert (failure.type, failure.non_retryable) == (INVALID_ACTION_RESULT, True)
     assert len(send.calls) == 1
+
+
+# ------------------------------------------------------------------ forget_run
+async def test_forget_run_removes_the_checkpoints_the_run_made(runtime, database):
+    graph, run = ScriptedGraph(SEND_THEN_PUBLISH), some_run()
+    activities = runtime(graph, routes_of(*two_handlers()))
+    await ActivityEnvironment().run(activities.run_graph_step, StepInput(run, None))
+    assert database.thread_has_checkpoints(thread_of(run))
+    await ActivityEnvironment().run(activities.forget_run, run)
+    assert not database.thread_has_checkpoints(thread_of(run))
+
+
+async def test_forget_run_leaves_the_checkpoints_of_another_run(runtime, database):
+    graph, run, other = ScriptedGraph(SEND_THEN_PUBLISH), some_run(), some_run()
+    activities = runtime(graph, routes_of(*two_handlers()))
+    await ActivityEnvironment().run(activities.run_graph_step, StepInput(run, None))
+    await ActivityEnvironment().run(activities.run_graph_step, StepInput(other, None))
+    await ActivityEnvironment().run(activities.forget_run, run)
+    assert database.thread_has_checkpoints(thread_of(other))
+
+
+async def test_forget_run_of_a_run_with_no_checkpoints_does_nothing(runtime):
+    activities = runtime(ScriptedGraph([]), routes_of(*two_handlers()))
+    assert await ActivityEnvironment().run(activities.forget_run, some_run()) is None
+
+
+async def test_forget_run_forgets_checkpoints_an_attempt_still_holds(
+    runtime, checkpoints, database
+):
+    graph, run = ScriptedGraph(SEND_THEN_PUBLISH), some_run()
+    activities = runtime(graph, routes_of(*two_handlers()))
+    await ActivityEnvironment().run(activities.run_graph_step, StepInput(run, None))
+    with checkpoints.of_attempt(thread_of(run)):
+        await ActivityEnvironment().run(activities.forget_run, run)
+    assert not database.thread_has_checkpoints(thread_of(run))
+
+
+def never_attempted(thread_id: str) -> AbstractContextManager[RunCheckpoints]:
+    raise AssertionError("forgetting a run takes no attempt at its graph")
+
+
+def forgetting_fails_with(error: Exception) -> RuntimeActivities:
+    def forget(thread_id: str) -> None:
+        raise error
+
+    access = CheckpointAccess(of_attempt=never_attempted, forget=forget)
+    return RuntimeActivities(access, ScriptedGraph([]), routes_of(*two_handlers()))
+
+
+async def test_forget_run_does_not_fail_for_a_database_that_is_down(caplog):
+    activities = forgetting_fails_with(DatabaseError("connection is closed"))
+    with caplog.at_level(logging.WARNING):
+        assert await ActivityEnvironment().run(activities.forget_run, some_run()) is None
+    assert "were not forgotten, the cleanup removes them" in caplog.text
+
+
+async def test_forget_run_that_stops_on_an_error_nobody_worded_is_tried_again_without_its_detail():
+    activities = forgetting_fails_with(RuntimeError(f"disk path {SECRET}"))
+    failure = await refused(activities.forget_run, some_run())
+    assert (failure.type, failure.message) == (UNEXPECTED, RUN_TEXTS.stopped_unexpectedly)
+    assert not failure.non_retryable
+    assert SECRET not in str(failure)
+
+
+async def test_forget_run_of_a_kind_that_cannot_name_a_thread_is_refused_for_good(runtime):
+    activities = runtime(ScriptedGraph([]), routes_of(*two_handlers()))
+    unnamed = GraphRunRef(kind="Not a kind!", run_id=uuid.uuid4())
+    failure = await refused(activities.forget_run, unnamed)
+    assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)

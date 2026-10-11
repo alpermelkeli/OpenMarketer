@@ -46,13 +46,13 @@ from temporalio.exceptions import (
     TimeoutType,
 )
 
+from openmarketer_core.agent_runtime.actions import ActionPolicy
 from openmarketer_core.agent_runtime.steps import MissingInitialState, StepOutcome
 from openmarketer_worker.agent_runtime import driver, vocabulary
 from openmarketer_worker.agent_runtime.vocabulary import (
     ACTION_TEXTS,
     MAX_ERROR_CHARACTERS,
     MAX_RESULT_BYTES,
-    ActionPolicy,
 )
 
 SECRET = "sk-live-4242-not-for-history"

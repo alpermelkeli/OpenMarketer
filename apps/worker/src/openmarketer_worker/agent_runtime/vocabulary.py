@@ -21,9 +21,11 @@ from openmarketer_core.agent_runtime.steps import GraphRunRef
 
 RUN_GRAPH_STEP = "run_graph_step"
 RUN_ACTION = "run_action"
+FORGET_RUN = "forget_run"
 
 # The action's own input is core's ``ActionRequest`` and its result an ``ActionOutcome``;
-# the step's result is a ``StepOutcome``.
+# the step's result is a ``StepOutcome``. ``forget_run`` is given the run's ``GraphRunRef``
+# and returns nothing.
 
 
 @dataclass(frozen=True)
@@ -123,37 +125,19 @@ class DatabaseWritePolicy:
     give_up_after_seconds: float | None = None
 
 
-@dataclass(frozen=True)
-class ActionPolicy:
-    """Limits of one action. An action is tried again only when it fails in a way that may pass.
-
-    ``max_attempts`` counts the first one and is at least 1: Temporal reads 0 as
-    no limit, and an action has a side effect. ``heartbeat_timeout_seconds`` is
-    for an action that runs long: a worker that stops heartbeating is noticed
-    within it, and the workflow's cancellation reaches the action at a
-    heartbeat. The activity heartbeats three times in it, taking the timeout from
-    what the workflow scheduled it with, so this is the one place it is set. A
-    short action needs none.
-
-    The values are checked when the policy is made, so a policy is a constant of the
-    agent's workflow module and never part of a workflow's input: a ``ValueError``
-    while Temporal decodes the input fails the workflow task, which is tried again
-    for ever.
-    """
-
-    attempt_timeout_seconds: float
-    max_attempts: int
-    retry_after_seconds: float
-    heartbeat_timeout_seconds: float | None = None
-
-    def __post_init__(self) -> None:
-        _require_positive(
-            attempt_timeout_seconds=self.attempt_timeout_seconds,
-            max_attempts=self.max_attempts,
-            retry_after_seconds=self.retry_after_seconds,
-        )
-        if self.heartbeat_timeout_seconds is not None:
-            _require_positive(heartbeat_timeout_seconds=self.heartbeat_timeout_seconds)
+# What ends every run of a graph: forgetting its checkpoints is a few deletes of one thread's
+# rows, so an attempt gets the 30 seconds of any single write. ``forget_quietly`` never fails
+# for a database that is down, so an attempt is tried again only for a worker that died or a
+# connection that hung; the waits (1 second, doubling to a minute) and the hour to give up
+# are those of recording a failed analysis. The hour bounds how long a finished run's workflow
+# stays open for rows it cannot remove, which is as long as an outage the run's own record rides
+# out, and no longer.
+FORGET_RUN_LIMITS = DatabaseWritePolicy(
+    attempt_timeout_seconds=30,
+    retry_after_seconds=1,
+    max_retry_wait_seconds=60,
+    give_up_after_seconds=60 * 60,
+)
 
 
 @dataclass(frozen=True)
@@ -162,8 +146,8 @@ class GraphRunPolicy:
 
     ``max_actions`` bounds how many actions one run may ask for, and with them
     the size of its workflow history. The step heartbeats three times in
-    ``heartbeat_timeout_seconds``, as an action does. Like ``ActionPolicy`` it is checked
-    when it is made, and is a constant of the agent's workflow module.
+    ``heartbeat_timeout_seconds``, as an action does. Like core's ``ActionPolicy`` it is
+    checked when it is made, and is a constant of the agent's workflow module.
     """
 
     attempt_timeout_seconds: float

@@ -18,12 +18,13 @@ import openmarketer_worker.agent_runtime as runtime
 
 SOURCE = Path(runtime.__file__).parent
 MODULES = sorted(SOURCE.glob("*.py"))
-WORKFLOW_MODULES = ["__init__", "vocabulary", "workflow_support", "driver"]
+WORKFLOW_MODULES = ["__init__", "vocabulary", "workflow_support", "driver", "workflow_dsl"]
 DATABASE = ("sqlalchemy", "psycopg", "openmarketer_core.db", "openmarketer_core.graph_checkpoints")
 ACTIVITY_CODE = (
     "temporalio.activity",
     "openmarketer_worker.agent_runtime.activities",
     "openmarketer_worker.agent_runtime.activity_support",
+    "openmarketer_worker.agent_runtime.agent_worker",
     "openmarketer_worker.agent_runtime.routes",
 )
 
@@ -65,9 +66,11 @@ def test_the_runtime_has_the_modules_these_tests_know():
         "__init__",
         "activities",
         "activity_support",
+        "agent_worker",
         "driver",
         "routes",
         "vocabulary",
+        "workflow_dsl",
         "workflow_support",
     }
 
@@ -109,6 +112,7 @@ def test_package_loads_nothing_of_core_or_of_the_workflow_engine():
 def test_modules_of_the_workflow_load_no_database_graph_framework_or_activity_code():
     loaded = loaded_after_importing(
         "openmarketer_worker.agent_runtime.driver",
+        "openmarketer_worker.agent_runtime.workflow_dsl",
         "openmarketer_worker.agent_runtime.workflow_support",
     )
     forbidden = [

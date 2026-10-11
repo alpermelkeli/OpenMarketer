@@ -39,9 +39,10 @@ run unrecorded; catch ``ApplicationError`` as well. Cancellation passes through.
 records nothing on a run and does not forget its checkpoints: what a run owes when it ends is
 the agent's workflow.
 
-``ActionPolicy`` and ``GraphRunPolicy`` check their values when they are made. They are
-constants of the agent's workflow module and not its input: a ``ValueError`` while Temporal
-decodes a workflow's input fails the workflow task, which is tried again for ever.
+``ActionPolicy`` (core's, made by ``Agent.action``) and ``GraphRunPolicy`` check their values
+when they are made. They are constants of the agent's modules and not a workflow's input: a
+``ValueError`` while Temporal decodes a workflow's input fails the workflow task, which is
+tried again for ever.
 
 This is workflow code, loaded by the sandbox. An agent's workflow module may import it plainly
 or inside ``workflow.unsafe.imports_passed_through()``; both work, and the tests run both.
@@ -58,7 +59,12 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError, is_cancelled_exception
 
 with workflow.unsafe.imports_passed_through():
-    from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest, UnknownAction
+    from openmarketer_core.agent_runtime.actions import (
+        ActionOutcome,
+        ActionPolicy,
+        ActionRequest,
+        UnknownAction,
+    )
     from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
     from openmarketer_worker.agent_runtime.vocabulary import (
         ACTION_TEXTS,
@@ -70,7 +76,6 @@ with workflow.unsafe.imports_passed_through():
         STEP_REFUSED,
         TOO_MANY_ACTIONS,
         UNKNOWN_ACTION,
-        ActionPolicy,
         GraphRunPolicy,
         StepInput,
     )

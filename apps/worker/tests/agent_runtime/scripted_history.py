@@ -3,10 +3,12 @@
 Payloads in history are stored encoded; the tests ask two things of it: whether a text is in it
 anywhere (``readable``), and what each activity was given and returned (``exchanges``). Both read
 the history as the server stores it, so no secret can hide in a field this module does not decode.
+``scheduled_with`` reads the limits an activity was scheduled with.
 """
 
 import json
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from temporalio.client import WorkflowHistory
@@ -37,7 +39,7 @@ def failures_in(history: WorkflowHistory) -> str:
 class Exchange:
     """What one scheduled activity was given and what it returned, decoded.
 
-    ``returned`` is None for an activity that did not complete.
+    ``returned`` is None for an activity that did not complete, or returned nothing.
     """
 
     activity: str
@@ -57,8 +59,41 @@ def exchanges(history: WorkflowHistory) -> list[Exchange]:
         elif event.HasField("activity_task_completed_event_attributes"):
             attributes = event.activity_task_completed_event_attributes
             (returned,) = attributes.result.payloads
-            results[attributes.scheduled_event_id] = json.loads(returned.data)
+            # An activity that returns nothing is stored as a payload with no data.
+            results[attributes.scheduled_event_id] = (
+                json.loads(returned.data) if returned.data else None
+            )
     return [
         Exchange(activity, given, results.get(event_id))
         for event_id, (activity, given) in scheduled.items()
     ]
+
+
+@dataclass(frozen=True)
+class ScheduledWith:
+    """The limits Temporal was asked to run an activity under."""
+
+    start_to_close: timedelta
+    heartbeat: timedelta | None
+    max_attempts: int
+    first_wait: timedelta
+
+
+def scheduled_with(history: WorkflowHistory, activity: str) -> ScheduledWith:
+    """The limits the first scheduling of ``activity`` in the history asked for."""
+    for event in history.events:
+        attributes = event.activity_task_scheduled_event_attributes
+        if event.HasField("activity_task_scheduled_event_attributes") and (
+            attributes.activity_type.name == activity
+        ):
+            return ScheduledWith(
+                start_to_close=attributes.start_to_close_timeout.ToTimedelta(),
+                heartbeat=(
+                    attributes.heartbeat_timeout.ToTimedelta()
+                    if attributes.HasField("heartbeat_timeout")
+                    else None
+                ),
+                max_attempts=attributes.retry_policy.maximum_attempts,
+                first_wait=attributes.retry_policy.initial_interval.ToTimedelta(),
+            )
+    raise AssertionError(f"the history schedules no activity {activity}")

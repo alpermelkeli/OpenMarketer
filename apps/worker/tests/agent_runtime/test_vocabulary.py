@@ -3,6 +3,7 @@
 A limit that would make Temporal retry for ever is refused when it is made, and the types that
 cross between the workflow and the activities are shown to survive the data converter that
 carries them, with annotations that are types and not text (the sandbox's converter needs that).
+Core's ``ActionPolicy`` is checked in core's tests; only its journey through the converter is here.
 """
 
 import dataclasses
@@ -11,10 +12,9 @@ import uuid
 import pytest
 from temporalio.converter import DataConverter
 
-from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
+from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionPolicy, ActionRequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
 from openmarketer_worker.agent_runtime.vocabulary import (
-    ActionPolicy,
     DatabaseWritePolicy,
     FailureTexts,
     GraphRunPolicy,
@@ -34,22 +34,6 @@ def converted[T](value: T) -> T:
 
 
 # ------------------------------------------------------------------ policies
-@pytest.mark.parametrize(
-    "limits",
-    [
-        {"attempt_timeout_seconds": 0},
-        {"max_attempts": 0},  # Temporal reads 0 attempts as no limit, which an action must not have
-        {"retry_after_seconds": 0},
-        {"heartbeat_timeout_seconds": 0},
-        {"heartbeat_timeout_seconds": -1},
-    ],
-)
-def test_action_policy_with_a_limit_that_is_not_positive_is_refused(limits):
-    given = {"attempt_timeout_seconds": 30, "max_attempts": 2, "retry_after_seconds": 1} | limits
-    with pytest.raises(ValueError, match=next(iter(limits))):
-        ActionPolicy(**given)
-
-
 @pytest.mark.parametrize(
     "limit",
     [
@@ -115,7 +99,7 @@ def test_policies_survive_the_converter_with_and_without_a_heartbeat_timeout():
 
 @pytest.mark.parametrize(
     "decoded",
-    [StepInput, ActionPolicy, GraphRunPolicy, DatabaseWritePolicy, FailureTexts],
+    [StepInput, GraphRunPolicy, DatabaseWritePolicy, FailureTexts],
     ids=lambda c: c.__name__,
 )
 def test_type_the_workflow_carries_has_annotations_that_are_types_not_text(decoded):

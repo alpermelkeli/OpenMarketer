@@ -17,6 +17,8 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, create_model
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome, mark_as_action
+from openmarketer_core.agent_runtime.agent import Agent
+from openmarketer_core.agent_runtime.langgraph_agent import AgentSteps
 from openmarketer_core.agent_runtime.langgraph_steps import (
     CompiledGraph,
     GraphThread,
@@ -65,6 +67,19 @@ def asks_twice(state: State) -> dict[str, Any]:
     first = request_action(asking_for("send_email", {"to": "ada@example.com"}))
     second = request_action(asking_for("publish", {"post": 7}))
     return {"answers": [asdict(first), asdict(second)]}
+
+
+class Unregistered(BaseModel):
+    """A payload model that no agent declared as an action."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    to: str
+
+
+def asks_with_an_unregistered_model(state: State) -> dict[str, Any]:
+    request_action(Unregistered(to="ada@example.com"))
+    return {"answers": []}
 
 
 def goes_on(state: State) -> str:
@@ -119,6 +134,46 @@ class ScriptedGraph:
             # The outcome is applied and stored; what the step found out is lost with the worker.
             raise RuntimeError("the worker died after the outcome was applied")
         return step
+
+
+class GraphOfNode:
+    """An ``AgentGraph`` whose one node is ``node``, started with a plan of one action."""
+
+    def __init__(self, node: Any) -> None:
+        self._node = node
+
+    def advance(
+        self, run: GraphRunRef, checkpoints: RunCheckpoints, resume: ActionOutcome | None
+    ) -> StepOutcome:
+        initial = {"plan": [asdict(SEND_THEN_PUBLISH[0])], "answers": []}
+        graph = compiled(checkpoints, self._node)
+        thread = GraphThread(graph, checkpoints, recursion_limit=GRAPH_STEPS)
+        return thread.advance(initial=initial, resume=resume)
+
+
+class NoteState(TypedDict):
+    note: str
+
+
+def steps_of_an_agent_whose_route_chooses_outside_its_targets() -> AgentSteps:
+    """The graph of a declared agent whose route sends the run to a node it was not given."""
+    agent = Agent("scripted-route", state=NoteState)
+
+    @agent.node(start=True)
+    def first(state: NoteState) -> dict[str, Any]:
+        return {"note": "first"}
+
+    @agent.node
+    def second(state: NoteState) -> dict[str, Any]:
+        return {"note": "second"}
+
+    @agent.route(after=first, to=[second])
+    def chooses_wrongly(state: NoteState) -> str:
+        return "elsewhere"
+
+    return AgentSteps(
+        agent, initial_state=lambda run: {"note": ""}, result=dict, recursion_limit=GRAPH_STEPS
+    )
 
 
 class RaisingGraph:
