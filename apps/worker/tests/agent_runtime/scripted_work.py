@@ -24,6 +24,7 @@ from google.protobuf.json_format import MessageToDict
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict
 from scripted_agent import ScriptedAgent, ScriptedRun, WritesToTheDatabase
+from scripted_passthrough_agent import PassedThroughRun, PassesTheDriverThrough
 from temporalio.client import Client, WorkflowFailureError, WorkflowHandle, WorkflowHistory
 from temporalio.worker import Worker
 
@@ -246,6 +247,19 @@ class Execution:
     async def finish(self, run: GraphRunRef, **limits: Any) -> dict[str, Any]:
         return await (await self.start(run, **limits)).result()
 
+    async def finish_with_the_driver_passed_through(self, run: GraphRunRef) -> dict[str, Any]:
+        """The same run, started on the workflow that imports the driver through the sandbox."""
+        scripted = PassedThroughRun(run=run, actions=ALLOWED, policy=STEP_LIMITS)
+        handle = await self.client.start_workflow(
+            PassesTheDriverThrough.run,
+            scripted,
+            id=f"passed-through-{run.run_id}",
+            task_queue=self.task_queue,
+        )
+        # A workflow task that cannot decode a result fails and is tried again for ever, so the
+        # run would hang: a deadline turns that into a failure of the test.
+        return await asyncio.wait_for(handle.result(), timeout=20)
+
     async def fail(self, run: GraphRunRef, **limits: Any) -> BaseException:
         """What the run failed with: the failure that ended the workflow."""
         with pytest.raises(WorkflowFailureError) as failed:
@@ -265,7 +279,7 @@ async def serving_runs(
     worker = Worker(
         client,
         task_queue=task_queue,
-        workflows=[ScriptedAgent, WritesToTheDatabase],
+        workflows=[ScriptedAgent, PassesTheDriverThrough, WritesToTheDatabase],
         activities=[activities.run_graph_step, activities.run_action],
     )
     async with worker:

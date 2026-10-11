@@ -16,9 +16,13 @@ fields at fault, never the values, which may hold a secret or an instruction.
 This module runs nothing and knows no workflow engine, graph framework or
 database. Which activity runs an action, how often it is retried and whether a
 person must approve it are the worker's.
-"""
 
-from __future__ import annotations
+The annotations of the dataclasses are real types, not text: a workflow decodes
+their values in the workflow sandbox, whose data converter evaluates the
+annotations of a class in the namespace of its module, and that module is not
+always the one the sandbox has loaded. Hence no ``from __future__ import
+annotations`` here or in ``steps.py``.
+"""
 
 from collections.abc import Iterable
 from dataclasses import dataclass

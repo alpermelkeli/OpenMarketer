@@ -28,14 +28,10 @@ It raises ``ActivityError`` when a step fails or an action ends the run,
 through. It records nothing on a run and does not forget its checkpoints: what
 a run owes when it ends is the agent's workflow.
 
-This is workflow code, loaded by the sandbox, and an agent's workflow module
-imports it plainly, not inside ``workflow.unsafe.imports_passed_through()``.
-The sandbox then loads the driver itself, and the types the driver passes
-through (core's outcomes and requests) become known to the sandbox. The data
-converter needs that to read a step's outcome in the workflow: it evaluates the
-annotations of those types in their own modules. Passing the driver through
-instead leaves those modules unknown, and every result of a step fails to
-decode: the workflow task fails and is retried, and the run hangs.
+This is workflow code, loaded by the sandbox. An agent's workflow module may
+import it plainly or inside ``workflow.unsafe.imports_passed_through()``: core's
+outcomes and requests, which the workflow decodes, carry real annotations
+(see ``actions.py``), so the data converter reads them either way.
 """
 
 from __future__ import annotations

@@ -12,10 +12,9 @@ here, and not with the graph framework that raises them, so that the worker can
 tell them apart from a failure of the database or of a model without loading
 the framework.
 
-This module takes no step: how one is taken is in ``langgraph_steps.py``.
+This module takes no step: how one is taken is in ``langgraph_steps.py``. Its
+annotations are real types, not text, for the reason given in ``actions.py``.
 """
-
-from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
@@ -48,11 +47,11 @@ class StepOutcome:
             raise ValueError("a step either finished with an output or waits for an action")
 
     @classmethod
-    def finished(cls, output: dict[str, Any]) -> StepOutcome:
+    def finished(cls, output: dict[str, Any]) -> "StepOutcome":
         return cls(output=output, action=None)
 
     @classmethod
-    def waiting_for(cls, action: ActionRequest) -> StepOutcome:
+    def waiting_for(cls, action: ActionRequest) -> "StepOutcome":
         return cls(output=None, action=action)
 
 

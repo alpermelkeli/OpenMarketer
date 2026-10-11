@@ -14,10 +14,8 @@ from typing import Any
 
 from temporalio import workflow
 
-# The driver and the workflow support are imported plainly, so that the sandbox loads them itself:
-# what they pass through (core's types, the vocabulary) is then known to the sandbox, which the
-# data converter needs to read a step's outcome in the workflow. Passing the driver through as
-# well leaves those types unknown to it, and the workflow task fails decoding every result.
+# The driver and the workflow support are imported plainly here; ``scripted_passthrough_agent.py``
+# imports the driver through the sandbox, and the tests run both.
 from openmarketer_worker.agent_runtime.driver import run_graph_with_actions
 from openmarketer_worker.agent_runtime.workflow_support import database_write
 

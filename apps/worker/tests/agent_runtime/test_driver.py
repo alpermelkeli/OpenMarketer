@@ -109,6 +109,14 @@ async def test_graph_is_told_what_came_of_each_action_by_the_id_it_asked_with(ru
     ]
 
 
+async def test_workflow_may_import_the_driver_through_the_sandbox(runtime, serving):
+    send, publish = ScriptedAction([{"message_id": "m-1"}]), ScriptedAction()
+    graph, run = ScriptedGraph(SEND_THEN_PUBLISH), some_run()
+    async with serving(runtime(graph, routes_of(send, publish))) as execution:
+        output = await execution.finish_with_the_driver_passed_through(run)
+    assert [answer["succeeded"] for answer in output["answers"]] == [True, True]
+
+
 async def test_graph_that_asks_for_nothing_finishes_after_one_step(runtime, serving):
     send, publish = ScriptedAction(), ScriptedAction()
     graph = ScriptedGraph([])

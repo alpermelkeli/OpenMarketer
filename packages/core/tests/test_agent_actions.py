@@ -205,6 +205,18 @@ def test_step_with_neither_an_output_nor_an_action_is_refused():
         StepOutcome(output=None, action=None)
 
 
+# ---------------------------------------------- what a workflow decodes is typed
+@pytest.mark.parametrize(
+    "decoded",
+    [ActionRequest, ActionOutcome, StepOutcome, steps.GraphRunRef],
+    ids=lambda c: c.__name__,
+)
+def test_type_a_workflow_decodes_has_annotations_that_are_types_not_text(decoded):
+    # The workflow sandbox's data converter evaluates text annotations in the namespace of the
+    # class's module, which may not be the module the sandbox has loaded: the run then hangs.
+    assert not any(isinstance(annotation, str) for annotation in decoded.__annotations__.values())
+
+
 # ---------------------------------------------------------------- thread names
 RUN_ID = uuid.UUID("0b7e4c1a-5f3d-4e8a-9c21-6d1f8a7b2e90")
 
