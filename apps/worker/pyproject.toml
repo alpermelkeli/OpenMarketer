@@ -7,6 +7,7 @@ license = "Apache-2.0"
 dependencies = [
     "openmarketer-core",
     "openmarketer-extractors",
+    "pydantic>=2",
     "sqlalchemy>=2",
     "temporalio>=1.34.0",
 ]
