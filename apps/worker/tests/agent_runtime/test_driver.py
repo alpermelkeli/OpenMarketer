@@ -236,14 +236,14 @@ async def test_step_tried_again_after_it_applied_an_outcome_does_not_run_the_act
 
 
 async def test_step_is_tried_again_until_the_attempt_that_holds_the_thread_returns(
-    runtime, serving, checkpoint_access
+    runtime, serving, checkpoints
 ):
     patient = replace(STEP_LIMITS, max_attempts=10)
     graph, run = ScriptedGraph([]), some_run()
     async with serving(
         runtime(graph, routes_of(ScriptedAction(), ScriptedAction()), patient)
     ) as execution:
-        with checkpoint_access.of_attempt(thread_of(run)):
+        with checkpoints.of_attempt(thread_of(run)):
             handle = await execution.start(run, policy=patient)
             await asyncio.sleep(1.5)
             assert not graph.advanced

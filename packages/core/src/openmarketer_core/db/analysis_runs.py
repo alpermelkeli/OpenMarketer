@@ -47,6 +47,7 @@ from sqlalchemy import Select, func, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.db.models import (
     ANALYSIS_ERROR_MAX_LENGTH,
     AnalysisRunRecord,
@@ -61,11 +62,13 @@ UNFINISHED_RUN_INDEX = "uq_analysis_run_project_id_unfinished"
 FINISHED = (AnalysisRunStatus.SUCCEEDED, AnalysisRunStatus.FAILED)
 
 
+# The kind of run an analysis is, in the name of its thread (``agent_runtime.threads``).
+ANALYSIS_RUN_KIND = "analysis-run"
 # What the name of every thread of an analysis run starts with. The checkpoint tables are
 # shared by every graph, and a thread's name is all they know of it; the kind in front
 # says whose it is. A colon ends it because no run id holds one, and there is no ``_`` or
 # ``%`` in it, which a pattern match would read as wildcards.
-ANALYSIS_RUN_THREADS = "analysis-run:"
+ANALYSIS_RUN_THREADS = f"{ANALYSIS_RUN_KIND}:"
 
 
 def run_thread_id(run_id: uuid.UUID) -> str:
@@ -74,7 +77,7 @@ def run_thread_id(run_id: uuid.UUID) -> str:
     ``db/checkpoint_cleanup.py`` finds the threads of analysis runs, and the run
     of each, by the same prefix.
     """
-    return f"{ANALYSIS_RUN_THREADS}{run_id}"
+    return thread_id(ANALYSIS_RUN_KIND, run_id)
 
 
 class AnalysisRunNotFound(Exception):

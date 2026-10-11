@@ -91,7 +91,7 @@ async def test_step_with_the_outcome_of_the_action_goes_on_to_the_end(runtime):
     assert finished.output["answers"][0]["result"] == {"message_id": "m-1"}
 
 
-async def test_step_gives_the_graph_the_thread_of_its_run(runtime, checkpoint_access):
+async def test_step_gives_the_graph_the_thread_of_its_run(runtime, checkpoints):
     seen: list[str] = []
 
     class Recording(ScriptedGraph):
@@ -159,11 +159,11 @@ async def test_failure_of_the_database_is_reported_as_one_worth_another_attempt(
 
 
 async def test_step_is_refused_while_an_earlier_attempt_holds_the_thread(
-    runtime, checkpoint_access, caplog
+    runtime, checkpoints, caplog
 ):
     graph, run = ScriptedGraph([]), some_run()
     activities = runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))
-    with checkpoint_access.of_attempt(thread_of(run)):
+    with checkpoints.of_attempt(thread_of(run)):
         failure = await refused(activities.run_graph_step, StepInput(run, None))
     assert (failure.type, failure.non_retryable) == (ATTEMPT_STILL_RUNNING, False)
     assert failure.message == EARLIER_ATTEMPT_RUNNING

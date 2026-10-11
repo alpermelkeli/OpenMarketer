@@ -18,6 +18,7 @@ from openmarketer_core.llm import RouterChatModel
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
+from openmarketer_worker.agent_runtime.activity_support import checkpoints_in
 from openmarketer_worker.repository_analyzer import steps, wiring
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy, longest_analysis_seconds
 from openmarketer_worker.repository_analyzer.workflow import AnalyzeRepository
@@ -79,9 +80,7 @@ def test_each_attempt_gets_a_chat_model_of_its_own(analysed_with, run_checkpoint
 
 
 def test_database_password_is_not_in_the_text_of_what_reaches_the_checkpoints():
-    checkpoints = wiring.checkpoints_in(
-        "postgresql+psycopg://app:hunter2@db.internal:5432/marketer"
-    )
+    checkpoints = checkpoints_in("postgresql+psycopg://app:hunter2@db.internal:5432/marketer")
     shown = [
         repr(checkpoints),
         str(checkpoints),

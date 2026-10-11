@@ -51,6 +51,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from openmarketer_worker.agent_runtime.vocabulary import DatabaseWritePolicy
+
 
 @dataclass(frozen=True)
 class AnalysisPolicy:
@@ -64,17 +66,6 @@ class AnalysisPolicy:
     @property
     def heartbeat_every_seconds(self) -> float:
         return self.heartbeat_timeout_seconds / 3
-
-
-@dataclass(frozen=True)
-class DatabaseWritePolicy:
-    """Limits of an activity that is one short database transaction."""
-
-    attempt_timeout_seconds: float
-    retry_after_seconds: float
-    max_retry_wait_seconds: float
-    max_attempts: int = 0  # 0: no limit on attempts, only on time
-    give_up_after_seconds: float | None = None
 
 
 # Five attempts over about eight seconds: long enough for the request that created the

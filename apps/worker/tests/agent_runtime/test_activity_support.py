@@ -188,28 +188,26 @@ def test_access_does_not_show_the_password_of_its_url():
     assert PASSWORD not in repr(access.forget)
 
 
-def test_attempt_holds_the_thread_and_another_is_refused_until_it_ends(checkpoint_access):
-    with checkpoint_access.of_attempt("scripted-agent:held") as held:
+def test_attempt_holds_the_thread_and_another_is_refused_until_it_ends(checkpoints):
+    with checkpoints.of_attempt("scripted-agent:held") as held:
         assert held.thread_id == "scripted-agent:held"
-        with pytest.raises(AttemptInProgress), checkpoint_access.of_attempt("scripted-agent:held"):
+        with pytest.raises(AttemptInProgress), checkpoints.of_attempt("scripted-agent:held"):
             pass
-    with checkpoint_access.of_attempt("scripted-agent:held"):
+    with checkpoints.of_attempt("scripted-agent:held"):
         pass
 
 
-def test_forgetting_removes_the_checkpoints_of_the_thread_and_only_that_thread(
-    checkpoint_access, engine
-):
+def test_forgetting_removes_the_checkpoints_of_the_thread_and_only_that_thread(checkpoints, engine):
     def stored(thread: str) -> int:
         with engine.connect() as conn:
             query = text("SELECT count(*) FROM checkpoints WHERE thread_id = :thread")
             return conn.execute(query, {"thread": thread}).scalar_one()
 
     for thread in ("scripted-agent:forgotten", "scripted-agent:kept"):
-        with checkpoint_access.of_attempt(thread) as checkpoints:
+        with checkpoints.of_attempt(thread) as held:
             config = {"configurable": {"thread_id": thread, "checkpoint_ns": ""}}
-            checkpoints.store.put(config, empty_checkpoint(), {"source": "loop", "step": 1}, {})
-    checkpoint_access.forget("scripted-agent:forgotten")
+            held.store.put(config, empty_checkpoint(), {"source": "loop", "step": 1}, {})
+    checkpoints.forget("scripted-agent:forgotten")
     assert (stored("scripted-agent:forgotten"), stored("scripted-agent:kept")) == (0, 1)
 
 

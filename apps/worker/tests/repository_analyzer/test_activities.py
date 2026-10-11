@@ -27,13 +27,19 @@ from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError
 from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.pipeline import RepositoryAnalysis
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess
+from openmarketer_worker.agent_runtime.vocabulary import (
+    ATTEMPT_STILL_RUNNING,
+    DATABASE_UNAVAILABLE,
+    UNEXPECTED,
+)
 from openmarketer_worker.checkpoint_cleanup import (
     CheckpointCleanup,
     keep_removing_leftover_checkpoints,
     remove_leftover_checkpoints,
 )
 from openmarketer_worker.repository_analyzer import steps
-from openmarketer_worker.repository_analyzer.activities import AnalysisActivities, CheckpointAccess
+from openmarketer_worker.repository_analyzer.activities import AnalysisActivities
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy
 
 POLICY = AnalysisPolicy(attempt_timeout_seconds=600, max_attempts=3)
@@ -187,7 +193,7 @@ async def test_attempt_is_refused_while_an_earlier_one_is_still_running(
         activities_with(scripted(meanwhile=second_attempt)).analyse_and_store, started
     )
     (refusal,) = refusals
-    assert (refusal.type, refusal.non_retryable) == (steps.ATTEMPT_STILL_RUNNING, False)
+    assert (refusal.type, refusal.non_retryable) == (ATTEMPT_STILL_RUNNING, False)
     assert refusal.message == steps.EARLIER_ATTEMPT_RUNNING
     assert second.cloned == []
 
@@ -220,12 +226,12 @@ async def test_of_two_attempts_that_both_analysed_one_result_is_stored(
 async def test_result_of_a_run_that_failed_meanwhile_is_not_stored(
     activities, activities_with, scripted, started, database
 ):
-    gave_up = steps.RunFailure(run=started, error=steps.TIMED_OUT)
+    gave_up = steps.RunFailure(run=started, error=steps.ANALYSIS_TEXTS.timed_out)
     late = scripted(meanwhile=lambda: activities.record_failure(gave_up))
     failure = await refused(activities_with(late).analyse_and_store, started)
     assert (failure.type, failure.non_retryable) == (steps.RUN_UNAVAILABLE, True)
     assert database.profile_versions(started) == 0
-    assert database.run(started).error == steps.TIMED_OUT
+    assert database.run(started).error == steps.ANALYSIS_TEXTS.timed_out
 
 
 async def test_analysis_from_another_workspace_touches_nothing(
@@ -325,7 +331,10 @@ async def test_unexpected_error_is_reported_without_its_detail(failing, started)
     failure = await refused(
         failing(RuntimeError("/Users/someone/secret")).analyse_and_store, started
     )
-    assert (failure.type, failure.message) == (steps.UNEXPECTED, steps.STOPPED_UNEXPECTEDLY)
+    assert (failure.type, failure.message) == (
+        UNEXPECTED,
+        steps.ANALYSIS_TEXTS.stopped_unexpectedly,
+    )
     assert not failure.non_retryable
     assert failure.__cause__ is None
 
@@ -336,7 +345,7 @@ async def test_result_the_database_refuses_is_reported_without_its_detail(
     # PostgreSQL stores no NUL character in a text column.
     unstorable = scripted(ref="main\x00")
     failure = await refused(activities_with(unstorable).analyse_and_store, started)
-    assert (failure.type, failure.message) == (steps.DATABASE_UNAVAILABLE, steps.NOT_STORED)
+    assert (failure.type, failure.message) == (DATABASE_UNAVAILABLE, steps.NOT_STORED)
     assert database.profile_versions(started) == 0
     assert database.run(started).status is AnalysisRunStatus.RUNNING
 
@@ -407,7 +416,7 @@ async def test_refused_analysis_leaves_no_checkpoints_once_its_failure_is_record
 async def test_attempt_still_running_after_its_run_failed_leaves_no_checkpoints(
     activities, activities_with, scripted, started, database
 ):
-    gave_up = steps.RunFailure(run=started, error=steps.TIMED_OUT)
+    gave_up = steps.RunFailure(run=started, error=steps.ANALYSIS_TEXTS.timed_out)
     # The scripted attempt writes a checkpoint after the failure was recorded.
     late = scripted(meanwhile=lambda: activities.record_failure(gave_up))
     await refused(activities_with(late).analyse_and_store, started)

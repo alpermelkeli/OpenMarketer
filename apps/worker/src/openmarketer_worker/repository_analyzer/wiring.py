@@ -18,7 +18,6 @@ imports it: it loads the activities, and with them code the sandbox refuses.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from contextlib import AbstractContextManager
 from datetime import timedelta
 from pathlib import Path
 
@@ -26,11 +25,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.db.checkpoint_cleanup import remove_checkpoints_of_analysis_runs
 from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.graph_checkpoints.postgres import (
-    driver_connection_string,
-    forget_checkpoints,
-    run_checkpoints,
-)
 from openmarketer_core.llm import RouterChatModel
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ModelRouter
 from openmarketer_core.repository_analysis.extraction import discover_extractors
@@ -38,12 +32,9 @@ from openmarketer_core.repository_analysis.intake import RepositoryTokens
 from openmarketer_core.repository_analysis.pipeline import RepositoryAnalysis, analyze_repository
 from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
 from openmarketer_worker import AgentRegistration
+from openmarketer_worker.agent_runtime.activity_support import checkpoints_in
 from openmarketer_worker.checkpoint_cleanup import CheckpointCleanup
-from openmarketer_worker.repository_analyzer.activities import (
-    AnalyseRepository,
-    AnalysisActivities,
-    CheckpointAccess,
-)
+from openmarketer_worker.repository_analyzer.activities import AnalyseRepository, AnalysisActivities
 from openmarketer_worker.repository_analyzer.policy import (
     AnalysisPolicy,
     longest_analysis_seconds,
@@ -119,19 +110,3 @@ def analysis_with_configured_models(environ: Mapping[str, str]) -> AnalyseReposi
         )
 
     return analyse
-
-
-def checkpoints_in(database_url: str) -> CheckpointAccess:
-    """The checkpoints of analysis runs, kept in the database the runs themselves are in."""
-    # Asked for here, so a URL the checkpoint store cannot use stops the worker and not every run.
-    driver_connection_string(database_url)
-
-    # Functions, not ``functools.partial``: the text of a partial shows its arguments,
-    # and the URL holds the password.
-    def of_attempt(thread_id: str) -> AbstractContextManager[RunCheckpoints]:
-        return run_checkpoints(database_url, thread_id)
-
-    def forget(thread_id: str) -> None:
-        forget_checkpoints(database_url, thread_id)
-
-    return CheckpointAccess(of_attempt=of_attempt, forget=forget)

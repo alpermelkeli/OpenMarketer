@@ -44,8 +44,7 @@ from openmarketer_core.repository_analysis.extraction import ExtractionResult
 from openmarketer_core.repository_analysis.intake import IntakeResult, RepoFiles, Snapshot
 from openmarketer_core.repository_analysis.pipeline import RepositoryAnalysis, analyze_repository
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
-from openmarketer_worker.repository_analyzer import wiring
-from openmarketer_worker.repository_analyzer.activities import CheckpointAccess
+from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, checkpoints_in
 
 DEV_STACK_TEMPORAL = "localhost:7233"
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
@@ -208,7 +207,7 @@ def sessions(engine) -> sessionmaker[Session]:
 @pytest.fixture
 def checkpoints(engine) -> CheckpointAccess:
     """The checkpoints of runs in the test database, reached the way the worker reaches them."""
-    return wiring.checkpoints_in(engine.url.render_as_string(hide_password=False))
+    return checkpoints_in(engine.url.render_as_string(hide_password=False))
 
 
 @dataclass(frozen=True)

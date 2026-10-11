@@ -22,13 +22,10 @@ stores the failure's stack trace, which names source files and lines only.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import tempfile
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -58,6 +55,17 @@ from openmarketer_core.repository_analysis.pipeline import (
     failure_message,
 )
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_worker.agent_runtime.activity_support import (
+    CheckpointAccess,
+    failure,
+    forget_quietly,
+    run_with_heartbeats,
+    worded_failures,
+)
+from openmarketer_worker.agent_runtime.vocabulary import (
+    ATTEMPT_STILL_RUNNING,
+    DATABASE_UNAVAILABLE,
+)
 from openmarketer_worker.repository_analyzer import steps
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy
 
@@ -66,19 +74,6 @@ logger = logging.getLogger(__name__)
 # Analyse the repository at a URL, cloning it into the given folder and continuing
 # from the given checkpoints of the run.
 AnalyseRepository = Callable[[str, Path, RunCheckpoints], RepositoryAnalysis]
-
-
-@dataclass(frozen=True)
-class CheckpointAccess:
-    """How the activities reach the checkpoints of a run, by its thread id.
-
-    Built from the database URL when the worker starts (``wiring.py``), from
-    core's ``run_checkpoints`` and ``forget_checkpoints``.
-    """
-
-    # The checkpoints for one attempt; refuses with ``AttemptInProgress`` while another has them.
-    of_attempt: Callable[[str], AbstractContextManager[RunCheckpoints]]
-    forget: Callable[[str], None]
 
 
 class AnalysisActivities:
@@ -97,7 +92,7 @@ class AnalysisActivities:
     @activity.defn(name=steps.START_RUN)
     def start_run(self, run: AnalyzeRepositoryInput) -> AnalysisPolicy:
         """Mark the run as picked up and say how this worker limits the analysis."""
-        with _worded_failures(run):
+        with worded_failures(steps.ANALYSIS_TEXTS, subject=_subject(run)):
             try:
                 with transaction(self._sessions) as session:
                     mark_run_started(session, **_scope(run))
@@ -120,21 +115,11 @@ class AnalysisActivities:
         alive, not that the analysis is making progress; the timeout of the
         attempt bounds that.
         """
-        work = asyncio.create_task(asyncio.to_thread(self._analyse_and_store, run))
-        # When this coroutine is cancelled nobody else collects the thread's outcome.
-        work.add_done_callback(lambda finished: finished.cancelled() or finished.exception())
-        try:
-            while not work.done():
-                activity.heartbeat()
-                await asyncio.wait({work}, timeout=self._policy.heartbeat_every_seconds)
-        except asyncio.CancelledError:
-            # A thread cannot be stopped. Whatever it still does is settled by the run's
-            # transition rules: a result for a run already marked failed is not stored.
-            logger.warning(
-                "analysis run %s was cancelled while its analysis was running", run.run_id
-            )
-            raise
-        work.result()
+        await run_with_heartbeats(
+            lambda: self._analyse_and_store(run),
+            every_seconds=self._policy.heartbeat_every_seconds,
+            subject=_subject(run),
+        )
 
     @activity.defn(name=steps.RECORD_FAILURE)
     def record_failure(self, failed: steps.RunFailure) -> None:
@@ -142,7 +127,7 @@ class AnalysisActivities:
 
         The run is over then, whichever way, and its checkpoints are forgotten.
         """
-        with _worded_failures(failed.run):
+        with worded_failures(steps.ANALYSIS_TEXTS, subject=_subject(failed.run)):
             try:
                 with transaction(self._sessions) as session:
                     mark_run_failed(session, **_scope(failed.run), error=failed.error)
@@ -154,10 +139,12 @@ class AnalysisActivities:
             except AnalysisRunFinished as e:
                 # Nothing to record: its analysis did store a result, or it failed before.
                 logger.info("failure of analysis run %s not recorded: %s", failed.run.run_id, e)
-            self._forget_checkpoints(failed.run)
+            forget_quietly(
+                self._checkpoints, run_thread_id(failed.run.run_id), subject=_subject(failed.run)
+            )
 
     def _analyse_and_store(self, run: AnalyzeRepositoryInput) -> None:
-        with _worded_failures(run):
+        with worded_failures(steps.ANALYSIS_TEXTS, subject=_subject(run)):
             try:
                 # Held before the run is read: an attempt that was given up on may be
                 # about to store its result, and then there is nothing left to analyse.
@@ -165,9 +152,9 @@ class AnalysisActivities:
                     self._store_analysis_once(run, checkpoints)
             except AttemptInProgress:
                 logger.info("analysis run %s: an earlier attempt is still running", run.run_id)
-                raise _failure(steps.ATTEMPT_STILL_RUNNING, steps.EARLIER_ATTEMPT_RUNNING) from None
+                raise _failure(ATTEMPT_STILL_RUNNING, steps.EARLIER_ATTEMPT_RUNNING) from None
             # Reached only when the run has succeeded, now or in an earlier attempt.
-            self._forget_checkpoints(run)
+            forget_quietly(self._checkpoints, run_thread_id(run.run_id), subject=_subject(run))
 
     def _store_analysis_once(
         self, run: AnalyzeRepositoryInput, checkpoints: RunCheckpoints
@@ -227,47 +214,17 @@ class AnalysisActivities:
                 return
             # The run was recorded failed while this attempt ran, and its checkpoints were
             # forgotten then; this removes what the attempt has written since.
-            self._forget_checkpoints(run)
+            forget_quietly(self._checkpoints, run_thread_id(run.run_id), subject=_subject(run))
             raise _failure(steps.RUN_UNAVAILABLE, str(e)) from None
         except (AnalysisRunNotFound, ProjectNotFound) as e:
             raise _failure(steps.RUN_UNAVAILABLE, str(e)) from None
         except DatabaseError:
             logger.exception("the profile of analysis run %s was not stored", run.run_id)
-            raise _failure(steps.DATABASE_UNAVAILABLE, steps.NOT_STORED) from None
+            raise _failure(DATABASE_UNAVAILABLE, steps.NOT_STORED) from None
 
     def _succeeded(self, run: AnalyzeRepositoryInput) -> bool:
         with transaction(self._sessions) as session:
             return analysis_run(session, **_scope(run)).status is AnalysisRunStatus.SUCCEEDED
-
-    def _forget_checkpoints(self, run: AnalyzeRepositoryInput) -> None:
-        """Forget the checkpoints of a run that is over; failing to is logged, not raised."""
-        try:
-            self._checkpoints.forget(run_thread_id(run.run_id))
-        except DatabaseError as e:
-            logger.warning(
-                "checkpoints of analysis run %s were not forgotten, the cleanup removes them: %s",
-                run.run_id,
-                e,
-            )
-
-
-@contextmanager
-def _worded_failures(run: AnalyzeRepositoryInput) -> Iterator[None]:
-    """Let only failures leave an activity whose type and message were chosen here.
-
-    Temporal stores whatever an activity raises. An error nobody worded is
-    logged and replaced, so the history never holds a message written for a log.
-    """
-    try:
-        yield
-    except ApplicationError:
-        raise
-    except DatabaseError:
-        logger.exception("analysis run %s: the database could not be used", run.run_id)
-        raise _failure(steps.DATABASE_UNAVAILABLE, steps.DATABASE_FAILED) from None
-    except Exception:  # noqa: BLE001  (activity boundary, see the docstring)
-        logger.exception("analysis run %s stopped on an unexpected error", run.run_id)
-        raise _failure(steps.UNEXPECTED, steps.STOPPED_UNEXPECTEDLY) from None
 
 
 def _scope(run: AnalyzeRepositoryInput) -> dict[str, uuid.UUID]:
@@ -278,5 +235,11 @@ def _scope(run: AnalyzeRepositoryInput) -> dict[str, uuid.UUID]:
     }
 
 
+def _subject(run: AnalyzeRepositoryInput) -> str:
+    """How the log names the run's work."""
+    return f"analysis run {run.run_id}"
+
+
 def _failure(kind: str, message: str) -> ApplicationError:
-    return ApplicationError(message, type=kind, non_retryable=kind in steps.NOT_RETRIED)
+    """The failure of ``kind``, which is not tried again when the analysis cannot go on."""
+    return failure(kind, message, non_retryable=kind in steps.NOT_RETRIED)

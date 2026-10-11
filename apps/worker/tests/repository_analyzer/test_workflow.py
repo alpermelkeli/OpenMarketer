@@ -199,7 +199,9 @@ async def test_failure_nobody_worded_is_recorded_without_its_message(
     leaking = ScriptedActivities(policy=once, analysis_outcomes=[ValueError("/tmp/clone-1234")])
     async with serving(temporal, task_queue, leaking) as execution:
         await execution.fail(some_run())
-    assert [failed.error for failed in leaking.recorded] == [steps.STOPPED_UNEXPECTEDLY]
+    assert [failed.error for failed in leaking.recorded] == [
+        steps.ANALYSIS_TEXTS.stopped_unexpectedly
+    ]
 
 
 # ----------------------------------------------------- timeouts and cancellation
@@ -210,7 +212,7 @@ async def test_attempt_that_takes_too_long_is_recorded_as_timed_out(temporal, ta
     hanging = ScriptedActivities(policy=impatient, analysis_outcomes=[5])
     async with serving(temporal, task_queue, hanging) as execution:
         await execution.fail(some_run())
-    assert [failed.error for failed in hanging.recorded] == [steps.TIMED_OUT]
+    assert [failed.error for failed in hanging.recorded] == [steps.ANALYSIS_TEXTS.timed_out]
 
 
 async def test_worker_that_stops_sending_heartbeats_is_noticed_before_the_attempt_ends(
@@ -220,7 +222,7 @@ async def test_worker_that_stops_sending_heartbeats_is_noticed_before_the_attemp
     hanging = ScriptedActivities(policy=silent, analysis_outcomes=[5])
     async with serving(temporal, task_queue, hanging) as execution:
         await execution.fail(some_run())
-    assert [failed.error for failed in hanging.recorded] == [steps.WORKER_STOPPED]
+    assert [failed.error for failed in hanging.recorded] == [steps.ANALYSIS_TEXTS.worker_stopped]
 
 
 async def test_attempt_lost_with_its_worker_is_made_again(temporal, task_queue, some_run):
@@ -245,4 +247,4 @@ async def test_cancelled_workflow_still_records_the_failure(temporal, task_queue
         with pytest.raises(WorkflowFailureError) as stopped:
             await handle.result()
     assert isinstance(stopped.value.__cause__, CancelledError)
-    assert activities.recorded == [steps.RunFailure(run=run, error=steps.CANCELLED)]
+    assert activities.recorded == [steps.RunFailure(run=run, error=steps.ANALYSIS_TEXTS.cancelled)]
