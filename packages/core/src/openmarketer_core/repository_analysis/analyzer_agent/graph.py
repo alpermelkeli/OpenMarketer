@@ -8,9 +8,10 @@ router), and repository access goes through ``RepoTools``.
                  ^______________|  (until a submitted profile is accepted)
 
 Collaborators are bound when the graph is built, so the state holds only
-plain data and can be checkpointed. With a ``ResumableRun`` the graph saves a
-checkpoint after each step, and a later attempt at the same run continues
-from the last one. This module does not open the checkpoint store
+plain data and can be checkpointed. With a ``ResumableRun`` the graph is taken
+step by step on the run's thread (``agent_runtime.langgraph_steps.GraphThread``),
+which saves a checkpoint after each step, and a later attempt at the same run
+continues from the last one. This module does not open the checkpoint store
 (``graph_checkpoints/postgres.py`` does) and does not decide when a run's checkpoints are
 forgotten: its caller does, when the run is over.
 """
@@ -26,8 +27,9 @@ from typing import Annotated, Any, TypedDict
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import StateSnapshot
 
+from openmarketer_core.agent_runtime.langgraph_steps import GraphThread, ThreadState
+from openmarketer_core.agent_runtime.steps import StepOutcome
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatModel
 from openmarketer_core.profile import ProductProfile
@@ -46,8 +48,6 @@ from openmarketer_core.repository_analysis.intake import RepoFiles
 logger = logging.getLogger(__name__)
 
 FORCE_SUBMIT = {"type": "function", "function": {"name": rules.SUBMIT}}
-# The checkpoint of a finished step is in the store before the next step starts.
-CHECKPOINT_DURABILITY = "sync"
 
 
 class AnalyzerState(TypedDict):
@@ -197,24 +197,23 @@ def analyze(
         final = graph.invoke(initial, {"recursion_limit": recursion_limit})
         return _analysis(final, Resumption.FRESH)
 
-    thread_id = resume.checkpoints.thread_id
-    graph = build_graph(model, tools, limits, checkpoints=resume.checkpoints.store).with_config(
-        {"recursion_limit": recursion_limit, "configurable": {"thread_id": thread_id}}
-    )
-    how = rules.resumption(_stored_progress(graph), resume.commit_sha)
+    graph = build_graph(model, tools, limits, checkpoints=resume.checkpoints.store)
+    thread = GraphThread(graph, resume.checkpoints, recursion_limit=recursion_limit)
+    stored = thread.state()
+    how = rules.resumption(_stored_progress(stored), resume.commit_sha)
     if how is Resumption.ALREADY_FINISHED:
-        return _analysis(_latest_checkpoint(graph).values, how)
+        return _analysis(stored.values, how)
     if how is Resumption.CONTINUED:
-        return _analysis(graph.invoke(None, durability=CHECKPOINT_DURABILITY), how)
+        return _analysis(_finished(thread.advance()), how)
     if how is Resumption.STARTED_OVER:
         logger.info(
             "checkpoints of thread %s are not of commit %s: starting over",
-            thread_id,
+            resume.checkpoints.thread_id,
             resume.commit_sha,
         )
-        resume.checkpoints.forget()
+        thread.forget()
     initial = _initial_state(files, facts, commit_sha=resume.commit_sha)
-    return _analysis(graph.invoke(initial, durability=CHECKPOINT_DURABILITY), how)
+    return _analysis(_finished(thread.advance(initial=initial)), how)
 
 
 def _initial_state(
@@ -236,20 +235,19 @@ def _initial_state(
     }
 
 
-def _latest_checkpoint(graph: AnalyzerGraph) -> StateSnapshot:
-    # A resumable graph is bound to its thread, and ``get_state`` still asks which one to read.
-    return graph.get_state(graph.config or {})
-
-
-def _stored_progress(graph: AnalyzerGraph) -> StoredProgress | None:
-    """What the latest checkpoint of the graph's thread says, or ``None`` when it has none."""
-    latest = _latest_checkpoint(graph)
-    if latest.created_at is None:
+def _stored_progress(stored: ThreadState) -> StoredProgress | None:
+    """What the latest checkpoint of the run's thread says, or ``None`` when it has none."""
+    if not stored.has_checkpoint:
         return None
     # A checkpoint from before the first step holds no state yet, so no commit either.
-    commit_sha = latest.values.get("commit_sha", "")
-    # Not ``latest.next``: it is also empty when a step ran and its checkpoint was not stored.
-    return StoredProgress(commit_sha=commit_sha, finished=latest.values.get("profile") is not None)
+    commit_sha = stored.values.get("commit_sha", "")
+    return StoredProgress(commit_sha=commit_sha, finished=stored.values.get("profile") is not None)
+
+
+def _finished(step: StepOutcome) -> dict[str, Any]:
+    """The final state of a step of the analyzer graph, which has no action to wait for."""
+    assert step.output is not None, "the analyzer graph asked for an action; it has none to ask for"
+    return step.output
 
 
 def _analysis(final: dict[str, Any], how: Resumption) -> Analysis:
