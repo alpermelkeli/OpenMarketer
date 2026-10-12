@@ -81,11 +81,17 @@ class ChatModel(Protocol):
 
 @dataclass
 class RouterChatModel:
-    """``ChatModel`` backed by the per-role model configuration."""
+    """``ChatModel`` backed by the per-role model configuration.
+
+    ``api_key`` is the provider's key for the calls of this model, for a caller that has
+    resolved one itself; without it the key is the one in the router's environment. It is
+    left out of ``repr``, which ends up in logs and tracebacks.
+    """
 
     router: ModelRouter
     transport: httpx.BaseTransport | None = None
     calls: list[ChatReply] = field(default_factory=list)
+    api_key: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, config_path: str | None = None) -> RouterChatModel:
@@ -111,7 +117,7 @@ class RouterChatModel:
             with httpx.Client(
                 timeout=self.router.resolve(role).timeout_s, transport=self.transport
             ) as client:
-                response = client.post(url, json=payload, headers=self.router.headers())
+                response = client.post(url, json=payload, headers=self.router.headers(self.api_key))
         except httpx.HTTPError as e:
             raise LLMError(f"request failed: {type(e).__name__}") from e
         if response.status_code != 200:

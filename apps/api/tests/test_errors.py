@@ -34,7 +34,10 @@ def client(app) -> TestClient:
 @pytest.mark.parametrize("method", ["GET", "POST"])
 def test_unreachable_database_is_reported_without_connection_details(app, client, method):
     app.state.services = Services(
-        sessions=session_factory(UNREACHABLE_URL), analysis_workflows=NoWorkflows()
+        sessions=session_factory(UNREACHABLE_URL),
+        analysis_workflows=NoWorkflows(),
+        environment={},
+        credential_cipher=None,
     )
     url = RUN_URL if method == "GET" else RUN_URL.rsplit("/", 1)[0]
     response = client.request(method, url)

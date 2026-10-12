@@ -10,6 +10,9 @@
  * given. It deliberately is not a general proxy: only the routes listed in
  * `ALLOWED_ROUTES` exist, the only query parameters are the two that page a list,
  * and the upstream URL is built from validated parts, never from the incoming URL.
+ *
+ * A request body can hold a secret (a credential being stored). It is passed on to
+ * the API and nowhere else: nothing here logs it or puts it in an answer.
  */
 
 import type { paths } from "@/lib/api/schema";
@@ -22,11 +25,13 @@ export const MAX_BODY_BYTES = 1_000_000;
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const VERSION = "[1-9][0-9]{0,8}";
+// The form every credential's name has in the API. Nothing else reaches it as one.
+const CREDENTIAL_NAME = "[a-z][a-z0-9_]{0,63}";
 
 // The whole of a Host header that names this machine, as the API itself matches it.
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i;
 
-type Method = "GET" | "POST";
+type Method = "GET" | "POST" | "PUT" | "DELETE";
 
 type AllowedRoute = {
   method: Method;
@@ -40,7 +45,8 @@ type AllowedRoute = {
 function route(method: Method, template: keyof paths, paged = false): AllowedRoute {
   const pattern = template
     .replace(/\{(project_id|run_id)\}/g, UUID)
-    .replace(/\{version\}/g, VERSION);
+    .replace(/\{version\}/g, VERSION)
+    .replace(/\{name\}/g, CREDENTIAL_NAME);
   return { method, template, pattern: new RegExp(`^${pattern}$`), paged };
 }
 
@@ -58,6 +64,9 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/projects/{project_id}/profile/versions/{version}"),
   route("POST", "/v1/projects/{project_id}/profile/versions/{version}/edits"),
   route("POST", "/v1/projects/{project_id}/profile/versions/{version}/approval"),
+  route("GET", "/v1/settings/credentials"),
+  route("PUT", "/v1/settings/credentials/{name}"),
+  route("DELETE", "/v1/settings/credentials/{name}"),
 ];
 
 // What a page of a list may be asked for, as the contract has it: 1 to 100 items,
@@ -90,8 +99,8 @@ export class ProxyRefusal extends Error {
  * - `Sec-Fetch-Site`, when the browser sends it, must say the request was made by a
  *   page of this origin (or, for a read, typed into the address bar).
  * - `Origin`, when present, must be this origin. A request that changes something
- *   must carry it: browsers always send it with a POST, so its absence means the
- *   caller is not the dashboard.
+ *   (every method but GET) must carry it: browsers always send it with a POST, a
+ *   PUT or a DELETE, so its absence means the caller is not the dashboard.
  */
 export function assertFromDashboard(method: string, headers: Headers): void {
   const host = headers.get("host");
@@ -185,11 +194,17 @@ export function apiBaseUrl(configured: string | undefined): URL {
   return url;
 }
 
-/** The JSON body to forward, or none. Anything that is not JSON, or is too large, is refused. */
+/**
+ * The JSON body to forward, or none. Anything that is not JSON, or is too large, is
+ * refused, and so is a body sent with a DELETE, which the API takes none for.
+ */
 export async function readJsonBody(request: Request): Promise<string | undefined> {
   if (request.method === "GET") return undefined;
   const body = await request.text();
   if (body === "") return undefined;
+  if (request.method === "DELETE") {
+    throw new ProxyRefusal(400, "proxy_body_rejected", "a DELETE takes no request body");
+  }
   const mediaType = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
   if (mediaType !== "application/json") {
     throw new ProxyRefusal(415, "proxy_body_rejected", "a request body must be application/json");

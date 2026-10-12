@@ -25,6 +25,9 @@ OPERATIONS = {
         "post",
         "/v1/projects/{project_id}/profile/versions/{version}/approval",
     ),
+    "listCredentials": ("get", "/v1/settings/credentials"),
+    "setCredential": ("put", "/v1/settings/credentials/{name}"),
+    "removeCredential": ("delete", "/v1/settings/credentials/{name}"),
 }
 
 
@@ -118,6 +121,37 @@ def test_existing_project_of_a_conflict_is_an_optional_field_of_every_problem(sc
     assert problem["required"] == ["code", "message"]
     assert problem["properties"]["existing_project_id"]["format"] == "uuid"
     assert "anyOf" not in problem["properties"]["existing_project_id"]
+
+
+def test_credential_value_is_write_only_and_the_only_field_of_its_request(schema):
+    request = schema["components"]["schemas"]["SetCredentialRequest"]
+    assert set(request["properties"]) == {"value"}
+    assert request["additionalProperties"] is False
+    value = request["properties"]["value"]
+    assert (value["writeOnly"], value["format"]) == (True, "password")
+    assert not {"example", "examples", "default"} & set(value)
+
+
+def test_credential_responses_have_no_field_for_a_value(schema):
+    fields = {
+        name: set(schema["components"]["schemas"][name]["properties"])
+        for name in (
+            "CredentialListResponse",
+            "CredentialStatusResponse",
+            "StoredCredentialResponse",
+        )
+    }
+    assert fields == {
+        "CredentialListResponse": {"credentials", "can_store"},
+        "CredentialStatusResponse": {"name", "source", "environment_variable", "stored"},
+        "StoredCredentialResponse": {"set_at", "set_by"},
+    }
+
+
+def test_removing_a_credential_takes_no_request_body_and_answers_with_none(schema):
+    removal = schema["paths"]["/v1/settings/credentials/{name}"]["delete"]
+    assert "requestBody" not in removal
+    assert "content" not in removal["responses"]["204"]
 
 
 def test_routes_import_no_database_or_agent_code():

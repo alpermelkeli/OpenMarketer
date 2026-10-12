@@ -1,19 +1,22 @@
 "use client";
 
-import { FolderIcon, LayoutGridIcon } from "lucide-react";
+import { FolderIcon, LayoutGridIcon, SettingsIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { useProjects } from "@/lib/api/projects";
 import { cn } from "@/lib/utils";
 
-/** Navigation: all projects, then the most recent ones by name. */
+/** Navigation: all projects, the most recent ones by name, and the settings. */
 export function SidebarNav() {
   const pathname = usePathname();
   const { data: projects = [] } = useProjects();
 
   return (
-    <nav aria-label="Main" className="flex gap-1 overflow-x-auto px-3 pb-3 lg:flex-col lg:overflow-visible lg:pt-2">
+    <nav
+      aria-label="Main"
+      className="flex gap-1 overflow-x-auto px-3 pb-3 lg:flex-1 lg:flex-col lg:overflow-visible lg:pt-2"
+    >
       <NavLink href="/" current={pathname === "/"}>
         <LayoutGridIcon aria-hidden="true" />
         Projects
@@ -33,6 +36,13 @@ export function SidebarNav() {
           <span className="truncate">{project.name}</span>
         </NavLink>
       ))}
+      {/* Last in the sidebar, at its foot. In the top bar it stays at the right edge while the projects scroll. */}
+      <div className="sticky right-0 -mr-3 ml-auto bg-surface pr-3 pl-1 lg:static lg:m-0 lg:mt-auto lg:p-0">
+        <NavLink href="/settings" current={pathname.startsWith("/settings")}>
+          <SettingsIcon aria-hidden="true" />
+          Settings
+        </NavLink>
+      </div>
     </nav>
   );
 }

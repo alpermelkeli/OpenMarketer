@@ -6,7 +6,7 @@ an agent for:
 
 - ``initial_state``: what a run starts from, which is the run's own identifiers;
 - ``context``: what the nodes of one attempt are given: a chat model of the attempt's own,
-  the limits, and the run's repository through ``LocalClones``;
+  made for the run's workspace, the limits, and the run's repository through ``LocalClones``;
 - ``clone``: the handler of the action ``clone_repository``;
 - ``finish``: storing the profile and marking the run succeeded, both or neither;
 - ``release``: removing the run's clone once the run is over.
@@ -14,16 +14,22 @@ an agent for:
 ``WordedSteps`` wraps the steps of the graph so that what an analysis fails with leaves the
 activity as a failure with a type and a message that may be stored and shown.
 
-They hold no rule of their own: which repository may be cloned, what a profile must hold and
-how a run changes state are core's. What they add is what an activity owes the engine. A
-failure says whether another attempt is worth its cost, and none carries the clone's folder
-or its original error, which is logged. Everything can run twice without doing its work
-twice: a clone is the same clone, and a profile is stored once.
+They hold no rule of their own: which repository may be cloned, what a profile must hold,
+which value a credential has and how a run changes state are core's. What they add is what
+an activity owes the engine. A failure says whether another attempt is worth its cost, and
+none carries the clone's folder or its original error, which is logged. Everything can run
+twice without doing its work twice: a clone is the same clone, and a profile is stored once.
 
 A step keeps the run's checkpoints on a failure that will be tried again. They are forgotten
 by the runtime when the run ends; here only by an attempt that finds, when it is done, that
 its run was recorded failed meanwhile, for what it wrote since. Dependencies are handed in
 when the worker starts; nothing here reads the environment.
+
+No credential is kept here or put in the graph's state: the model of an attempt and the
+tokens of a clone are asked for with the run's workspace (``new_model``, ``tokens_of``),
+each time one is needed, so a key set from the dashboard is the one the next attempt uses.
+One that is set nowhere, or is stored and cannot be read (``CREDENTIAL_FAILURES``), ends the
+analysis in the words of its error, which name what to set and hold no value.
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
+from openmarketer_core.credentials.resolution import CredentialUnreadable
 from openmarketer_core.db.analysis_runs import (
     AnalysisRunFinished,
     AnalysisRunNotFound,
@@ -68,17 +75,24 @@ from openmarketer_core.repository_analysis.failures import ANALYSIS_FAILURES, fa
 from openmarketer_core.repository_analysis.intake import (
     IntakeError,
     RepoFiles,
+    RepositoryTokens,
     remote_repository_url,
 )
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 from openmarketer_worker.agent_runtime.activities import AgentGraph
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, forget_quietly
 from openmarketer_worker.agent_runtime.vocabulary import DATABASE_UNAVAILABLE
+from openmarketer_worker.credentials import ModelKeyNotSet
 from openmarketer_worker.repository_analyzer import steps
 from openmarketer_worker.repository_analyzer.activities import failure, scope_of, subject_of
-from openmarketer_worker.repository_analyzer.clones import LocalClones
+from openmarketer_worker.repository_analyzer.clones import LocalClones, TokensOfTheRun
 
 logger = logging.getLogger(__name__)
+
+# What the credentials of a run's workspace are refused with: the model provider's key is set
+# nowhere, or a stored value does not open. Neither passes by itself, and both are worded for
+# whoever asked for the analysis.
+CREDENTIAL_FAILURES = (ModelKeyNotSet, CredentialUnreadable)
 
 
 class AnalysisWork:
@@ -88,15 +102,22 @@ class AnalysisWork:
         checkpoints: CheckpointAccess,
         clones: LocalClones,
         *,
-        new_model: Callable[[], ChatModel],
+        new_model: Callable[[uuid.UUID], ChatModel],
+        tokens_of: Callable[[uuid.UUID], RepositoryTokens],
         extractors: Sequence[Extractor],
         limits: Limits,
     ) -> None:
-        """``new_model`` makes the chat model of one attempt: a model keeps what it served."""
+        """``new_model`` makes the chat model of one attempt: a model keeps what it served.
+
+        It is given the workspace of the run, as ``tokens_of`` is, which gives the tokens a
+        clone for a run of that workspace may carry. Either may raise one of
+        ``CREDENTIAL_FAILURES``, which ends the analysis.
+        """
         self._sessions = sessions
         self._checkpoints = checkpoints
         self._clones = clones
         self._new_model = new_model
+        self._tokens_of = tokens_of
         self._extractors = extractors
         self._limits = limits
 
@@ -108,11 +129,14 @@ class AnalysisWork:
         """What the nodes of one attempt at a step of ``run`` are given."""
 
         def files_at(commit_sha: str) -> RepoFiles:
-            source = self._repository_of(self._run_to_execute(run))
-            return self._clones.at_commit(run.run_id, source, commit_sha).files
+            found = self._run_to_execute(run)
+            source = self._repository_of(found)
+            return self._clones.at_commit(
+                run.run_id, source, commit_sha, self._tokens_for(found)
+            ).files
 
         return AnalyzerContext(
-            model=self._new_model(),
+            model=self._new_model(self._run_to_execute(run).workspace_id),
             limits=self._limits,
             files_at=files_at,
             facts_of=self._facts_of,
@@ -121,8 +145,8 @@ class AnalysisWork:
     def clone(self, payload: CloneRepository) -> Mapping[str, Any]:
         """Clone the repository of the run's project onto this worker; the commit it is at.
 
-        A repository that is refused is not tried again, and the graph ends the analysis
-        with what this says of it.
+        A repository that is refused is not tried again, and neither is a token that cannot
+        be read; the graph ends the analysis with what this says of it.
         """
         run = AnalyzeRepositoryInput(
             workspace_id=payload.workspace_id,
@@ -131,8 +155,8 @@ class AnalysisWork:
         )
         source = self._repository_of(run)
         try:
-            intake = self._clones.clone(run.run_id, source)
-        except IntakeError as e:
+            intake = self._clones.clone(run.run_id, source, self._tokens_for(run))
+        except (IntakeError, *CREDENTIAL_FAILURES) as e:
             logger.info("analysis run %s: its repository was not cloned: %s", run.run_id, e)
             raise failure(
                 steps.ANALYSIS_FAILED, failure_message(e, self._clones.folder_of(run.run_id))
@@ -164,6 +188,10 @@ class AnalysisWork:
         if found is None:
             raise failure(steps.RUN_UNAVAILABLE, f"there is no analysis run {run.run_id}")
         return found
+
+    def _tokens_for(self, run: AnalyzeRepositoryInput) -> TokensOfTheRun:
+        """How a clone of ``run`` gets its tokens: those of the run's workspace, when it asks."""
+        return lambda: self._tokens_of(run.workspace_id)
 
     def _facts_of(self, files: RepoFiles) -> list[ExtractedFact]:
         return run_extractors(files, self._extractors).facts
@@ -210,7 +238,7 @@ class AnalysisWork:
         """Store the result and mark the run succeeded, both or neither."""
         analysis = analysis_of(final_state)
         intake = self._clones.at_commit(
-            run.run_id, self._repository_of(run), final_state["commit_sha"]
+            run.run_id, self._repository_of(run), final_state["commit_sha"], self._tokens_for(run)
         )
         try:
             with transaction(self._sessions) as session:
@@ -251,13 +279,14 @@ class WordedSteps:
     ) -> StepOutcome:
         """Take the step, as ``AgentGraph.advance`` says.
 
-        A refused repository or profile ends the analysis (``ANALYSIS_FAILED``); only the
-        model provider fails in ways that pass, an outage or a rate limit
-        (``MODEL_UNAVAILABLE``, tried again). The message never names the clone's folder.
+        A refused repository or profile ends the analysis (``ANALYSIS_FAILED``), as does a
+        credential that is not set or cannot be read; only the model provider fails in ways
+        that pass, an outage or a rate limit (``MODEL_UNAVAILABLE``, tried again). The message
+        never names the clone's folder.
         """
         try:
             return self._graph.advance(run, checkpoints, resume)
-        except ANALYSIS_FAILURES as e:
+        except (*ANALYSIS_FAILURES, *CREDENTIAL_FAILURES) as e:
             logger.info("analysis run %s failed: %s", run.run_id, e)
             passing = isinstance(e, LLMError) and e.may_pass
             kind = steps.MODEL_UNAVAILABLE if passing else steps.ANALYSIS_FAILED

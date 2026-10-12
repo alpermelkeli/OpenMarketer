@@ -12,6 +12,7 @@ import base64
 import json
 import re
 import threading
+import uuid
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,9 +22,11 @@ from temporalio.client import WorkflowFailureError, WorkflowHistory
 from temporalio.exceptions import CancelledError
 from temporalio.worker import Worker
 
+from openmarketer_core.credentials.catalog import GITHUB_TOKEN, OPENROUTER_API_KEY
 from openmarketer_core.db.analysis_runs import run_thread_id
 from openmarketer_core.db.models import AnalysisRunStatus
 from openmarketer_core.llm import LLMError
+from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError
 from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.workflow_contract import (
@@ -32,8 +35,10 @@ from openmarketer_core.repository_analysis.workflow_contract import (
     analysis_workflow_id,
 )
 from openmarketer_worker import main
+from openmarketer_worker.credentials import ModelKeyNotSet, WorkspaceCredentials
 from openmarketer_worker.repository_analyzer import wiring
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy
+from openmarketer_worker.repository_analyzer.repository_tokens import WorkspaceRepositoryTokens
 
 QUICK = AnalysisPolicy(max_attempts=2, retry_after_seconds=1)
 MODELS = str(Path(__file__).resolve().parents[3] / "config" / "models.yaml")
@@ -153,6 +158,43 @@ async def test_request_the_model_provider_refuses_ends_the_run_at_the_first_atte
         "the model provider answered HTTP 401",
     )
     assert len(model.requests) == 1
+
+
+async def test_run_without_a_key_of_the_model_provider_ends_failed_at_the_first_attempt(
+    execute, quick, intake, run, database
+):
+    def no_key(workspace_id: uuid.UUID):
+        raise ModelKeyNotSet("OPENROUTER_API_KEY")
+
+    await execute(run, quick(new_model=no_key))
+    stored = database.run(run)
+    assert (stored.status, stored.error) == (
+        AnalysisRunStatus.FAILED,
+        "the model provider's API key is not set: set it in the dashboard's Settings,"
+        " or with the environment variable OPENROUTER_API_KEY",
+    )
+    assert intake.cloned == []
+    assert not database.has_checkpoints(run)
+
+
+async def test_history_of_a_run_holds_no_credential_of_its_workspace(
+    execute, quick, model, sessions, cipher, run, database
+):
+    database.store_credential(run.workspace_id, OPENROUTER_API_KEY, "sk-stored-0123456789", cipher)
+    database.store_credential(run.workspace_id, GITHUB_TOKEN, "ghp_stored0123456789", cipher)
+    credentials = WorkspaceCredentials(sessions, {}, cipher)
+    router = ModelRouter.from_file(MODELS, env={})
+    used: list[str] = []
+
+    def new_model(workspace_id: uuid.UUID):
+        used.append(credentials.model_key(workspace_id, router))
+        return model
+
+    tokens = WorkspaceRepositoryTokens(credentials, {})
+    history = await execute(run, quick(new_model=new_model, tokens_of=tokens.of))
+    assert database.run(run).status is AnalysisRunStatus.SUCCEEDED
+    assert set(used) == {"sk-stored-0123456789"}
+    assert "sk-stored-0123456789" not in history and "ghp_stored0123456789" not in history
 
 
 async def test_failure_that_keeps_happening_ends_the_run_once_attempts_are_used_up(
@@ -419,9 +461,17 @@ async def test_worker_does_not_start_with_a_token_host_that_is_not_a_host():
         await main.serve(environ)
 
 
-async def test_worker_does_not_start_without_the_key_of_the_model_provider():
-    with pytest.raises(main.StartupError, match="OPENROUTER_API_KEY"):
-        await main.serve({**DATABASE, "LLM_CONFIG_PATH": MODELS})
+async def test_worker_does_not_start_with_an_encryption_key_that_is_not_one():
+    environ = {**DATABASE, **MODEL, "ENCRYPTION_KEY": "made-up-and-not-a-key"}
+    with pytest.raises(main.StartupError, match="ENCRYPTION_KEY is not base64") as refused:
+        await main.serve(environ)
+    assert "made-up-and-not-a-key" not in str(refused.value)
+
+
+async def test_worker_without_the_key_of_the_model_provider_gets_as_far_as_temporal():
+    environ = {**DATABASE, "LLM_CONFIG_PATH": MODELS, "TEMPORAL_ADDRESS": "127.0.0.1:1"}
+    with pytest.raises(main.StartupError, match="TEMPORAL_ADDRESS"):
+        await main.serve(environ)
 
 
 async def test_worker_does_not_start_without_its_model_configuration(tmp_path):

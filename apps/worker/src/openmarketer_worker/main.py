@@ -1,13 +1,14 @@
 """The worker process: read its settings, connect, register the agents, serve until stopped.
 
 This module holds what belongs to the process and to no agent: its settings,
-the database sessions, the connection to Temporal, the ``Worker`` with its
+the database sessions, how the installation's credentials are resolved for a
+run's workspace (``credentials.py``), the connection to Temporal, the ``Worker`` with its
 executor and concurrency, the signals that stop it, the schedule of checkpoint
 cleanups that runs while it serves, and the wording of a start that cannot
 happen (``StartupError``). How an agent is set up (its settings, models,
-tokens, workflows, activities and the cleanup of its runs' checkpoints) is in
-the agent's ``wiring.py``, called here by name; this module reads no agent's
-settings or policy and holds no rule.
+tokens, workflows, activities and the cleanup of its runs' checkpoints)
+is in the agent's ``wiring.py``, called here by name; this module reads no
+agent's settings or policy and holds no rule.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from openmarketer_core.credentials.cipher import EncryptionKeyInvalid
 from openmarketer_core.db.session import DatabaseError, session_factory
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.repository_analysis.intake import IntakeError
@@ -32,6 +34,7 @@ from openmarketer_worker.checkpoint_cleanup import (
     CheckpointCleanup,
     keep_removing_leftover_checkpoints,
 )
+from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.repository_analyzer.wiring import repository_analyzer
 from openmarketer_worker.settings import Settings, SettingsError
 
@@ -62,8 +65,16 @@ async def serve(environ: Mapping[str, str]) -> None:
     try:
         settings = Settings.from_env(environ)
         sessions = session_factory(settings.database_url)
-        agent = repository_analyzer(environ, sessions, settings.database_url)
-    except (SettingsError, DatabaseError, ConfigError, IntakeError, OSError) as e:
+        credentials = WorkspaceCredentials(sessions, environ, settings.credential_cipher)
+        agent = repository_analyzer(environ, sessions, settings.database_url, credentials)
+    except (
+        SettingsError,
+        EncryptionKeyInvalid,
+        DatabaseError,
+        ConfigError,
+        IntakeError,
+        OSError,
+    ) as e:
         raise StartupError(str(e)) from e
     try:
         client = await Client.connect(

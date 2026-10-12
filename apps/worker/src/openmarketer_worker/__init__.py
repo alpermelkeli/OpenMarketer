@@ -1,7 +1,10 @@
 """OpenMarketer Temporal worker: runs the long work of each agent as durable workflows.
 
 One folder per agent holds its workflow, activities, settings and wiring;
-``main.py`` holds the process. ``AgentRegistration`` is what an agent's wiring
+``main.py`` holds the process, and beside it is what every agent shares: the
+agent runtime, the schedule of checkpoint cleanups, and the installation's
+credentials resolved for a run's workspace (``credentials.py``).
+``AgentRegistration`` is what an agent's wiring
 hands to the process.
 
 The workflow sandbox loads this module with every workflow, so at run time it

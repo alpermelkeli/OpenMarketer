@@ -278,6 +278,75 @@
         "title": "CreateProjectRequest",
         "type": "object"
       },
+      "CredentialListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "can_store": {
+            "description": "Whether this API has an `ENCRYPTION_KEY`. Without one, storing a credential is answered 409 `encryption_key_missing`.",
+            "title": "Can Store",
+            "type": "boolean"
+          },
+          "credentials": {
+            "items": {
+              "$ref": "#/components/schemas/CredentialStatusResponse"
+            },
+            "title": "Credentials",
+            "type": "array"
+          }
+        },
+        "required": [
+          "credentials",
+          "can_store"
+        ],
+        "title": "CredentialListResponse",
+        "type": "object"
+      },
+      "CredentialSource": {
+        "description": "Where the value in use comes from.",
+        "enum": [
+          "environment",
+          "stored",
+          "not_set"
+        ],
+        "title": "CredentialSource",
+        "type": "string"
+      },
+      "CredentialStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "environment_variable": {
+            "description": "The environment variable that sets this credential when it is not empty.",
+            "title": "Environment Variable",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CredentialSource"
+          },
+          "stored": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StoredCredentialResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when no value is stored. With the source `environment`, a stored value that the environment overrides."
+          }
+        },
+        "required": [
+          "name",
+          "source",
+          "environment_variable",
+          "stored"
+        ],
+        "title": "CredentialStatusResponse",
+        "type": "object"
+      },
       "ErrorCode": {
         "enum": [
           "invalid_repository_url",
@@ -285,9 +354,12 @@
           "project_not_found",
           "analysis_not_found",
           "profile_not_found",
+          "credential_not_found",
           "project_already_exists",
           "analysis_already_running",
           "profile_already_approved",
+          "credential_set_by_environment",
+          "encryption_key_missing",
           "internal_error",
           "analysis_not_started",
           "database_unavailable"
@@ -885,6 +957,45 @@
           "profile"
         ],
         "title": "SaveProfileEditRequest",
+        "type": "object"
+      },
+      "SetCredentialRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "description": "The secret. Whitespace around it is dropped; what is left is 1 to 4096 printable ASCII characters without a space. No response returns it.",
+            "format": "password",
+            "title": "Value",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "SetCredentialRequest",
+        "type": "object"
+      },
+      "StoredCredentialResponse": {
+        "additionalProperties": false,
+        "description": "That a value is stored: who stored it and when, never the value.",
+        "properties": {
+          "set_at": {
+            "format": "date-time",
+            "title": "Set At",
+            "type": "string"
+          },
+          "set_by": {
+            "format": "uuid",
+            "title": "Set By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "set_at",
+          "set_by"
+        ],
+        "title": "StoredCredentialResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -1986,6 +2097,207 @@
         "summary": "Save Edit",
         "tags": [
           "profiles"
+        ]
+      }
+    },
+    "/v1/settings/credentials": {
+      "get": {
+        "description": "Every credential the installation has, in a fixed order, and where its value comes from.",
+        "operationId": "listCredentials",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List All",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/settings/credentials/{name}": {
+      "delete": {
+        "description": "Remove the stored value, if there is one. The environment's value is not touched.",
+        "operationId": "removeCredential",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Remove One",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "description": "Store a value for the credential, encrypted, in place of the one stored before.\n\n409 while the environment sets the credential, and when the API has no `ENCRYPTION_KEY`.",
+        "operationId": "setCredential",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Set One",
+        "tags": [
+          "settings"
         ]
       }
     }

@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { allowedApiTarget, apiBaseUrl, assertFromDashboard, proxyToApi } from "./api-proxy";
+import { MAX_BODY_BYTES, allowedApiTarget, apiBaseUrl, assertFromDashboard, proxyToApi } from "./api-proxy";
 
 const PROJECT = "8ce5e2bb-6e54-49b4-9ddc-b96f20ec1109";
 const RUN = "0b0e6c6e-1111-4222-8333-444455556666";
@@ -284,6 +284,183 @@ describe("the query of a list", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: "proxy_query_rejected" });
     expect(api).not.toHaveBeenCalled();
+  });
+});
+
+describe("the credential routes", () => {
+  const LIST = ["settings", "credentials"];
+  const ONE = ["settings", "credentials", "github_token"];
+  // Not a real credential: a marker that must never turn up where it does not belong.
+  const SECRET = "ghp_a-value-that-must-not-be-repeated";
+  const json = { ...fromDashboard, "content-type": "application/json" };
+  const valueBody = JSON.stringify({ value: SECRET });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("forward the list, the storing of one and the removal of one", () => {
+    expect(allowedApiPath("GET", LIST)).toBe("/v1/settings/credentials");
+    expect(allowedApiPath("PUT", ONE)).toBe("/v1/settings/credentials/github_token");
+    expect(allowedApiPath("DELETE", ONE)).toBe("/v1/settings/credentials/github_token");
+    expect(allowedApiPath("PUT", [...LIST, `a${"b".repeat(63)}`])).toContain("/v1/settings/credentials/ab");
+  });
+
+  it("do not include any other method on these paths", () => {
+    for (const method of ["POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]) {
+      expect(() => allowedApiPath(method, LIST)).toThrow();
+    }
+    for (const method of ["GET", "POST", "PATCH", "HEAD", "OPTIONS", "put", "delete"]) {
+      expect(() => allowedApiPath(method, ONE)).toThrow();
+    }
+  });
+
+  it("do not include a name of another form", () => {
+    for (const name of [
+      "",
+      "GITHUB_TOKEN",
+      "Github_token",
+      "1password",
+      "_token",
+      "github-token",
+      "github.token",
+      "github token",
+      "github_token\n",
+      "github_token%2F..",
+      "..",
+      `a${"b".repeat(64)}`,
+      SECRET,
+    ]) {
+      expect(() => allowedApiPath("PUT", [...LIST, name])).toThrow();
+      expect(() => allowedApiPath("DELETE", [...LIST, name])).toThrow();
+    }
+  });
+
+  it("do not include a path below or beside a credential", () => {
+    expect(() => allowedApiPath("PUT", [...ONE, "value"])).toThrow();
+    expect(() => allowedApiPath("DELETE", ["settings", "credentials", "github_token", ".."])).toThrow();
+    expect(() => allowedApiPath("GET", ["settings"])).toThrow();
+    expect(() => allowedApiPath("PUT", ["settings", "github_token"])).toThrow();
+  });
+
+  it("take no query", () => {
+    expect(() => allowedApiTarget("GET", LIST, new URLSearchParams("limit=5"))).toThrow("no query parameters");
+    expect(() => allowedApiTarget("PUT", ONE, new URLSearchParams(`value=${SECRET}`))).toThrow();
+    expect(() => allowedApiTarget("DELETE", ONE, new URLSearchParams("force=1"))).toThrow();
+  });
+
+  it("send a new value to the API as the body, and nothing of the browser's with it", async () => {
+    const api = apiAnswering(200, '{"name":"github_token","source":"stored"}');
+    const response = await proxyToApi(
+      request("PUT", { ...json, cookie: "session=1", authorization: "Bearer x" }, valueBody),
+      ONE,
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(200);
+    const [target, init] = api.mock.calls[0];
+    expect(String(target)).toBe("http://127.0.0.1:8000/v1/settings/credentials/github_token");
+    expect(init?.method).toBe("PUT");
+    expect(init?.body).toBe(valueBody);
+    expect(init?.headers).toEqual({ accept: "application/json", "content-type": "application/json" });
+  });
+
+  it("remove without a body, and pass the API's 204 on as a 204 with no body", async () => {
+    const api = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+    const response = await proxyToApi(request("DELETE", fromDashboard), ONE, undefined, api);
+    expect(response.status).toBe(204);
+    expect(response.body).toBeNull();
+    expect(await response.text()).toBe("");
+    const [target, init] = api.mock.calls[0];
+    expect(String(target)).toBe("http://127.0.0.1:8000/v1/settings/credentials/github_token");
+    expect(init?.method).toBe("DELETE");
+    expect(init?.body).toBeUndefined();
+    expect(init?.headers).toEqual({ accept: "application/json" });
+  });
+
+  it("refuse a removal that carries a body", async () => {
+    const api = apiAnswering(204, "");
+    const response = await proxyToApi(request("DELETE", json, valueBody), ONE, undefined, api);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "proxy_body_rejected" });
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("are refused without an Origin, and nothing is forwarded", async () => {
+    for (const [method, body] of [
+      ["PUT", valueBody],
+      ["DELETE", undefined],
+    ] as const) {
+      const api = apiAnswering(200, "{}");
+      const headers = { host: "localhost:3000", "content-type": "application/json" };
+      const response = await proxyToApi(request(method, headers, body), ONE, undefined, api);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: "proxy_request_refused" });
+      expect(api).not.toHaveBeenCalled();
+    }
+  });
+
+  it("are refused from another site, and nothing is forwarded", async () => {
+    const foreign = [
+      { host: "localhost:3000", origin: "https://evil.example" },
+      { host: "localhost:3000", origin: "http://localhost:5173" },
+      { host: "localhost:3000", origin: "null" },
+      { ...fromDashboard, "sec-fetch-site": "cross-site" },
+      { ...fromDashboard, "sec-fetch-site": "same-site" },
+      { ...fromDashboard, "sec-fetch-site": "none" },
+      { host: "evil.example:3000", origin: "http://evil.example:3000" },
+    ];
+    for (const headers of foreign) {
+      for (const [method, body] of [
+        ["PUT", valueBody],
+        ["DELETE", undefined],
+      ] as const) {
+        const api = apiAnswering(200, "{}");
+        const response = await proxyToApi(
+          request(method, { ...headers, "content-type": "application/json" }, body),
+          ONE,
+          undefined,
+          api,
+        );
+        expect(response.status).toBe(403);
+        expect(api).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it("bound the size of a new value's body", async () => {
+    const api = apiAnswering(200, "{}");
+    const tooLarge = JSON.stringify({ value: "a".repeat(MAX_BODY_BYTES) });
+    const response = await proxyToApi(request("PUT", json, tooLarge), ONE, undefined, api);
+    expect(response.status).toBe(413);
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("never repeat or log a body, whatever becomes of the request", async () => {
+    const logs = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => undefined),
+    );
+    const down = vi.fn<typeof fetch>(async () => {
+      throw new TypeError(`fetch failed for ${SECRET}`);
+    });
+    const answers = [
+      // Forwarded and answered, refused by the API, and the API not answering.
+      await proxyToApi(request("PUT", json, valueBody), ONE, undefined, apiAnswering(200, '{"source":"stored"}')),
+      await proxyToApi(request("PUT", json, valueBody), ONE, undefined, apiAnswering(409, '{"code":"x"}')),
+      await proxyToApi(request("PUT", json, valueBody), ONE, undefined, down),
+      // Refused here: another site, no JSON, a query, an unknown path, a removal with a body.
+      await proxyToApi(request("PUT", { ...json, origin: "https://evil.example" }, valueBody), ONE, undefined, down),
+      await proxyToApi(request("PUT", { ...fromDashboard, "content-type": "text/plain" }, valueBody), ONE, undefined, down),
+      await proxyToApi(request("PUT", json, valueBody, "?debug=1"), ONE, undefined, down),
+      await proxyToApi(request("PUT", json, valueBody), [...ONE, "value"], undefined, down),
+      await proxyToApi(request("DELETE", json, valueBody), ONE, undefined, down),
+      await proxyToApi(request("PUT", json, valueBody), ONE, "not a url", down),
+    ];
+    for (const answer of answers) {
+      expect(await answer.text()).not.toContain(SECRET);
+      expect([...answer.headers.values()].join(" ")).not.toContain(SECRET);
+    }
+    for (const log of logs) expect(log).not.toHaveBeenCalled();
   });
 });
 

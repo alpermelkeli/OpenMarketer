@@ -16,7 +16,7 @@ from temporalio.exceptions import ApplicationError
 
 from openmarketer_core.db.models import AnalysisRunStatus
 from openmarketer_core.llm import LLMError
-from openmarketer_core.repository_analysis.intake import IntakeResult
+from openmarketer_core.repository_analysis.intake import IntakeResult, RepositoryTokens
 from openmarketer_worker.repository_analyzer import steps
 from openmarketer_worker.repository_analyzer.clones import LocalClones
 
@@ -139,9 +139,11 @@ async def test_step_after_the_clone_was_lost_from_the_disk_reads_the_same_commit
 async def test_profile_that_was_not_stored_is_stored_by_the_next_attempt_without_the_model(
     analyzer_with, another_worker, intake_of_a_local_repository, model, started, database
 ):
-    def unstorable(source: str, clone_into: Path, commit: str | None) -> IntakeResult:
+    def unstorable(
+        source: str, clone_into: Path, commit: str | None, tokens: RepositoryTokens
+    ) -> IntakeResult:
         # PostgreSQL stores no NUL character in a text column.
-        result = intake_of_a_local_repository(source, clone_into, commit)
+        result = intake_of_a_local_repository(source, clone_into, commit, tokens)
         return replace(result, snapshot=replace(result.snapshot, ref="main\x00"))
 
     spoiled = analyzer_with(intake=unstorable)

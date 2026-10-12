@@ -235,6 +235,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List All
+         * @description Every credential the installation has, in a fixed order, and where its value comes from.
+         */
+        get: operations["listCredentials"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/credentials/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set One
+         * @description Store a value for the credential, encrypted, in place of the one stored before.
+         *
+         *     409 while the environment sets the credential, and when the API has no `ENCRYPTION_KEY`.
+         */
+        put: operations["setCredential"];
+        post?: never;
+        /**
+         * Remove One
+         * @description Remove the stored value, if there is one. The environment's value is not touched.
+         */
+        delete: operations["removeCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -337,11 +383,40 @@ export interface components {
             /** Repository Url */
             repository_url: string;
         };
+        /** CredentialListResponse */
+        CredentialListResponse: {
+            /**
+             * Can Store
+             * @description Whether this API has an `ENCRYPTION_KEY`. Without one, storing a credential is answered 409 `encryption_key_missing`.
+             */
+            can_store: boolean;
+            /** Credentials */
+            credentials: components["schemas"]["CredentialStatusResponse"][];
+        };
+        /**
+         * CredentialSource
+         * @description Where the value in use comes from.
+         * @enum {string}
+         */
+        CredentialSource: "environment" | "stored" | "not_set";
+        /** CredentialStatusResponse */
+        CredentialStatusResponse: {
+            /**
+             * Environment Variable
+             * @description The environment variable that sets this credential when it is not empty.
+             */
+            environment_variable: string;
+            /** Name */
+            name: string;
+            source: components["schemas"]["CredentialSource"];
+            /** @description Null when no value is stored. With the source `environment`, a stored value that the environment overrides. */
+            stored: components["schemas"]["StoredCredentialResponse"] | null;
+        };
         /**
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "profile_not_found" | "project_already_exists" | "analysis_already_running" | "profile_already_approved" | "internal_error" | "analysis_not_started" | "database_unavailable";
+        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "profile_not_found" | "credential_not_found" | "project_already_exists" | "analysis_already_running" | "profile_already_approved" | "credential_set_by_environment" | "encryption_key_missing" | "internal_error" | "analysis_not_started" | "database_unavailable";
         /**
          * Evidence
          * @description A location in the analysed repository that supports a claim.
@@ -579,6 +654,31 @@ export interface components {
         /** SaveProfileEditRequest */
         SaveProfileEditRequest: {
             profile: components["schemas"]["ProductProfile"];
+        };
+        /** SetCredentialRequest */
+        SetCredentialRequest: {
+            /**
+             * Value
+             * Format: password
+             * @description The secret. Whitespace around it is dropped; what is left is 1 to 4096 printable ASCII characters without a space. No response returns it.
+             */
+            value: string;
+        };
+        /**
+         * StoredCredentialResponse
+         * @description That a value is stored: who stored it and when, never the value.
+         */
+        StoredCredentialResponse: {
+            /**
+             * Set At
+             * Format: date-time
+             */
+            set_at: string;
+            /**
+             * Set By
+             * Format: uuid
+             */
+            set_by: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -1329,6 +1429,171 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProfileVersionResponse"];
                 };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialStatusResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Forbidden */
             403: {

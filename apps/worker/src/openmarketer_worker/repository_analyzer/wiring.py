@@ -1,12 +1,18 @@
 """Setting the repository analyzer up for this installation, when the worker starts.
 
 Everything an analysis depends on is built here once (the analyzer's settings,
-the model router, the extractors, the repository tokens, access to the runs'
-checkpoints, the place of the runs' clones on this worker's disk) and handed
-to what runs it; the result says what the worker registers and how the
-checkpoints its runs leave behind are removed. The process's own things come
-in as arguments: the environment mapping, the session factory and the database
-URL.
+the model router, the extractors, access to the runs' checkpoints, the place
+of the runs' clones on this worker's disk) and handed to what runs it; the
+result says what the worker registers and how the checkpoints its runs leave
+behind are removed. The process's own things come in as arguments: the
+environment mapping, the session factory, the database URL and the
+installation's credentials (``WorkspaceCredentials``).
+
+No credential is read here. The model provider's key and the repository tokens
+can be stored from the dashboard after the worker started, so each is resolved
+for the run's workspace when an attempt needs it: the worker starts without a
+model key, and a run that finds none is told so. ``GITLAB_HOST``, which is not
+a credential, is read and checked now (``repository_tokens.py``).
 
 ``repository_analyzer`` reads the environment; ``registration`` takes what was
 built (``AnalyzerParts``) and declares the agent's worker side: the handler of
@@ -25,6 +31,7 @@ imports it: it loads the graph and the database, which the sandbox refuses.
 from __future__ import annotations
 
 import tempfile
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -56,14 +63,16 @@ from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess,
 from openmarketer_worker.agent_runtime.agent_worker import AgentWorker
 from openmarketer_worker.agent_runtime.routes import ActionContext
 from openmarketer_worker.checkpoint_cleanup import CheckpointCleanup
+from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.repository_analyzer import steps
 from openmarketer_worker.repository_analyzer.activities import AnalysisActivities
 from openmarketer_worker.repository_analyzer.analysis import AnalysisWork, WordedSteps
-from openmarketer_worker.repository_analyzer.clones import Intake, LocalClones
+from openmarketer_worker.repository_analyzer.clones import LocalClones
 from openmarketer_worker.repository_analyzer.policy import (
     AnalysisPolicy,
     longest_analysis_seconds,
 )
+from openmarketer_worker.repository_analyzer.repository_tokens import WorkspaceRepositoryTokens
 from openmarketer_worker.repository_analyzer.settings import RepositoryAnalyzerSettings
 from openmarketer_worker.repository_analyzer.workflow import AnalyzeRepository
 
@@ -78,29 +87,35 @@ class AnalyzerParts:
     sessions: sessionmaker[Session]
     checkpoints: CheckpointAccess
     clones: LocalClones
-    new_model: Callable[[], ChatModel]  # the chat model of one attempt
+    # The chat model of one attempt, and the tokens one clone may carry: each made for the
+    # workspace of the run when it is needed, so no credential is held between attempts.
+    new_model: Callable[[uuid.UUID], ChatModel]
+    tokens_of: Callable[[uuid.UUID], RepositoryTokens]
     extractors: Sequence[Extractor]
     policy: AnalysisPolicy
     limits: Limits = field(default_factory=Limits)
 
 
 def repository_analyzer(
-    environ: Mapping[str, str], sessions: sessionmaker[Session], database_url: str
+    environ: Mapping[str, str],
+    sessions: sessionmaker[Session],
+    database_url: str,
+    credentials: WorkspaceCredentials,
 ) -> AgentRegistration:
     """The repository analyzer as this installation runs it, ready for the worker.
 
-    Everything is read and checked now, so a mistake in the configuration
-    stops the worker at start-up instead of failing every run.
+    The configuration is read and checked now, so a mistake in it stops the
+    worker at start-up instead of failing every run. The credentials are not:
+    a run asks for the ones of its workspace, and one that is missing ends
+    that run.
     """
     policy = RepositoryAnalyzerSettings.from_env(environ).policy
     checkpoints = checkpoints_in(database_url)
     router = ModelRouter.from_file(
         environ.get("LLM_CONFIG_PATH") or DEFAULT_CONFIG_PATH, env=environ
     )
-    # Asked for here, so a missing provider key stops the worker and not every run.
-    router.headers()
-    tokens = RepositoryTokens.from_environment(environ)
-    clones = LocalClones(Path(tempfile.gettempdir()) / CLONES_FOLDER, intake_with(tokens))
+    tokens = WorkspaceRepositoryTokens(credentials, environ)
+    clones = LocalClones(Path(tempfile.gettempdir()) / CLONES_FOLDER, intake)
     # A run that could still be in progress is younger than this, so its clone is left alone.
     clones.sweep(older_than=timedelta(seconds=longest_analysis_seconds(policy)))
     return registration(
@@ -108,8 +123,12 @@ def repository_analyzer(
             sessions=sessions,
             checkpoints=checkpoints,
             clones=clones,
-            # A chat model per attempt: it keeps the replies of the attempt it served.
-            new_model=lambda: RouterChatModel(router=router),
+            # A chat model per attempt: it keeps the replies of the attempt it served, and
+            # carries the key its workspace has at that moment.
+            new_model=lambda workspace_id: RouterChatModel(
+                router=router, api_key=credentials.model_key(workspace_id, router)
+            ),
+            tokens_of=tokens.of,
             extractors=list(discover_extractors()),
             policy=policy,
         )
@@ -123,6 +142,7 @@ def registration(parts: AnalyzerParts) -> AgentRegistration:
         parts.checkpoints,
         parts.clones,
         new_model=parts.new_model,
+        tokens_of=parts.tokens_of,
         extractors=parts.extractors,
         limits=parts.limits,
     )
@@ -170,10 +190,8 @@ def cleanup_of_analysis_runs(policy: AnalysisPolicy) -> CheckpointCleanup:
     return CheckpointCleanup(runs="analysis runs", remove=remove)
 
 
-def intake_with(tokens: RepositoryTokens) -> Intake:
-    """Intake as this installation does it: with its tokens, each sent only to its own host."""
-
-    def intake(source: str, clone_into: Path, commit: str | None) -> IntakeResult:
-        return run_intake(source, clone_into, tokens=tokens, commit=commit)
-
-    return intake
+def intake(
+    source: str, clone_into: Path, commit: str | None, tokens: RepositoryTokens
+) -> IntakeResult:
+    """Intake as the worker does it: with the tokens of the run, each sent only to its own host."""
+    return run_intake(source, clone_into, tokens=tokens, commit=commit)

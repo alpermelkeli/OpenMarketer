@@ -30,9 +30,14 @@ class RepositoryTokens:
     """Access tokens, each for the one host it was issued by."""
 
     def __init__(self, token_by_host: Mapping[str, str]) -> None:
-        """``token_by_host`` maps ``host`` or ``host:port`` to a token; empty tokens are ignored."""
+        """``token_by_host`` maps ``host`` or ``host:port`` to a token.
+
+        A token is kept without the whitespace around it; an empty one is ignored.
+        """
         # Every host is read, with or without a token, so a mistake in one shows at start-up.
-        configured = {_configured_host(host): token for host, token in token_by_host.items()}
+        configured = {
+            _configured_host(host): token.strip() for host, token in token_by_host.items()
+        }
         self._tokens = {host: token for host, token in configured.items() if token}
 
     @classmethod

@@ -15,6 +15,8 @@ Rules
 - Approval is recorded with who and when, from `identity.py`, never from the request; no route lets a model output approve anything.
 - Errors have one shape (`Problem`: `code`, `message`; `existing_project_id` only on the 409 for an existing repository, left out otherwise). Nothing leaks a stack trace, a path or a credential.
 - A list is paged like the three there are (`pagination.py`): `limit`, an opaque `cursor`, `next_cursor`; the store does the keyset query, and a cursor the API did not write is a 422.
+- A route whose request holds a secret is on a router with `route_class=SecretBodyRoute` (`secret_bodies.py`), takes the secret as a `SecretStr`, and puts no length or pattern on it that Pydantic would report with the value: the rule is core's, answered as a 422 that names the rule. No response model has a field for a value or anything derived from one (`test_openapi.py` checks the contract), and a path parameter that could be mistaken for a secret has a fixed form. See "Stored credentials" in `docs/status.md`.
+- The API encrypts a credential and never decrypts one: it does not call `credential_value` or `CredentialCipher.open`. `ENCRYPTION_KEY` is optional at start-up, and one that is not a key stops the start.
 - Tests use FastAPI's test client with dependencies overridden, against PostgreSQL; no network, no model.
 
 Done means `make check` passes and new routes have tests for the success path and the main failure paths.
