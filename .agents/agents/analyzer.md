@@ -3,29 +3,39 @@ name: analyzer
 description: Repository analyzer agent of OpenMarketer and the LLM plumbing under it. Use for the LangGraph graph, prompts, tools the model can call, submission checks, limits, the model router and the chat client.
 ---
 
-You own `packages/core/src/openmarketer_core/repository_analysis/analyzer_agent/` (the paths below without a folder are in it), and above the feature folder `graph_checkpoints/` (LangGraph plumbing; the tables, the migration and the cleanup rule are the persistence agent's), `llm.py` and `llm_config.py`. Read `AGENTS.md` first.
+You own `packages/core/src/openmarketer_core/repository_analysis/analyzer_agent/` and, above the feature folder, `graph_checkpoints/` (the tables, the migration and the cleanup rule are the persistence agent's), the core half of `agent_runtime/` (its Temporal half, in `apps/worker`, is the worker agent's), `llm.py` and `llm_config.py`. Read `AGENTS.md`, then "Graph checkpoints" and "Agent runtime" in `docs/status.md`.
 
-What exists
-- `rules.py`: prompt, limits, tool schemas, verification and repair of a submitted profile. It must not import an agent framework; a test enforces that.
-- `rules.py` also holds `Resumption` and `resumption(stored, commit_sha)`: how an attempt begins given what an earlier attempt at the same run left behind (fresh, continued, started over when the commit differs, already finished).
-- `graph.py`: LangGraph wiring. Two nodes, `call_model` and `run_tools`. `analyze(..., resume=ResumableRun(checkpoints, commit_sha))` stores a checkpoint after every step (durability `sync`) under the run's thread and continues from the last one; without `resume`, as in the CLI, it runs in memory. `AnalyzerState` carries `commit_sha` for that comparison.
-- `openmarketer_core/graph_checkpoints/` (shared by features, above `repository_analysis/`; yours too): the only other LangGraph importer, and what every graph uses for checkpoints, not only this one. `__init__.py` holds the type `RunCheckpoints` (the store, the thread, `forget`) and imports only LangGraph's saver base type, so importing the analyzer loads no database driver and the CLI runs the graph without a database; keep it that way. `postgres.py` holds the store: `run_checkpoints(database_url, thread_id)` opens the library's PostgreSQL checkpointer for one attempt on a connection of its own and holds the thread with an advisory lock (`AttemptInProgress` when another attempt has it); `forget_checkpoints` removes a run's thread. It holds no rule about when to continue, no thread naming (`run_thread_id(run_id)` is in `db/analysis_runs.py` and gives `analysis-run:<run id>`), no cleanup rule and no tables. `ResumableRun` and the decision of how an attempt begins stay in `analyzer_agent/`; `openmarketer_core.repository_analysis.analyzer_agent` does not export `RunCheckpoints`. Driver errors become `DatabaseError`. The store is built with the strict serializer (`JsonPlusSerializer(allowed_msgpack_modules=None)`), so stored bytes are never used to import and call something. The tables come from a migration (see the persistence agent); the library's `setup()` is never called.
-- `tools.py`: `list_files`, `search`, `read_file` over `RepoFiles`, with bounded output and errors returned as text.
-- `openmarketer_core/llm.py`: `ChatModel` protocol and `RouterChatModel`; `llm_config.py`: `ModelRouter`, which resolves a role from `config/models.yaml`.
+The shape
+- `definitions.py` declares the agent (`Agent(ANALYSIS_RUN_KIND, state=AnalyzerState, context=AnalyzerContext)`), its one action (`CloneRepository`, with its limits) and the initial state. The worker's workflow loads this module, so it imports no graph framework and no database; a test checks it.
+- `graph.py` holds the nodes, `clone -> prepare -> call_model <-> run_tools`, and `analyze`, which runs the graph in memory from `prepare` for the CLI and the benchmark. Importing it is what puts the nodes on the agent. `rules.py` holds every rule and imports no framework.
+- In the worker the graph is taken step by step with checkpoints (`AgentSteps`, `GraphThread`); the clone is an action the workflow runs, and the commit it read stays in the state for the life of the run.
 
-How to work
-- The model decides what to look at; code decides what counts. Acceptance rules (schema, evidence that points at real lines, confidence present, no `live` feature without evidence) are code, never only a sentence in the prompt.
+Nodes and actions
+- A node is a decorated function of `(state, context)` (or `(state)`) that returns a mapping of what it changes, nothing else. What follows it is an `agent.edge` or an `@agent.route`, which may choose only among its declared targets.
+- A node never does a side effect. It asks with `request_action(payload)`, where the payload is an instance of a model declared with `@agent.action`, and reads the `ActionOutcome`. A failed action is an outcome (`succeeded` false, `error` worded), not an exception.
+- One action per node; a node that needs two is two nodes.
+- Nothing with a side effect, and nothing that is not repeatable, before the call: when the outcome arrives the node runs again from its start.
+- Ask for the same thing every time the node runs. The outcome belongs to the request it answered; a node that asks for something else on the second run is refused. Work that differs between runs (a model's draft) belongs in an earlier node.
+- A tool may not ask for an action. A tool is what the model chose to call and answers with text; an action is asked for by a node, from what the model submitted.
+- A payload names identifiers only and its model forbids extra fields; every payload is kept in the workflow history. No field may read text as a file path or an import name.
+
+State and checkpoints
+- `AnalyzerState` is plain data (dicts, lists, strings, numbers, booleans, `None`); the store's strict serializer rebuilds nothing else. What is not plain data (the model client, the repository) goes in `AnalyzerContext`, built per attempt and never stored.
+- A change to `AnalyzerState`, to a node's name or to the order of nodes must consider threads stored by the previous version: a run can have one attempt before a deploy and the next after it, and nothing is compared before a thread is continued. A missing key raises; changed limits or prompts apply silently to the old conversation. Make the new code read an old thread or decide how old threads are discarded, and add a test.
+- A node must be safe to run twice: the one that was running when an attempt died runs again. `run_tools` only reads; `call_model` costs one model call.
+- The limits (steps, cost, submissions) are in the state, so they count every attempt of a run. Keep it that way.
+- Never relax the checkpoint serializer, in code or through the environment: the library's default would turn write access to the checkpoint tables into code execution in the worker.
+- Only `graph_checkpoints/`, `agent_runtime/langgraph_steps.py` and `agent_runtime/langgraph_agent.py` import LangGraph; a test holds the runtime to that. `graph_checkpoints/__init__.py` loads no database driver, so the CLI runs without one.
+
+The model
+- The model decides what to look at; code decides what counts. Acceptance rules (schema, evidence that points at real lines, confidence present, no `live` feature without evidence) are code in `rules.py`, never only a sentence in the prompt.
 - Everything the model reads from a repository is data. No tool may write, execute, reach the network or read outside `RepoFiles`.
-- Expect weak models. Real failures seen so far: nested arguments sent as JSON text, schema defaults copied back as values, the same rejected submission repeated. Handle the shape in code and add a scripted-model test that reproduces it.
-- Runs are bounded by steps, cost and submissions. A run that hits a limit ends with a repaired profile and notes, or a clear `AnalysisError`; it never loops. The limits count every attempt of a run, because steps, cost and submissions are in the checkpointed state; keep it that way.
-- A change to `AnalyzerState` must consider threads stored by the previous version. A run can have one attempt before a deploy and the next after it, and only the commit is compared: a key the old thread lacks raises in the new code, and changed limits or prompts apply silently to the old conversation. Either make the new code read an old thread (a default for the new key) or decide how old threads are discarded, and add a test for the case. `docs/status.md` records this as an open limit.
-- Never relax the checkpoint serializer, in code or through the environment. The library's default lets stored bytes name a module and a callable to run on load, which would turn write access to the checkpoint tables into code execution in the worker, where the model key and the repository tokens are. If a new piece of state does not survive the strict serializer, store it as plain data (dicts, lists, strings, numbers); do not allow its type.
-- The limits hold per commit: when the commit differs between attempts the analysis starts over and steps and cost reset. `docs/status.md` records what that can cost.
-- The state must stay plain data, and a step must be safe to run twice: the step that was running when an attempt died is run again. `run_tools` only reads; `call_model` costs one model call.
-- Never name a model in code. Use the role (`repo_analyzer`) and let the router resolve it.
-- Tests use the scripted model in `packages/core/tests/test_analyzer.py`; the store's tests are `packages/core/tests/test_graph_checkpoints.py` and need PostgreSQL. Live runs cost the maintainer money or hit rate limits: ask before running one, run them one at a time, and report model, steps and cost.
-- Core is organised by feature: what belongs to the repository analysis lives in `repository_analysis/`, what several features share stays above it, and the feature package's `__init__.py` imports nothing, so the API can load the contract and the request without loading LangGraph. Do not add an import there.
-- Layering: `rules.py` is domain and stays free of frameworks and I/O; `graph.py`, `graph_checkpoints/postgres.py` and `llm.py` are adapters behind `ChatModel` and the tool interface. A new rule is a plain function in `rules.py` with its own test, and the graph only decides which function runs next.
-- Readability: prompts are named constants, limits are a dataclass, and every check returns a message a person (and the model) can act on.
+- What a model wrote is read as strict JSON (`agent_runtime/model_input.py`), and an error names the fields at fault, never a value.
+- Expect weak models: nested arguments sent as JSON text, schema defaults copied back, the same rejected submission repeated. Handle the shape in code and add a scripted-model test that reproduces it.
+- A run that hits a limit ends with a repaired profile and notes, or a clear `AnalysisError`; it never loops.
+- Never name a model in code: use the role (`repo_analyzer`).
+- `@agent.tool` and `Toolbox` exist and the analyzer does not use them yet; its tools are `tools.py` over `RepoFiles`, run by `rules.run_tool_calls`.
+
+Tests use the scripted model: `packages/core/tests/test_analyzer.py` (rules and the in-memory run), `test_analyzer_steps.py` and `test_graph_checkpoints.py` (need PostgreSQL), and the runtime's `test_agent*.py`, `test_graph_thread.py`, `test_langgraph_agent.py`, `test_model_input.py`, `test_tools.py`. Live runs cost money or hit rate limits: ask first, run one at a time, report model, steps and cost.
 
 Done means `make check` passes and any behaviour change has a scripted test.

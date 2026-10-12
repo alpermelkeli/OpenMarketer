@@ -1,0 +1,158 @@
+"""What taking one step of an agent graph gives back, how a run is named, and why a step is refused.
+
+A step is one stretch of a graph on its thread: from where it stands to where
+it finishes or has to wait for the outside world. ``StepOutcome`` says which
+of the two it was, as plain data that the workflow engine's default converter
+can carry between activities. ``GraphRunRef`` names the run a step belongs to
+by ids only, so no repository, profile or token is ever in the history of the
+workflow.
+
+The errors say why a thread cannot take the step it was asked to. They are
+here, and not with the graph framework that raises them, so that the worker can
+tell them apart from a failure of the database or of a model without loading
+the framework.
+
+This module takes no step: how one is taken is in ``langgraph_steps.py``. Its
+annotations are real types, not text, for the reason given in ``actions.py``.
+"""
+
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
+from openmarketer_core.agent_runtime.actions import ActionRequest
+from openmarketer_core.agent_runtime.model_input import shown
+
+
+@dataclass(frozen=True)
+class GraphRunRef:
+    """A run of a graph: the kind of run (see ``threads.thread_id``) and its id."""
+
+    kind: str
+    run_id: uuid.UUID
+
+
+@dataclass(frozen=True)
+class StepOutcome:
+    """The end of a step: the graph finished with ``output``, or waits for ``action``.
+
+    Exactly one of the two is set. ``output`` is the graph's final state as
+    plain data.
+    """
+
+    output: dict[str, Any] | None
+    action: ActionRequest | None
+
+    def __post_init__(self) -> None:
+        if (self.output is None) == (self.action is None):
+            raise ValueError("a step either finished with an output or waits for an action")
+
+    @classmethod
+    def finished(cls, output: dict[str, Any]) -> "StepOutcome":
+        return cls(output=output, action=None)
+
+    @classmethod
+    def waiting_for(cls, action: ActionRequest) -> "StepOutcome":
+        return cls(output=None, action=action)
+
+
+class StepError(Exception):
+    """A thread cannot take the step it was asked to; asking again will not change that."""
+
+
+class RunOfAnotherKind(StepError):
+    """The run is of another kind than the agent whose graph was asked to take its step."""
+
+    def __init__(self, run_kind: str, agent_kind: str) -> None:
+        super().__init__(
+            f"a run of kind {shown(run_kind)} cannot be taken by the graph of "
+            f"agent {shown(agent_kind)}"
+        )
+
+
+class MissingInitialState(StepError):
+    """The thread has no checkpoint, so only an initial state can start it, and none was given."""
+
+    def __init__(self, thread_id: str) -> None:
+        super().__init__(f"thread {thread_id} has no checkpoint and was given no initial state")
+
+
+class UnexpectedResume(StepError):
+    """The outcome answers an action that the thread never asked for."""
+
+    def __init__(self, thread_id: str, action_id: str) -> None:
+        super().__init__(f"outcome of action {action_id} answers no action of thread {thread_id}")
+
+
+class TooManyPendingActions(StepError):
+    """The thread waits for several actions at once; a graph asks for one at a time."""
+
+    def __init__(self, thread_id: str, count: int) -> None:
+        super().__init__(
+            f"thread {thread_id} waits for {count} actions at once: "
+            "a graph may ask for one action at a time"
+        )
+
+
+class MalformedActionRequest(StepError):
+    """The thread paused on something that is not an action request."""
+
+    def __init__(self, thread_id: str) -> None:
+        super().__init__(
+            f"thread {thread_id} paused on something that is not an action request: "
+            "nodes ask for an action with request_action"
+        )
+
+
+class TwoActionsInOneNode(StepError):
+    """A node asked for a second action while it ran with the outcome of the first."""
+
+    def __init__(self, action_id: str) -> None:
+        super().__init__(
+            f"a node asked for a second action after action {action_id} was answered: "
+            "a node asks for one action, and a second needs a node of its own"
+        )
+
+
+class RequestChangedOnResume(StepError):
+    """A node asked for something else when it ran with the outcome of its request."""
+
+    def __init__(self, action_id: str) -> None:
+        super().__init__(
+            f"a node asked for something other than action {action_id} when it ran again "
+            "with that action's outcome: a node must ask for the same thing every time it runs"
+        )
+
+
+class ActionAskedByTool(StepError):
+    """A tool, which the model chose to call, asked for an action."""
+
+    def __init__(self, tool_name: str) -> None:
+        # Nothing of the request: the payload may hold what the model wrote.
+        super().__init__(
+            f"tool {tool_name!r} asked for an action: a tool answers with text, and an action "
+            "is asked for by a node, from what the model submitted, never from inside a tool "
+            "the model chose to call"
+        )
+        self.tool_name = tool_name
+
+
+class InvalidNodeResult(StepError):
+    """A node answered with something other than the changes it makes to the state."""
+
+    def __init__(self, node_name: str) -> None:
+        # What it returned is not shown: it may hold what a model or a repository said.
+        super().__init__(
+            f"node {node_name!r} answered with something other than a mapping of the changes "
+            "it makes to the state: the route after a node, and nothing the node returns, "
+            "decides which node follows"
+        )
+        self.node_name = node_name
+
+
+class InvalidToolAnswer(StepError):
+    """A tool answered with something other than the text its model reads."""
+
+    def __init__(self, tool_name: str, answer_type: str) -> None:
+        super().__init__(f"tool {tool_name!r} answered with {answer_type}, not text")
+        self.tool_name = tool_name

@@ -1,23 +1,26 @@
 """Tests for how the repository analyzer is set up from the environment when the worker starts.
 
-They need no Temporal server and no model: the analysis itself is replaced
-where a test looks at what it would be run with. A database is named, never
-connected to.
+They need no Temporal server and no model. A database is named, never connected to. The
+worker's own folder of clones is under the system's temporary folder, which every test of the
+worker has replaced with one of its own (``temporary_folder`` in ``conftest.py``).
 """
 
+import os
+import time
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy.orm import Session
 
 from openmarketer_core.db.session import DatabaseError, session_factory
-from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import RouterChatModel
 from openmarketer_core.llm_config import ConfigError
-from openmarketer_core.repository_analysis.intake import IntakeError
+from openmarketer_core.repository_analysis.intake import IntakeError, RepositoryTokens
 from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
+from openmarketer_worker.agent_runtime.activity_support import checkpoints_in
+from openmarketer_worker.agent_runtime.vocabulary import FORGET_RUN, RUN_ACTION, RUN_GRAPH_STEP
 from openmarketer_worker.repository_analyzer import steps, wiring
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy, longest_analysis_seconds
 from openmarketer_worker.repository_analyzer.workflow import AnalyzeRepository
@@ -33,55 +36,52 @@ def wired(environ: dict[str, str], database_url: str = DATABASE_URL):
 
 
 @pytest.fixture
-def analysed_with(monkeypatch) -> list[dict]:
-    """Replace the analysis itself and collect what the worker would have run it with."""
-    calls: list[dict] = []
+def parts(monkeypatch) -> list[wiring.AnalyzerParts]:
+    """What the wiring built the analyzer of, each time it was asked."""
+    built: list[wiring.AnalyzerParts] = []
+    register = wiring.registration
 
-    def analyze_repository(source: str, clone_into: Path, **dependencies) -> None:
-        calls.append({"source": source, **dependencies})
+    def registration(parts: wiring.AnalyzerParts):
+        built.append(parts)
+        return register(parts)
 
-    monkeypatch.setattr(wiring, "analyze_repository", analyze_repository)
-    return calls
-
-
-@pytest.fixture
-def run_checkpoints() -> RunCheckpoints:
-    """Checkpoints of some run; nothing is stored in them here."""
-    return RunCheckpoints(store=InMemorySaver(), thread_id="some-run")
+    monkeypatch.setattr(wiring, "registration", registration)
+    return built
 
 
-def test_tokens_of_the_environment_reach_the_analysis_bound_to_their_hosts(
-    analysed_with, run_checkpoints, tmp_path
-):
-    analyse = wiring.analysis_with_configured_models(
-        {**MODEL, "GITHUB_TOKEN": "github-token-value"}
+def test_tokens_of_the_environment_reach_the_clone_bound_to_their_hosts(monkeypatch, tmp_path):
+    offered: list[RepositoryTokens] = []
+
+    def run_intake(source, clone_into, *, tokens, commit):
+        offered.append(tokens)
+
+    monkeypatch.setattr(wiring, "run_intake", run_intake)
+    tokens = RepositoryTokens.from_environment({"GITHUB_TOKEN": "github-token-value"})
+    wiring.intake_with(tokens)("https://example.com/acme/app.git", tmp_path / "repo", None)
+    assert offered[0].token_for("https://github.com/acme/app.git") == "github-token-value"
+    assert offered[0].token_for("https://example.com/acme/app.git") is None
+
+
+def test_commit_of_the_run_reaches_the_clone(monkeypatch, tmp_path):
+    asked: list[str | None] = []
+    monkeypatch.setattr(
+        wiring, "run_intake", lambda source, clone_into, *, tokens, commit: asked.append(commit)
     )
-    analyse("https://example.com/acme/app.git", tmp_path, run_checkpoints)
-    tokens = analysed_with[0]["tokens"]
-    assert tokens.token_for("https://github.com/acme/app.git") == "github-token-value"
-    assert tokens.token_for("https://example.com/acme/app.git") is None
+    intake = wiring.intake_with(RepositoryTokens.from_environment({}))
+    intake("https://example.com/acme/app.git", tmp_path / "repo", "a" * 40)
+    assert asked == ["a" * 40]
 
 
-def test_checkpoints_of_the_run_reach_the_analysis(analysed_with, run_checkpoints, tmp_path):
-    analyse = wiring.analysis_with_configured_models(MODEL)
-    analyse("https://example.com/acme/app.git", tmp_path, run_checkpoints)
-    assert analysed_with[0]["checkpoints"] is run_checkpoints
-
-
-def test_each_attempt_gets_a_chat_model_of_its_own(analysed_with, run_checkpoints, tmp_path):
-    analyse = wiring.analysis_with_configured_models(MODEL)
-    analyse("https://example.com/acme/app.git", tmp_path, run_checkpoints)
-    analyse("https://example.com/acme/app.git", tmp_path, run_checkpoints)
-    first, second = (call["model"] for call in analysed_with)
-    assert isinstance(first, RouterChatModel)
+def test_each_attempt_gets_a_chat_model_of_its_own_from_one_router(parts):
+    wired(MODEL)
+    first, second = parts[0].new_model(), parts[0].new_model()
+    assert isinstance(first, RouterChatModel) and isinstance(second, RouterChatModel)
     assert first is not second
     assert first.router is second.router
 
 
 def test_database_password_is_not_in_the_text_of_what_reaches_the_checkpoints():
-    checkpoints = wiring.checkpoints_in(
-        "postgresql+psycopg://app:hunter2@db.internal:5432/marketer"
-    )
+    checkpoints = checkpoints_in("postgresql+psycopg://app:hunter2@db.internal:5432/marketer")
     shown = [
         repr(checkpoints),
         str(checkpoints),
@@ -91,14 +91,45 @@ def test_database_password_is_not_in_the_text_of_what_reaches_the_checkpoints():
     assert all("hunter2" not in text and "db.internal" not in text for text in shown)
 
 
+# ------------------------------------------------------------- the clones
+def test_clones_are_kept_in_a_folder_of_the_worker_under_the_temporary_folder(
+    parts, temporary_folder
+):
+    wired(MODEL)
+    run_id = uuid.uuid4()
+    assert parts[0].clones.folder_of(run_id) == (
+        temporary_folder / "openmarketer-analysis" / str(run_id)
+    )
+
+
+def test_clones_older_than_a_run_can_last_are_swept_when_the_worker_starts(temporary_folder):
+    limits = {"ANALYSIS_TIMEOUT_MINUTES": "10", "ANALYSIS_MAX_ATTEMPTS": "2"}
+    longest = longest_analysis_seconds(AnalysisPolicy(attempt_timeout_seconds=600, max_attempts=2))
+    root = temporary_folder / "openmarketer-analysis"
+    left_behind, in_progress = root / "left-behind", root / "in-progress"
+    for folder, age in ((left_behind, longest + 60), (in_progress, longest - 60)):
+        folder.mkdir(parents=True)
+        os.utime(folder, (time.time() - age, time.time() - age))
+    wired({**MODEL, **limits})
+    assert (left_behind.exists(), in_progress.exists()) == (False, True)
+
+
+def test_folder_of_clones_that_cannot_be_the_workers_is_an_error_of_the_system(temporary_folder):
+    (temporary_folder / "openmarketer-analysis").write_text("not a folder")
+    with pytest.raises(OSError):
+        wired(MODEL)
+
+
 # ------------------------------------------------- what the worker is handed
-def test_worker_is_handed_the_workflow_and_its_three_activities_on_the_analysis_queue():
+def test_worker_is_handed_the_workflow_and_its_activities_on_the_analysis_queue():
     agent = wired(MODEL)
     assert agent.task_queue == ANALYSIS_TASK_QUEUE
     assert list(agent.workflows) == [AnalyzeRepository]
     assert [getattr(activity, "__name__", "") for activity in agent.activities] == [
+        RUN_GRAPH_STEP,
+        RUN_ACTION,
+        FORGET_RUN,
         steps.START_RUN,
-        steps.ANALYSE_AND_STORE,
         steps.RECORD_FAILURE,
     ]
 

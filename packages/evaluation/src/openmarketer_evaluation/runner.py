@@ -1,9 +1,10 @@
 """Running the analyzer on a golden case and keeping what it produced.
 
-The analyzer is reached through ``analyze_repository``, the operation the
-worker runs: clone the pinned commit, scan it, run the extractors, draft the
-profile. Nothing of the analyzer's inside is used, so what is measured is what
-a user gets.
+The analyzer is reached through ``analyze_repository``, which takes the steps the
+worker takes, in memory: clone the pinned commit, scan it, run the extractors,
+draft the profile with the analyzer's own graph. The worker takes them one by one,
+with checkpoints, so a difference between the two is a difference in how a run
+survives a failure, not in what is analysed.
 
 A run that ends without a profile is a result, not a failure of the benchmark:
 the clone failing, the model provider failing and the analyzer giving up are
@@ -26,10 +27,21 @@ from typing import Any
 from openmarketer_core.llm import ChatModel, ChatReply, LLMError
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.profile import Evidence, ProductProfile
-from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError, Limits
-from openmarketer_core.repository_analysis.extraction import Extractor
-from openmarketer_core.repository_analysis.intake import ExcludedFileError, IntakeError, RepoFiles
-from openmarketer_core.repository_analysis.pipeline import analyze_repository, failure_message
+from openmarketer_core.repository_analysis.analyzer_agent import Analysis, AnalysisError, Limits
+from openmarketer_core.repository_analysis.analyzer_agent.graph import analyze
+from openmarketer_core.repository_analysis.extraction import (
+    ExtractionResult,
+    Extractor,
+    run_extractors,
+)
+from openmarketer_core.repository_analysis.failures import failure_message
+from openmarketer_core.repository_analysis.intake import (
+    ExcludedFileError,
+    IntakeError,
+    IntakeResult,
+    RepoFiles,
+    run_intake,
+)
 from openmarketer_evaluation.cases import GoldenCase
 from openmarketer_evaluation.claims import claims_of
 from openmarketer_evaluation.results import (
@@ -152,6 +164,39 @@ def cited_claims(files: RepoFiles, profile: ProductProfile) -> list[CitedClaim]:
             excerpts.append(taken)
         cited.append(CitedClaim(key=claim.key, statement=claim.statement, excerpts=excerpts))
     return cited
+
+
+@dataclass(frozen=True)
+class RepositoryAnalysis:
+    """What one run produced: the snapshot it read, the extractor facts and the draft."""
+
+    intake: IntakeResult
+    extraction: ExtractionResult
+    analysis: Analysis
+
+
+def analyze_repository(
+    source: str,
+    clone_into: Path,
+    *,
+    model: ChatModel,
+    extractors: Sequence[Extractor],
+    limits: Limits | None = None,
+    commit: str | None = None,
+) -> RepositoryAnalysis:
+    """Clone ``source`` into ``clone_into`` and draft a Product Profile from it, in memory.
+
+    With ``commit`` (a full commit id) that commit is analysed instead of the
+    default branch. No access token is offered. Nothing is stored and no
+    checkpoint is kept, so a call that fails is made again from the start.
+
+    Raises ``IntakeError`` when the repository cannot be cloned or scanned, and
+    ``AnalysisError`` or ``LLMError`` when the analyzer does not produce a profile.
+    """
+    intake = run_intake(source, clone_into, commit=commit)
+    extraction = run_extractors(intake.files, extractors)
+    analysis = analyze(intake.files, model, facts=extraction.facts, limits=limits)
+    return RepositoryAnalysis(intake=intake, extraction=extraction, analysis=analysis)
 
 
 def run_analyzer(

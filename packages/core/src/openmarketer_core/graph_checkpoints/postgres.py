@@ -3,9 +3,9 @@
 Every graph that checkpoints uses this store; nothing in it is about one of
 them. ``run_checkpoints`` opens it for one attempt at a run on a connection of
 its own, so several runs can be executed at once, each from its own thread.
-What it yields goes to the graph (the analyzer's ``analyze``, through
-``analyze_repository``) and is asked to ``forget()`` the run when the run is
-over. One attempt at a time holds a run's checkpoints: a second one is refused
+What it yields goes to the graph (``agent_runtime.langgraph_steps.GraphThread``)
+and is asked to ``forget()`` the run when the run is over. One attempt at a
+time holds a run's checkpoints: a second one is refused
 (``AttemptInProgress``) instead of writing to the same thread.
 ``forget_checkpoints`` removes a run's checkpoints without holding them, for a
 caller that only records that the run is over. A failure of the store is a
@@ -23,9 +23,8 @@ with. A graph's state must therefore be plain data, as the analyzer's is.
 
 This module does not create the tables: the migrations do (see
 ``db/checkpoint_schema.py``), and the library's ``setup()`` is never called.
-It holds no rule about when an attempt continues from a checkpoint (each graph
-has its own; the analyzer's is
-``repository_analysis.analyzer_agent.rules.resumption``), does not name the
+It holds no rule about when an attempt continues from a checkpoint (a thread
+that has checkpoints is continued: ``agent_runtime.langgraph_steps.GraphThread``), does not name the
 thread of a run (the caller does; an analysis run's is
 ``db.analysis_runs.run_thread_id``) and has no cleanup rule: its caller
 forgets a run that is over, and the rule of its kind of run removes what was
