@@ -34,6 +34,7 @@ The model
 - Expect weak models: nested arguments sent as JSON text, schema defaults copied back, the same rejected submission repeated. Handle the shape in code and add a scripted-model test that reproduces it.
 - A run that hits a limit ends with a repaired profile and notes, or a clear `AnalysisError`; it never loops.
 - Never name a model in code: use the role (`repo_analyzer`).
+- The router and the chat client read no database. A caller that resolved the provider's key itself hands it in (`RouterChatModel.api_key`, `ModelRouter.headers(api_key)`), as the worker does for a run's workspace; without one the key is the environment's, which is all the CLI and the benchmark have. The key stays out of `repr`, errors and `AnalyzerState`: it lives in the attempt's context, which is never stored.
 - `@agent.tool` and `Toolbox` exist and the analyzer does not use them yet; its tools are `tools.py` over `RepoFiles`, run by `rules.run_tool_calls`.
 
 Tests use the scripted model: `packages/core/tests/test_analyzer.py` (rules and the in-memory run), `test_analyzer_steps.py` and `test_graph_checkpoints.py` (need PostgreSQL), and the runtime's `test_agent*.py`, `test_graph_thread.py`, `test_langgraph_agent.py`, `test_model_input.py`, `test_tools.py`. Live runs cost money or hit rate limits: ask first, run one at a time, report model, steps and cost.

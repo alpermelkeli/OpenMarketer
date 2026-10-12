@@ -18,6 +18,7 @@ The system clones repositories it does not trust and shows their content to lang
 - **Checkpoints.** They hold repository content while a run is in flight and have no workspace column. The strict serializer is never relaxed; state is plain data.
 - **Approval.** Approval is an authenticated user action, recorded from the server's identity; nothing a model says can approve.
 - **Tenancy.** Queries and routes are scoped to a workspace; an unscoped read needs a reason stated in the code.
+- **Stored credentials.** A value goes in and never comes out: follow it from the dashboard's field through the proxy and the API to the `credential` table, and from there to the worker's activity. Check that no response, validation error, log line, `repr`, query cache, workflow history or checkpoint holds it; that only `credential_value` decrypts and only the worker calls it; that a sealed value stays bound to its workspace and name; that the environment still wins; and that a stored token reaches intake under the same names, so the token-to-host rule is not repeated or bypassed. "Stored credentials" in `docs/status.md` lists what is known not to be covered.
 - **Leaks.** No credentials, tokens or `.env` values in logs, errors, test fixtures or commits.
 - **Layering.** The architecture in `AGENTS.md` is also a security boundary: flag a safety rule that sits in a prompt, a route or a component instead of in code the domain owns, and any adapter the domain imports directly.
 

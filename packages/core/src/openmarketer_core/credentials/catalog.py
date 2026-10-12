@@ -4,9 +4,9 @@ There are three, the secrets the code uses: the model provider's API key and
 the access tokens of the two repository hosts. Each has an environment
 variable, which is where it was configured before it could be stored.
 
-A value ends up in an HTTP ``Authorization`` header and in the input of git's
-credential helper, so it must not be able to break out of either: it is
-printable ASCII without a space, of a bounded length. A refusal names the rule
+A value ends up in an HTTP ``Authorization`` header, the model provider's or
+the one git sends to a repository host, so it must not be able to break out of
+one: it is printable ASCII without a space, of a bounded length. A refusal names the rule
 and never repeats the value or a part of it. A name the catalog does not have
 is not repeated either: it may be a secret written in the wrong place.
 

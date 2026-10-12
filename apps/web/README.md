@@ -1,6 +1,6 @@
 # OpenMarketer dashboard
 
-The web interface of OpenMarketer: see every project and where it stands, start an analysis of a repository and follow it, then review the drafted Product Profile, with the evidence and confidence behind every claim, correct it, approve it, and look back through its versions. Next.js 16, React 19, Tailwind 4, shadcn/ui (Base UI), TanStack Query.
+The web interface of OpenMarketer: see every project and where it stands, start an analysis of a repository and follow it, then review the drafted Product Profile, with the evidence and confidence behind every claim, correct it, approve it, and look back through its versions; and, under Settings, store the installation's credentials. Next.js 16, React 19, Tailwind 4, shadcn/ui (Base UI), TanStack Query.
 
 What it does, what it works around and how it was checked is in [docs/status.md](../../docs/status.md#the-dashboard).
 
@@ -32,7 +32,7 @@ pnpm api:types:check   # fail if that file is stale
 
 ## Do not expose it
 
-There is no login. The API trusts requests from this machine, and the dashboard's proxy (`src/lib/server/api-proxy.ts`) trusts requests from the dashboard's own page. Both listen on `127.0.0.1`. Binding the dashboard to another address, or putting it behind a reverse proxy, lets anyone who can reach it approve a profile.
+There is no login. The API trusts requests from this machine, and the dashboard's proxy (`src/lib/server/api-proxy.ts`) trusts requests from the dashboard's own page. Both listen on `127.0.0.1`. Binding the dashboard to another address, or putting it behind a reverse proxy, lets anyone who can reach it approve a profile, and store, replace or remove the installation's credentials: whoever replaces the model provider's key with their own has every later analysis send the repository's content through an account they control. The proxy protects against another web site, not against a program on this machine, which can call the API on `127.0.0.1:8000` directly.
 
 ## Where things are
 
@@ -44,6 +44,6 @@ There is no login. The API trusts requests from this machine, and the dashboard'
 | `src/components/ui` | shadcn primitives, added with the shadcn CLI |
 | `src/lib/api` | Generated types, the typed client, query and mutation hooks |
 | `src/lib/server` | The proxy's rules |
-| `src/lib/profile`, `src/lib/analysis`, `src/lib/projects` | Pure display logic, with tests |
+| `src/lib/profile`, `src/lib/analysis`, `src/lib/projects`, `src/lib/settings` | Pure display logic, with tests |
 
 The typefaces are Hedvig Letters Sans and Hedvig Letters Serif (SIL Open Font License 1.1) and Geist Mono (SIL Open Font License 1.1), loaded through `next/font`.
