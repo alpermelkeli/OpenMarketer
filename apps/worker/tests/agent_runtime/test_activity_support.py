@@ -11,9 +11,8 @@ from dataclasses import replace
 from datetime import timedelta
 
 import pytest
-from langgraph.checkpoint.base import empty_checkpoint
 from scripted_actions import nested, worded_while_handling
-from scripted_rig import happened
+from scripted_rig import a_thread_with_a_checkpoint, happened
 from sqlalchemy import text
 from temporalio.api.failure.v1 import Failure
 from temporalio.converter import DataConverter
@@ -300,9 +299,7 @@ def test_forgetting_removes_the_checkpoints_of_the_thread_and_only_that_thread(c
             return conn.execute(query, {"thread": thread}).scalar_one()
 
     for thread in ("scripted-agent:forgotten", "scripted-agent:kept"):
-        with checkpoints.of_attempt(thread) as held:
-            config = {"configurable": {"thread_id": thread, "checkpoint_ns": ""}}
-            held.store.put(config, empty_checkpoint(), {"source": "loop", "step": 1}, {})
+        a_thread_with_a_checkpoint(checkpoints, thread)
     checkpoints.forget("scripted-agent:forgotten")
     assert (stored("scripted-agent:forgotten"), stored("scripted-agent:kept")) == (0, 1)
 

@@ -21,7 +21,12 @@ from temporalio.exceptions import (
 )
 from temporalio.worker import Worker
 
-from openmarketer_worker.agent_runtime.vocabulary import DatabaseWritePolicy, FailureTexts
+from openmarketer_worker.agent_runtime.vocabulary import (
+    UNKNOWN_ACTION,
+    WORDED_BY_THE_RUNTIME,
+    DatabaseWritePolicy,
+    FailureTexts,
+)
 from openmarketer_worker.agent_runtime.workflow_support import reason_shown
 
 # An agent's own words: the helper holds none.
@@ -52,11 +57,14 @@ def from_an_activity(cause: BaseException | None) -> ActivityError:
 
 # ------------------------------------------------------------------ reason_shown
 def test_cancelled_workflow_is_shown_as_cancelled():
-    assert reason_shown(CancelledError("cancelled"), TEXTS) == TEXTS.cancelled
+    assert reason_shown(CancelledError("cancelled"), TEXTS, worded_types=WORDED) == TEXTS.cancelled
 
 
 def test_activity_that_was_cancelled_is_shown_as_cancelled():
-    assert reason_shown(from_an_activity(CancelledError("cancelled")), TEXTS) == TEXTS.cancelled
+    assert (
+        reason_shown(from_an_activity(CancelledError("cancelled")), TEXTS, worded_types=WORDED)
+        == TEXTS.cancelled
+    )
 
 
 def test_failure_an_activity_worded_is_shown_with_its_own_message():
@@ -72,16 +80,33 @@ def test_failure_of_a_type_nobody_worded_is_shown_in_the_fixed_words():
     )
 
 
-def test_every_failure_is_worded_when_the_agent_gives_no_types():
-    worded_by_a_handler = ApplicationError("the mail server refused it", type="Refused")
+def test_failure_of_a_type_the_runtime_words_is_shown_with_its_message_when_the_agent_adds_none():
+    refused = ApplicationError("action 'x' is not one of the allowed actions", type=UNKNOWN_ACTION)
     assert (
-        reason_shown(from_an_activity(worded_by_a_handler), TEXTS) == "the mail server refused it"
+        reason_shown(from_an_activity(refused), TEXTS, worded_types=WORDED_BY_THE_RUNTIME)
+        == refused.message
+    )
+
+
+def test_failure_the_workers_library_made_is_shown_in_the_fixed_words():
+    listing_every_activity = ApplicationError(
+        "Activity function run_action is not registered on this worker, available activities: a, b",
+        type="NotFoundError",
+    )
+    assert (
+        reason_shown(
+            from_an_activity(listing_every_activity), TEXTS, worded_types=WORDED_BY_THE_RUNTIME
+        )
+        == TEXTS.stopped_unexpectedly
     )
 
 
 def test_message_that_says_nothing_is_shown_in_the_fixed_words():
-    silent = ApplicationError("", type="Refused")
-    assert reason_shown(from_an_activity(silent), TEXTS) == TEXTS.stopped_unexpectedly
+    silent = ApplicationError("", type="CampaignRefused")
+    assert (
+        reason_shown(from_an_activity(silent), TEXTS, worded_types=WORDED)
+        == TEXTS.stopped_unexpectedly
+    )
 
 
 def test_failure_the_workflow_raised_itself_is_shown_with_its_own_message():
@@ -91,18 +116,23 @@ def test_failure_the_workflow_raised_itself_is_shown_with_its_own_message():
 
 def test_attempt_that_took_too_long_is_shown_as_timed_out():
     slow = TimeoutError("timed out", type=TimeoutType.START_TO_CLOSE, last_heartbeat_details=[])
-    assert reason_shown(from_an_activity(slow), TEXTS) == TEXTS.timed_out
+    assert reason_shown(from_an_activity(slow), TEXTS, worded_types=WORDED) == TEXTS.timed_out
 
 
 def test_worker_that_stopped_sending_heartbeats_is_shown_as_stopped():
     silent = TimeoutError("timed out", type=TimeoutType.HEARTBEAT, last_heartbeat_details=[])
-    assert reason_shown(from_an_activity(silent), TEXTS) == TEXTS.worker_stopped
+    assert (
+        reason_shown(from_an_activity(silent), TEXTS, worded_types=WORDED) == TEXTS.worker_stopped
+    )
 
 
 def test_failure_without_a_cause_is_shown_in_the_fixed_words():
-    assert reason_shown(from_an_activity(None), TEXTS) == TEXTS.stopped_unexpectedly
     assert (
-        reason_shown(RuntimeError("a message written for a log"), TEXTS)
+        reason_shown(from_an_activity(None), TEXTS, worded_types=WORDED)
+        == TEXTS.stopped_unexpectedly
+    )
+    assert (
+        reason_shown(RuntimeError("a message written for a log"), TEXTS, worded_types=WORDED)
         == TEXTS.stopped_unexpectedly
     )
 

@@ -1,23 +1,20 @@
 """The greeter's graph: a node that asks for a greeting, and where the run goes from there.
 
 Only the worker's process loads this module: it imports LangGraph's side of core. Importing it is
-also what registers the nodes on the agent, so ``handlers.py`` imports the functions below.
+also what registers the nodes on the agent, so ``wiring.py`` imports the functions below. The
+node reads whom to greet from the run's context and keeps no state of its own.
 """
 
-import uuid
 from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel
 from scripted_graphs import asking_for
 
-from dsl.definitions import Greet, Greeting, Unlisted, agent
+from dsl.definitions import Greet, GreeterContext, Greeting, Unlisted, agent
 from openmarketer_core.agent_runtime.agent import END
 from openmarketer_core.agent_runtime.langgraph_steps import request_action
 from openmarketer_core.agent_runtime.steps import GraphRunRef
-
-# Who each run greets. A real agent reads this from its run's row in the database.
-subjects: dict[uuid.UUID, str] = {}
 
 # Subjects that make the graph ask for what it must not, as a model that was led astray would.
 ASKS_FOR_ANOTHER_AGENTS_ACTION = "asks for another agent's action"
@@ -25,7 +22,7 @@ ASKS_WITH_A_PAYLOAD_THAT_DOES_NOT_FIT = "asks with a payload that does not fit"
 
 
 def initial_state(run: GraphRunRef) -> dict[str, Any]:
-    return {"name": subjects.get(run.run_id, "Ada"), "reply": "", "summary": ""}
+    return {"reply": "", "summary": ""}
 
 
 def final_result(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -34,8 +31,8 @@ def final_result(state: Mapping[str, Any]) -> dict[str, Any]:
 
 
 @agent.node(start=True)
-def ask(state: Greeting) -> dict[str, Any]:
-    outcome = request_action(_greeting_asked_for(state["name"]))
+def ask(state: Greeting, context: GreeterContext) -> dict[str, Any]:
+    outcome = request_action(_greeting_asked_for(context.subject))
     return {"reply": outcome.result["text"] if outcome.succeeded else ""}
 
 

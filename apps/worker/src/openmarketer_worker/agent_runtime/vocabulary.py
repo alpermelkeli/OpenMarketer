@@ -16,7 +16,7 @@ nothing: which failure ends a run and what a text says are used by ``driver.py``
 
 from dataclasses import dataclass, fields
 
-from openmarketer_core.agent_runtime.actions import ActionOutcome
+from openmarketer_core.agent_runtime.actions import ActionOutcome, require_positive
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 
 RUN_GRAPH_STEP = "run_graph_step"
@@ -46,6 +46,7 @@ INVALID_ACTION_PAYLOAD = "InvalidActionPayload"  # the payload does not fit the 
 ACTION_RESULT_TOO_LARGE = "ActionResultTooLarge"  # the result is over ``MAX_RESULT_BYTES``
 INVALID_ACTION_RESULT = "InvalidActionResult"  # the result is not JSON
 TOO_MANY_ACTIONS = "TooManyActions"  # the run asked for more actions than its policy allows
+RUN_OF_ANOTHER_KIND = "RunOfAnotherKind"  # a workflow was started with another agent's run
 
 # A failure of these types ends the run instead of being told to the graph: the fault is in the
 # agent's graph, routes or handlers and not in the world, so the graph would only ask again.
@@ -54,6 +55,26 @@ RUN_ENDING_ACTION_FAILURES = (
     INVALID_ACTION_PAYLOAD,
     ACTION_RESULT_TOO_LARGE,
     INVALID_ACTION_RESULT,
+)
+
+# The failure types of the runtime itself whose message was chosen for whoever reads it: a fixed
+# sentence, or one that names the action, the node or the fields at fault and never a value the
+# graph, a model or a host wrote. They are what a run is told, and shown, as they are. Every
+# other type is shown in the fixed words of the agent's texts, because Temporal and an agent's
+# own activities raise errors too (a database driver's, with the host it could not reach; the
+# worker's, listing every activity it has), and a message written for a log must not reach a
+# run's record, the dashboard or a model. An agent adds the types its own activities and
+# handlers word, and never removes one of these.
+WORDED_BY_THE_RUNTIME = (
+    UNKNOWN_ACTION,
+    INVALID_ACTION_PAYLOAD,
+    ACTION_RESULT_TOO_LARGE,
+    INVALID_ACTION_RESULT,
+    TOO_MANY_ACTIONS,
+    STEP_REFUSED,
+    ATTEMPT_STILL_RUNNING,
+    DATABASE_UNAVAILABLE,
+    UNEXPECTED,
 )
 
 # What the runtime lets into the workflow history, which is stored for as long as the namespace
@@ -114,15 +135,36 @@ ACTION_TEXTS = FailureTexts(
 )
 
 
+def _require_whole_number(value: int, name: str, *, at_least: int) -> None:
+    # Temporal is given a count as a number it can use, never as a float or a bool.
+    if isinstance(value, bool) or not isinstance(value, int) or value < at_least:
+        raise ValueError(f"{name} must be a whole number of at least {at_least}, not {value!r}")
+
+
 @dataclass(frozen=True)
 class DatabaseWritePolicy:
-    """Limits of an activity that is one short database transaction."""
+    """Limits of an activity that is one short database transaction.
+
+    Checked when it is made, as a policy is a constant of the agent's modules or is built from
+    settings that were checked when the worker started: a value Temporal cannot use fails the
+    workflow task, which is tried again for ever.
+    """
 
     attempt_timeout_seconds: float
     retry_after_seconds: float
     max_retry_wait_seconds: float
     max_attempts: int = 0  # 0: no limit on attempts, only on time
     give_up_after_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        require_positive(
+            attempt_timeout_seconds=self.attempt_timeout_seconds,
+            retry_after_seconds=self.retry_after_seconds,
+            max_retry_wait_seconds=self.max_retry_wait_seconds,
+        )
+        if self.give_up_after_seconds is not None:
+            require_positive(give_up_after_seconds=self.give_up_after_seconds)
+        _require_whole_number(self.max_attempts, "max_attempts", at_least=0)
 
 
 # What ends every run of a graph: forgetting its checkpoints is a few deletes of one thread's
@@ -157,16 +199,12 @@ class GraphRunPolicy:
     max_actions: int = 200
 
     def __post_init__(self) -> None:
-        _require_positive(
+        require_positive(
             attempt_timeout_seconds=self.attempt_timeout_seconds,
             heartbeat_timeout_seconds=self.heartbeat_timeout_seconds,
             max_attempts=self.max_attempts,
             retry_after_seconds=self.retry_after_seconds,
             max_actions=self.max_actions,
         )
-
-
-def _require_positive(**limits: float) -> None:
-    for name, value in limits.items():
-        if value <= 0:
-            raise ValueError(f"{name} must be more than 0, not {value}")
+        _require_whole_number(self.max_attempts, "max_attempts", at_least=1)
+        _require_whole_number(self.max_actions, "max_actions", at_least=1)

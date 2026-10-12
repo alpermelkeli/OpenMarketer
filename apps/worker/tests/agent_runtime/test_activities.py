@@ -6,6 +6,7 @@ the activities behave when Temporal retries them, is in ``test_driver.py``.
 
 import asyncio
 import logging
+import threading
 import uuid
 from contextlib import AbstractContextManager
 from dataclasses import replace
@@ -30,7 +31,7 @@ from scripted_graphs import (
     asks_with_an_unregistered_model,
     steps_of_an_agent_whose_route_chooses_outside_its_targets,
 )
-from scripted_rig import happened, some_run, thread_of
+from scripted_rig import KIND, a_thread_with_a_checkpoint, happened, some_run, thread_of
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
@@ -54,10 +55,19 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     STEP_REFUSED,
     UNEXPECTED,
     UNKNOWN_ACTION,
+    FailureTexts,
     StepInput,
 )
 
 SECRET = "sk-live-4242-not-for-the-run"
+# Words of an agent of its own, to tell them from the runtime's.
+OWN_TEXTS = FailureTexts(
+    stopped_unexpectedly="the greeting stopped unexpectedly",
+    timed_out="the greeting did not finish in time",
+    worker_stopped="the worker running the greeting stopped responding",
+    cancelled="the greeting was cancelled",
+    database_failed="the greeting could not reach its database",
+)
 
 
 def asking_for(name: str, payload: dict, *, run=None) -> ActionRequest:
@@ -241,7 +251,7 @@ async def test_node_that_asks_with_a_model_no_action_was_declared_for_is_refused
 
 async def test_route_that_chooses_outside_its_targets_is_refused_for_good(runtime):
     graph = steps_of_an_agent_whose_route_chooses_outside_its_targets()
-    activities = runtime(graph, routes_of(*two_handlers()))
+    activities = runtime(graph, routes_of(*two_handlers()), kind="scripted-route")
     run = GraphRunRef(kind="scripted-route", run_id=uuid.uuid4())
     failure = await refused(activities.run_graph_step, StepInput(run, None))
     assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
@@ -288,13 +298,42 @@ async def test_step_that_finishes_with_an_output_that_is_not_json_is_refused_for
     assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
 
 
-async def test_step_whose_kind_of_run_cannot_name_a_thread_is_refused_for_good(runtime):
+UNNAMEABLE_KIND = "Not a kind!"
+OTHER_KINDS = pytest.mark.parametrize(
+    "kind",
+    ["another-agent", UNNAMEABLE_KIND, "x" * 500],
+    ids=["another-agent", "not-a-kind", "500-characters"],
+)
+
+
+@OTHER_KINDS
+async def test_step_of_a_run_of_another_kind_is_refused_for_good_and_the_graph_is_not_asked(
+    runtime, kind
+):
     graph = ScriptedGraph([])
     activities = runtime(graph, routes_of(ScriptedAction(), ScriptedAction()))
-    unnamed = GraphRunRef(kind="Not a kind!", run_id=uuid.uuid4())
-    failure = await refused(activities.run_graph_step, StepInput(unnamed, None))
+    stranger = GraphRunRef(kind=kind, run_id=uuid.uuid4())
+    failure = await refused(activities.run_graph_step, StepInput(stranger, None))
     assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
     assert graph.advanced == []
+
+
+async def test_step_of_a_run_of_another_kind_is_refused_before_the_thread_is_taken(
+    runtime, checkpoints
+):
+    activities = runtime(ScriptedGraph([]), routes_of(ScriptedAction(), ScriptedAction()))
+    stranger = GraphRunRef(kind="another-agent", run_id=uuid.uuid4())
+    with checkpoints.of_attempt(thread_of(stranger)):
+        failure = await refused(activities.run_graph_step, StepInput(stranger, None))
+    # Not "an earlier attempt is still running", which would be tried again.
+    assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
+
+
+async def test_message_of_the_refusal_of_a_kind_is_short_whatever_the_kind(runtime):
+    activities = runtime(ScriptedGraph([]), routes_of(ScriptedAction(), ScriptedAction()))
+    stranger = GraphRunRef(kind="x" * 5000, run_id=uuid.uuid4())
+    failure = await refused(activities.run_graph_step, StepInput(stranger, None))
+    assert len(failure.message) < 300
 
 
 # ------------------------------------------------------------------ run_action
@@ -490,7 +529,9 @@ def forgetting_fails_with(error: Exception) -> RuntimeActivities:
         raise error
 
     access = CheckpointAccess(of_attempt=never_attempted, forget=forget)
-    return RuntimeActivities(access, ScriptedGraph([]), routes_of(*two_handlers()))
+    return RuntimeActivities(
+        access, ScriptedGraph([]), routes_of(*two_handlers()), kind=KIND, texts=RUN_TEXTS
+    )
 
 
 async def test_forget_run_does_not_fail_for_a_database_that_is_down(caplog):
@@ -508,8 +549,118 @@ async def test_forget_run_that_stops_on_an_error_nobody_worded_is_tried_again_wi
     assert SECRET not in str(failure)
 
 
-async def test_forget_run_of_a_kind_that_cannot_name_a_thread_is_refused_for_good(runtime):
+@OTHER_KINDS
+async def test_forget_run_of_a_run_of_another_kind_is_refused_for_good(runtime, kind):
     activities = runtime(ScriptedGraph([]), routes_of(*two_handlers()))
-    unnamed = GraphRunRef(kind="Not a kind!", run_id=uuid.uuid4())
-    failure = await refused(activities.forget_run, unnamed)
+    stranger = GraphRunRef(kind=kind, run_id=uuid.uuid4())
+    failure = await refused(activities.forget_run, stranger)
     assert (failure.type, failure.non_retryable) == (STEP_REFUSED, True)
+
+
+async def test_forget_run_of_a_run_of_another_kind_removes_nothing_and_ends_nothing(
+    runtime, checkpoints, database
+):
+    ended: list[GraphRunRef] = []
+    activities = runtime(ScriptedGraph([]), routes_of(*two_handlers()), on_run_end=ended.append)
+    stranger = GraphRunRef(kind="another-agent", run_id=uuid.uuid4())
+    a_thread_with_a_checkpoint(checkpoints, thread_of(stranger))
+    await refused(activities.forget_run, stranger)
+    assert database.thread_has_checkpoints(thread_of(stranger))
+    assert ended == []
+
+
+# ------------------------------------------------------------------ the agent's words
+async def test_step_that_stops_on_an_error_nobody_worded_is_told_in_the_words_of_the_agent(runtime):
+    graph = RaisingGraph(RuntimeError(SECRET))
+    activities = runtime(graph, routes_of(*two_handlers()), texts=OWN_TEXTS)
+    failure = await refused(activities.run_graph_step, StepInput(some_run(), None))
+    assert (failure.type, failure.message) == (UNEXPECTED, OWN_TEXTS.stopped_unexpectedly)
+
+
+async def test_step_that_cannot_reach_the_database_is_told_in_the_words_of_the_agent(runtime):
+    graph = RaisingGraph(DatabaseError("connection is closed"))
+    activities = runtime(graph, routes_of(*two_handlers()), texts=OWN_TEXTS)
+    failure = await refused(activities.run_graph_step, StepInput(some_run(), None))
+    assert (failure.type, failure.message) == (DATABASE_UNAVAILABLE, OWN_TEXTS.database_failed)
+
+
+async def test_action_that_stops_on_an_error_nobody_worded_is_told_in_the_words_of_the_runtime(
+    runtime,
+):
+    send = ScriptedAction([RuntimeError(SECRET)])
+    activities = runtime(ScriptedGraph([]), routes_of(send, ScriptedAction()), texts=OWN_TEXTS)
+    failure = await refused(activities.run_action, asking_for("send_email", {"to": "ada"}))
+    assert failure.message == ACTION_TEXTS.stopped_unexpectedly
+
+
+# ------------------------------------------------------- what the agent is told of a run's end
+async def test_forget_run_tells_the_agent_that_the_run_ended_once_its_checkpoints_are_gone(
+    runtime, database
+):
+    seen: list[tuple[GraphRunRef, bool]] = []
+    run = some_run()
+
+    def ended(ended_run: GraphRunRef) -> None:
+        seen.append((ended_run, database.thread_has_checkpoints(thread_of(ended_run))))
+
+    activities = runtime(
+        ScriptedGraph(SEND_THEN_PUBLISH), routes_of(*two_handlers()), on_run_end=ended
+    )
+    await ActivityEnvironment().run(activities.run_graph_step, StepInput(run, None))
+    await ActivityEnvironment().run(activities.forget_run, run)
+    assert seen == [(run, False)]
+
+
+async def test_forget_run_tells_the_agent_from_a_thread_of_its_own_and_not_the_event_loop(runtime):
+    threads: list[int] = []
+    activities = runtime(
+        ScriptedGraph([]),
+        routes_of(*two_handlers()),
+        on_run_end=lambda run: threads.append(threading.get_ident()),
+    )
+    await ActivityEnvironment().run(activities.forget_run, some_run())
+    assert threads != [] and threads != [threading.get_ident()]
+
+
+async def test_forget_run_does_not_fail_when_the_agent_cannot_release_what_the_run_left(
+    runtime, caplog
+):
+    def cannot(run: GraphRunRef) -> None:
+        raise OSError(f"cannot remove /tmp/clone-1234 {SECRET}")
+
+    activities = runtime(ScriptedGraph([]), routes_of(*two_handlers()), on_run_end=cannot)
+    with caplog.at_level(logging.ERROR):
+        assert await ActivityEnvironment().run(activities.forget_run, some_run()) is None
+    assert "releasing what the run left failed" in caplog.text
+
+
+async def test_forget_run_tells_the_agent_even_when_the_database_is_down(caplog):
+    ended: list[GraphRunRef] = []
+
+    def forget(thread_id: str) -> None:
+        raise DatabaseError("connection is closed")
+
+    access = CheckpointAccess(of_attempt=never_attempted, forget=forget)
+    activities = RuntimeActivities(
+        access,
+        ScriptedGraph([]),
+        routes_of(*two_handlers()),
+        kind=KIND,
+        texts=RUN_TEXTS,
+        on_run_end=ended.append,
+    )
+    run = some_run()
+    with caplog.at_level(logging.WARNING):
+        await ActivityEnvironment().run(activities.forget_run, run)
+    assert ended == [run]
+
+
+def test_activities_of_a_kind_that_cannot_name_a_thread_are_refused_when_they_are_made(checkpoints):
+    with pytest.raises(ValueError, match="Not a kind!"):
+        RuntimeActivities(
+            checkpoints,
+            ScriptedGraph([]),
+            routes_of(*two_handlers()),
+            kind=UNNAMEABLE_KIND,
+            texts=RUN_TEXTS,
+        )

@@ -12,24 +12,40 @@ from pathlib import Path
 
 import pytest
 
+from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_worker.agent_runtime.activities import AgentGraph, RuntimeActivities
 from openmarketer_worker.agent_runtime.routes import ActionRoutes
+from openmarketer_worker.agent_runtime.vocabulary import RUN_TEXTS, FailureTexts
 
 # The workflow sandbox imports the module of a workflow by name, and the test folders are not
 # packages: this makes ``scripted_agent`` importable the way an agent's workflow module is.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from scripted_rig import Execution, serving_runs  # noqa: E402
+from scripted_rig import KIND, Execution, serving_runs  # noqa: E402
 
 Serving = Callable[[RuntimeActivities], AbstractAsyncContextManager[Execution]]
 
 
 @pytest.fixture
 def runtime(checkpoints) -> Callable[..., RuntimeActivities]:
-    """The runtime's activities for a graph and routes, on the test database."""
+    """The runtime's activities for a graph and routes, on the test database.
 
-    def activities(graph: AgentGraph, routes: ActionRoutes) -> RuntimeActivities:
-        return RuntimeActivities(checkpoints, graph, routes)
+    They are the scripted agent's (``KIND``) unless a test gives another kind, in the runtime's
+    own words unless it gives others, and tell ``on_run_end`` of the runs they forget, if it
+    gives one.
+    """
+
+    def activities(
+        graph: AgentGraph,
+        routes: ActionRoutes,
+        *,
+        kind: str = KIND,
+        texts: FailureTexts = RUN_TEXTS,
+        on_run_end: Callable[[GraphRunRef], None] | None = None,
+    ) -> RuntimeActivities:
+        return RuntimeActivities(
+            checkpoints, graph, routes, kind=kind, texts=texts, on_run_end=on_run_end
+        )
 
     return activities
 

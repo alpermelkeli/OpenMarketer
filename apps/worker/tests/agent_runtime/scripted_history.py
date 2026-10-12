@@ -69,6 +69,26 @@ def exchanges(history: WorkflowHistory) -> list[Exchange]:
     ]
 
 
+def completed(history: WorkflowHistory) -> list[str]:
+    """The names of the activities that completed, in the order they did.
+
+    An activity that was scheduled and never completed is not in it: a workflow that closed
+    while its activity was pending leaves no completion behind.
+    """
+    scheduled: dict[int, str] = {}
+    names: list[str] = []
+    for event in history.events:
+        if event.HasField("activity_task_scheduled_event_attributes"):
+            scheduled[event.event_id] = (
+                event.activity_task_scheduled_event_attributes.activity_type.name
+            )
+        elif event.HasField("activity_task_completed_event_attributes"):
+            names.append(
+                scheduled[event.activity_task_completed_event_attributes.scheduled_event_id]
+            )
+    return names
+
+
 @dataclass(frozen=True)
 class ScheduledWith:
     """The limits Temporal was asked to run an activity under."""

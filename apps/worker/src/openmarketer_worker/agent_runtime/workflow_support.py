@@ -8,7 +8,7 @@ shown to the person who asked for it.
 This is workflow code: deterministic, with nothing that reaches the network,
 the file system, the clock or the environment, and the sandbox loads it. It
 holds no agent's wording and no failure type of an agent: both come in as
-arguments (``FailureTexts``, the types an agent's activities word themselves).
+arguments (``FailureTexts``, the types whose messages were chosen to be shown).
 """
 
 from __future__ import annotations
@@ -63,26 +63,23 @@ async def database_write(
 
 
 def reason_shown(
-    failure: BaseException,
-    texts: FailureTexts,
-    *,
-    worded_types: Collection[str] | None = None,
+    failure: BaseException, texts: FailureTexts, *, worded_types: Collection[str]
 ) -> str:
     """The reason to show for ``failure``: the activity's own wording, or a fixed text.
 
     A failure raised by an activity (or by the workflow) carries a message
-    written for whoever reads it when its type is one of ``worded_types``, or
-    whatever its type is when that is ``None``: the activities of an agent that
-    word every failure they raise. Anything else (a timeout, a worker that
-    stopped, an error nobody worded) is told in the fixed words of ``texts``,
-    so a message written for a log never reaches a run.
+    written for whoever reads it only when its type is one of ``worded_types``.
+    Anything else (a timeout, a worker that stopped, an error nobody worded, one the
+    worker's library or a database driver raised) is told in the fixed words of
+    ``texts``, so a message written for a log never reaches a run. There is no
+    default: a caller says which types it trusts (``vocabulary.WORDED_BY_THE_RUNTIME``
+    are the runtime's own), and a call that trusted every type would be one that
+    forgot to choose.
     """
     if is_cancelled_exception(failure):
         return texts.cancelled
     reason = failure if isinstance(failure, ApplicationError) else failure.__cause__
-    if isinstance(reason, ApplicationError) and (
-        worded_types is None or reason.type in worded_types
-    ):
+    if isinstance(reason, ApplicationError) and reason.type in worded_types:
         # An empty message tells nothing, and a failed outcome must say what went wrong.
         return reason.message or texts.stopped_unexpectedly
     if isinstance(reason, TimeoutError):

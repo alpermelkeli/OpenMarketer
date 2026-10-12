@@ -17,7 +17,7 @@ from scripted_actions import (
     WatchingAction,
     routes_of,
 )
-from scripted_agent import RecordsEveryFailure, RecordsLikeTheAnalyzer
+from scripted_agent import RecordsEveryFailure, RecordsLikeTheAnalyzer, ScriptedAgent
 from scripted_graphs import (
     SEND_THEN_PUBLISH,
     Ask,
@@ -29,7 +29,9 @@ from scripted_graphs import (
 from scripted_history import exchanges, failures_in
 from scripted_rig import (
     ALLOWED,
+    REFUSED_BY_A_HANDLER,
     STEP_LIMITS,
+    Execution,
     cause_of,
     failed_an_attempt_with,
     happened,
@@ -45,6 +47,7 @@ from temporalio.exceptions import (
     TimeoutError,
     TimeoutType,
 )
+from temporalio.worker import Worker
 
 from openmarketer_core.agent_runtime.actions import ActionPolicy
 from openmarketer_core.agent_runtime.steps import MissingInitialState, StepOutcome
@@ -53,6 +56,7 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     ACTION_TEXTS,
     MAX_ERROR_CHARACTERS,
     MAX_RESULT_BYTES,
+    WORDED_BY_THE_RUNTIME,
 )
 
 SECRET = "sk-live-4242-not-for-history"
@@ -162,7 +166,7 @@ async def test_action_that_fails_for_good_is_told_to_the_graph_with_the_handlers
     runtime, serving
 ):
     refused = ApplicationError(
-        "the mail server refused the address", type="Refused", non_retryable=True
+        "the mail server refused the address", type=REFUSED_BY_A_HANDLER, non_retryable=True
     )
     send = ScriptedAction([refused, {"message_id": "never"}])
     graph, run = ScriptedGraph(SEND_THEN_PUBLISH[:1]), some_run()
@@ -171,6 +175,40 @@ async def test_action_that_fails_for_good_is_told_to_the_graph_with_the_handlers
     assert len(send.calls) == 1
     assert output["answers"][0]["succeeded"] is False
     assert output["answers"][0]["error"] == "the mail server refused the address"
+
+
+async def test_failure_of_a_type_the_agent_did_not_declare_is_told_to_the_graph_as_unexpected(
+    runtime, serving
+):
+    refused = ApplicationError(
+        "the mail server refused the address", type=REFUSED_BY_A_HANDLER, non_retryable=True
+    )
+    send = ScriptedAction([refused])
+    graph, run = ScriptedGraph(SEND_THEN_PUBLISH[:1]), some_run()
+    runtimes_own_types = list(WORDED_BY_THE_RUNTIME)
+    async with serving(runtime(graph, routes_of(send, ScriptedAction()))) as execution:
+        output = await execution.finish(run, worded_types=runtimes_own_types)
+    assert output["answers"][0]["error"] == ACTION_TEXTS.stopped_unexpectedly
+
+
+async def test_failure_the_workers_library_made_is_told_to_the_graph_as_unexpected(
+    runtime, temporal, task_queue
+):
+    # The worker serves the steps and not the action: the library fails the action itself, with
+    # a message that lists every activity the worker has.
+    activities = runtime(
+        ScriptedGraph(SEND_THEN_PUBLISH[:1]), routes_of(ScriptedAction(), ScriptedAction())
+    )
+    worker = Worker(
+        temporal,
+        task_queue=task_queue,
+        workflows=[ScriptedAgent],
+        activities=[activities.run_graph_step],
+    )
+    async with worker:
+        output = await Execution(temporal, task_queue).finish(some_run())
+    assert output["answers"][0]["error"] == ACTION_TEXTS.stopped_unexpectedly
+    assert "available activities" not in output["answers"][0]["error"]
 
 
 async def test_action_that_does_not_finish_in_time_is_told_to_the_graph_as_timed_out(
@@ -252,7 +290,7 @@ async def test_step_longer_than_the_heartbeat_timeout_of_the_workflow_goes_on_he
 # --------------------------------------------------------------------- what the graph is told
 async def test_error_told_to_the_graph_is_cut_to_its_limit(runtime, serving):
     long_reply = ApplicationError(
-        "the service said: " + "x" * 5000, type="Refused", non_retryable=True
+        "the service said: " + "x" * 5000, type=REFUSED_BY_A_HANDLER, non_retryable=True
     )
     send = ScriptedAction([long_reply])
     graph, run = ScriptedGraph(SEND_THEN_PUBLISH[:1]), some_run()

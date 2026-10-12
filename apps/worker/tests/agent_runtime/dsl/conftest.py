@@ -10,19 +10,17 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 import pytest
 from temporalio.worker import Worker
 
-from dsl import graph, handlers
 from dsl.rig import Forgetting, Starter
+from dsl.wiring import GreeterWorld, wire
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess
 
 Serving = Callable[[], AbstractAsyncContextManager[Starter]]
 
 
-@pytest.fixture(autouse=True)
-def a_fresh_outside_world(monkeypatch):
-    """No call, note or subject of an earlier test, and a service that does as the test says."""
-    monkeypatch.setattr(handlers, "service", handlers.GreetingService())
-    handlers.notes.clear()
-    graph.subjects.clear()
+@pytest.fixture
+def world() -> GreeterWorld:
+    """The outside world of one test: a service that does as the test says, and nothing noted."""
+    return GreeterWorld()
 
 
 @pytest.fixture
@@ -31,13 +29,13 @@ def forgetting(checkpoints, database) -> Forgetting:
 
 
 @pytest.fixture
-def serving(temporal, task_queue, checkpoints, forgetting) -> Serving:
+def serving(temporal, task_queue, checkpoints, forgetting, world) -> Serving:
     """A worker serving the greeter's registration on the test's own queue."""
     forgetful = CheckpointAccess(of_attempt=checkpoints.of_attempt, forget=forgetting)
 
     @asynccontextmanager
     async def serve() -> AsyncIterator[Starter]:
-        registration = handlers.registration(forgetful)
+        registration = wire(world, forgetful)
         async with Worker(
             temporal,
             task_queue=task_queue,

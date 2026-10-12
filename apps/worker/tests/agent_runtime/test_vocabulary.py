@@ -1,20 +1,23 @@
-"""Tests for the plain data the workflow and the activities share: limits and texts.
+"""Tests for the plain data the workflow and the activities share: limits, texts and failure types.
 
 A limit that would make Temporal retry for ever is refused when it is made, and the types that
 cross between the workflow and the activities are shown to survive the data converter that
 carries them, with annotations that are types and not text (the sandbox's converter needs that).
-Core's ``ActionPolicy`` is checked in core's tests; only its journey through the converter is here.
+Core's ``ActionPolicy``, which is never a workflow's input, is checked in core's tests.
 """
 
 import dataclasses
 import uuid
+from typing import Any
 
 import pytest
 from temporalio.converter import DataConverter
 
-from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionPolicy, ActionRequest
+from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
 from openmarketer_worker.agent_runtime.vocabulary import (
+    RUN_ENDING_ACTION_FAILURES,
+    WORDED_BY_THE_RUNTIME,
     DatabaseWritePolicy,
     FailureTexts,
     GraphRunPolicy,
@@ -34,26 +37,65 @@ def converted[T](value: T) -> T:
 
 
 # ------------------------------------------------------------------ policies
-@pytest.mark.parametrize(
-    "limit",
-    [
-        "attempt_timeout_seconds",
-        "heartbeat_timeout_seconds",
-        "max_attempts",
-        "retry_after_seconds",
-        "max_actions",
-    ],
-)
-def test_graph_run_policy_with_a_limit_that_is_not_positive_is_refused(limit):
-    given = {
-        "attempt_timeout_seconds": 30,
-        "heartbeat_timeout_seconds": 60,
-        "max_attempts": 5,
-        "retry_after_seconds": 60,
-        "max_actions": 200,
-    } | {limit: 0}
+GRAPH_RUN_LIMITS: dict[str, Any] = {
+    "attempt_timeout_seconds": 30,
+    "heartbeat_timeout_seconds": 60,
+    "max_attempts": 5,
+    "retry_after_seconds": 60,
+    "max_actions": 200,
+}
+DATABASE_WRITE_LIMITS: dict[str, Any] = {
+    "attempt_timeout_seconds": 30,
+    "retry_after_seconds": 1,
+    "max_retry_wait_seconds": 60,
+    "max_attempts": 5,
+    "give_up_after_seconds": 3600,
+}
+# What Temporal cannot make a duration or a count of: it fails the workflow task, again and again.
+NOT_A_LIMIT = [0, -1, float("nan"), float("inf"), True]
+
+
+def with_limit(limits: dict[str, Any], name: str, value: Any) -> dict[str, Any]:
+    """``limits`` with the limit ``name`` set to ``value``."""
+    return {**limits, name: value}
+
+
+@pytest.mark.parametrize("limit", list(GRAPH_RUN_LIMITS))
+@pytest.mark.parametrize("value", NOT_A_LIMIT, ids=repr)
+def test_graph_run_policy_with_a_limit_that_is_not_a_positive_number_is_refused(limit, value):
     with pytest.raises(ValueError, match=limit):
-        GraphRunPolicy(**given)
+        GraphRunPolicy(**with_limit(GRAPH_RUN_LIMITS, limit, value))
+
+
+@pytest.mark.parametrize("count", ["max_attempts", "max_actions"])
+def test_graph_run_policy_with_a_count_that_is_not_whole_is_refused(count):
+    with pytest.raises(ValueError, match=f"{count} must be a whole number"):
+        GraphRunPolicy(**with_limit(GRAPH_RUN_LIMITS, count, 2.5))
+
+
+@pytest.mark.parametrize("limit", list(DATABASE_WRITE_LIMITS))
+@pytest.mark.parametrize("value", [-1, float("nan"), float("inf"), True], ids=repr)
+def test_database_write_policy_with_a_limit_that_is_not_a_positive_number_is_refused(limit, value):
+    with pytest.raises(ValueError, match=limit):
+        DatabaseWritePolicy(**with_limit(DATABASE_WRITE_LIMITS, limit, value))
+
+
+@pytest.mark.parametrize("limit", ["attempt_timeout_seconds", "retry_after_seconds"])
+def test_database_write_policy_with_a_wait_that_is_zero_is_refused(limit):
+    with pytest.raises(ValueError, match=limit):
+        DatabaseWritePolicy(**with_limit(DATABASE_WRITE_LIMITS, limit, 0))
+
+
+def test_database_write_policy_with_no_limit_on_attempts_and_none_on_time_is_made():
+    unlimited = with_limit(
+        with_limit(DATABASE_WRITE_LIMITS, "max_attempts", 0), "give_up_after_seconds", None
+    )
+    assert DatabaseWritePolicy(**unlimited).max_attempts == 0
+
+
+# ------------------------------------------------------------------ failure types
+def test_every_failure_that_ends_a_run_has_a_message_that_is_shown():
+    assert set(RUN_ENDING_ACTION_FAILURES) <= set(WORDED_BY_THE_RUNTIME)
 
 
 # ------------------------------------------------------------------ texts
@@ -86,15 +128,6 @@ def test_step_that_waits_for_an_action_survives_the_converter():
 def test_outcome_of_a_failed_action_survives_the_converter():
     failed = ActionOutcome("scripted-agent:1:2", succeeded=False, result={}, error="it failed")
     assert converted(failed) == failed
-
-
-def test_policies_survive_the_converter_with_and_without_a_heartbeat_timeout():
-    assert converted(ActionPolicy(30, 2, 0.5)) == ActionPolicy(30, 2, 0.5)
-    watched = ActionPolicy(30, 2, 0.5, heartbeat_timeout_seconds=9)
-    assert converted(watched) == watched
-    assert converted(GraphRunPolicy(30, 60, 5, 60, max_actions=3)) == GraphRunPolicy(
-        30, 60, 5, 60, max_actions=3
-    )
 
 
 @pytest.mark.parametrize(

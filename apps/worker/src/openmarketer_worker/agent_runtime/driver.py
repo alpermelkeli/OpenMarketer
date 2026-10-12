@@ -22,9 +22,12 @@ What the graph is told of a failure is the message of the error the action's han
 or a fixed text (``ACTION_TEXTS``) for a timeout or an error nobody worded, cut to
 ``MAX_ERROR_CHARACTERS``. It goes into the model's context and into the next step's input, so a
 handler words its failures for the model to read: it does not put in one the reply text of a
-service, or anything the model must not see. Any ``ApplicationError`` of ``run_action`` is
-told this way, whatever its type, including one the SDK makes itself (an activity that is not
-registered on the worker, say); the cut is the limit.
+service, or anything the model must not see. Which messages count as worded is decided by
+type, with ``worded_types``: the runtime's own (``WORDED_BY_THE_RUNTIME``, the default) and the
+types the agent's handlers raise, which the agent adds. An error of any other type, such as one
+the worker's library makes itself (an activity that is not registered on the worker lists all
+that are), is told as the fixed text: a handler that raises a type its agent did not declare
+is told to the graph as "the action stopped unexpectedly", which is the sign to declare it.
 
 Everything that enters the history is an identifier, a name or small JSON, and the activities
 refuse what is larger (``MAX_STEP_BYTES``, ``MAX_RESULT_BYTES``). A failure's message is one
@@ -50,7 +53,7 @@ or inside ``workflow.unsafe.imports_passed_through()``; both work, and the tests
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import timedelta
 from typing import Any
 
@@ -76,6 +79,7 @@ with workflow.unsafe.imports_passed_through():
         STEP_REFUSED,
         TOO_MANY_ACTIONS,
         UNKNOWN_ACTION,
+        WORDED_BY_THE_RUNTIME,
         GraphRunPolicy,
         StepInput,
     )
@@ -83,13 +87,18 @@ with workflow.unsafe.imports_passed_through():
 
 
 async def run_graph_with_actions(
-    run: GraphRunRef, *, actions: Mapping[str, ActionPolicy], policy: GraphRunPolicy
+    run: GraphRunRef,
+    *,
+    actions: Mapping[str, ActionPolicy],
+    policy: GraphRunPolicy,
+    worded_types: Collection[str] = WORDED_BY_THE_RUNTIME,
 ) -> dict[str, Any]:
     """Run the graph of ``run`` and the actions it asks for; the graph's final output.
 
     ``actions`` is the allowlist: the name of each action the graph may ask for,
     with the limits it runs under. It is plain data that the agent's workflow
-    module holds, so the sandbox can load it.
+    module holds, so the sandbox can load it. ``worded_types`` are the failure types whose
+    message the graph is told, as the module's docstring says.
     """
     resume: ActionOutcome | None = None
     asked = 0
@@ -118,7 +127,7 @@ async def run_graph_with_actions(
                 non_retryable=True,
             )
         asked += 1
-        resume = await _take_action(request, limits)
+        resume = await _take_action(request, limits, worded_types)
 
 
 async def _take_step(step: StepInput, policy: GraphRunPolicy) -> StepOutcome:
@@ -137,7 +146,9 @@ async def _take_step(step: StepInput, policy: GraphRunPolicy) -> StepOutcome:
     )
 
 
-async def _take_action(request: ActionRequest, limits: ActionPolicy) -> ActionOutcome:
+async def _take_action(
+    request: ActionRequest, limits: ActionPolicy, worded_types: Collection[str]
+) -> ActionOutcome:
     heartbeat_seconds = limits.heartbeat_timeout_seconds
     heartbeat_timeout = None if heartbeat_seconds is None else timedelta(seconds=heartbeat_seconds)
     try:
@@ -161,7 +172,7 @@ async def _take_action(request: ActionRequest, limits: ActionPolicy) -> ActionOu
             action_id=request.action_id,
             succeeded=False,
             result={},
-            error=_cut(reason_shown(failure, ACTION_TEXTS)),
+            error=_cut(reason_shown(failure, ACTION_TEXTS, worded_types=worded_types)),
         )
 
 

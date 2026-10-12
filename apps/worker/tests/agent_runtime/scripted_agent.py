@@ -28,6 +28,7 @@ with workflow.unsafe.imports_passed_through():
     from openmarketer_core.agent_runtime.steps import GraphRunRef
     from openmarketer_worker.agent_runtime.vocabulary import (
         RUN_TEXTS,
+        WORDED_BY_THE_RUNTIME,
         DatabaseWritePolicy,
         GraphRunPolicy,
     )
@@ -41,6 +42,7 @@ class ScriptedRun:
     run: GraphRunRef
     actions: dict[str, ActionPolicy]
     policy: GraphRunPolicy
+    worded_types: list[str]  # the failure types whose message the graph is told
 
 
 @dataclass(frozen=True)
@@ -54,7 +56,10 @@ class ScriptedAgent:
     @workflow.run
     async def run(self, scripted: ScriptedRun) -> dict[str, Any]:
         return await run_graph_with_actions(
-            scripted.run, actions=scripted.actions, policy=scripted.policy
+            scripted.run,
+            actions=scripted.actions,
+            policy=scripted.policy,
+            worded_types=scripted.worded_types,
         )
 
 
@@ -78,7 +83,7 @@ class RecordsLikeTheAnalyzer:
                 scripted.run, actions=scripted.actions, policy=scripted.policy
             )
         except (ActivityError, asyncio.CancelledError) as failure:
-            return reason_shown(failure, RUN_TEXTS)
+            return reason_shown(failure, RUN_TEXTS, worded_types=WORDED_BY_THE_RUNTIME)
         return "finished"
 
 
@@ -93,5 +98,5 @@ class RecordsEveryFailure:
                 scripted.run, actions=scripted.actions, policy=scripted.policy
             )
         except (ActivityError, ApplicationError, asyncio.CancelledError) as failure:
-            return reason_shown(failure, RUN_TEXTS)
+            return reason_shown(failure, RUN_TEXTS, worded_types=WORDED_BY_THE_RUNTIME)
         return "finished"

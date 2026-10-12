@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import empty_checkpoint
 from scripted_agent import (
     RecordsEveryFailure,
     RecordsLikeTheAnalyzer,
@@ -31,7 +33,8 @@ from openmarketer_core.agent_runtime.actions import ActionPolicy
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_worker.agent_runtime.activities import RuntimeActivities
-from openmarketer_worker.agent_runtime.vocabulary import GraphRunPolicy
+from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess
+from openmarketer_worker.agent_runtime.vocabulary import WORDED_BY_THE_RUNTIME, GraphRunPolicy
 
 KIND = "scripted-agent"
 STEP_LIMITS = GraphRunPolicy(
@@ -42,6 +45,10 @@ STEP_LIMITS = GraphRunPolicy(
 )
 ACTION_LIMITS = ActionPolicy(attempt_timeout_seconds=30, max_attempts=2, retry_after_seconds=0.2)
 ALLOWED = {"send_email": ACTION_LIMITS, "publish": ACTION_LIMITS}
+# The type the scripted handlers word their failures with, and the types the scripted agent
+# declares: the runtime's, and that one.
+REFUSED_BY_A_HANDLER = "Refused"
+WORDED = [*WORDED_BY_THE_RUNTIME, REFUSED_BY_A_HANDLER]
 
 
 def some_run() -> GraphRunRef:
@@ -50,6 +57,13 @@ def some_run() -> GraphRunRef:
 
 def thread_of(run: GraphRunRef) -> str:
     return thread_id(run.kind, run.run_id)
+
+
+def a_thread_with_a_checkpoint(checkpoints: CheckpointAccess, thread: str) -> None:
+    """Gives ``thread`` one checkpoint, as the thread of a run that has taken a step has."""
+    with checkpoints.of_attempt(thread) as held:
+        config: RunnableConfig = {"configurable": {"thread_id": thread, "checkpoint_ns": ""}}
+        held.store.put(config, empty_checkpoint(), {"source": "loop", "step": 1}, {})
 
 
 def cause_of(failure: BaseException) -> ApplicationError:
@@ -70,12 +84,16 @@ class Execution:
         *,
         actions: dict[str, ActionPolicy] | None = None,
         policy: GraphRunPolicy = STEP_LIMITS,
+        worded_types: list[str] = WORDED,
         workflow_run: Any = ScriptedAgent.run,
     ) -> WorkflowHandle:
         # The limits are the input of this workflow so that each test sets its own. An agent's
         # workflow keeps them as constants: a limit that fails validation fails decoding the input.
         scripted = ScriptedRun(
-            run=run, actions=ALLOWED if actions is None else actions, policy=policy
+            run=run,
+            actions=ALLOWED if actions is None else actions,
+            policy=policy,
+            worded_types=worded_types,
         )
         return await self.client.start_workflow(
             workflow_run, scripted, id=f"scripted-{run.run_id}", task_queue=self.task_queue
