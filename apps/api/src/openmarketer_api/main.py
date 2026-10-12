@@ -2,7 +2,8 @@
 
 ``create_app`` builds the application without touching the environment, which
 is what the tests and the OpenAPI export use. ``app_from_env`` is what uvicorn
-runs: it reads the settings and attaches the database and the workflow starter.
+runs: it reads the settings and attaches the database, the workflow starter,
+the environment and the cipher credentials are stored with.
 Neither connects to anything: the database and the workflow server are reached
 when a request first needs them.
 """
@@ -16,7 +17,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from openmarketer_api.dependencies import Services
 from openmarketer_api.errors import problems, register_error_handlers
 from openmarketer_api.identity import current_user_id
-from openmarketer_api.routes import analyses, health, profiles, projects
+from openmarketer_api.routes import analyses, credentials, health, profiles, projects
 from openmarketer_api.settings import Settings
 from openmarketer_api.temporal_workflows import TemporalAnalysisWorkflows
 from openmarketer_core.db.session import session_factory
@@ -37,7 +38,7 @@ def create_app() -> FastAPI:
     workspace_routes = APIRouter(
         prefix="/v1", dependencies=[Depends(current_user_id)], responses=problems(403, 503)
     )
-    for resource in (projects, analyses, profiles):
+    for resource in (projects, analyses, profiles, credentials):
         workspace_routes.include_router(resource.router)
     app.include_router(workspace_routes)
     return app
@@ -51,5 +52,7 @@ def app_from_env() -> FastAPI:
         analysis_workflows=TemporalAnalysisWorkflows(
             settings.workflow_server, task_queue=ANALYSIS_TASK_QUEUE
         ),
+        environment=os.environ,
+        credential_cipher=settings.credential_cipher,
     )
     return app

@@ -5,6 +5,10 @@ and never build error responses themselves. Messages come from the domain
 error; database failures and anything unexpected get a fixed message, because
 their text may name hosts, statements or paths.
 
+A credential value that breaks a rule is the one domain error answered in the
+shape of a request validation error (422), beside the field it was sent in:
+it is a refusal of what the body holds, like a field of the wrong type.
+
 An error body carries what a client needs to act on it as a field of its own,
 never inside the message: ``existing_project_id`` with ``project_already_exists``.
 """
@@ -23,6 +27,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from openmarketer_api.identity import NotLocalRequest
+from openmarketer_core.credentials.catalog import CredentialValueRefused, UnknownCredential
+from openmarketer_core.credentials.resolution import (
+    CredentialSetByEnvironment,
+    EncryptionKeyMissing,
+)
 from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
 from openmarketer_core.db.profile_versions import ProfileAlreadyApproved, ProfileVersionNotFound
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
@@ -39,9 +48,12 @@ class ErrorCode(StrEnum):
     PROJECT_NOT_FOUND = "project_not_found"
     ANALYSIS_NOT_FOUND = "analysis_not_found"
     PROFILE_NOT_FOUND = "profile_not_found"
+    CREDENTIAL_NOT_FOUND = "credential_not_found"
     PROJECT_ALREADY_EXISTS = "project_already_exists"
     ANALYSIS_ALREADY_RUNNING = "analysis_already_running"
     PROFILE_ALREADY_APPROVED = "profile_already_approved"
+    CREDENTIAL_SET_BY_ENVIRONMENT = "credential_set_by_environment"
+    ENCRYPTION_KEY_MISSING = "encryption_key_missing"
     INTERNAL_ERROR = "internal_error"
     ANALYSIS_NOT_STARTED = "analysis_not_started"
     DATABASE_UNAVAILABLE = "database_unavailable"
@@ -75,8 +87,11 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     AnalysisRunNotFound: (404, ErrorCode.ANALYSIS_NOT_FOUND),
     ProfileVersionNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
     ProfileNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
+    UnknownCredential: (404, ErrorCode.CREDENTIAL_NOT_FOUND),
     AnalysisAlreadyRunning: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
+    CredentialSetByEnvironment: (409, ErrorCode.CREDENTIAL_SET_BY_ENVIRONMENT),
+    EncryptionKeyMissing: (409, ErrorCode.ENCRYPTION_KEY_MISSING),
     AnalysisNotStarted: (503, ErrorCode.ANALYSIS_NOT_STARTED),
 }
 
@@ -90,6 +105,7 @@ def register_error_handlers(app: FastAPI) -> None:
     for error_type, (status, code) in _DOMAIN_ERRORS.items():
         app.add_exception_handler(error_type, _domain_error_handler(status, code))
     app.add_exception_handler(ProjectAlreadyExists, _project_already_exists)
+    app.add_exception_handler(CredentialValueRefused, _credential_value_refused)
     app.add_exception_handler(DatabaseError, _database_error)
     app.add_exception_handler(Exception, _unexpected_error)
 
@@ -113,6 +129,12 @@ def _domain_error_handler(
 def _project_already_exists(_: Request, error: Exception) -> JSONResponse:
     existing = error.project_id if isinstance(error, ProjectAlreadyExists) else None
     return _problem(409, ErrorCode.PROJECT_ALREADY_EXISTS, str(error), existing_project_id=existing)
+
+
+def _credential_value_refused(_: Request, error: Exception) -> JSONResponse:
+    # The message names the rule that was broken and never the value.
+    refusal = {"type": "value_error", "loc": ["body", "value"], "msg": str(error)}
+    return JSONResponse({"detail": [refusal]}, 422)
 
 
 def _database_error(_: Request, error: Exception) -> JSONResponse:

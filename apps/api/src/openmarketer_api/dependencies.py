@@ -12,8 +12,8 @@ event loop and waits for it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass, field
 from typing import Annotated
 
 from anyio import from_thread
@@ -22,6 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_api.analysis_workflows import AnalysisWorkflows
+from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.session import transaction
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 
@@ -32,6 +33,11 @@ class Services:
 
     sessions: sessionmaker[Session]
     analysis_workflows: AnalysisWorkflows
+    # The process environment, for core to see which credentials it sets. Kept out of
+    # the repr, which would print every secret in it.
+    environment: Mapping[str, str] = field(repr=False)
+    # None when the installation has no ENCRYPTION_KEY.
+    credential_cipher: CredentialCipher | None
 
 
 def _services(request: Request) -> Services:
@@ -63,6 +69,16 @@ def start_workflow(
     return start
 
 
+def environment(services: Annotated[Services, Depends(_services)]) -> Mapping[str, str]:
+    return services.environment
+
+
+def credential_cipher(
+    services: Annotated[Services, Depends(_services)],
+) -> CredentialCipher | None:
+    return services.credential_cipher
+
+
 async def no_request_body(request: Request) -> None:
     """Refuse a body on a route that takes none, instead of ignoring what the client sent.
 
@@ -79,4 +95,6 @@ async def no_request_body(request: Request) -> None:
 # error response and never a success the database did not keep.
 DbSession = Annotated[Session, Depends(db_session, scope="function")]
 Sessions = Annotated[sessionmaker[Session], Depends(sessions)]
+Environment = Annotated[Mapping[str, str], Depends(environment)]
+StoringCipher = Annotated[CredentialCipher | None, Depends(credential_cipher)]
 StartWorkflow = Annotated[Callable[[AnalyzeRepositoryInput], None], Depends(start_workflow)]
