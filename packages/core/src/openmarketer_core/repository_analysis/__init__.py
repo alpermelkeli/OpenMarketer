@@ -5,11 +5,10 @@
 - ``workflow_contract.py``: the names the API and the worker share to run that
   workflow (its name, its queue, its id and its input). They do not import
   each other, so the names live here.
-- ``pipeline.py``: the analysis itself as one call, from a repository URL to a
-  draft Product Profile: intake, extractors, then the analyzer agent. The
-  worker calls it.
+- ``failures.py``: what an analysis raises when it ends without a profile, and
+  how that is worded for whoever asked. The worker and the benchmark use it.
 - ``extraction.py``: the interface of the extractor plugins, the deterministic
-  step of that pipeline.
+  step of an analysis.
 
 - ``intake/``: cloning a repository and reading it safely (the secret scan
   and redaction, ``RepoFiles``, the rule for which host gets a token).

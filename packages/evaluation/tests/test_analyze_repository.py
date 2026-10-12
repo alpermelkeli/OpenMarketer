@@ -15,7 +15,7 @@ from openmarketer_core.llm import ChatReply
 from openmarketer_core.repository_analysis.analyzer_agent.rules import SUBMIT
 from openmarketer_core.repository_analysis.extraction import Fact
 from openmarketer_core.repository_analysis.intake import IntakeError, RepoFiles
-from openmarketer_core.repository_analysis.pipeline import analyze_repository
+from openmarketer_evaluation.runner import analyze_repository
 
 pytestmark = pytest.mark.skipif(shutil.which("gitleaks") is None, reason="needs gitleaks")
 

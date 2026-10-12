@@ -3,9 +3,9 @@
 Every graph that checkpoints uses this store; nothing in it is about one of
 them. ``run_checkpoints`` opens it for one attempt at a run on a connection of
 its own, so several runs can be executed at once, each from its own thread.
-What it yields goes to the graph (the analyzer's ``analyze``, through
-``analyze_repository``) and is asked to ``forget()`` the run when the run is
-over. One attempt at a time holds a run's checkpoints: a second one is refused
+What it yields goes to the graph (``agent_runtime.langgraph_steps.GraphThread``)
+and is asked to ``forget()`` the run when the run is over. One attempt at a
+time holds a run's checkpoints: a second one is refused
 (``AttemptInProgress``) instead of writing to the same thread.
 ``forget_checkpoints`` removes a run's checkpoints without holding them, for a
 caller that only records that the run is over. A failure of the store is a

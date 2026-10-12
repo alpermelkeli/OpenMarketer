@@ -64,12 +64,12 @@ from openmarketer_core.repository_analysis.extraction import (
     Extractor,
     run_extractors,
 )
+from openmarketer_core.repository_analysis.failures import ANALYSIS_FAILURES, failure_message
 from openmarketer_core.repository_analysis.intake import (
     IntakeError,
     RepoFiles,
     remote_repository_url,
 )
-from openmarketer_core.repository_analysis.pipeline import ANALYSIS_FAILURES, failure_message
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 from openmarketer_worker.agent_runtime.activities import AgentGraph
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, forget_quietly
