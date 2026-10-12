@@ -512,5 +512,10 @@ def test_module_of_the_workflow_loads_no_database_graph_framework_or_activity_co
         "openmarketer_worker.repository_analyzer.wiring",
         "openmarketer_worker.repository_analyzer.analysis",
         "openmarketer_worker.repository_analyzer.clones",
+        "openmarketer_worker.repository_analyzer.repository_tokens",
+        "openmarketer_worker.credentials",
+        "openmarketer_worker.settings",
+        "openmarketer_core.credentials.cipher",
+        "cryptography",
     )
     assert [name for name in json.loads(done.stdout) if name.startswith(forbidden)] == []

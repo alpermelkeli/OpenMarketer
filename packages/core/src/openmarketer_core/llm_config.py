@@ -293,9 +293,23 @@ class ModelRouter:
         return problems
 
     # -- requests ------------------------------------------------------
-    def headers(self) -> dict[str, str]:
+    def api_key_in_environment(self) -> str | None:
+        """The provider's key in this router's environment, or ``None`` when it is not set there.
+
+        The variable is the one the configuration names (``provider.api_key_env``).
+        """
+        return self.env.get(self.config.provider.api_key_env) or None
+
+    def headers(self, api_key: str | None = None) -> dict[str, str]:
+        """The headers of a request to the provider, with ``api_key`` as its key.
+
+        Without ``api_key`` the key is the environment's, which is all the command line and
+        the benchmark have. A caller that keeps keys elsewhere (the worker, for a workspace's
+        stored one) hands in the key to use; this module reads no database. Raises
+        ``ConfigError``, which names the variable and never a key, when there is neither.
+        """
         p = self.config.provider
-        key = self.env.get(p.api_key_env, "")
+        key = api_key or self.api_key_in_environment()
         if not key:
             raise ConfigError(f"environment variable {p.api_key_env} is not set")
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}

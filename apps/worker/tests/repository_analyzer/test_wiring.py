@@ -1,6 +1,8 @@
 """Tests for how the repository analyzer is set up from the environment when the worker starts.
 
-They need no Temporal server and no model. A database is named, never connected to. The
+They need no Temporal server and no model. A database is named, never connected to, and no
+credential is resolved: how one is, is tested with ``WorkspaceCredentials`` and with the
+analyzer's tokens. The
 worker's own folder of clones is under the system's temporary folder, which every test of the
 worker has replaced with one of its own (``temporary_folder`` in ``conftest.py``).
 """
@@ -16,11 +18,15 @@ from sqlalchemy.orm import Session
 
 from openmarketer_core.db.session import DatabaseError, session_factory
 from openmarketer_core.llm import RouterChatModel
-from openmarketer_core.llm_config import ConfigError
-from openmarketer_core.repository_analysis.intake import IntakeError, RepositoryTokens
+from openmarketer_core.repository_analysis.intake import (
+    NO_TOKENS,
+    IntakeError,
+    RepositoryTokens,
+)
 from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
 from openmarketer_worker.agent_runtime.activity_support import checkpoints_in
 from openmarketer_worker.agent_runtime.vocabulary import FORGET_RUN, RUN_ACTION, RUN_GRAPH_STEP
+from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.repository_analyzer import steps, wiring
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy, longest_analysis_seconds
 from openmarketer_worker.repository_analyzer.workflow import AnalyzeRepository
@@ -32,7 +38,9 @@ DATABASE_URL = "postgresql+psycopg://app:hunter2@db.internal:5432/marketer"
 
 
 def wired(environ: dict[str, str], database_url: str = DATABASE_URL):
-    return wiring.repository_analyzer(environ, session_factory(DATABASE_URL), database_url)
+    sessions = session_factory(DATABASE_URL)
+    credentials = WorkspaceCredentials(sessions, environ, None)
+    return wiring.repository_analyzer(environ, sessions, database_url, credentials)
 
 
 @pytest.fixture
@@ -49,7 +57,7 @@ def parts(monkeypatch) -> list[wiring.AnalyzerParts]:
     return built
 
 
-def test_tokens_of_the_environment_reach_the_clone_bound_to_their_hosts(monkeypatch, tmp_path):
+def test_tokens_of_the_run_reach_the_clone_as_they_were_resolved(monkeypatch, tmp_path):
     offered: list[RepositoryTokens] = []
 
     def run_intake(source, clone_into, *, tokens, commit):
@@ -57,9 +65,8 @@ def test_tokens_of_the_environment_reach_the_clone_bound_to_their_hosts(monkeypa
 
     monkeypatch.setattr(wiring, "run_intake", run_intake)
     tokens = RepositoryTokens.from_environment({"GITHUB_TOKEN": "github-token-value"})
-    wiring.intake_with(tokens)("https://example.com/acme/app.git", tmp_path / "repo", None)
-    assert offered[0].token_for("https://github.com/acme/app.git") == "github-token-value"
-    assert offered[0].token_for("https://example.com/acme/app.git") is None
+    wiring.intake("https://example.com/acme/app.git", tmp_path / "repo", None, tokens)
+    assert offered == [tokens]
 
 
 def test_commit_of_the_run_reaches_the_clone(monkeypatch, tmp_path):
@@ -67,17 +74,41 @@ def test_commit_of_the_run_reaches_the_clone(monkeypatch, tmp_path):
     monkeypatch.setattr(
         wiring, "run_intake", lambda source, clone_into, *, tokens, commit: asked.append(commit)
     )
-    intake = wiring.intake_with(RepositoryTokens.from_environment({}))
-    intake("https://example.com/acme/app.git", tmp_path / "repo", "a" * 40)
+    wiring.intake("https://example.com/acme/app.git", tmp_path / "repo", "a" * 40, NO_TOKENS)
     assert asked == ["a" * 40]
 
 
 def test_each_attempt_gets_a_chat_model_of_its_own_from_one_router(parts):
     wired(MODEL)
-    first, second = parts[0].new_model(), parts[0].new_model()
+    workspace_id = uuid.uuid4()
+    first, second = parts[0].new_model(workspace_id), parts[0].new_model(workspace_id)
     assert isinstance(first, RouterChatModel) and isinstance(second, RouterChatModel)
     assert first is not second
     assert first.router is second.router
+
+
+def test_chat_model_of_an_attempt_carries_the_key_of_the_environment(parts):
+    wired(MODEL)
+    model = parts[0].new_model(uuid.uuid4())
+    assert isinstance(model, RouterChatModel)
+    assert model.api_key == MODEL["OPENROUTER_API_KEY"]
+
+
+def test_no_credential_is_in_the_text_of_what_the_analyzer_is_built_of(parts):
+    secrets = {
+        "OPENROUTER_API_KEY": "made-up-model-key",
+        "GITHUB_TOKEN": "made-up-github-token",
+        "GITLAB_TOKEN": "made-up-gitlab-token",
+    }
+    wired({"LLM_CONFIG_PATH": MODELS, **secrets})
+    workspace_id = uuid.uuid4()
+    shown = [
+        repr(parts[0]),
+        str(parts[0]),
+        repr(parts[0].new_model(workspace_id)),
+        repr(parts[0].tokens_of(workspace_id)),
+    ]
+    assert all(secret not in text for secret in secrets.values() for text in shown)
 
 
 def test_database_password_is_not_in_the_text_of_what_reaches_the_checkpoints():
@@ -158,9 +189,9 @@ def test_limit_that_is_not_a_number_is_a_settings_error_naming_it():
         wired({**MODEL, "ANALYSIS_MAX_ATTEMPTS": "soon"})
 
 
-def test_missing_key_of_the_model_provider_is_a_configuration_error():
-    with pytest.raises(ConfigError, match="OPENROUTER_API_KEY"):
-        wired({"LLM_CONFIG_PATH": MODELS})
+def test_analyzer_is_built_without_a_key_of_the_model_provider(parts):
+    wired({"LLM_CONFIG_PATH": MODELS})
+    assert len(parts) == 1
 
 
 def test_token_host_that_is_not_a_host_is_an_intake_error():

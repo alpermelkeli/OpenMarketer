@@ -19,7 +19,9 @@ by the thread that makes it, when it is done.
 What a run leaves when its worker dies is removed by ``sweep`` when a worker starts.
 
 This module holds no rule about what may be cloned (``intake`` does, and the caller names
-the source) and decides nothing about when a run ends: its caller releases the run.
+the source) and decides nothing about when a run ends: its caller releases the run. It
+resolves no credential either: the caller says how the tokens of the run are found, and they
+are asked for only when a clone is really made, handed to intake and not kept.
 """
 
 from __future__ import annotations
@@ -35,13 +37,16 @@ from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 
-from openmarketer_core.repository_analysis.intake import IntakeResult
+from openmarketer_core.repository_analysis.intake import IntakeResult, RepositoryTokens
 
 logger = logging.getLogger(__name__)
 
 # Clone the source into the folder and return a safe view of it; of the default branch, or of
-# the commit named. It is ``run_intake`` with the installation's tokens.
-Intake = Callable[[str, Path, str | None], IntakeResult]
+# the commit named. It is ``run_intake``, with the tokens it may offer to their hosts.
+Intake = Callable[[str, Path, str | None, RepositoryTokens], IntakeResult]
+# The tokens a clone of the run may carry, resolved when asked: the run's workspace can be
+# given one while the run waits.
+TokensOfTheRun = Callable[[], RepositoryTokens]
 
 OWNER_ONLY = 0o700
 # The folder in a run's folder that git clones into: git wants one that is empty or not there.
@@ -77,26 +82,30 @@ class LocalClones:
         """Where the clone of the run is or would be: for wording a failure without the path."""
         return self._root / str(run_id)
 
-    def clone(self, run_id: uuid.UUID, source: str) -> IntakeResult:
+    def clone(self, run_id: uuid.UUID, source: str, tokens: TokensOfTheRun) -> IntakeResult:
         """Clone ``source`` for the run, or give the clone this worker already holds for it.
 
         A repeated attempt at the clone thus answers with the commit the first one read.
-        Raises ``IntakeError`` when the repository cannot be cloned or scanned; nothing of
+        ``tokens`` is called only when a clone is made. Raises ``IntakeError`` when the
+        repository cannot be cloned or scanned, and whatever ``tokens`` raises; nothing of
         the run is left on the disk then.
         """
         with self._working_on(run_id):
-            return self._present(run_id) or self._cloned(run_id, source, commit=None)
+            return self._present(run_id) or self._cloned(run_id, source, tokens, commit=None)
 
-    def at_commit(self, run_id: uuid.UUID, source: str, commit: str) -> IntakeResult:
+    def at_commit(
+        self, run_id: uuid.UUID, source: str, commit: str, tokens: TokensOfTheRun
+    ) -> IntakeResult:
         """The run's clone at ``commit``: the one held here, or that commit fetched again.
 
-        Raises ``IntakeError`` when the commit has to be fetched and cannot be.
+        ``tokens`` is called only when the commit is fetched. Raises ``IntakeError`` when the
+        commit has to be fetched and cannot be, and whatever ``tokens`` raises.
         """
         with self._working_on(run_id):
             present = self._present(run_id)
             if present is not None and present.snapshot.commit_sha == commit:
                 return present
-            return self._cloned(run_id, source, commit=commit)
+            return self._cloned(run_id, source, tokens, commit=commit)
 
     def release(self, run_id: uuid.UUID) -> None:
         """Remove the run's clone from the disk and forget it; never raises.
@@ -190,13 +199,15 @@ class LocalClones:
             return None
         return held
 
-    def _cloned(self, run_id: uuid.UUID, source: str, *, commit: str | None) -> IntakeResult:
+    def _cloned(
+        self, run_id: uuid.UUID, source: str, tokens: TokensOfTheRun, *, commit: str | None
+    ) -> IntakeResult:
         folder = self.folder_of(run_id)
         # What is there is not this clone: a process that died left it, or it is of another commit.
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir(mode=OWNER_ONLY)
         try:
-            intake = self._intake(source, folder / REPOSITORY_FOLDER, commit)
+            intake = self._intake(source, folder / REPOSITORY_FOLDER, commit, tokens())
         except BaseException:
             self._remove(run_id)
             raise

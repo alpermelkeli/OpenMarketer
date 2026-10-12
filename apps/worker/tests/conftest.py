@@ -8,14 +8,16 @@ tests are.
 
 The analyzer is the real one (its graph, its rules, the checkpoints in
 PostgreSQL, the clones on a disk under ``tmp_path``) with two things replaced
-at the edge, both through ``AnalyzerParts``. The model is ``ScriptedModel``.
-The clone is ``ScriptedIntake``, which writes a small repository instead of
+at the edge, both through ``AnalyzerParts``. The model is ``ScriptedModel``,
+whatever the workspace, and a clone is offered no token unless a test hands
+the analyzer its own. The clone is ``ScriptedIntake``, which writes a small repository instead of
 reaching a host, or, for the tests that need real git and the secret scan,
 ``intake_of_a_local_repository``: the worker clones only ``https://`` URLs, so
 the URL of the project is set aside and a repository on this machine is cloned.
 """
 
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -37,6 +39,9 @@ from temporalio.testing import ActivityEnvironment
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
+from openmarketer_core.credentials.catalog import Credential
+from openmarketer_core.credentials.cipher import CredentialCipher
+from openmarketer_core.credentials.resolution import set_credential
 from openmarketer_core.db.analysis_runs import (
     AnalysisRun,
     analysis_run,
@@ -47,10 +52,12 @@ from openmarketer_core.db.checkpoint_schema import CHECKPOINT_TABLES_OF_THREADS
 from openmarketer_core.db.models import ProductProfileRecord, Project, RepoSnapshot, Workspace
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.llm import ChatReply
+from openmarketer_core.llm import ChatModel, ChatReply
 from openmarketer_core.repository_analysis.intake import (
+    NO_TOKENS,
     IntakeResult,
     RepoFiles,
+    RepositoryTokens,
     Snapshot,
     run_intake,
 )
@@ -133,9 +140,13 @@ class ScriptedIntake:
 
     def __post_init__(self) -> None:
         self.cloned: list[tuple[str, Path, str | None]] = []  # source, folder, commit asked for
+        self.offered: list[RepositoryTokens] = []  # the tokens each clone was given
 
-    def __call__(self, source: str, clone_into: Path, commit: str | None) -> IntakeResult:
+    def __call__(
+        self, source: str, clone_into: Path, commit: str | None, tokens: RepositoryTokens
+    ) -> IntakeResult:
         self.cloned.append((source, clone_into, commit))
+        self.offered.append(tokens)
         if self.failures:
             failure = self.failures.pop(0)
             raise failure if isinstance(failure, Exception) else failure(clone_into)
@@ -270,14 +281,16 @@ def analyzer_with(sessions, checkpoints, clones_root, model, intake):
         reaching: CheckpointAccess = checkpoints,
         policy: AnalysisPolicy = TEST_POLICY,
         clones: LocalClones | None = None,
-        new_model: Callable[[], ScriptedModel] | None = None,
+        new_model: Callable[[uuid.UUID], ChatModel] | None = None,
+        tokens_of: Callable[[uuid.UUID], RepositoryTokens] = lambda workspace_id: NO_TOKENS,
     ) -> Analyzer:
         return Analyzer(
             wiring.AnalyzerParts(
                 sessions=sessions,
                 checkpoints=reaching,
                 clones=clones or LocalClones(clones_root, intake),
-                new_model=new_model or (lambda: model),
+                new_model=new_model or (lambda workspace_id: model),
+                tokens_of=tokens_of,
                 extractors=[],
                 policy=policy,
             )
@@ -301,7 +314,9 @@ def started(analyzer, run) -> AnalyzeRepositoryInput:
 def intake_of(source: Path) -> Intake:
     """Real intake (git, the secret scan) of the repository at ``source``, whatever URL is named."""
 
-    def intake(repository_url: str, clone_into: Path, commit: str | None) -> IntakeResult:
+    def intake(
+        repository_url: str, clone_into: Path, commit: str | None, tokens: RepositoryTokens
+    ) -> IntakeResult:
         return run_intake(str(source), clone_into, commit=commit)
 
     return intake
@@ -377,6 +392,21 @@ class Database:
                 workspace_id=workspace_id, project_id=project.id, run_id=run.id
             )
 
+    def store_credential(
+        self, workspace_id: uuid.UUID, credential: Credential, value: str, cipher: CredentialCipher
+    ) -> None:
+        """Store ``value`` for the workspace, sealed, as the dashboard does."""
+        with transaction(self.sessions) as session:
+            set_credential(
+                session,
+                {},
+                workspace_id=workspace_id,
+                name=credential.name,
+                value=value,
+                set_by=uuid.uuid4(),
+                cipher=cipher,
+            )
+
     def run(self, run: AnalyzeRepositoryInput) -> AnalysisRun:
         with transaction(self.sessions) as session:
             return analysis_run(
@@ -428,6 +458,23 @@ class Database:
 @pytest.fixture
 def database(sessions) -> Database:
     return Database(sessions)
+
+
+def new_cipher() -> CredentialCipher:
+    """A cipher under a key made up for the test."""
+    return CredentialCipher(base64.b64encode(os.urandom(32)).decode())
+
+
+@pytest.fixture
+def cipher() -> CredentialCipher:
+    return new_cipher()
+
+
+@pytest.fixture
+def another_cipher() -> CredentialCipher:
+    """The cipher of an installation whose ``ENCRYPTION_KEY`` is not the one values were
+    stored with."""
+    return new_cipher()
 
 
 @pytest.fixture

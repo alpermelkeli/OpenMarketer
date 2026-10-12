@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from openmarketer_core.llm import LLMError, RouterChatModel
-from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.llm_config import ConfigError, ModelRouter
 
 MODELS_YAML = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
 TOOL = {"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}
@@ -156,3 +156,77 @@ def test_provider_that_did_not_answer_may_answer_later():
     with pytest.raises(LLMError) as failure:
         client(handler).chat("writer", [{"role": "user", "content": "x"}])
     assert (failure.value.status, failure.value.may_pass) == (None, True)
+
+
+# ------------------------------------------------------------- the provider's key
+HANDED_IN = "key-handed-in-0123456789"
+
+
+def key_sent_by(model: RouterChatModel) -> str:
+    """The ``Authorization`` header of one chat request of ``model``."""
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        return reply_naming("fake/model")
+
+    model.transport = httpx.MockTransport(handler)
+    model.chat("writer", [{"role": "user", "content": "x"}])
+    (authorization,) = sent
+    return authorization
+
+
+def router_with(environ: dict[str, str]) -> ModelRouter:
+    return ModelRouter.from_file(MODELS_YAML, env=environ)
+
+
+def test_key_handed_to_a_model_is_the_one_sent():
+    model = RouterChatModel(router=router_with({}), api_key=HANDED_IN)
+    assert key_sent_by(model) == f"Bearer {HANDED_IN}"
+
+
+def test_key_handed_in_is_sent_instead_of_the_environments():
+    router = router_with({"OPENROUTER_API_KEY": "test-key"})
+    assert key_sent_by(RouterChatModel(router=router, api_key=HANDED_IN)) == f"Bearer {HANDED_IN}"
+
+
+def test_key_of_the_environment_is_sent_when_none_is_handed_in():
+    router = router_with({"OPENROUTER_API_KEY": "test-key"})
+    assert key_sent_by(RouterChatModel(router=router)) == "Bearer test-key"
+
+
+def test_model_without_a_key_anywhere_names_the_variable_to_set():
+    model = RouterChatModel(router=router_with({}))
+    with pytest.raises(ConfigError, match="environment variable OPENROUTER_API_KEY is not set"):
+        model.chat("writer", [{"role": "user", "content": "x"}])
+
+
+@pytest.mark.parametrize("environ", [{}, {"OPENROUTER_API_KEY": ""}])
+def test_router_says_when_its_environment_has_no_key(environ):
+    assert router_with(environ).api_key_in_environment() is None
+
+
+def test_router_reads_the_key_from_the_variable_its_configuration_names():
+    router = router_with({"OPENROUTER_API_KEY": "test-key", "OTHER_KEY": "other-key"})
+    router.config.provider.api_key_env = "OTHER_KEY"
+    assert router.api_key_in_environment() == "other-key"
+    assert router.headers()["Authorization"] == "Bearer other-key"
+
+
+def test_key_is_in_no_text_of_the_model_or_its_router():
+    router = router_with({"OPENROUTER_API_KEY": "test-key"})
+    model = RouterChatModel(router=router, api_key=HANDED_IN)
+    shown = [repr(model), str(model), repr(router), str(router)]
+    assert all(HANDED_IN not in text and "test-key" not in text for text in shown)
+
+
+def test_failure_of_a_request_does_not_repeat_the_key_handed_in():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"could not send {request.headers['authorization']}")
+
+    model = RouterChatModel(
+        router=router_with({}), transport=httpx.MockTransport(handler), api_key=HANDED_IN
+    )
+    with pytest.raises(LLMError) as failure:
+        model.chat("writer", [{"role": "user", "content": "x"}])
+    assert HANDED_IN not in str(failure.value)

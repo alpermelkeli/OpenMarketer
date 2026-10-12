@@ -386,7 +386,7 @@ async def test_result_the_database_refuses_is_reported_without_its_detail(
 async def test_each_attempt_is_given_a_chat_model_of_its_own(analyzer_with, model, started):
     made: list[object] = []
 
-    def new_model():
+    def new_model(workspace_id: uuid.UUID):
         made.append(model)
         return model
 
