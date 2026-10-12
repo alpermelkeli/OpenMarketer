@@ -2,45 +2,86 @@
 
 Everything an analysis depends on is built here once (the analyzer's settings,
 the model router, the extractors, the repository tokens, access to the runs'
-checkpoints) and handed to the activities; the result says what the worker
-registers and how the checkpoints its runs leave behind are removed. The
-process's own things come in as arguments: the environment mapping, the
-session factory and the database URL.
+checkpoints, the place of the runs' clones on this worker's disk) and handed
+to what runs it; the result says what the worker registers and how the
+checkpoints its runs leave behind are removed. The process's own things come
+in as arguments: the environment mapping, the session factory and the database
+URL.
+
+``repository_analyzer`` reads the environment; ``registration`` takes what was
+built (``AnalyzerParts``) and declares the agent's worker side: the handler of
+its one action, what releases a run that ended, the steps of its graph, and the
+two activities of the workflow's hooks. Clones that runs of an earlier process
+left on the disk are swept when the worker starts.
 
 This module holds no rule: which token goes to which host, how a repository is
 analysed and how a run changes state are all in core. It does not connect to
 Temporal, build the worker or turn a failure into a start-up error: it raises
 ``SettingsError``, ``ConfigError``, ``IntakeError``, ``DatabaseError`` or
 ``OSError``, and the worker's ``main.py`` words them. The workflow never
-imports it: it loads the activities, and with them code the sandbox refuses.
+imports it: it loads the graph and the database, which the sandbox refuses.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import tempfile
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from openmarketer_core.agent_runtime.langgraph_agent import AgentSteps
+from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.checkpoint_cleanup import remove_checkpoints_of_analysis_runs
-from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.llm import RouterChatModel
+from openmarketer_core.llm import ChatModel, RouterChatModel
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ModelRouter
-from openmarketer_core.repository_analysis.extraction import discover_extractors
-from openmarketer_core.repository_analysis.intake import RepositoryTokens
-from openmarketer_core.repository_analysis.pipeline import RepositoryAnalysis, analyze_repository
+from openmarketer_core.repository_analysis.analyzer_agent import Limits
+from openmarketer_core.repository_analysis.analyzer_agent.definitions import (
+    CloneRepository,
+    agent,
+)
+from openmarketer_core.repository_analysis.analyzer_agent.graph import recursion_limit
+from openmarketer_core.repository_analysis.extraction import Extractor, discover_extractors
+from openmarketer_core.repository_analysis.intake import (
+    IntakeResult,
+    RepositoryTokens,
+    run_intake,
+)
 from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
 from openmarketer_worker import AgentRegistration
-from openmarketer_worker.agent_runtime.activity_support import checkpoints_in
+from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, checkpoints_in
+from openmarketer_worker.agent_runtime.agent_worker import AgentWorker
+from openmarketer_worker.agent_runtime.routes import ActionContext
 from openmarketer_worker.checkpoint_cleanup import CheckpointCleanup
-from openmarketer_worker.repository_analyzer.activities import AnalyseRepository, AnalysisActivities
+from openmarketer_worker.repository_analyzer import steps
+from openmarketer_worker.repository_analyzer.activities import AnalysisActivities
+from openmarketer_worker.repository_analyzer.analysis import AnalysisWork, WordedSteps
+from openmarketer_worker.repository_analyzer.clones import Intake, LocalClones
 from openmarketer_worker.repository_analyzer.policy import (
     AnalysisPolicy,
     longest_analysis_seconds,
 )
 from openmarketer_worker.repository_analyzer.settings import RepositoryAnalyzerSettings
 from openmarketer_worker.repository_analyzer.workflow import AnalyzeRepository
+
+# Under the system's temporary folder, where the runs of this worker keep their clones.
+CLONES_FOLDER = "openmarketer-analysis"
+
+
+@dataclass(frozen=True)
+class AnalyzerParts:
+    """What the analyzer's worker side is made of, built once when the worker starts."""
+
+    sessions: sessionmaker[Session]
+    checkpoints: CheckpointAccess
+    clones: LocalClones
+    new_model: Callable[[], ChatModel]  # the chat model of one attempt
+    extractors: Sequence[Extractor]
+    policy: AnalysisPolicy
+    limits: Limits = field(default_factory=Limits)
 
 
 def repository_analyzer(
@@ -53,18 +94,65 @@ def repository_analyzer(
     """
     policy = RepositoryAnalyzerSettings.from_env(environ).policy
     checkpoints = checkpoints_in(database_url)
-    analyse = analysis_with_configured_models(environ)
-    return registration(AnalysisActivities(sessions, analyse, checkpoints, policy), policy)
+    router = ModelRouter.from_file(
+        environ.get("LLM_CONFIG_PATH") or DEFAULT_CONFIG_PATH, env=environ
+    )
+    # Asked for here, so a missing provider key stops the worker and not every run.
+    router.headers()
+    tokens = RepositoryTokens.from_environment(environ)
+    clones = LocalClones(Path(tempfile.gettempdir()) / CLONES_FOLDER, intake_with(tokens))
+    # A run that could still be in progress is younger than this, so its clone is left alone.
+    clones.sweep(older_than=timedelta(seconds=longest_analysis_seconds(policy)))
+    return registration(
+        AnalyzerParts(
+            sessions=sessions,
+            checkpoints=checkpoints,
+            clones=clones,
+            # A chat model per attempt: it keeps the replies of the attempt it served.
+            new_model=lambda: RouterChatModel(router=router),
+            extractors=list(discover_extractors()),
+            policy=policy,
+        )
+    )
 
 
-def registration(activities: AnalysisActivities, policy: AnalysisPolicy) -> AgentRegistration:
-    """What the worker registers to run analyses with ``activities`` under ``policy``."""
-    return AgentRegistration(
-        # One queue, the one the API starts the workflow on.
-        task_queue=ANALYSIS_TASK_QUEUE,
+def registration(parts: AnalyzerParts) -> AgentRegistration:
+    """What the worker registers to run analyses with ``parts``."""
+    work = AnalysisWork(
+        parts.sessions,
+        parts.checkpoints,
+        parts.clones,
+        new_model=parts.new_model,
+        extractors=parts.extractors,
+        limits=parts.limits,
+    )
+    # One queue, the one the API starts the workflow on.
+    worker = AgentWorker(agent, task_queue=ANALYSIS_TASK_QUEUE)
+
+    @worker.handler(CloneRepository)
+    def clone_repository(payload: CloneRepository, context: ActionContext) -> Mapping[str, Any]:
+        # The action's id is not needed to make the clone once: the run's folder is the key.
+        return work.clone(payload)
+
+    @worker.run_ended
+    def release_the_clone(run: GraphRunRef) -> None:
+        work.release(run)
+
+    graph_steps = AgentSteps(
+        agent,
+        initial_state=work.initial_state,
+        finish=work.finish,
+        context=work.context,
+        recursion_limit=recursion_limit(parts.limits),
+    )
+    activities = AnalysisActivities(parts.sessions, parts.policy)
+    return worker.registration(
+        checkpoints=parts.checkpoints,
+        graph=WordedSteps(graph_steps, parts.clones),
         workflows=[AnalyzeRepository],
-        activities=[activities.start_run, activities.analyse_and_store, activities.record_failure],
-        checkpoint_cleanups=[cleanup_of_analysis_runs(policy)],
+        texts=steps.ANALYSIS_TEXTS,
+        activities=[activities.start_run, activities.record_failure],
+        checkpoint_cleanups=[cleanup_of_analysis_runs(parts.policy)],
     )
 
 
@@ -82,31 +170,10 @@ def cleanup_of_analysis_runs(policy: AnalysisPolicy) -> CheckpointCleanup:
     return CheckpointCleanup(runs="analysis runs", remove=remove)
 
 
-def analysis_with_configured_models(environ: Mapping[str, str]) -> AnalyseRepository:
-    """How this installation analyses a repository: its models, extractors and tokens.
+def intake_with(tokens: RepositoryTokens) -> Intake:
+    """Intake as this installation does it: with its tokens, each sent only to its own host."""
 
-    The configuration is read once, so a mistake in it stops the worker at
-    start-up instead of failing every run.
-    """
-    router = ModelRouter.from_file(
-        environ.get("LLM_CONFIG_PATH") or DEFAULT_CONFIG_PATH, env=environ
-    )
-    # Asked for here, so a missing provider key stops the worker and not every run.
-    router.headers()
-    tokens = RepositoryTokens.from_environment(environ)
-    extractors = list(discover_extractors())
+    def intake(source: str, clone_into: Path, commit: str | None) -> IntakeResult:
+        return run_intake(source, clone_into, tokens=tokens, commit=commit)
 
-    def analyse(
-        repository_url: str, clone_into: Path, checkpoints: RunCheckpoints
-    ) -> RepositoryAnalysis:
-        # A chat model per attempt: it keeps the replies of the attempt it served.
-        return analyze_repository(
-            repository_url,
-            clone_into,
-            model=RouterChatModel(router=router),
-            extractors=extractors,
-            tokens=tokens,
-            checkpoints=checkpoints,
-        )
-
-    return analyse
+    return intake

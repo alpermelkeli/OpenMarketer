@@ -22,9 +22,10 @@ Everything else is refused: a finished run is never started, failed or given
 another result (``AnalysisRunFinished``), and a run that was never started
 cannot succeed (``AnalysisRunNotStarted``).
 
-Every function is scoped to a workspace and a project, including those the
+Every function but one is scoped to a workspace and a project, including those the
 worker calls: a run of another workspace or project is treated exactly like a
-run that does not exist. Listing the runs of a project the workspace does not
+run that does not exist. The one is ``run_to_execute``, which is how the worker learns the
+scope of a run it was handed by its id. Listing the runs of a project the workspace does not
 have is ``ProjectNotFound``, like requesting one. Functions take a session and never commit, so the
 worker can store a run's result (``evidence_store.save_analysis_of_project``)
 and report its success in one transaction.
@@ -57,18 +58,21 @@ from openmarketer_core.db.models import (
 )
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.projects import get_project
+from openmarketer_core.repository_analysis.workflow_contract import (
+    ANALYSIS_RUN_KIND,
+    AnalyzeRepositoryInput,
+)
 
 UNFINISHED_RUN_INDEX = "uq_analysis_run_project_id_unfinished"
 FINISHED = (AnalysisRunStatus.SUCCEEDED, AnalysisRunStatus.FAILED)
 
 
-# The kind of run an analysis is, in the name of its thread (``agent_runtime.threads``).
-ANALYSIS_RUN_KIND = "analysis-run"
 # What the name of every thread of an analysis run starts with. The checkpoint tables are
 # shared by every graph, and a thread's name is all they know of it; the kind in front
-# says whose it is. A colon ends it because no run id holds one. A kind is only lower-case
-# letters, digits and hyphens (``agent_runtime.threads``), so no name holds a character that
-# is special to a pattern match or ends the kind early; the cleanup escapes the prefix anyway.
+# (``workflow_contract.ANALYSIS_RUN_KIND``) says whose it is. A colon ends it because no run
+# id holds one. A kind is only lower-case letters, digits and hyphens
+# (``agent_runtime.threads``), so no name holds a character that is special to a pattern
+# match or ends the kind early; the cleanup escapes the prefix anyway.
 ANALYSIS_RUN_THREADS = f"{ANALYSIS_RUN_KIND}:"
 
 
@@ -221,6 +225,26 @@ def analysis_run(
     if record is None:
         raise AnalysisRunNotFound(project_id, run_id)
     return _analysis_run(session, record)
+
+
+def run_to_execute(session: Session, run_id: uuid.UUID) -> AnalyzeRepositoryInput | None:
+    """The run ``run_id`` with its project and workspace, or ``None`` when there is no such run.
+
+    This one read is not scoped by a workspace, because it is what finds the scope: the
+    worker's graph is handed a run by its id alone (the id this module made and the API gave
+    the run's workflow, never a value a request or a model chose), and everything it then
+    does with the run goes through the scoped functions with what this returns. It says
+    nothing else of the run, and changes nothing.
+    """
+    found = session.execute(
+        select(Project.workspace_id, AnalysisRunRecord.project_id)
+        .join(Project, Project.id == AnalysisRunRecord.project_id)
+        .where(AnalysisRunRecord.id == run_id)
+    ).one_or_none()
+    if found is None:
+        return None
+    workspace_id, project_id = found
+    return AnalyzeRepositoryInput(workspace_id=workspace_id, project_id=project_id, run_id=run_id)
 
 
 def list_analysis_runs(

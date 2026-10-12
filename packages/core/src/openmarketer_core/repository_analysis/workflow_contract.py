@@ -17,6 +17,11 @@ from dataclasses import dataclass
 
 ANALYZE_REPOSITORY_WORKFLOW = "AnalyzeRepository"
 ANALYSIS_TASK_QUEUE = "openmarketer-analysis"
+# The kind of run an analysis is: what the analyzer's agent is declared with, and what the name
+# of the thread of a run's checkpoints starts with (``db.analysis_runs.run_thread_id``). It is
+# here, with no import beside it, because the agent's declarations are loaded by the workflow
+# and must not load the database with them.
+ANALYSIS_RUN_KIND = "analysis-run"
 
 
 @dataclass(frozen=True)

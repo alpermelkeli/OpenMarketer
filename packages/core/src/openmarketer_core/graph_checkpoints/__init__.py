@@ -8,9 +8,8 @@ in PostgreSQL is opened in ``graph_checkpoints/postgres.py``; the type is here
 on its own so that a graph module can name it without importing a database
 driver, and a graph run without checkpoints needs no database at all.
 
-Nothing here is a rule. When an attempt continues from a checkpoint and when
-it starts over is the graph's own decision (the analyzer's is
-``repository_analysis.analyzer_agent.rules.resumption``); which thread belongs to which run is the
+Nothing here is a rule. How an attempt continues from a checkpoint is
+``agent_runtime.langgraph_steps.GraphThread``'s; which thread belongs to which run is the
 caller's (an analysis run's is ``db.analysis_runs.run_thread_id``); which
 leftover threads may be removed is a rule of each kind of run (the analysis
 runs' is in ``db/checkpoint_cleanup.py``); and the

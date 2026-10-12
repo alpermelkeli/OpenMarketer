@@ -23,9 +23,8 @@ with. A graph's state must therefore be plain data, as the analyzer's is.
 
 This module does not create the tables: the migrations do (see
 ``db/checkpoint_schema.py``), and the library's ``setup()`` is never called.
-It holds no rule about when an attempt continues from a checkpoint (each graph
-has its own; the analyzer's is
-``repository_analysis.analyzer_agent.rules.resumption``), does not name the
+It holds no rule about when an attempt continues from a checkpoint (a thread
+that has checkpoints is continued: ``agent_runtime.langgraph_steps.GraphThread``), does not name the
 thread of a run (the caller does; an analysis run's is
 ``db.analysis_runs.run_thread_id``) and has no cleanup rule: its caller
 forgets a run that is over, and the rule of its kind of run removes what was

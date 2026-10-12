@@ -26,6 +26,7 @@ from openmarketer_core.db.analysis_runs import (
     mark_run_started,
     mark_run_succeeded,
     request_analysis_run,
+    run_to_execute,
 )
 from openmarketer_core.db.evidence_store import (
     SavedAnalysis,
@@ -45,6 +46,7 @@ from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.session import transaction
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.intake import Snapshot
+from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
 
 
 @dataclass(frozen=True)
@@ -522,3 +524,25 @@ def test_concurrent_reports_of_one_run_are_applied_one_after_the_other(engine):
     with sessions() as session:
         stored = analysis_run(session, **project.scope, run_id=run.id)
     assert stored.status is AnalysisRunStatus.SUCCEEDED
+
+
+# ------------------------------------------------------- the scope of a run
+def test_run_is_found_by_its_id_with_the_project_and_workspace_it_is_of(session, project):
+    run = request_analysis_run(session, **project.scope)
+    assert run_to_execute(session, run.id) == AnalyzeRepositoryInput(
+        workspace_id=project.workspace_id, project_id=project.project_id, run_id=run.id
+    )
+
+
+def test_run_of_another_project_is_found_with_its_own_scope(session, project):
+    other = new_project(session, new_workspace(session))
+    request_analysis_run(session, **project.scope)
+    run = request_analysis_run(session, **other.scope)
+    found = run_to_execute(session, run.id)
+    assert found is not None
+    assert (found.workspace_id, found.project_id) == (other.workspace_id, other.project_id)
+
+
+def test_run_that_does_not_exist_has_no_scope(session, project):
+    request_analysis_run(session, **project.scope)
+    assert run_to_execute(session, uuid.uuid4()) is None

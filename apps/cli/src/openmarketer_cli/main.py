@@ -18,7 +18,8 @@ from openmarketer_core.db.session import DatabaseError, session_factory, transac
 from openmarketer_core.llm import ChatModel, LLMError, RouterChatModel
 from openmarketer_core.llm_config import ConfigError, Resolved
 from openmarketer_core.profile import ProductProfile
-from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError, Limits, analyze
+from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError, Limits
+from openmarketer_core.repository_analysis.analyzer_agent.graph import analyze
 from openmarketer_core.repository_analysis.analyzer_agent.rules import ROLE as ANALYZER_ROLE
 from openmarketer_core.repository_analysis.extraction import (
     ExtractedFact,
