@@ -17,3 +17,8 @@ export function dataOf<Data>(result: ApiResult<Data>): Data {
   if (result.response.ok && result.data !== undefined) return result.data;
   throw apiErrorFrom(result.response.status, result.error);
 }
+
+/** For a call that answers with no content (204): nothing on success, an `ApiError` otherwise. */
+export function doneOf(result: ApiResult<unknown>): void {
+  if (!result.response.ok) throw apiErrorFrom(result.response.status, result.error);
+}

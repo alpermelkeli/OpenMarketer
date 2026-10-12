@@ -9,4 +9,4 @@ async function handle(request: Request, context: RouteContext<"/api/v1/[...path]
   return proxyToApi(request, path, process.env.OPENMARKETER_API_URL);
 }
 
-export { handle as GET, handle as POST };
+export { handle as GET, handle as POST, handle as PUT, handle as DELETE };

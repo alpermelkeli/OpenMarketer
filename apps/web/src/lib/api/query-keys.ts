@@ -11,4 +11,6 @@ export const queryKeys = {
   profileVersions: (projectId: string) => ["projects", "one", projectId, "versions", "list"] as const,
   profileVersion: (projectId: string, version: number) =>
     ["projects", "one", projectId, "versions", "one", version] as const,
+  /** Where each credential's value comes from. Never a value: no response holds one. */
+  credentials: () => ["settings", "credentials"] as const,
 };

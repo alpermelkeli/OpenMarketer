@@ -30,6 +30,10 @@ export type BusinessModelType = Schemas["BusinessModelType"];
 export type Measurement = Schemas["Measurement"];
 export type Evidence = Schemas["Evidence"];
 
+export type CredentialStatus = Schemas["CredentialStatusResponse"];
+export type CredentialList = Schemas["CredentialListResponse"];
+export type CredentialSource = Schemas["CredentialSource"];
+
 export type Problem = Schemas["Problem"];
 export type ErrorCode = Schemas["ErrorCode"];
 export type RequestValidationError = Schemas["HTTPValidationError"];
