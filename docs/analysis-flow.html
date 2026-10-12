@@ -9,7 +9,7 @@
   with the file and function behind each step. docs/analysis-flow.png is this page rendered:
 
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --hide-scrollbars \
-      --force-device-scale-factor=2 --window-size=1360,2346 \
+      --force-device-scale-factor=2 --window-size=1360,2775 \
       --screenshot=docs/analysis-flow.png docs/analysis-flow.html
 
   Update both when a step, a file or a function named here changes.
@@ -207,78 +207,77 @@
 
   <!-- ------------------------------------------------------------------ workflow -->
   <section class="lane" style="--c: var(--temporal)">
-    <h2>2 · The workflow <small>— <code>worker/repository_analyzer/workflow.py</code> · <code>AnalyzeRepository.run()</code> orders three activities and decides nothing else</small></h2>
+    <h2>2 · The workflow <small>— <code>worker/repository_analyzer/workflow.py</code> · <code>AnalyzeRepository</code> holds two hooks; <code>worker/agent_runtime/workflow_dsl.py</code> <b>agent_workflow</b> writes the rest, as for any agent</small></h2>
 
     <div class="step" style="--c: var(--worker)">
       <span class="n">4</span>
-      <h3>Activity <code>start_run</code>: the run is picked up</h3>
+      <h3>Hook <code>before</code> → activity <code>start_run</code>: the run is picked up</h3>
       <ul class="where">
         <li><span class="f">worker/repository_analyzer/activities.py</span> <b>AnalysisActivities.start_run()</b>
             → <span class="f">core/db/analysis_runs.py</span> <b>mark_run_started()</b></li>
       </ul>
-      <p>Run is <b class="state running">running</b>. Returns the <code>AnalysisPolicy</code> (time limits, attempts) the workflow uses for the next activity.</p>
+      <p>Run is <b class="state running">running</b>. Returns the <code>AnalysisPolicy</code> from the worker's settings (time limit, attempts); it limits each graph step below.</p>
+    </div>
+
+    <div class="down label"><span><code>agent_runtime/driver.py</code> <b>run_graph_with_actions()</b>: step, action, next step</span></div>
+
+    <div class="step" style="--c: var(--worker)">
+      <span class="n">5</span>
+      <h3>Activity <code>run_graph_step</code>: the graph starts and asks for the clone</h3>
+      <ul class="where">
+        <li><span class="f">worker/agent_runtime/activities.py</span> <b>RuntimeActivities.run_graph_step()</b> in a thread, with heartbeats</li>
+        <li>→ <span class="f">core/graph_checkpoints/postgres.py</span> <b>run_checkpoints()</b> holds the thread <code>analysis-run:&lt;run id&gt;</code>: one attempt per run at a time</li>
+        <li>→ <span class="f">worker/repository_analyzer/analysis.py</span> <b>WordedSteps.advance()</b> → <span class="f">core/agent_runtime/langgraph_agent.py</span> <b>AgentSteps.advance()</b></li>
+        <li>→ node <b>clone</b> (<span class="f">core/repository_analysis/analyzer_agent/graph.py</span>) → <b>request_action(CloneRepository(…))</b></li>
+      </ul>
+      <p>The graph pauses on a checkpoint and the activity ends. The request holds the run's three identifiers and nothing else; the driver refuses a name the agent did not declare (<code>analyzer_agent/definitions.py</code>).</p>
     </div>
 
     <div class="down"></div>
 
     <div class="step" style="--c: var(--worker)">
-      <span class="n">5</span>
-      <h3>Activity <code>analyse_and_store</code>: one attempt at the analysis</h3>
+      <span class="n">6</span>
+      <h3>Activity <code>run_action</code> · <code>clone_repository</code>: the clone, as an activity of its own</h3>
       <ul class="where">
-        <li><span class="f">worker/repository_analyzer/activities.py</span> <b>AnalysisActivities.analyse_and_store()</b>
-            runs <b>_analyse_and_store()</b> in a thread and sends a heartbeat every 20 s</li>
+        <li><span class="f">worker/agent_runtime/activities.py</span> <b>RuntimeActivities.run_action()</b> checks the payload against its model, then calls the handler</li>
+        <li>→ <span class="f">worker/repository_analyzer/wiring.py</span> <b>clone_repository()</b> → <span class="f">analysis.py</span> <b>AnalysisWork.clone()</b>: the URL is read from the database</li>
+        <li>→ <span class="f">worker/repository_analyzer/clones.py</span> <b>LocalClones.clone()</b> → <span class="f">core/repository_analysis/intake/__init__.py</span> <b>run_intake()</b>:
+            <b>clone()</b>, <b>scan_and_redact()</b></li>
       </ul>
+      <p>Its own limits: 15 minutes, 5 attempts, a heartbeat every 20 s (constants on the action). The clone lives in <code>&lt;temp&gt;/openmarketer-analysis/&lt;run id&gt;/repo</code>; a token goes only to its own host; secrets are redacted and files are read only through <code>RepoFiles</code>. It answers with the commit and nothing else.</p>
+    </div>
 
-      <div class="cols two" style="margin-top:12px">
-        <div class="sub" style="--c: var(--worker)">
-          <h4><em>5a</em>Hold the run's checkpoints</h4>
-          <ul class="where">
-            <li><b>CheckpointAccess.of_attempt(run_thread_id(run_id))</b></li>
-            <li>→ <span class="f">core/graph_checkpoints/postgres.py</span> <b>run_checkpoints()</b></li>
-          </ul>
-          <p>The thread is named <code>analysis-run:&lt;run id&gt;</code> (<code>core/db/analysis_runs.py</code>). One attempt per run at a time (advisory lock); while an earlier attempt still runs, this one is refused and retried.</p>
-        </div>
-        <div class="sub" style="--c: var(--worker)">
-          <h4><em>5b</em>Read the run and its repository</h4>
-          <ul class="where">
-            <li><b>_repository_to_analyse()</b> → <b>analysis_run()</b>, <b>get_project()</b>, <b>remote_repository_url()</b></li>
-          </ul>
-          <p>Already succeeded → nothing to do. The URL comes from the database, never from Temporal.</p>
-        </div>
-      </div>
+    <div class="down"></div>
 
-      <div class="sub core" style="margin-top:14px">
-        <h4><em>5c</em>Analyse — <code>core/repository_analysis/pipeline.py</code> <b>analyze_repository()</b>, called through
-            <code>worker/repository_analyzer/wiring.py</code> <b>analysis_with_configured_models()</b>. Paths in the three boxes are under <code>core/repository_analysis/</code></h4>
+    <div class="step" style="--c: var(--worker)">
+      <span class="n">7</span>
+      <h3>Activity <code>run_graph_step</code>: the graph continues with the commit and drafts the profile</h3>
+      <div class="sub core" style="margin-top:12px">
+        <h4><em>7a</em>The nodes — <code>core/repository_analysis/analyzer_agent/graph.py</code>, declared on the <code>Agent</code> of <code>definitions.py</code>. The context of the attempt (<code>analysis.py</code> <b>AnalysisWork.context()</b>) gives them a new chat model and the files of the pinned commit</h4>
         <div class="cols three" style="margin-top:10px">
           <div class="sub" style="background:#fff">
-            <h4>Intake</h4>
+            <h4>clone</h4>
             <ul class="where">
-              <li><span class="f">intake/__init__.py</span> <b>run_intake()</b></li>
-              <li>→ <span class="f">intake/git.py</span> <b>clone()</b></li>
-              <li>→ <span class="f">intake/secrets.py</span> <b>scan_and_redact()</b></li>
+              <li>runs again with the outcome</li>
             </ul>
-            <p>Clone into a temporary folder; a token goes only to its own host. Secrets are redacted; files are read only through <code>RepoFiles</code>.</p>
+            <p>Puts the commit in the state. From here every attempt reads <b>that</b> commit: a worker without the clone fetches it again (<b>LocalClones.at_commit()</b>). An analysis never starts over.</p>
           </div>
           <div class="sub" style="background:#fff">
-            <h4>Extractors</h4>
+            <h4>prepare</h4>
             <ul class="where">
               <li><span class="f">extraction.py</span> <b>run_extractors()</b></li>
-              <li>plugins in <span class="f">packages/extractors</span></li>
+              <li><span class="f">rules.py</span> <b>initial_messages()</b></li>
             </ul>
-            <p>Deterministic facts from manifests (package.json, Gradle, pyproject …) as hints for the agent.</p>
+            <p>Deterministic facts from manifests (package.json, Gradle, pyproject …) as hints, and the first messages.</p>
           </div>
           <div class="sub" style="background:#fff">
-            <h4>Analyzer agent (LangGraph)</h4>
+            <h4>call_model ⇄ run_tools</h4>
             <ul class="where">
-              <li><span class="f">analyzer_agent/graph.py</span> <b>analyze()</b></li>
-              <li>→ <span class="f">analyzer_agent/rules.py</span> <b>resumption()</b></li>
-              <li>loop <b>call_model</b> ⇄ <b>run_tools</b>:</li>
               <li>· <span class="f">core/llm.py</span> <b>RouterChatModel.chat()</b></li>
               <li>· <span class="f">rules.py</span> <b>run_tool_calls()</b> → <span class="f">tools.py</span> <b>RepoTools</b></li>
               <li>· submit → <b>verify()</b> / <b>repair()</b></li>
             </ul>
-            <p>A checkpoint is stored after every step. Starts fresh, continues, starts over (new commit) or returns a finished result.</p>
+            <p>A checkpoint is stored after every node, so a retried attempt continues after the last one that finished.</p>
           </div>
         </div>
       </div>
@@ -287,48 +286,60 @@
         <div class="ok">
           <div class="head">a profile was accepted</div>
           <div class="step" style="--c: var(--good)">
-            <span class="n">5d</span>
+            <span class="n">7b</span>
             <h3>Store the draft, finish the run</h3>
             <ul class="where">
-              <li><b>_store()</b> — one transaction:</li>
+              <li><span class="f">analysis.py</span> <b>AnalysisWork.finish()</b> — one transaction:</li>
               <li>→ <span class="f">core/db/evidence_store.py</span> <b>save_analysis_of_project()</b></li>
               <li>→ <span class="f">core/db/analysis_runs.py</span> <b>mark_run_succeeded()</b></li>
-              <li><b>_forget_checkpoints()</b> → <span class="f">core/graph_checkpoints/postgres.py</span> <b>forget_checkpoints()</b></li>
             </ul>
-            <p>Run is <b class="state succeeded">succeeded</b> with snapshot, evidence and profile version 1 as a draft.</p>
+            <p>Run is <b class="state succeeded">succeeded</b> with snapshot, evidence and profile version 1 as a draft. The step answers with the profile's id only.</p>
           </div>
         </div>
         <div class="ko">
-          <div class="head">the attempt failed</div>
+          <div class="head">an attempt failed</div>
           <div class="step" style="--c: var(--bad)">
             <span class="n">!</span>
-            <h3>An <code>ApplicationError</code> with a type from <code>steps.py</code></h3>
+            <h3>An <code>ApplicationError</code> with a type from <code>steps.py</code> or the runtime's <code>vocabulary.py</code></h3>
             <ul class="where">
               <li><b>ModelUnavailable</b>, <b>DatabaseUnavailable</b>, <b>AttemptStillRunning</b>, <b>Unexpected</b>, a time limit, a lost heartbeat</li>
             </ul>
             <div class="retry">
-              <b>Temporal retries</b>: up to 5 attempts, waiting 1, 2, 4 and 8 minutes (<code>policy.py</code>).
-              The next attempt repeats step 5 and <b>continues from the checkpoints</b>.
+              <b>Temporal retries that activity</b>: each graph step up to 5 attempts, waiting 1, 2, 4 and 8 minutes (<code>policy.py</code>).
+              The next attempt <b>continues from the checkpoints</b>, on the same commit.
             </div>
             <ul class="where" style="margin-top:10px">
-              <li><b>AnalysisFailed</b>, <b>RunUnavailable</b>, attempts used up, cancellation</li>
+              <li><b>AnalysisFailed</b> (a refused repository, a model that gave up), <b>RunUnavailable</b>, attempts used up, cancellation</li>
             </ul>
-            <div class="retry" style="border-color: var(--bad)"><b>Not retried</b>: the workflow goes to step 6.</div>
+            <div class="retry" style="border-color: var(--bad)"><b>Not retried</b>: the workflow goes to step 8.</div>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="down label"><span>only when steps 4 or 5 ended without a result</span></div>
+    <div class="down label"><span>only when the run ended without a result</span></div>
 
     <div class="step" style="--c: var(--worker)">
-      <span class="n">6</span>
-      <h3>Activity <code>record_failure</code>: the reason is written on the run</h3>
+      <span class="n">8</span>
+      <h3>Hook <code>failed</code> → activity <code>record_failure</code>: the reason is written on the run</h3>
       <ul class="where">
         <li><span class="f">worker/repository_analyzer/activities.py</span> <b>AnalysisActivities.record_failure()</b>
-            → <span class="f">core/db/analysis_runs.py</span> <b>mark_run_failed()</b>, then <b>_forget_checkpoints()</b></li>
+            → <span class="f">core/db/analysis_runs.py</span> <b>mark_run_failed()</b></li>
       </ul>
       <p>Run is <b class="state failed">failed</b> with a message fit to show. It no longer blocks the project.</p>
+    </div>
+
+    <div class="down label"><span>in every case: finished, failed or cancelled</span></div>
+
+    <div class="step" style="--c: var(--worker)">
+      <span class="n">9</span>
+      <h3>Activity <code>forget_run</code>: what the run left behind is removed</h3>
+      <ul class="where">
+        <li><span class="f">worker/agent_runtime/activities.py</span> <b>RuntimeActivities.forget_run()</b>
+            → <span class="f">core/graph_checkpoints/postgres.py</span> <b>forget_checkpoints()</b></li>
+        <li>→ <span class="f">worker/repository_analyzer/wiring.py</span> <b>release_the_clone()</b> → <span class="f">clones.py</span> <b>LocalClones.release()</b></li>
+      </ul>
+      <p>The checkpoints and the clone's folder are gone. Failing to remove them is logged and never changes how the run ended.</p>
     </div>
   </section>
 
@@ -339,12 +350,12 @@
     <h2>3 · What the person sees <small>— <code>apps/api/…/routes/analyses.py</code> <b>get()</b> → <code>core/db/analysis_runs.py</code> <b>analysis_run()</b>; Temporal is not asked</small></h2>
     <div class="cols two">
       <div class="step" style="--c: var(--good)">
-        <span class="n">7</span>
+        <span class="n">10</span>
         <h3><b class="state succeeded">succeeded</b> → the profile review</h3>
         <p>The run links to the profile version it stored. A person reads the draft with its evidence and confidence, corrects it and approves it. Approval is always a human action.</p>
       </div>
       <div class="step" style="--c: var(--bad)">
-        <span class="n">7</span>
+        <span class="n">10</span>
         <h3><b class="state failed">failed</b> → the reason, and a new start</h3>
         <p>The message holds nothing a repository host or a model provider wrote. A new analysis can be started at once.</p>
       </div>
@@ -354,7 +365,7 @@
   <div class="aside">
     <h2>Meanwhile, in every worker</h2>
     <div>
-      <p>Checkpoints that a run left behind (a process that died, a workflow that was terminated) are removed at start-up and every 10 minutes. The schedule knows no rule: it runs the cleanups the agents' wiring hands it. The analyzer's touches only threads named <code>analysis-run:…</code>.</p>
+      <p>Checkpoints that a run left behind (a process that died, a workflow that was terminated) are removed at start-up and every 10 minutes. The schedule knows no rule: it runs the cleanups the agents' wiring hands it. The analyzer's touches only threads named <code>analysis-run:…</code>. Clone folders older than the longest a run can last are removed when a worker starts (<code>clones.py</code> <b>LocalClones.sweep()</b>).</p>
       <ul class="where" style="--c: var(--worker)">
         <li><span class="f">worker/main.py</span> <b>serve_until()</b> →
             <span class="f">worker/checkpoint_cleanup.py</span> <b>keep_removing_leftover_checkpoints()</b> runs each <b>CheckpointCleanup</b></li>
