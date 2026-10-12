@@ -16,7 +16,7 @@
 
 OpenMarketer is an open-source AI agent that reads the source repository of any mobile app or website, builds a verified understanding of the product, and runs the marketing: research, content, publishing, ad campaigns and measurement. It asks you before anything risky or expensive, and it cannot spend beyond the budget you set.
 
-> **Status: early development.** The architecture, safety model and roadmap are designed and documented. The first milestone, the repository analyzer, runs from the command line or through a local API and produces a draft Product Profile, which can be stored in a local database; nothing is reviewed or published yet. See [what exists today](#status).
+> **Status: early development.** The architecture, safety model and roadmap are designed and documented. The first milestone, the repository analyzer, is built: it runs from the command line or as a durable workflow behind a local API, and produces a draft Product Profile that a person reviews, corrects and approves in the dashboard. How good its profiles are has not been measured, and nothing is published yet. See [what exists today](#status).
 
 <p align="center">
   <img src="docs/design-report/figures/fig_loop.png" alt="The OpenMarketer agent loop" width="640">
@@ -33,16 +33,17 @@ Most tools automate one slice: scheduling, ad rules or copy generation. Strategy
 - **A model per role, through OpenRouter.** Every LLM call site (writer, planner, reader, orchestrator, and so on) has its own configurable model, with fallbacks and capability checks.
 - **Talk to it.** A dashboard chat (the orchestrator) answers questions about the project and takes special requests. In proactive mode it also sends digests, approval reminders, questions and alerts.
 - **An agentic creative studio.** Asset production works like a coding agent for graphics: it writes code to compose exact text, logos and layouts, generates backgrounds or whole images with models, then verifies the result (OCR, contrast, size checks and a separate vision model) and edits until it passes or hands over to a human, within iteration and cost limits.
-- **Agent graphs with durable workflows.** Agent behaviour is written as LangGraph graphs that run inside Temporal activities: Temporal owns time and reliability, LangGraph owns the reasoning flow of a task.
+- **Agent graphs with durable workflows.** Agent behaviour is written as LangGraph graphs that run inside Temporal activities: Temporal owns time and reliability, LangGraph owns the reasoning flow of a task. A graph does no side effect itself: a node asks for an action, and the workflow runs it as an activity of its own, with its own retries and time limit. An agent is declared with a few decorators, so every agent joins the two the same way.
 - **Pluggable everything.** Platforms, media providers (fal.ai, Higgsfield, ElevenLabs), framework extractors, playbooks and policy packs are plugins behind small interfaces.
 
 ## Status
 
 | Area | Status |
 |---|---|
-| Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 54 pages) |
+| Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 55 pages) |
 | Per-role LLM model configuration through OpenRouter | Built and used by the analyzer (`config/models.yaml`) |
-| Repository analyzer and Product Profile | **In progress**: intake, extractors and the analyzer agent run from the CLI, which can store a run as a draft; the API registers projects, runs analyses, and reads, edits and approves profiles; the dashboard reviews them; a golden-repository benchmark (`make evaluate`) runs, with one case so far |
+| Repository analyzer and Product Profile | **Built, quality not measured**: intake, extractors and the analyzer agent run from the CLI, which can store a run as a draft; the API registers projects, starts analyses, and reads, edits and approves profiles; the worker runs each analysis as a durable workflow; the dashboard reviews the profiles. The golden-repository benchmark (`make evaluate`) runs, with one case so far, whose label no person has reviewed |
+| Agent runtime: LangGraph graphs inside Temporal workflows, declared with decorators | Built and used by the analyzer; no policy gate or human approval of actions yet, so nothing that publishes or spends runs on it |
 | Content engine and approved publishing (X, Instagram) | Planned |
 | Creative studio (compose with code, generate, verify, edit) | Designed |
 | Orchestrator console and proactive mode | Designed |
@@ -87,7 +88,7 @@ Each stored run adds a snapshot of the commit, the extractor facts and a new dra
 
 `make api` serves the API on `http://127.0.0.1:8000`, for the dashboard: register a repository, start an analysis, poll it, then read, edit and approve the profile. It has no login, so it answers only requests made on the same machine; do not expose it. The routes and their limits are in [docs/status.md](docs/status.md#the-api).
 
-`make worker` runs the Temporal worker that executes each analysis the API starts, as a durable workflow with retries, timeouts and the run's state in the database. The analyzer's progress is stored in the same database after every step until the run ends, so a retried attempt continues where the last one stopped instead of starting over; this has been checked in tests with a scripted model, not with a worker killed during a real analysis. To analyse a repository through the API you need both, on top of the database: `make up`, `make migrate`, `make worker` and `make api`. What the worker does and what it leaves out is in [docs/status.md](docs/status.md#the-worker).
+`make worker` runs the Temporal worker that executes each analysis the API starts, as a durable workflow with retries, timeouts and the run's state in the database. Cloning the repository is an activity of its own, with its own time limit and retries; the commit it read is fixed for the rest of the run. The analyzer's progress is stored in the same database after every step until the run ends, so a retried attempt continues where the last one stopped, on the same commit, instead of starting over; this has been checked in tests with a scripted model, not with a worker killed during a real analysis. Finish or stop running analyses before upgrading a worker across this change: a workflow started by the earlier worker cannot be continued by this one. To analyse a repository through the API you need both, on top of the database: `make up`, `make migrate`, `make worker` and `make api`. What the worker does and what it leaves out is in [docs/status.md](docs/status.md#the-worker).
 
 `make web` serves the dashboard on `http://localhost:3000`: create a project, start an analysis and watch it, then review the drafted profile, with the evidence and confidence of every claim and what the analyzer was unsure about first, correct it and approve it. It needs `make api` (and `make worker` to analyse). Like the API it has no login and listens on this machine only. What it does and what it works around is in [docs/status.md](docs/status.md#the-dashboard).
 
