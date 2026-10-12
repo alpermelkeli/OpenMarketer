@@ -8,10 +8,11 @@ uses them, and keeps none.
 
 Which value a credential has is core's rule (``credentials/resolution.py``): the
 environment's, otherwise the one stored for the workspace, opened with the installation's
-``ENCRYPTION_KEY``. The model provider's key has one step before that: the model
-configuration can name the variable of its key (``provider.api_key_env``), and that variable
-is looked at first, then the catalog's credential (``OPENROUTER_API_KEY``, then the stored
-value). The two variables are the same unless the configuration says otherwise.
+``ENCRYPTION_KEY``. The model provider's key is the catalog's credential
+(``OPENROUTER_API_KEY``, then the stored value) when the variable the model configuration
+names for its key (``provider.api_key_env``) is the catalog's. A configuration that names
+another variable is another provider's: its key comes from that variable alone, so the key of
+one provider is never sent to another.
 
 What cannot be resolved is said in an error whose message may be shown and never holds a
 value: core's ``CredentialUnreadable`` for a stored value that does not open, and
@@ -44,10 +45,16 @@ class ModelKeyNotSet(Exception):
     """The model provider's key is neither in the environment nor stored for the workspace."""
 
     def __init__(self, environment_variable: str) -> None:
-        super().__init__(
-            "the model provider's API key is not set: set it in the dashboard's Settings,"
-            f" or with the environment variable {environment_variable}"
-        )
+        """``environment_variable`` is the one the model configuration names for the key."""
+        # Settings stores the catalog's credential only, so it is no place for another key.
+        if environment_variable == OPENROUTER_API_KEY.environment_variable:
+            where = (
+                "set it in the dashboard's Settings,"
+                f" or with the environment variable {environment_variable}"
+            )
+        else:
+            where = f"set the environment variable {environment_variable}"
+        super().__init__(f"the model provider's API key is not set: {where}")
 
 
 class WorkspaceCredentials:
@@ -87,14 +94,17 @@ class WorkspaceCredentials:
     def model_key(self, workspace_id: uuid.UUID, router: ModelRouter) -> str:
         """The key for the calls ``router`` builds for a run of the workspace.
 
-        The one in the router's environment, otherwise the workspace's. Raises
-        ``ModelKeyNotSet`` when there is none, ``CredentialUnreadable`` and ``DatabaseError``.
+        The one in the router's environment, otherwise the workspace's when the router's
+        variable is the catalog's. Raises ``ModelKeyNotSet`` when there is none,
+        ``CredentialUnreadable`` and ``DatabaseError``.
         """
+        variable = router.config.provider.api_key_env
         key = router.api_key_in_environment()
-        if key is None:
+        # Only for the catalog's own variable: its key must not reach another provider.
+        if key is None and variable == OPENROUTER_API_KEY.environment_variable:
             key = self.values(workspace_id, [OPENROUTER_API_KEY])[OPENROUTER_API_KEY]
         if key is None:
-            raise ModelKeyNotSet(router.config.provider.api_key_env)
+            raise ModelKeyNotSet(variable)
         return key
 
     def __repr__(self) -> str:

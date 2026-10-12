@@ -296,9 +296,11 @@ class ModelRouter:
     def api_key_in_environment(self) -> str | None:
         """The provider's key in this router's environment, or ``None`` when it is not set there.
 
-        The variable is the one the configuration names (``provider.api_key_env``).
+        The variable is the one the configuration names (``provider.api_key_env``). Its
+        value is given without the whitespace around it; one that is empty or only
+        whitespace is not set.
         """
-        return self.env.get(self.config.provider.api_key_env) or None
+        return self.env.get(self.config.provider.api_key_env, "").strip() or None
 
     def headers(self, api_key: str | None = None) -> dict[str, str]:
         """The headers of a request to the provider, with ``api_key`` as its key.

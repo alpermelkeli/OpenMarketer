@@ -201,9 +201,15 @@ def test_model_without_a_key_anywhere_names_the_variable_to_set():
         model.chat("writer", [{"role": "user", "content": "x"}])
 
 
-@pytest.mark.parametrize("environ", [{}, {"OPENROUTER_API_KEY": ""}])
+@pytest.mark.parametrize("environ", [{}, {"OPENROUTER_API_KEY": ""}, {"OPENROUTER_API_KEY": " \n"}])
 def test_router_says_when_its_environment_has_no_key(environ):
     assert router_with(environ).api_key_in_environment() is None
+
+
+def test_router_reads_the_key_without_the_whitespace_around_it():
+    router = router_with({"OPENROUTER_API_KEY": " test-key\n"})
+    assert router.api_key_in_environment() == "test-key"
+    assert router.headers()["Authorization"] == "Bearer test-key"
 
 
 def test_router_reads_the_key_from_the_variable_its_configuration_names():

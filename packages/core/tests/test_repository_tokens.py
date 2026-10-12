@@ -67,8 +67,14 @@ def test_token_can_be_configured_for_a_port():
     assert tokens.token_for("https://git.example.com/acme/app.git") is None
 
 
-def test_empty_token_is_no_token():
-    assert RepositoryTokens({"github.com": ""}).token_for("https://github.com/a/b") is None
+@pytest.mark.parametrize("token", ["", " ", "\t\n"])
+def test_empty_token_is_no_token(token):
+    assert RepositoryTokens({"github.com": token}).token_for("https://github.com/a/b") is None
+
+
+def test_token_is_sent_without_the_whitespace_around_it():
+    tokens = RepositoryTokens({"github.com": f" {GITHUB}\n"})
+    assert tokens.token_for("https://github.com/a/b") == GITHUB
 
 
 @pytest.mark.parametrize(
@@ -106,6 +112,12 @@ def test_gitlab_token_follows_the_configured_host():
     assert tokens.token_for("https://gitlab.example.com/acme/app.git") == GITLAB
     assert tokens.token_for("https://gitlab.com/acme/app.git") is None
     assert tokens.token_for("https://github.com/acme/app.git") == GITHUB
+
+
+def test_whitespace_in_the_environment_configures_no_token():
+    tokens = RepositoryTokens.from_environment({"GITHUB_TOKEN": " ", "GITLAB_TOKEN": "\n"})
+    assert tokens.token_for("https://github.com/acme/app.git") is None
+    assert tokens.token_for("https://gitlab.com/acme/app.git") is None
 
 
 def test_environment_without_tokens_configures_none():

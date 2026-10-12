@@ -1,8 +1,9 @@
 """Which value a credential has in a workspace, and setting or removing a stored one.
 
-The environment wins. A credential whose environment variable is not empty has
-that value, and a value stored for it is ignored; storing one is refused while
-the variable is set, since it would have no effect. Removing a stored value is
+The environment wins. A credential whose environment variable is neither empty
+nor only whitespace has that value, without the whitespace around it, and a
+value stored for it is ignored; storing one is refused while the variable is
+set, since it would have no effect. Removing a stored value is
 always allowed. Without the variable, the stored value is the one in use, and
 it needs the installation's ``ENCRYPTION_KEY`` to be read.
 
@@ -181,8 +182,11 @@ def remove_credential(session: Session, *, workspace_id: uuid.UUID, name: str) -
 
 
 def _value_in_environment(credential: Credential, environ: Mapping[str, str]) -> str | None:
-    """The environment's value of the credential; an empty variable sets nothing."""
-    return environ.get(credential.environment_variable) or None
+    """The environment's value of the credential, without the whitespace around it.
+
+    A variable that is empty or only whitespace sets nothing.
+    """
+    return environ.get(credential.environment_variable, "").strip() or None
 
 
 def _status(

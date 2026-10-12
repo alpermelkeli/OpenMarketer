@@ -32,10 +32,10 @@ class SecretBodyRoute(APIRoute):
             try:
                 return await handle(request)
             except RequestValidationError as invalid:
-                # Without the cause: it holds the body.
-                raise RequestValidationError(
-                    [_unquoted(error, fields) for error in invalid.errors()]
-                ) from None
+                unquoted = [_unquoted(error, fields) for error in invalid.errors()]
+            # Raised once the original is handled, so that nothing leads back to it: it
+            # holds the body.
+            raise RequestValidationError(unquoted)
 
         return handle_without_quoting
 

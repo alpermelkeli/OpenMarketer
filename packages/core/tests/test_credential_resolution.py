@@ -102,6 +102,18 @@ def test_empty_environment_variable_falls_back_to_the_stored_value(session, work
     assert value_of(session, {"GITHUB_TOKEN": ""}, workspace_id, cipher) == STORED_TOKEN
 
 
+def test_whitespace_in_the_environment_variable_falls_back_to_the_stored_value(
+    session, workspace_id, cipher
+):
+    store(session, workspace_id, cipher)
+    assert value_of(session, {"GITHUB_TOKEN": " \t\n"}, workspace_id, cipher) == STORED_TOKEN
+
+
+def test_environment_value_is_used_without_the_whitespace_around_it(session, workspace_id, cipher):
+    environ = {"GITHUB_TOKEN": f"  {ENVIRONMENT_TOKEN}\n"}
+    assert value_of(session, environ, workspace_id, cipher) == ENVIRONMENT_TOKEN
+
+
 def test_environment_variable_of_another_credential_sets_nothing(session, workspace_id, cipher):
     environ = {"GITLAB_TOKEN": ENVIRONMENT_TOKEN, "github_token": ENVIRONMENT_TOKEN}
     assert value_of(session, environ, workspace_id, cipher) is None
@@ -222,6 +234,19 @@ def test_empty_environment_variable_does_not_count_as_set(session, workspace_id)
     assert status.source is CredentialSource.NOT_SET
 
 
+def test_whitespace_in_the_environment_variable_does_not_count_as_set(session, workspace_id):
+    status = status_of(session, {"GITHUB_TOKEN": " \t\n"}, workspace_id)
+    assert status.source is CredentialSource.NOT_SET
+
+
+def test_stored_credential_is_the_one_in_use_beside_whitespace_in_the_environment(
+    session, workspace_id, cipher
+):
+    store(session, workspace_id, cipher)
+    status = status_of(session, {"GITHUB_TOKEN": " "}, workspace_id)
+    assert status.source is CredentialSource.STORED
+
+
 def test_each_credential_has_its_own_status(session, workspace_id, cipher):
     store(session, workspace_id, cipher, name="gitlab_token")
     statuses = credential_statuses(
@@ -303,6 +328,23 @@ def test_setting_a_credential_the_environment_sets_is_refused(session, workspace
     assert ENVIRONMENT_TOKEN not in str(refused.value)
     assert STORED_TOKEN not in str(refused.value)
     assert stored_credentials(session, workspace_id=workspace_id, names=["github_token"]) == []
+
+
+def test_setting_is_accepted_beside_whitespace_in_the_environment_variable(
+    session, workspace_id, cipher
+):
+    environ = {"GITHUB_TOKEN": " "}
+    status = set_credential(
+        session,
+        environ,
+        workspace_id=workspace_id,
+        name="github_token",
+        value=STORED_TOKEN,
+        set_by=OWNER,
+        cipher=cipher,
+    )
+    assert status.source is CredentialSource.STORED
+    assert value_of(session, environ, workspace_id, cipher) == STORED_TOKEN
 
 
 def test_setting_a_value_that_breaks_the_rule_is_refused_and_stores_nothing(

@@ -7,7 +7,8 @@ variable, which is where it was configured before it could be stored.
 A value ends up in an HTTP ``Authorization`` header and in the input of git's
 credential helper, so it must not be able to break out of either: it is
 printable ASCII without a space, of a bounded length. A refusal names the rule
-and never repeats the value or a part of it.
+and never repeats the value or a part of it. A name the catalog does not have
+is not repeated either: it may be a secret written in the wrong place.
 
 ``SealedValue`` is the shape a value has once encrypted; the cipher makes it
 and the store keeps it.
@@ -21,14 +22,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 MAX_VALUE_LENGTH = 4096
-_MAX_SHOWN_CHARACTERS = 60
 
 
 class UnknownCredential(Exception):
-    """No credential of the catalog has that name."""
+    """No credential of the catalog has that name; the message does not say which name."""
 
-    def __init__(self, name: str) -> None:
-        super().__init__(f"there is no credential named {_shown(name)}")
+    def __init__(self) -> None:
+        super().__init__("there is no such credential")
 
 
 class CredentialValueRefused(Exception):
@@ -63,7 +63,7 @@ def credential_named(name: str) -> Credential:
     for credential in CREDENTIALS:
         if credential.name == name:
             return credential
-    raise UnknownCredential(name)
+    raise UnknownCredential
 
 
 def acceptable_value(value: str) -> str:
@@ -84,11 +84,3 @@ def acceptable_value(value: str) -> str:
             " line break or control character inside it"
         )
     return stripped
-
-
-def _shown(name: str) -> str:
-    """A name a caller wrote, quoted on one line and short enough for a message."""
-    quoted = repr(name)
-    if len(quoted) <= _MAX_SHOWN_CHARACTERS:
-        return quoted
-    return quoted[: _MAX_SHOWN_CHARACTERS - 3] + "..."

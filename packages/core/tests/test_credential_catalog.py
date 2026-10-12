@@ -39,15 +39,14 @@ def test_credential_is_found_by_its_name(credential):
 
 @pytest.mark.parametrize("name", ["", "GITHUB_TOKEN", "github_token ", "gitlab_host", "stripe_key"])
 def test_name_that_is_not_in_the_catalog_is_refused(name):
-    with pytest.raises(UnknownCredential, match="no credential named"):
+    with pytest.raises(UnknownCredential):
         credential_named(name)
 
 
-def test_unknown_name_is_quoted_and_shortened_in_the_message():
+def test_unknown_name_is_not_repeated_in_the_message():
     with pytest.raises(UnknownCredential) as refused:
-        credential_named("x" * 1000 + "\nforged log line")
-    assert len(str(refused.value)) < 120
-    assert "\n" not in str(refused.value)
+        credential_named(SECRET)
+    assert str(refused.value) == "there is no such credential"
 
 
 def test_acceptable_value_is_returned_as_it_is():

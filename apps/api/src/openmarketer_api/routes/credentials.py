@@ -36,6 +36,7 @@ from openmarketer_core.credentials.resolution import (
 router = APIRouter(prefix="/settings/credentials", tags=["settings"], route_class=SecretBodyRoute)
 
 # The form every credential's name has. Anything else is a 422 that does not repeat it,
+# and a name of this form that is no credential is a 404 that does not repeat it either,
 # so a secret pasted into the path by mistake is not answered back.
 CredentialName = Annotated[str, Path(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 

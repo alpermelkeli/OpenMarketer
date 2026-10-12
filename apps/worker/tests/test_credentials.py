@@ -26,6 +26,12 @@ def router(environ: dict[str, str]) -> ModelRouter:
     return ModelRouter.from_file(MODELS, env=environ)
 
 
+def router_naming(api_key_env: str, environ: dict[str, str]) -> ModelRouter:
+    named = router(environ)
+    named.config.provider.api_key_env = api_key_env
+    return named
+
+
 @pytest.fixture
 def workspace_id(database) -> uuid.UUID:
     return database.new_workspace()
@@ -85,31 +91,59 @@ def test_no_key_anywhere_says_where_one_can_be_set(sessions, workspace_id, ciphe
     )
 
 
-def test_variable_the_model_configuration_names_is_looked_at_first(
+def test_key_padded_with_whitespace_in_the_environment_is_used_without_it(
+    sessions, workspace_id, cipher
+):
+    environ = {"OPENROUTER_API_KEY": f" {ENVIRONMENT_KEY}\n"}
+    credentials = WorkspaceCredentials(sessions, environ, cipher)
+    assert credentials.model_key(workspace_id, router(environ)) == ENVIRONMENT_KEY
+
+
+def test_whitespace_in_the_environment_is_no_key_so_the_stored_one_is_used(
+    sessions, workspace_id, cipher, stored_key
+):
+    environ = {"OPENROUTER_API_KEY": " "}
+    credentials = WorkspaceCredentials(sessions, environ, cipher)
+    assert credentials.model_key(workspace_id, router(environ)) == stored_key
+
+
+# ------------------------------------------- a configuration that names another variable
+def test_another_variable_the_model_configuration_names_holds_the_key(
     sessions, workspace_id, cipher, stored_key
 ):
     environ = {"PROVIDER_KEY": "sk-named-by-the-configuration", "OPENROUTER_API_KEY": ""}
-    named = router(environ)
-    named.config.provider.api_key_env = "PROVIDER_KEY"
     credentials = WorkspaceCredentials(sessions, environ, cipher)
-    assert credentials.model_key(workspace_id, named) == "sk-named-by-the-configuration"
+    key = credentials.model_key(workspace_id, router_naming("PROVIDER_KEY", environ))
+    assert key == "sk-named-by-the-configuration"
 
 
-def test_catalogs_variable_is_used_when_the_one_the_configuration_names_is_not_set(
+def test_catalogs_variable_is_not_the_key_of_a_configuration_that_names_another(
     sessions, workspace_id, cipher
 ):
     environ = {"OPENROUTER_API_KEY": ENVIRONMENT_KEY}
-    named = router(environ)
-    named.config.provider.api_key_env = "PROVIDER_KEY"
     credentials = WorkspaceCredentials(sessions, environ, cipher)
-    assert credentials.model_key(workspace_id, named) == ENVIRONMENT_KEY
+    with pytest.raises(ModelKeyNotSet):
+        credentials.model_key(workspace_id, router_naming("PROVIDER_KEY", environ))
 
 
-def test_no_key_anywhere_names_the_variable_the_configuration_names(sessions, workspace_id, cipher):
-    named = router({})
-    named.config.provider.api_key_env = "PROVIDER_KEY"
-    with pytest.raises(ModelKeyNotSet, match="environment variable PROVIDER_KEY$"):
-        WorkspaceCredentials(sessions, {}, cipher).model_key(workspace_id, named)
+def test_stored_key_is_not_the_key_of_a_configuration_that_names_another_variable(
+    sessions, workspace_id, cipher, stored_key
+):
+    credentials = WorkspaceCredentials(sessions, {}, cipher)
+    with pytest.raises(ModelKeyNotSet):
+        credentials.model_key(workspace_id, router_naming("PROVIDER_KEY", {}))
+
+
+def test_another_variable_that_is_not_set_is_named_without_pointing_at_settings(
+    sessions, workspace_id, cipher, stored_key
+):
+    environ = {"OPENROUTER_API_KEY": ENVIRONMENT_KEY}
+    credentials = WorkspaceCredentials(sessions, environ, cipher)
+    with pytest.raises(ModelKeyNotSet) as refused:
+        credentials.model_key(workspace_id, router_naming("PROVIDER_KEY", environ))
+    assert str(refused.value) == (
+        "the model provider's API key is not set: set the environment variable PROVIDER_KEY"
+    )
 
 
 # ------------------------------------------------------------ what cannot be read

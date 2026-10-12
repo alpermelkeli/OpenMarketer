@@ -4,18 +4,23 @@ Each test starts with an empty environment, no stored value and a key made for
 the test. ``SECRET`` is a made-up value that is easy to find in a response.
 """
 
+import asyncio
 import base64
 import logging
 import os
 import uuid
 
 import pytest
+from fastapi import Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from openmarketer_api.dependencies import credential_cipher, db_session, environment
 from openmarketer_api.identity import LOCAL_USER_ID
 from openmarketer_api.routes.credentials import SetCredentialRequest
+from openmarketer_api.secret_bodies import SecretBodyRoute
 from openmarketer_core.credentials.catalog import SealedValue
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.credentials import sealed_credential, store_credential
@@ -26,6 +31,8 @@ URL = "/v1/settings/credentials"
 GITHUB = f"{URL}/github_token"
 SECRET = "sk-or-v1-Recognisable-0123456789-abcdef"
 OTHER_SECRET = "ghp_AnotherRecognisable9876543210"
+# A secret that has the form of a credential's name, as one pasted into the path may have.
+SECRET_SHAPED_NAME = "secretmarker0123456789"
 NOT_SET = [
     {
         "name": "openrouter_api_key",
@@ -241,7 +248,7 @@ def test_set_of_an_unknown_credential_is_not_found(client):
     response = client.put(f"{URL}/slack_token", json={"value": SECRET})
     assert (response.status_code, response.json()) == (
         404,
-        {"code": "credential_not_found", "message": "there is no credential named 'slack_token'"},
+        {"code": "credential_not_found", "message": "there is no such credential"},
     )
 
 
@@ -310,6 +317,36 @@ def test_secret_sent_as_the_name_is_refused_without_repeating_it(client):
     response = client.put(f"{URL}/{SECRET}", json={"value": "anything"})
     assert response.status_code == 422
     assert SECRET not in response.text
+
+
+@pytest.mark.parametrize(
+    ("method", "body"), [("PUT", {"value": "anything"}), ("DELETE", None)], ids=["set", "remove"]
+)
+def test_secret_shaped_like_a_name_is_not_found_without_repeating_it(client, method, body):
+    response = client.request(method, f"{URL}/{SECRET_SHAPED_NAME}", json=body)
+    assert (response.status_code, response.json()["code"]) == (404, "credential_not_found")
+    assert SECRET_SHAPED_NAME not in response.text
+
+
+def test_refusal_of_a_malformed_body_does_not_lead_back_to_the_body(monkeypatch):
+    async def refuse_quoting_the_body(request: Request) -> Response:
+        raise RequestValidationError(
+            [
+                {
+                    "type": "missing",
+                    "loc": ("body", "value"),
+                    "msg": "Field required",
+                    "input": SECRET,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(APIRoute, "get_route_handler", lambda route: refuse_quoting_the_body)
+    handle = SecretBodyRoute("/", lambda: None).get_route_handler()
+    with pytest.raises(RequestValidationError) as refused:
+        asyncio.run(handle(Request({"type": "http"})))
+    assert (refused.value.__cause__, refused.value.__context__) == (None, None)
+    assert SECRET not in repr(refused.value.errors())
 
 
 def test_no_response_of_any_route_holds_a_stored_value(client, environ):
