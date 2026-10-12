@@ -25,7 +25,15 @@ from openmarketer_core.db.models import (
 )
 from openmarketer_core.profile import ProductProfile
 
-TABLES = {"workspace", "project", "repo_snapshot", "evidence", "product_profile", "analysis_run"}
+TABLES = {
+    "workspace",
+    "project",
+    "repo_snapshot",
+    "evidence",
+    "product_profile",
+    "analysis_run",
+    "credential",
+}
 
 
 @pytest.fixture

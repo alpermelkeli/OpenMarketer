@@ -1,7 +1,9 @@
-"""Tables for projects, repository evidence, Product Profile versions and analysis runs.
+"""Tables for projects, repository evidence, Product Profile versions, analysis runs and
+stored credentials.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
-security can bind a database session to one project.
+security can bind a database session to one project; ``credential`` belongs to
+the workspace itself and carries ``workspace_id``.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     SmallInteger,
     Text,
     UniqueConstraint,
@@ -105,6 +108,24 @@ class Project(Base):
         _enum(ProjectStatus, "status"), server_default=ProjectStatus.ONBOARDING.value
     )
     created_at: Mapped[datetime] = _created_at()
+
+
+# ------------------------------------------------------------ credentials
+class CredentialRecord(Base):
+    """A secret of the workspace that was set from the dashboard, encrypted.
+
+    ``name`` is a name of ``openmarketer_core.credentials.catalog``. The
+    database does not check it: a name the code no longer knows is never read.
+    """
+
+    __tablename__ = "credential"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspace.id"), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    set_by: Mapped[uuid.UUID]
+    set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # --------------------------------------------------------------- evidence
