@@ -35,7 +35,7 @@ provider:
 
 # Three reusable model classes. Change a tier and every role that uses it follows.
 tiers:
-  fast: apodex/apodex-1.1-mini:free          # cheap, quick: classification, short replies (free, rate limited)
+  fast: anthropic/claude-haiku-5.5           # cheap, quick: classification, short replies
   balanced: anthropic/claude-sonnet-5.5     # default workhorse: writing, planning
   strong: anthropic/claude-opus-5.5         # hard reasoning: planning, strategy
 
@@ -46,6 +46,16 @@ defaults:
   timeout_s: 120
   fallbacks:                                 # tried in order if the primary model or its providers fail
     - anthropic/claude-haiku-5.5
+
+# Request parameters a model's providers reject. routing.require_parameters makes OpenRouter
+# answer 404 ("No endpoints found that can handle the requested parameters") to a request that
+# carries one, so the router leaves them out for these models and sends them to every other.
+# The catalogue lists what each model accepts: GET /models/<slug>/endpoints, supported_parameters.
+# The list applies to the request's first model; its fallbacks receive the same request.
+unsupported_parameters:
+  anthropic/claude-haiku-5.5: [temperature]
+  anthropic/claude-sonnet-5.5: [temperature]
+  anthropic/claude-opus-5.5: [temperature]
 
 # Soft guard per request; the monthly cap in .env (LLM_MONTHLY_CAP_USD) is enforced by the budget ledger.
 limits:

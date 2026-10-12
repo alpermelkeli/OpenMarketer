@@ -86,6 +86,14 @@ def test_request_payload_shape_for_openrouter():
     assert h["Authorization"] == "Bearer test-key" and h["X-Title"] == "OpenMarketer"
 
 
+def test_temperature_is_left_out_for_a_model_that_rejects_it():
+    msgs = [{"role": "user", "content": "hi"}]
+    rejecting = router({"LLM_MODEL__WRITER": "anthropic/claude-sonnet-5.5"})
+    assert "temperature" not in rejecting.build_chat_request("writer", msgs)
+    accepting = router({"LLM_MODEL__WRITER": "anthropic/claude-haiku-4.5"})
+    assert accepting.build_chat_request("writer", msgs)["temperature"] == 0.8
+
+
 def test_missing_api_key_is_a_clear_error():
     with pytest.raises(ConfigError, match="OPENROUTER_API_KEY"):
         ModelRouter.from_file(YAML, env={}).headers()

@@ -140,11 +140,22 @@ class Config(BaseModel):
     defaults: Defaults
     limits: Limits = Limits()
     roles: dict[str, RoleConfig]
+    # With routing.require_parameters on, a request carrying a parameter that none of a
+    # model's providers accept finds no endpoint (OpenRouter answers 404), so a parameter
+    # listed here for a model is left out of its requests.
+    unsupported_parameters: dict[str, list[Literal["temperature"]]] = Field(default_factory=dict)
 
     @field_validator("tiers")
     @classmethod
     def _tier_slugs(cls, v: dict[str, str]) -> dict[str, str]:
         return {k: _check_slug(s, f"tiers.{k}") for k, s in v.items()}
+
+    @field_validator("unsupported_parameters")
+    @classmethod
+    def _unsupported_slugs(cls, v: dict[str, list[str]]) -> dict[str, list[str]]:
+        for slug in v:
+            _check_slug(slug, "unsupported_parameters")
+        return v
 
 
 class Resolved(BaseModel):
@@ -339,10 +350,11 @@ class ModelRouter:
         payload: dict[str, Any] = {
             "model": r.model,
             "messages": messages,
-            "temperature": r.temperature,
             "max_tokens": r.max_tokens,
             "provider": routing.model_dump(),
         }
+        if "temperature" not in self.config.unsupported_parameters.get(r.model, []):
+            payload["temperature"] = r.temperature
         if r.fallbacks:
             payload["models"] = [r.model, *r.fallbacks]  # OpenRouter tries these in order
         if r.reasoning_effort:
