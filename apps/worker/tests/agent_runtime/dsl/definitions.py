@@ -27,7 +27,7 @@ class Greeting(TypedDict):
 agent = Agent(KIND, state=Greeting)
 
 
-@agent.action("greet", timeout=17, retries=4, retry_after=0.5, heartbeat=9)
+@agent.action("greet", timeout=17, attempts=4, retry_after=0.5, heartbeat=9)
 class Greet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

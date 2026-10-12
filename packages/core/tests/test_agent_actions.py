@@ -1,29 +1,34 @@
 """Tests for the framework-free half of the agent runtime: actions, steps and thread names.
 
-``test_agent.py`` covers ``Agent``, and ``test_graph_thread.py`` and ``test_langgraph_agent.py``
-the LangGraph half.
+``test_agent.py`` covers ``Agent``, ``test_tools.py`` its tools and ``test_model_input.py`` how
+what a model wrote is read; ``test_graph_thread.py`` and ``test_langgraph_agent.py`` cover the
+LangGraph half.
 """
 
 import ast
+import dataclasses
 import datetime
 import enum
 import hashlib
 import importlib
 import inspect
+import math
 import subprocess
 import sys
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from pydantic import BaseModel, ConfigDict, Field, ImportString, create_model
+from pydantic import dataclasses as pydantic_dataclasses
 
 from openmarketer_core import agent_runtime
-from openmarketer_core.agent_runtime import actions, agent, steps, threads
+from openmarketer_core.agent_runtime import actions, agent, model_input, steps, threads, tools
 from openmarketer_core.agent_runtime.actions import (
-    MAX_SHOWN_CHARACTERS,
-    MAX_SHOWN_FIELDS,
+    MAX_ATTEMPT_TIMEOUT_SECONDS,
+    MAX_ATTEMPTS,
+    MAX_RETRY_AFTER_SECONDS,
     ActionCatalog,
     ActionDefinition,
     ActionOutcome,
@@ -33,6 +38,12 @@ from openmarketer_core.agent_runtime.actions import (
     InvalidActionPayload,
     UnknownAction,
     request_digest,
+    require_positive,
+)
+from openmarketer_core.agent_runtime.model_input import (
+    MAX_SHOWN_CHARACTERS,
+    MAX_SHOWN_FIELDS,
+    UNKNOWN_FIELD,
 )
 from openmarketer_core.agent_runtime.steps import StepOutcome
 from openmarketer_core.agent_runtime.threads import thread_id
@@ -97,7 +108,7 @@ def test_name_of_an_unknown_action_is_shortened_in_the_message():
 def test_field_that_the_model_does_not_have_is_refused():
     with pytest.raises(InvalidActionPayload, match="send_email") as refused:
         CATALOG.validate(email(cc="boss@example.com"))
-    assert refused.value.fields == ("cc",)
+    assert refused.value.fields == (UNKNOWN_FIELD,)
 
 
 def test_field_of_the_wrong_type_is_refused():
@@ -143,12 +154,22 @@ def test_refusal_does_not_carry_the_librarys_error_that_holds_the_values():
 
 
 def test_message_lists_only_the_first_fields_when_there_are_many():
-    extra = {f"field_{n}": SECRET for n in range(100)}
+    fields: dict[str, Any] = {f"field_{n}": (int, ...) for n in range(100)}
+    many = create_model("Many", __config__=ConfigDict(extra="forbid"), **fields)
+    catalog = ActionCatalog([ActionDefinition("many", many)])
+    request = ActionRequest("t:i", "many", {f"field_{n}": SECRET for n in range(100)})
     with pytest.raises(InvalidActionPayload) as refused:
-        CATALOG.validate(email(**extra))
+        catalog.validate(request)
     assert len(refused.value.fields) == 100
     assert f"and {100 - MAX_SHOWN_FIELDS} more" in str(refused.value)
     assert "field_99" not in str(refused.value)
+
+
+def test_refusal_does_not_repeat_a_field_the_model_made_up():
+    with pytest.raises(InvalidActionPayload) as refused:
+        CATALOG.validate(email(**{SECRET: "x", "to": [{"address": "a@example.com", SECRET: "y"}]}))
+    assert refused.value.fields == (UNKNOWN_FIELD, f"to.0.{UNKNOWN_FIELD}")
+    assert SECRET not in str(refused.value)
 
 
 def test_two_definitions_of_one_action_are_refused():
@@ -171,6 +192,79 @@ def test_payload_model_that_forbids_extra_fields_through_a_parent_is_accepted():
         pass
 
     assert ActionDefinition("child", Child).payload is Child
+
+
+def test_payload_that_holds_a_dataclass_that_holds_a_model_that_allows_extra_fields_is_refused():
+    @dataclasses.dataclass
+    class Wrapper:
+        inner: Lenient
+
+    with pytest.raises(InvalidActionDefinition, match="Lenient in the payload of action 'wrap'"):
+        ActionDefinition("wrap", holding(list[Wrapper]))
+
+
+def test_payload_that_holds_an_alias_of_a_model_that_allows_extra_fields_is_refused():
+    with pytest.raises(InvalidActionDefinition, match="Lenient.*forbid extra fields"):
+        ActionDefinition("alias", holding(LenientAlias))
+
+
+def test_payload_that_holds_a_pydantic_dataclass_that_allows_extra_fields_is_refused():
+    @pydantic_dataclasses.dataclass
+    class Loose:
+        value: str
+
+    with pytest.raises(InvalidActionDefinition, match="Loose.*forbid extra fields"):
+        ActionDefinition("loose", holding(Loose))
+
+
+def test_payload_with_a_field_that_could_name_a_file_is_refused_naming_the_field():
+    class Upload(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        destination: Path
+
+    with pytest.raises(
+        InvalidActionDefinition,
+        match="field 'destination' of Upload in the payload of action 'upload' reads text",
+    ):
+        ActionDefinition("upload", Upload)
+
+
+def test_payload_with_a_field_that_could_name_code_is_refused_naming_the_field():
+    class Hook(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        target: ImportString
+
+    class Subscribe(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        hooks: list[Hook]
+
+    with pytest.raises(InvalidActionDefinition, match="field 'target' of Hook"):
+        ActionDefinition("subscribe", Subscribe)
+
+
+def test_payload_that_holds_a_type_that_is_not_defined_is_refused_and_not_taken_for_a_fine_one():
+    class Unfinished(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        inner: "NotDefinedAnywhere"  # type: ignore[name-defined]  # noqa: F821
+
+    with pytest.raises(
+        InvalidActionDefinition,
+        match="payload of action 'unfinished'.*'NotDefinedAnywhere' is not defined",
+    ):
+        ActionDefinition("unfinished", Unfinished)
+
+
+def test_payload_with_the_text_of_a_path_as_text_is_accepted():
+    class Upload(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        destination: str
+
+    assert ActionDefinition("upload", Upload).payload is Upload
 
 
 # ------------------------------------------------- a payload is read as strict JSON
@@ -277,6 +371,9 @@ class Forbidding(BaseModel):
     value: str
 
 
+type LenientAlias = Lenient
+
+
 class Tree(BaseModel):
     """Lenient, and refers to itself."""
 
@@ -343,13 +440,17 @@ def test_unknown_key_in_a_nested_model_of_a_payload_is_refused_when_it_is_asked(
     request = ActionRequest("t:i", "holder", {"field": [{"value": "a", "key": SECRET}]})
     with pytest.raises(InvalidActionPayload) as refused:
         catalog.validate(request)
-    assert refused.value.fields == ("field.0.key",)
+    assert refused.value.fields == (f"field.0.{UNKNOWN_FIELD}",)
     assert SECRET not in str(refused.value)
 
 
 # ------------------------------------------------------------- how an action is tried
 def test_action_policy_without_a_heartbeat_has_none():
     assert ActionPolicy(30, 2, 1).heartbeat_timeout_seconds is None
+
+
+def limits_with(**changes):
+    return {"attempt_timeout_seconds": 30, "max_attempts": 2, "retry_after_seconds": 1} | changes
 
 
 @pytest.mark.parametrize(
@@ -364,15 +465,82 @@ def test_action_policy_without_a_heartbeat_has_none():
     ],
 )
 def test_action_policy_with_a_limit_that_is_not_positive_is_refused(limits):
-    given = {"attempt_timeout_seconds": 30, "max_attempts": 2, "retry_after_seconds": 1} | limits
     with pytest.raises(ValueError, match=next(iter(limits))):
-        ActionPolicy(**given)
+        ActionPolicy(**limits_with(**limits))
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "-inf"])
+@pytest.mark.parametrize(
+    "limit",
+    ["attempt_timeout_seconds", "retry_after_seconds", "heartbeat_timeout_seconds"],
+)
+def test_action_policy_with_a_number_that_is_not_finite_is_refused(limit, value):
+    # ``timedelta(seconds=nan)`` raises inside the workflow, which fails the task again and again.
+    with pytest.raises(ValueError, match=f"{limit} must be a finite number"):
+        ActionPolicy(**limits_with(**{limit: value}))
+
+
+@pytest.mark.parametrize(
+    ("limit", "value"),
+    [
+        ("max_attempts", True),
+        ("max_attempts", 2.0),
+        ("max_attempts", "2"),
+        ("attempt_timeout_seconds", True),
+        ("attempt_timeout_seconds", "30"),
+        ("retry_after_seconds", None),
+    ],
+    ids=repr,
+)
+def test_action_policy_with_a_value_that_is_not_a_number_of_the_right_kind_is_refused(limit, value):
+    with pytest.raises(ValueError, match=limit):
+        ActionPolicy(**limits_with(**{limit: value}))
+
+
+@pytest.mark.parametrize(
+    ("limit", "ceiling"),
+    [
+        ("max_attempts", MAX_ATTEMPTS),
+        ("attempt_timeout_seconds", MAX_ATTEMPT_TIMEOUT_SECONDS),
+        ("retry_after_seconds", MAX_RETRY_AFTER_SECONDS),
+    ],
+)
+def test_action_policy_goes_up_to_its_ceiling_and_no_further(limit, ceiling):
+    assert ActionPolicy(**limits_with(**{limit: ceiling})) is not None
+    with pytest.raises(ValueError, match=f"{limit} must be at most {ceiling}"):
+        ActionPolicy(**limits_with(**{limit: ceiling + 1}))
+
+
+def test_ceilings_are_ten_attempts_a_day_for_an_attempt_and_an_hour_between_attempts():
+    assert (MAX_ATTEMPTS, MAX_ATTEMPT_TIMEOUT_SECONDS, MAX_RETRY_AFTER_SECONDS) == (
+        10,
+        86_400,
+        3_600,
+    )
+
+
+def test_heartbeat_is_not_longer_than_the_attempt_it_watches():
+    assert ActionPolicy(**limits_with(heartbeat_timeout_seconds=30)).heartbeat_timeout_seconds == 30
+    with pytest.raises(ValueError, match="heartbeat_timeout_seconds must be at most 30"):
+        ActionPolicy(**limits_with(heartbeat_timeout_seconds=31))
 
 
 def test_action_policy_cannot_be_changed_once_it_is_made():
     policy = ActionPolicy(30, 2, 1)
     with pytest.raises(AttributeError):
         policy.max_attempts = 0  # pyright: ignore[reportAttributeAccessIssue]
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, True, 0, -1, "1"], ids=repr)
+def test_limit_that_is_not_a_finite_number_above_zero_is_refused_naming_it(value):
+    with pytest.raises(ValueError, match="own_limit must be a finite number more than 0"):
+        require_positive(own_limit=value)
+
+
+def test_every_limit_that_is_not_positive_is_checked_not_only_the_first():
+    require_positive(first=1, second=0.5)
+    with pytest.raises(ValueError, match="second"):
+        require_positive(first=1, second=0)
 
 
 # ------------------------------------------------------- what a request is, as a digest
@@ -443,7 +611,7 @@ def test_step_with_neither_an_output_nor_an_action_is_refused():
 # ---------------------------------------------- what a workflow decodes is typed
 @pytest.mark.parametrize(
     "decoded",
-    [ActionRequest, ActionOutcome, StepOutcome, steps.GraphRunRef, ActionPolicy],
+    [ActionRequest, ActionOutcome, StepOutcome, steps.GraphRunRef],
     ids=lambda c: c.__name__,
 )
 def test_type_a_workflow_decodes_has_annotations_that_are_types_not_text(decoded):
@@ -479,10 +647,10 @@ def test_kind_with_anything_but_lower_case_letters_digits_and_hyphens_is_refused
 
 
 # ------------------------------------------------- no framework in the contract
-FRAMEWORK_FREE = (agent_runtime, actions, agent, steps, threads)
+FRAMEWORK_FREE = (agent_runtime, actions, agent, model_input, steps, threads, tools)
 # The modules of the package, those that import LangGraph and those that do not.
 LANGGRAPH_MODULES = {"langgraph_steps", "langgraph_agent"}
-PLAIN_MODULES = {"__init__", "actions", "agent", "steps", "threads"}
+PLAIN_MODULES = {"__init__", "actions", "agent", "model_input", "steps", "threads", "tools"}
 FRAMEWORKS = (
     "langgraph",
     "langchain",
@@ -540,8 +708,10 @@ def test_loading_the_contract_loads_no_framework():
         "import sys\n"
         "import openmarketer_core.agent_runtime.actions\n"
         "import openmarketer_core.agent_runtime.agent\n"
+        "import openmarketer_core.agent_runtime.model_input\n"
         "import openmarketer_core.agent_runtime.steps\n"
         "import openmarketer_core.agent_runtime.threads\n"
+        "import openmarketer_core.agent_runtime.tools\n"
         "frameworks = ('langgraph', 'langchain_core', 'temporalio', 'sqlalchemy', 'psycopg',\n"
         "              'openmarketer_worker')\n"
         "loaded = [name for name in frameworks if name in sys.modules]\n"

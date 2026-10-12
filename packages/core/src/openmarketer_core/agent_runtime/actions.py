@@ -10,18 +10,18 @@ keeps of the work.
 The name and the payload are text the model may have shaped, so they are data,
 never a decision: ``ActionCatalog`` is the allowlist. An action that is not in
 it does not run, and a payload that does not fit the action's model does not
-run either. A payload is read as strict JSON: no value is converted to the
-type the model wants (``"yes"`` is not true, ``"7"`` is not 7), nothing JSON
-cannot write (NaN, infinity) passes, and every model of the payload forbids
-fields it does not declare, so a misspelt or invented field is a refusal and
-not a silent default. What the catalog says about a refusal names the action
-and the fields at fault, never the values, which may hold a secret or an
-instruction.
+run either. A payload is read as strict JSON (``model_input.read_strict_json``):
+no value is converted to the type the model wants, nothing JSON cannot write passes,
+and every model of the payload forbids fields it does not declare and names no
+file or import, so a misspelt or invented field is a refusal and not a silent default.
+What the catalog says about a refusal names the action and the fields at fault, never
+the values, which may hold a secret or an instruction, nor a field name the code did
+not declare.
 
 A payload model carries the name of its action (``mark_as_action``, which an
 agent's ``action`` decorator calls), so that a node asks with the payload alone
 (``action_name_of``) and cannot misspell the name. ``ActionPolicy`` is how an
-action is tried: its timeout and attempts.
+action is tried: its timeout and attempts, within ceilings.
 
 ``request_digest`` says what a request is, so that the outcome of a request
 is delivered only to a node that asks for the same thing again.
@@ -39,15 +39,32 @@ annotations`` here or in ``steps.py``.
 
 import hashlib
 import json
-from collections.abc import Iterable, Iterator, Mapping
+import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, get_args
+from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
-# The most of a name, or of a list of names, an error message repeats of what the model sent.
-MAX_SHOWN_CHARACTERS = 60
-MAX_SHOWN_FIELDS = 5
+from openmarketer_core.agent_runtime.model_input import (
+    DoesNotFit,
+    UnreadableModel,
+    fields_phrase,
+    fields_that_name_files_or_code,
+    lenient_types,
+    read_strict_json,
+    shown,
+)
+
+# What no action's policy goes beyond. Waits double from the first, so ten attempts already
+# put a long way between the first and the last, and an action that still fails after that
+# is better ended as an outcome the graph handles than tried again. A day is longer than
+# anything one attempt of an action should hold a worker for (a longer job is several actions,
+# or one with a heartbeat that resumes), and an hour is longer than any wait that rides out a
+# passing failure. They also keep what is made of them far from what a duration cannot hold.
+MAX_ATTEMPTS = 10
+MAX_ATTEMPT_TIMEOUT_SECONDS = 24 * 60 * 60
+MAX_RETRY_AFTER_SECONDS = 60 * 60
 
 # Where a payload model keeps the name of its action. A dunder cannot be a field of a model, so it
 # never clashes with one; it is read from the class itself, so a subclass is not an action unless
@@ -77,14 +94,6 @@ class NotAnAction(Exception):
             "register it with the agent's action decorator"
         )
         self.model = model
-
-
-class DoesNotFit(Exception):
-    """What was sent does not fit the model that reads it; ``fields`` names where, never what."""
-
-    def __init__(self, fields: tuple[str, ...]) -> None:
-        super().__init__(f"does not fit{fields_phrase(fields)}")
-        self.fields = fields
 
 
 class InvalidActionPayload(Exception):
@@ -138,18 +147,19 @@ class ActionOutcome:
 class ActionPolicy:
     """Limits of one action. An action is tried again only when it fails in a way that may pass.
 
-    ``max_attempts`` counts the first one and is at least 1: Temporal reads 0 as
-    no limit, and an action has a side effect. ``heartbeat_timeout_seconds`` is
-    for an action that runs long: a worker that stops heartbeating is noticed
-    within it, and the workflow's cancellation reaches the action at a
-    heartbeat. The activity heartbeats three times in it, taking the timeout from
-    what the workflow scheduled it with, so this is the one place it is set. A
-    short action needs none.
+    ``max_attempts`` counts the first one and is a whole number from 1 to ``MAX_ATTEMPTS``:
+    Temporal reads 0 as no limit, and an action has a side effect. ``attempt_timeout_seconds``
+    and ``retry_after_seconds`` are finite numbers above 0, at most ``MAX_ATTEMPT_TIMEOUT_SECONDS``
+    and ``MAX_RETRY_AFTER_SECONDS``. ``heartbeat_timeout_seconds`` is for an action that runs
+    long: a worker that stops heartbeating is noticed within it, and the workflow's
+    cancellation reaches the action at a heartbeat. It is no longer than the attempt it
+    watches. The activity heartbeats three times in it, taking the timeout from what the
+    workflow scheduled it with, so this is the one place it is set. A short action needs none.
 
     The values are checked when the policy is made, so a policy is made when the
     agent's module is loaded (``Agent.action``) and is never part of a workflow's
     input: a ``ValueError`` while Temporal decodes the input fails the workflow
-    task, which is tried again for ever.
+    task, which is tried again for ever, and so would a duration of ``nan`` seconds.
     """
 
     attempt_timeout_seconds: float
@@ -158,13 +168,26 @@ class ActionPolicy:
     heartbeat_timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
-        _require_positive(
+        require_positive(
             attempt_timeout_seconds=self.attempt_timeout_seconds,
             max_attempts=self.max_attempts,
             retry_after_seconds=self.retry_after_seconds,
         )
+        if not isinstance(self.max_attempts, int):
+            raise ValueError(f"max_attempts must be a whole number, not {self.max_attempts}")
+        _require_at_most(
+            attempt_timeout_seconds=(self.attempt_timeout_seconds, MAX_ATTEMPT_TIMEOUT_SECONDS),
+            max_attempts=(self.max_attempts, MAX_ATTEMPTS),
+            retry_after_seconds=(self.retry_after_seconds, MAX_RETRY_AFTER_SECONDS),
+        )
         if self.heartbeat_timeout_seconds is not None:
-            _require_positive(heartbeat_timeout_seconds=self.heartbeat_timeout_seconds)
+            require_positive(heartbeat_timeout_seconds=self.heartbeat_timeout_seconds)
+            _require_at_most(
+                heartbeat_timeout_seconds=(
+                    self.heartbeat_timeout_seconds,
+                    self.attempt_timeout_seconds,
+                )
+            )
 
 
 @dataclass(frozen=True)
@@ -177,11 +200,24 @@ class ActionDefinition:
     def __post_init__(self) -> None:
         # Without this a payload with a misspelled or invented field would pass unnoticed, and
         # the library's default for a nested model is to drop what it does not know.
-        lenient = next(lenient_models(self.payload), None)
+        try:
+            lenient = next(lenient_types(self.payload), None)
+        except UnreadableModel as e:
+            raise InvalidActionDefinition(f"payload of action {self.name!r}: {e}") from None
         if lenient is not None:
             raise InvalidActionDefinition(
-                f"model {lenient.__name__} in the payload of action {self.name!r} "
-                "must forbid extra fields (model_config extra='forbid')"
+                f"{lenient.__name__} in the payload of action {self.name!r} "
+                "must forbid extra fields (extra='forbid' in its config)"
+            )
+        # A payload is text a model wrote: a path or an import name in it would let the model
+        # choose what the worker opens or imports.
+        named = next(fields_that_name_files_or_code(self.payload), None)
+        if named is not None:
+            structure, field = named
+            raise InvalidActionDefinition(
+                f"field {field!r} of {structure.__name__} in the payload of action {self.name!r} "
+                "reads text a model wrote as a file path or an import name: "
+                "take it as a string and let a handler decide what it may name"
             )
 
 
@@ -237,39 +273,6 @@ def action_name_of(payload: BaseModel) -> str:
     return name
 
 
-def read_strict_json[Model: BaseModel](model: type[Model], data: Mapping[str, Any]) -> Model:
-    """``data`` as ``model``, read as strict JSON: the one reading of what a model sent.
-
-    Nothing is converted to the type the model wants (``"7"`` is not 7) and
-    nothing JSON cannot write (NaN, infinity) passes. A field the model does
-    not declare is refused only by a model that forbids extra fields (see
-    ``lenient_models``). Raises ``DoesNotFit``, which names the fields at fault
-    and never their values.
-    """
-    try:
-        text = json.dumps(data, allow_nan=False)
-    except (TypeError, ValueError, RecursionError):
-        raise DoesNotFit(_fields_not_json(data)) from None
-    try:
-        # Strict, and from JSON text: nothing is converted to the type the model wants, and
-        # the library still reads a UUID, a date or an enum value from the string JSON has.
-        return model.model_validate_json(text, strict=True)
-    except ValidationError as e:
-        # ``from None``: the library's error holds the values it refused.
-        raise DoesNotFit(_fields_at_fault(e)) from None
-
-
-def lenient_models(annotation: Any) -> Iterator[type[BaseModel]]:
-    """Each model that ``annotation`` is or holds, at any depth, that allows extra fields.
-
-    The library's default for a model is to drop a field it does not know, so a
-    misspelt or invented field would pass unnoticed.
-    """
-    for model in _models_of(annotation, set()):
-        if model.model_config.get("extra") != "forbid":
-            yield model
-
-
 def request_digest(name: str, payload: Mapping[str, Any]) -> str:
     """What a request is, as text: the same for the same action name and payload, and no other.
 
@@ -284,55 +287,21 @@ def request_digest(name: str, payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _models_of(annotation: Any, seen: set[type[BaseModel]]) -> Iterator[type[BaseModel]]:
-    """Each model that ``annotation`` is or holds, at any depth, once; ``seen`` stops a cycle."""
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        if annotation not in seen:
-            seen.add(annotation)
-            yield annotation
-            for field in annotation.model_fields.values():
-                yield from _models_of(field.annotation, seen)
-        return
-    for argument in get_args(annotation):
-        yield from _models_of(argument, seen)
+def require_positive(**limits: float) -> None:
+    """Raises ``ValueError`` naming each limit that is not a finite number above 0.
 
-
-def _fields_not_json(data: Mapping[str, Any]) -> tuple[str, ...]:
-    """The fields of ``data`` that JSON cannot hold, to name them without showing them."""
-    not_json: list[str] = []
-    for field, value in data.items():
-        try:
-            json.dumps(value, allow_nan=False)
-        except (TypeError, ValueError, RecursionError):
-            not_json.append(str(field))
-    return tuple(not_json)
-
-
-def _fields_at_fault(error: ValidationError) -> tuple[str, ...]:
-    problems = error.errors(include_input=False, include_url=False, include_context=False)
-    named = (".".join(str(part) for part in problem["loc"]) for problem in problems)
-    # Several problems of one field are one field; an error of the whole model names none.
-    return tuple(dict.fromkeys(name for name in named if name))
-
-
-def fields_phrase(fields: tuple[str, ...]) -> str:
-    """The fields at fault as the end of a message: ``": a, b and 3 more"``, or nothing."""
-    listed = ", ".join(shown(name) for name in fields[:MAX_SHOWN_FIELDS])
-    more = len(fields) - MAX_SHOWN_FIELDS
-    if more > 0:
-        listed += f" and {more} more"
-    return f": {listed}" if listed else ""
-
-
-def shown(text: str) -> str:
-    """Text the model may have written, quoted on one line and short enough for a message."""
-    quoted = repr(text)
-    if len(quoted) <= MAX_SHOWN_CHARACTERS:
-        return quoted
-    return quoted[: MAX_SHOWN_CHARACTERS - 3] + "..."
-
-
-def _require_positive(**limits: float) -> None:
+    A bool is not a number here, and ``nan`` and infinity are not finite: a comparison with 0
+    lets them through, and a duration made of one raises where it is used, which in a
+    workflow fails the workflow task again and again.
+    """
     for name, value in limits.items():
-        if value <= 0:
-            raise ValueError(f"{name} must be more than 0, not {value}")
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError(f"{name} must be a finite number more than 0, not {value!r}")
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be a finite number more than 0, not {value}")
+
+
+def _require_at_most(**limits: tuple[float, float]) -> None:
+    for name, (value, ceiling) in limits.items():
+        if value > ceiling:
+            raise ValueError(f"{name} must be at most {ceiling}, not {value}")

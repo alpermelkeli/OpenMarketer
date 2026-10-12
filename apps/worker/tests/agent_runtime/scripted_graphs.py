@@ -172,7 +172,10 @@ def steps_of_an_agent_whose_route_chooses_outside_its_targets() -> AgentSteps:
         return "elsewhere"
 
     return AgentSteps(
-        agent, initial_state=lambda run: {"note": ""}, result=dict, recursion_limit=GRAPH_STEPS
+        agent,
+        initial_state=lambda run: {"note": ""},
+        finish=lambda run, final: dict(final),
+        recursion_limit=GRAPH_STEPS,
     )
 
 

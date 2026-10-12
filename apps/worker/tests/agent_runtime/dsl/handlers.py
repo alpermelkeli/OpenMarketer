@@ -64,7 +64,12 @@ async def note(entry: Note) -> None:
 
 
 def registration(checkpoints: CheckpointAccess) -> AgentRegistration:
-    steps = AgentSteps(agent, initial_state=initial_state, result=final_result, recursion_limit=20)
+    steps = AgentSteps(
+        agent,
+        initial_state=initial_state,
+        finish=lambda run, final: final_result(final),
+        recursion_limit=20,
+    )
     return worker.registration(
         checkpoints=checkpoints,
         graph=steps,

@@ -314,7 +314,7 @@ async def test_payload_that_does_not_fit_ends_the_run_and_the_handler_never_runs
         history = await execution.history(run)
     refusal = cause_of(failure)
     assert (refusal.type, refusal.non_retryable) == (vocabulary.INVALID_ACTION_PAYLOAD, True)
-    assert "bcc" in refusal.message
+    assert "'<field>'" in refusal.message
     assert send.calls == []
     assert graph.advanced == [None]
     # The action was scheduled once and not tried again; the failure does not repeat the value.

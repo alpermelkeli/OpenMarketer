@@ -3,50 +3,52 @@
 An ``Agent`` is where the author of an agent says what it is: the actions its
 graph may ask for (``action``), the nodes of the graph and how they follow one
 another (``node``, ``edge``, ``route``), and the tools its model may call
-(``tool``). Each decorator only records. Nothing here builds a graph, schedules
-an activity or calls a model: ``langgraph_agent.py`` turns the parts into a
-graph, and the worker turns the actions into activities. That is why this
-module imports no graph framework, workflow engine or database, and a workflow's
-module may load it.
+(``tool``, kept by ``tools.Toolbox``). Each decorator only records. Nothing here
+builds a graph, schedules an activity or calls a model: ``langgraph_agent.py``
+turns the parts into a graph, and the worker turns the actions into activities.
+That is why this module imports no graph framework, workflow engine or database,
+and a workflow's module may load it.
 
 The registries are plain data on the instance and never in the module, so two
 agents share nothing and importing a module that defines an agent twice gives
 two fresh ones. The one thing an agent writes outside itself is the name a
 payload model carries (``actions.mark_as_action``).
 
+An agent may declare a context type: what a run needs that is not the graph's state, such
+as a model client or the repository snapshot of the attempt. It is built by the agent's
+wiring for each attempt and is never stored with the state, so it may hold anything. A node,
+a route's chooser or a tool takes it as one more parameter, and an agent that declared none
+refuses a function that asks for it.
+
 What cannot be right is refused where it is declared, or when the whole is
 asked for (``shape``), with an error that names what is wrong. Only what code
-cannot know before it runs is checked at run time: the answer of a route, and
-the arguments of a tool, which are text a model wrote and are read as strict JSON
-(``actions.read_strict_json``): an error says which fields are at fault and never
-shows their values.
+cannot know before it runs is checked at run time: what a node answers with and the answer
+of a route, and what a model wrote, which is read as strict JSON
+(``model_input.read_strict_json``): an error says which fields are at fault, by names the
+code declared, and never shows their values.
 
 This module runs no node, action or tool of its own accord, and decides nothing
 about who may ask for what: ``actions.ActionCatalog`` is the allowlist.
 """
 
-import copy
 import inspect
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, get_type_hints, overload
+from typing import Any, overload
 
-from pydantic import BaseModel, ConfigDict, create_model
-from pydantic.json_schema import GenerateJsonSchema
+from pydantic import BaseModel
 
 from openmarketer_core.agent_runtime.actions import (
     ActionDefinition,
     ActionPolicy,
-    DoesNotFit,
     InvalidActionDefinition,
-    fields_phrase,
-    lenient_models,
     mark_as_action,
-    read_strict_json,
-    shown,
 )
+from openmarketer_core.agent_runtime.steps import InvalidNodeResult
 from openmarketer_core.agent_runtime.threads import validate_kind
+from openmarketer_core.agent_runtime.tools import InvalidTool, Toolbox, ToolFunction
 
 # The end of the graph, as an edge or a route names it. It is the text LangGraph's own end is,
 # so that a route's answer reaches the graph as it is; a test holds the two together.
@@ -54,20 +56,20 @@ END = "__end__"
 
 # What an action is tried with when its declaration says nothing. A short call to a service
 # fits 30 seconds, and an action that runs longer says so and sets a heartbeat. An action has a
-# side effect, so three attempts (the first and two repeats) ride out a passing failure without
-# trying often at something that does not pass; the handler's idempotency key makes a repeat
-# safe. The wait before the second attempt is a second, and each wait doubles.
+# side effect, and nothing here can make a repeat of it safe: whether the service behind a
+# handler treats a repeat as the same work is a fact about that service, which the framework
+# cannot check. So an action is tried once, and trying again is a choice made for each action
+# (``attempts``) by whoever knows its handler survives it. The wait before the second attempt,
+# once there is one, is a second, and each wait doubles.
 DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_ATTEMPTS = 3
+DEFAULT_ATTEMPTS = 1
 DEFAULT_RETRY_AFTER_SECONDS = 1
 
-# A node reads the graph's state and answers with what it changes; a route's chooser reads the
-# state and answers with the name of the node that follows, or END. The state is the agent's own
-# type, so these accept any.
-NodeFunction = Callable[[Any], Mapping[str, Any]]
-RouteChooser = Callable[[Any], str]
-# A tool answers with the text the model reads.
-ToolFunction = Callable[..., str]
+# A node reads the graph's state (and the agent's context, if it takes one) and answers with
+# what it changes; a route's chooser reads the same and answers with the name of the node that
+# follows, or END. The state and the context are the agent's own types, so these accept any.
+NodeFunction = Callable[..., Mapping[str, Any]]
+RouteChooser = Callable[..., str]
 
 
 class InvalidAgent(ValueError):
@@ -88,23 +90,6 @@ class InvalidRouteChoice(Exception):
         self.targets = targets
 
 
-class UnknownTool(Exception):
-    """The model called a tool the agent does not have."""
-
-    def __init__(self, tool_name: str) -> None:
-        super().__init__(f"tool {shown(tool_name)} is not one of the agent's tools")
-        self.tool_name = tool_name
-
-
-class InvalidToolArguments(Exception):
-    """The arguments the model gave a tool do not fit what the tool takes."""
-
-    def __init__(self, tool_name: str, fields: tuple[str, ...]) -> None:
-        super().__init__(f"arguments of tool {shown(tool_name)} do not fit{fields_phrase(fields)}")
-        self.tool_name = tool_name
-        self.fields = fields
-
-
 @dataclass(frozen=True)
 class Edge:
     """After the node ``after`` comes the node ``then``, or the end of the graph."""
@@ -114,20 +99,42 @@ class Edge:
 
 
 @dataclass(frozen=True)
+class Node:
+    """A node of the graph: its name, its function, and whether the function takes the context."""
+
+    name: str
+    function: NodeFunction
+    takes_context: bool
+
+    def run(self, state: Any, context: Any) -> Mapping[str, Any]:
+        """The changes the node makes to the state.
+
+        Raises ``InvalidNodeResult`` for anything but a mapping. The library reads some other
+        answers as an instruction (a command that says which node runs next), which would let a
+        node go where no edge or route of its agent allows.
+        """
+        changes = self.function(state, context) if self.takes_context else self.function(state)
+        if not isinstance(changes, Mapping):
+            raise InvalidNodeResult(self.name)
+        return changes
+
+
+@dataclass(frozen=True)
 class Route:
     """After the node ``after`` comes the one of ``targets`` that ``chooser`` names."""
 
     after: str
     targets: tuple[str, ...]
     chooser: RouteChooser
+    takes_context: bool
 
-    def choose(self, state: Any) -> str:
+    def choose(self, state: Any, context: Any = None) -> str:
         """What the chooser says, if it is one of the targets.
 
         Raises ``InvalidRouteChoice`` otherwise: the chooser's answer is not known
         before it runs, and a graph must not go where its agent did not say it may.
         """
-        chosen = self.chooser(state)
+        chosen = self.chooser(state, context) if self.takes_context else self.chooser(state)
         if chosen not in self.targets:
             raise InvalidRouteChoice(self.after, self.targets)
         return chosen
@@ -135,9 +142,14 @@ class Route:
 
 @dataclass(frozen=True)
 class GraphShape:
-    """The graph of an agent, checked: its nodes, where it starts, and what follows what."""
+    """The graph of an agent, checked: its types, its nodes, where it starts, and what follows what.
 
-    nodes: Mapping[str, NodeFunction]
+    It is a copy: what an agent declares after asking for it is not in it.
+    """
+
+    state: type
+    context: type | None
+    nodes: Mapping[str, Node]
     start: str
     edges: tuple[Edge, ...]
     routes: tuple[Route, ...]
@@ -150,35 +162,33 @@ class _DeclaredRoute:
     after: NodeFunction
     to: tuple[NodeFunction | str, ...]
     chooser: RouteChooser
-
-
-@dataclass(frozen=True)
-class _ToolSpec:
-    name: str
-    description: str
-    arguments: type[BaseModel]
-    parameters: dict[str, Any]  # the JSON schema of ``arguments``
-    function: ToolFunction
+    takes_context: bool
 
 
 class Agent:
     """One agent: its kind, its graph's state, and the parts it declares with decorators."""
 
-    def __init__(self, kind: str, *, state: type) -> None:
+    def __init__(self, kind: str, *, state: type, context: type | None = None) -> None:
         """``kind`` names the agent's runs (``threads.validate_kind``); ``state`` is the graph's.
 
-        Raises ``ValueError`` for a ``kind`` that cannot name a thread.
+        ``context`` is the type of what the wiring builds for each attempt (see the module's
+        docstring); it is left out by an agent whose functions need nothing but the state.
+        Raises ``ValueError`` for a ``kind`` that cannot name a thread and ``InvalidAgent``
+        for a ``context`` that is not a type.
         """
         validate_kind(kind)
+        if context is not None and not isinstance(context, type):
+            raise InvalidAgent(f"the context of agent {kind!r} is a type, not {context!r}")
         self.kind = kind
         self.state = state
+        self.context = context
         self._definitions: dict[str, ActionDefinition] = {}
         self._policies: dict[str, ActionPolicy] = {}
-        self._nodes: dict[str, NodeFunction] = {}
+        self._nodes: dict[str, Node] = {}
         self._start: str | None = None
         self._edges: list[tuple[NodeFunction, NodeFunction | str]] = []
         self._routes: list[_DeclaredRoute] = []
-        self._tools: dict[str, _ToolSpec] = {}
+        self._tools = Toolbox(kind, context)
 
     # ------------------------------------------------------------------ actions
     @property
@@ -196,26 +206,29 @@ class Agent:
         name: str,
         *,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
-        retries: int = DEFAULT_ATTEMPTS,
+        attempts: int = DEFAULT_ATTEMPTS,
         retry_after: float = DEFAULT_RETRY_AFTER_SECONDS,
         heartbeat: float | None = None,
     ) -> Callable[[type[Payload]], type[Payload]]:
         """Declare the model it decorates as the payload of the action ``name``.
 
-        ``timeout`` is the seconds one attempt may take. ``retries`` counts
-        attempts, the first included, as ``ActionPolicy.max_attempts`` does.
+        ``timeout`` is the seconds one attempt may take. ``attempts`` counts
+        the tries, the first included, as ``ActionPolicy.max_attempts`` does: the
+        default is one, and more is for an action whose handler is safe to repeat.
         ``retry_after`` is the seconds before the second attempt, and
-        ``heartbeat`` the heartbeat timeout of an action that runs long. A limit that
-        is not positive raises ``ValueError`` here, on the line of the decorator.
+        ``heartbeat`` the heartbeat timeout of an action that runs long. A limit
+        that is not finite and positive, or goes beyond what ``ActionPolicy`` allows,
+        raises ``ValueError`` here, on the line of the decorator.
 
         The model is returned as it is, carrying the name, so that a node asks
         with ``request_action(Model(...))``. Raises ``InvalidActionDefinition``
-        for a name this agent has, a model that is already an action's, or a
-        model (or one it holds) that allows extra fields.
+        for a name this agent has, a model that is already an action's, a model (or one
+        it holds) that allows extra fields, and a field that reads text as a file or an
+        import.
         """
         policy = ActionPolicy(
             attempt_timeout_seconds=timeout,
-            max_attempts=retries,
+            max_attempts=attempts,
             retry_after_seconds=retry_after,
             heartbeat_timeout_seconds=heartbeat,
         )
@@ -233,19 +246,24 @@ class Agent:
 
     # -------------------------------------------------------------------- graph
     @overload
-    def node[Node: NodeFunction](self, function: Node) -> Node: ...
+    def node[Function: NodeFunction](self, function: Function) -> Function: ...
 
     @overload
-    def node[Node: NodeFunction](self, *, start: bool = False) -> Callable[[Node], Node]: ...
+    def node[Function: NodeFunction](
+        self, *, start: bool = False
+    ) -> Callable[[Function], Function]: ...
 
-    def node[Node: NodeFunction](
-        self, function: Node | None = None, *, start: bool = False
-    ) -> Node | Callable[[Node], Node]:
+    def node[Function: NodeFunction](
+        self, function: Function | None = None, *, start: bool = False
+    ) -> Function | Callable[[Function], Function]:
         """Declare a function ``(state) -> changes`` as a node of the graph, named as it is.
 
-        Used bare (``@agent.node``) or as ``@agent.node(start=True)`` for the node
-        the graph starts at, of which there is exactly one. Raises
-        ``InvalidAgent`` for a name this agent already has and for a second start.
+        A node of an agent with a context takes it as a second parameter:
+        ``(state, context) -> changes``. Used bare (``@agent.node``) or as
+        ``@agent.node(start=True)`` for the node the graph starts at, of which there is
+        exactly one. Raises ``InvalidAgent`` for a function that has no name of its own (a
+        lambda), a name this agent already has, a second start, parameters other than
+        the state and the context, and a context the agent did not declare.
         """
         if function is None:
             return lambda declared: self._declare_node(declared, start=start)
@@ -266,9 +284,9 @@ class Agent:
     ) -> Callable[[Chooser], Chooser]:
         """After the node ``after`` comes the node, among ``to``, that the chooser names.
 
-        The chooser takes the state and answers with a node's name, or ``END``.
-        What it answers is not known before it runs: ``Route.choose`` refuses
-        anything that is not one of ``to``.
+        The chooser takes the state (and the context, as a node does) and answers with a
+        node's name, or ``END``. What it answers is not known before it runs:
+        ``Route.choose`` refuses anything that is not one of ``to``. A node has one route.
         """
         _require_node_function(after, "the start of a route")
         if not to:
@@ -277,7 +295,8 @@ class Agent:
             _require_node_function_or_end(target, "a target of a route")
 
         def declare(chooser: Chooser) -> Chooser:
-            self._routes.append(_DeclaredRoute(after, tuple(to), chooser))
+            takes_context = self._takes_context(chooser, "the chooser of a route")
+            self._routes.append(_DeclaredRoute(after, tuple(to), chooser, takes_context))
             return chooser
 
         return declare
@@ -285,9 +304,9 @@ class Agent:
     def shape(self) -> GraphShape:
         """The graph of the agent, checked.
 
-        Raises ``InvalidAgent`` for an agent with no node or no start, and for an
-        edge or a route that names a function that is not a node of this agent
-        (another agent's node with the same name is not one).
+        Raises ``InvalidAgent`` for an agent with no node or no start, an edge or a route
+        that names a function that is not a node of this agent (another agent's node with
+        the same name is not one), and a node with two routes.
         """
         if not self._nodes:
             raise InvalidAgent(f"agent {self.kind!r} has no nodes")
@@ -304,10 +323,18 @@ class Agent:
                 after=self._node_named(declared.after, "a route"),
                 targets=tuple(self._node_or_end_named(t, "a route") for t in declared.to),
                 chooser=declared.chooser,
+                takes_context=declared.takes_context,
             )
             for declared in self._routes
         )
-        return GraphShape(MappingProxyType(dict(self._nodes)), self._start, edges, routes)
+        for after, count in Counter(route.after for route in routes).items():
+            if count > 1:
+                raise InvalidAgent(
+                    f"agent {self.kind!r} has {count} routes after node {after!r}: "
+                    "a node has one route, which chooses among everything that may follow it"
+                )
+        nodes = MappingProxyType(dict(self._nodes))
+        return GraphShape(self.state, self.context, nodes, self._start, edges, routes)
 
     # -------------------------------------------------------------------- tools
     def tool[Tool: ToolFunction](self, function: Tool) -> Tool:
@@ -319,54 +346,40 @@ class Agent:
         model the arguments hold must forbid extra fields. A parameter with a
         default may be left out. The function answers with the text the model reads.
 
-        A tool runs inline in the node that calls it, so it has no side effect of
-        its own. One that needs the outside world asks for an action with
-        ``request_action`` from its body, and that is the one action its node
-        may ask for.
+        A tool runs inline in the node that calls it and has no side effect of its own. It
+        never asks for an action: a tool answers with text, and an action is asked for by a
+        node, from what the model submitted, never from inside a tool the model chose to
+        call (``request_action`` refuses it). A parameter named ``context``, annotated with
+        the agent's context type, is the run's: the model is not told of it and is not
+        asked for it.
 
         Raises ``InvalidAgent`` for a function with no docstring, a parameter with no
-        type hint or one that cannot be given by name, a model that allows extra fields, and
-        a name the agent has already.
+        type hint, one that cannot be given by name or cannot be a field (a name that starts
+        with an underscore, or ``model_config``), a ``context`` that is not the agent's, a
+        model that allows extra fields, a type that reads text as a file or an import, and a
+        name the agent has already.
         """
-        spec = _tool_spec(function)
-        if spec.name in self._tools:
-            raise InvalidAgent(f"agent {self.kind!r} has two tools named {spec.name!r}")
-        self._tools[spec.name] = spec
+        try:
+            self._tools.add(function)
+        except InvalidTool as e:
+            raise InvalidAgent(str(e)) from None
         return function
 
     def tool_schemas(self) -> list[dict[str, Any]]:
         """The tools as the model is told of them: OpenAI-style function schemas."""
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": spec.name,
-                    "description": spec.description,
-                    "parameters": copy.deepcopy(spec.parameters),
-                },
-            }
-            for spec in self._tools.values()
-        ]
+        return self._tools.schemas()
 
-    def call_tool(self, name: str, arguments: Mapping[str, Any]) -> str:
+    def call_tool(self, name: str, arguments: Mapping[str, Any], context: Any = None) -> str:
         """Run the tool ``name`` with ``arguments``, the JSON the model gave, and give its answer.
 
-        Raises ``UnknownTool`` for a tool the agent does not have and
-        ``InvalidToolArguments`` for arguments that do not fit; the second names
-        the fields and never their values.
+        ``context`` is the run's, given to a tool that takes one. Raises ``UnknownTool``,
+        ``InvalidToolArguments`` and ``InvalidToolAnswer`` as ``Toolbox.call`` does: the first
+        two name the fields and never their values, and are for the node to tell the model.
         """
-        spec = self._tools.get(name)
-        if spec is None:
-            raise UnknownTool(name)
-        try:
-            read = read_strict_json(spec.arguments, arguments)
-        except DoesNotFit as e:
-            raise InvalidToolArguments(name, e.fields) from None
-        # Not ``model_dump``: it would turn a model the tool asks for into a dict.
-        return spec.function(**{field: getattr(read, field) for field in type(read).model_fields})
+        return self._tools.call(name, arguments, context)
 
     # ---------------------------------------------------------------- internals
-    def _declare_node[Node: NodeFunction](self, function: Node, *, start: bool) -> Node:
+    def _declare_node[Function: NodeFunction](self, function: Function, *, start: bool) -> Function:
         name = _name_of(function)
         if name in self._nodes:
             raise InvalidAgent(f"agent {self.kind!r} has two nodes named {name!r}")
@@ -374,14 +387,35 @@ class Agent:
             raise InvalidAgent(
                 f"agent {self.kind!r} has two start nodes: {self._start!r} and {name!r}"
             )
-        self._nodes[name] = function
+        takes_context = self._takes_context(function, f"node {name!r}")
+        self._nodes[name] = Node(name, function, takes_context)
         if start:
             self._start = name
         return function
 
+    def _takes_context(self, function: Callable[..., Any], what: str) -> bool:
+        """Whether ``function`` takes the context as a second parameter, from its signature."""
+        try:
+            parameters = list(inspect.signature(function).parameters.values())
+        except (TypeError, ValueError):
+            raise InvalidAgent(f"cannot read the parameters of {what}") from None
+        positional = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        if not 1 <= len(parameters) <= 2 or any(p.kind not in positional for p in parameters):
+            raise InvalidAgent(
+                f"{what} takes the graph's state and, as a second parameter, the agent's context "
+                "if the agent has one: nothing else"
+            )
+        if len(parameters) == 2 and self.context is None:
+            raise InvalidAgent(
+                f"{what} takes a second parameter, the agent's context, and agent {self.kind!r} "
+                "declared none: give Agent(..., context=) a type"
+            )
+        return len(parameters) == 2
+
     def _node_named(self, function: NodeFunction, where: str) -> str:
         name = _name_of(function)
-        if self._nodes.get(name) is not function:
+        declared = self._nodes.get(name)
+        if declared is None or declared.function is not function:
             raise InvalidAgent(
                 f"{where} of agent {self.kind!r} names {name!r}, which is not a node of it: "
                 "declare it with @agent.node"
@@ -396,73 +430,19 @@ class Agent:
 
 def _name_of(function: NodeFunction) -> str:
     name = getattr(function, "__name__", None)
-    if not isinstance(name, str):
-        raise InvalidAgent("a node is a plain function, which has a name")
+    if not isinstance(name, str) or not name.isidentifier():
+        raise InvalidAgent(
+            "a node is a function declared with def, which has a name of its own: "
+            "a lambda or a partial has none, and two would be one name"
+        )
     return name
 
 
-def _require_node_function(end: object, role: str) -> None:
-    if not callable(end):
-        raise InvalidAgent(f"{role} is a node function, not {type(end).__name__}")
+def _require_node_function(function: object, role: str) -> None:
+    if not callable(function):
+        raise InvalidAgent(f"{role} is a node function, not {type(function).__name__}")
 
 
 def _require_node_function_or_end(end: object, role: str) -> None:
     if end != END and not callable(end):
         raise InvalidAgent(f"{role} is a node function or END, not {type(end).__name__}")
-
-
-class _TerseSchema(GenerateJsonSchema):
-    """A JSON schema without the title the library makes of every field's name.
-
-    The model reads the schema on every call, and a title only says again what the name does.
-    """
-
-    def field_title_should_be_set(self, schema: Any) -> bool:
-        return False
-
-
-def _tool_spec(function: ToolFunction) -> _ToolSpec:
-    name = function.__name__
-    description = inspect.getdoc(function)
-    if not description:
-        raise InvalidAgent(
-            f"tool {name!r} has no docstring: the model reads it to decide when to call the tool"
-        )
-    arguments = _arguments_model(function)
-    lenient = next(lenient_models(arguments), None)
-    if lenient is not None:
-        raise InvalidAgent(
-            f"model {lenient.__name__} in the arguments of tool {name!r} "
-            "must forbid extra fields (model_config extra='forbid')"
-        )
-    parameters = arguments.model_json_schema(schema_generator=_TerseSchema)
-    parameters.pop("title", None)
-    return _ToolSpec(name, description, arguments, parameters, function)
-
-
-def _arguments_model(function: ToolFunction) -> type[BaseModel]:
-    """A model with one field per parameter of ``function``, which forbids any other."""
-    name = function.__name__
-    try:
-        hints = get_type_hints(function, include_extras=True)
-    except (NameError, TypeError, AttributeError) as e:
-        raise InvalidAgent(f"cannot read the type hints of tool {name!r}: {e}") from None
-    fields: dict[str, Any] = {}
-    for parameter in inspect.signature(function).parameters.values():
-        if parameter.kind in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.VAR_POSITIONAL,
-            inspect.Parameter.VAR_KEYWORD,
-        ):
-            raise InvalidAgent(
-                f"parameter {parameter.name!r} of tool {name!r} cannot be given by name: "
-                "a tool takes the arguments the model names"
-            )
-        if parameter.name not in hints:
-            raise InvalidAgent(
-                f"parameter {parameter.name!r} of tool {name!r} has no type hint: "
-                "the model's arguments are read as that type"
-            )
-        default = ... if parameter.default is inspect.Parameter.empty else parameter.default
-        fields[parameter.name] = (hints[parameter.name], default)
-    return create_model(f"{name}_arguments", __config__=ConfigDict(extra="forbid"), **fields)

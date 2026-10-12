@@ -22,14 +22,19 @@ attempt). Interrupts, resume values and the graph's state are written by the
 store's strict serializer, which rebuilds only plain values, so they must be
 plain data: dicts, lists, strings, numbers, booleans and ``None``.
 
+A graph compiled with a context type is given the run's context for each attempt
+(``GraphThread``'s ``context``): it is never stored, so an attempt that resumes a paused
+thread has its own.
+
 Nothing here decides what an action is allowed to do (``ActionCatalog``), runs
 one, retries one or names a thread (``threads.thread_id``). It does not remove
-checkpoints either, except when asked to ``forget`` them.
+checkpoints either, except when asked to ``forget`` them. Only a node asks for an action:
+a tool the model chose to call that asks is refused (``steps.ActionAskedByTool``).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -46,6 +51,7 @@ from openmarketer_core.agent_runtime.actions import (
     request_digest,
 )
 from openmarketer_core.agent_runtime.steps import (
+    ActionAskedByTool,
     MalformedActionRequest,
     MissingInitialState,
     RequestChangedOnResume,
@@ -54,6 +60,7 @@ from openmarketer_core.agent_runtime.steps import (
     TwoActionsInOneNode,
     UnexpectedResume,
 )
+from openmarketer_core.agent_runtime.tools import running_tool
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 
 # The checkpoint of a finished step is in the store before the next step starts.
@@ -79,6 +86,12 @@ def request_action(payload: BaseModel) -> ActionOutcome:
     advanced with it, and a failed action is an outcome like any other: the
     node reads ``succeeded`` and ``error`` and decides what to do.
 
+    Only a node asks. A tool the model chose to call answers with text, and an
+    action is asked for from what the model submitted, never from inside a tool: a
+    tool that asks raises ``ActionAskedByTool`` and nothing is asked. This catches a
+    tool running in the context of its caller; it is the rule, not a wall, which a tool
+    that starts a thread of its own would walk round.
+
     Three rules for the node that calls it:
 
     - One action per node. A node that needs two is two nodes: asking a second
@@ -92,6 +105,9 @@ def request_action(payload: BaseModel) -> ActionOutcome:
       and is not given it. Work that is not repeatable belongs in an earlier
       node, whose result the state keeps.
     """
+    tool = running_tool()
+    if tool is not None:
+        raise ActionAskedByTool(tool)
     answered = _answered_in_this_node.get()
     if answered is not None:
         raise TwoActionsInOneNode(answered)
@@ -123,17 +139,22 @@ class GraphThread:
         checkpoints: RunCheckpoints,
         *,
         recursion_limit: int,
+        context: Any = None,
     ) -> None:
         """``graph`` must be compiled with ``checkpointer=checkpoints.store``.
 
         ``recursion_limit`` bounds the graph steps of one ``advance``. It has
         no default because the library's is 10000 steps, and a loop that
-        never ends would spend them before anything noticed.
+        never ends would spend them before anything noticed. ``context`` is what the
+        graph's nodes are given besides the state, for a graph compiled with a context
+        type: it is made for each attempt and never stored, so the attempt that resumes a
+        paused thread is given its own.
         """
         if graph.checkpointer is not checkpoints.store:
             raise ValueError("the graph must be compiled with the checkpoint store of the run")
         self._graph = graph
         self._checkpoints = checkpoints
+        self._context = context
         self._config: RunnableConfig = {
             "configurable": {"thread_id": checkpoints.thread_id},
             "recursion_limit": recursion_limit,
@@ -151,14 +172,16 @@ class GraphThread:
     def advance(
         self,
         *,
-        initial: Mapping[str, Any] | None = None,
+        initial: Mapping[str, Any] | Callable[[], Mapping[str, Any]] | None = None,
         resume: ActionOutcome | None = None,
     ) -> StepOutcome:
         """Run the graph until it finishes or asks for an action.
 
         ``resume`` is the outcome of the action the thread waits for. ``initial``
-        is the state to start from, and is only used when the thread has no
-        checkpoint yet. What happens depends on the thread:
+        is the state to start from, or a function that makes it, and is only used (and
+        a function is only called) when the thread has no checkpoint yet: what makes
+        the state may read a database, which a step that continues has no need of.
+        What happens depends on the thread:
 
         - waiting for an action, no ``resume``: the same request is returned and
           nothing runs, so an attempt that is repeated learns what to wait for;
@@ -200,7 +223,7 @@ class GraphThread:
         if not state.has_checkpoint:
             if initial is None:
                 raise MissingInitialState(self._checkpoints.thread_id)
-            return self._run(dict(initial))
+            return self._run(dict(initial() if callable(initial) else initial))
         return self._run(None)
 
     def forget(self) -> None:
@@ -209,7 +232,11 @@ class GraphThread:
 
     def _run(self, graph_input: dict[str, Any] | Command | None) -> StepOutcome:
         output = self._graph.invoke(
-            graph_input, self._config, version="v2", durability=CHECKPOINT_DURABILITY
+            graph_input,
+            self._config,
+            context=self._context,
+            version="v2",
+            durability=CHECKPOINT_DURABILITY,
         )
         action = self._single_action(output.interrupts)
         if action is not None:

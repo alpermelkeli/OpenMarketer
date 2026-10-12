@@ -9,7 +9,8 @@ repository root), which stores them with the strict serializer.
 import contextvars
 import operator
 import uuid
-from dataclasses import asdict
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from typing import Annotated, Any, Protocol, TypedDict
 
 import pytest
@@ -17,6 +18,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
+from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Engine, text
@@ -585,6 +587,118 @@ def test_forgetting_removes_the_checkpoints_of_the_thread(paused):
     state = paused.state()
 
     assert (state.has_checkpoint, state.pending_action) == (False, None)
+
+
+# ------------------------------------------------------------------ the run's context
+@dataclass
+class Attempt:
+    number: int
+
+
+def asks_in_the_attempt(runs: list[str]) -> Callable[[State, Runtime[Attempt]], dict[str, Any]]:
+    """A node that records the attempt it ran in, before and after the answer to its action."""
+
+    def node(state: State, runtime: Runtime[Attempt]) -> dict[str, Any]:
+        assert runtime.context is not None
+        runs.append(f"asked in attempt {runtime.context.number}")
+        outcome = request_action(SendEmail(to="ada"))
+        runs.append(f"answered in attempt {runtime.context.number}")
+        return {"answers": [asdict(outcome)]}
+
+    return node
+
+
+def chain_with_a_context(store: BaseCheckpointSaver[str], runs: list[str]) -> CompiledGraph:
+    builder = StateGraph(State, context_schema=Attempt)
+    builder.add_node("send", asks_in_the_attempt(runs))  # pyright: ignore[reportArgumentType]
+    builder.add_edge(START, "send")
+    builder.add_edge("send", END)
+    return builder.compile(checkpointer=store)
+
+
+def test_nodes_are_given_the_context_of_the_thread_that_runs_them(store):
+    runs: list[str] = []
+    thread = GraphThread(
+        chain_with_a_context(store, runs),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+        context=Attempt(number=1),
+    )
+
+    thread.advance(initial=START_STATE)
+
+    assert runs == ["asked in attempt 1"]
+
+
+def test_paused_thread_is_given_the_context_of_the_attempt_that_resumes_it(store):
+    runs: list[str] = []
+    graph = chain_with_a_context(store, runs)
+    first = GraphThread(
+        graph, checkpoints_in(store), recursion_limit=RECURSION_LIMIT, context=Attempt(number=1)
+    )
+    asked = first.advance(initial=START_STATE).action
+    assert asked is not None
+
+    second = GraphThread(
+        graph, checkpoints_in(store), recursion_limit=RECURSION_LIMIT, context=Attempt(number=2)
+    )
+    second.advance(resume=success(asked))
+
+    assert runs == ["asked in attempt 1", "asked in attempt 2", "answered in attempt 2"]
+
+
+def test_graph_that_takes_no_context_runs_on_a_thread_that_was_given_none(store, runs):
+    thread = GraphThread(
+        chain(store, step=records("step", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
+
+    assert thread.advance(initial=START_STATE).output is not None
+
+
+# ------------------------------------------------------ an initial state that is made on demand
+def test_initial_state_that_is_a_function_is_called_to_start_a_thread_that_has_no_checkpoint(
+    store, runs
+):
+    made: list[str] = []
+
+    def make() -> dict[str, Any]:
+        made.append("made")
+        return START_STATE
+
+    thread = GraphThread(
+        chain(store, step=records("step", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
+
+    assert thread.advance(initial=make).output == {"log": ["step done"], "answers": []}
+    assert made == ["made"]
+
+
+def test_initial_state_that_is_a_function_is_not_called_when_the_thread_has_a_checkpoint(paused):
+    def make() -> dict[str, Any]:
+        raise AssertionError("the thread has a checkpoint: nothing starts from the initial state")
+
+    assert paused.advance(initial=make).action is not None
+
+
+def test_initial_state_that_is_a_function_is_not_called_when_an_outcome_is_not_for_the_thread(
+    store, runs
+):
+    def make() -> dict[str, Any]:
+        raise AssertionError("an outcome nobody asked for is refused before anything starts")
+
+    thread = GraphThread(
+        chain(store, send=asks_to_send("ada", runs)),
+        checkpoints_in(store),
+        recursion_limit=RECURSION_LIMIT,
+    )
+    outcome = ActionOutcome(action_id="test:test-run:abc", succeeded=True, result={}, error="")
+
+    with pytest.raises(UnexpectedResume):
+        thread.advance(initial=make, resume=outcome)
 
 
 # ------------------------------------------------------- the PostgreSQL store

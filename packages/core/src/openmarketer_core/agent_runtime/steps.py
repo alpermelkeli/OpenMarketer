@@ -20,7 +20,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from openmarketer_core.agent_runtime.actions import ActionRequest, shown
+from openmarketer_core.agent_runtime.actions import ActionRequest
+from openmarketer_core.agent_runtime.model_input import shown
 
 
 @dataclass(frozen=True)
@@ -121,3 +122,37 @@ class RequestChangedOnResume(StepError):
             f"a node asked for something other than action {action_id} when it ran again "
             "with that action's outcome: a node must ask for the same thing every time it runs"
         )
+
+
+class ActionAskedByTool(StepError):
+    """A tool, which the model chose to call, asked for an action."""
+
+    def __init__(self, tool_name: str) -> None:
+        # Nothing of the request: the payload may hold what the model wrote.
+        super().__init__(
+            f"tool {tool_name!r} asked for an action: a tool answers with text, and an action "
+            "is asked for by a node, from what the model submitted, never from inside a tool "
+            "the model chose to call"
+        )
+        self.tool_name = tool_name
+
+
+class InvalidNodeResult(StepError):
+    """A node answered with something other than the changes it makes to the state."""
+
+    def __init__(self, node_name: str) -> None:
+        # What it returned is not shown: it may hold what a model or a repository said.
+        super().__init__(
+            f"node {node_name!r} answered with something other than a mapping of the changes "
+            "it makes to the state: the route after a node, and nothing the node returns, "
+            "decides which node follows"
+        )
+        self.node_name = node_name
+
+
+class InvalidToolAnswer(StepError):
+    """A tool answered with something other than the text its model reads."""
+
+    def __init__(self, tool_name: str, answer_type: str) -> None:
+        super().__init__(f"tool {tool_name!r} answered with {answer_type}, not text")
+        self.tool_name = tool_name
