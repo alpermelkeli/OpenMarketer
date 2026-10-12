@@ -14,9 +14,9 @@ outcome arrives, so ``request_action`` compares the digest with what the node
 asks for now and refuses to hand the outcome to a node that asks for anything
 else: an outcome belongs to the request it answered, not to the next call.
 
-This is one of four places that import LangGraph, with ``graph_checkpoints/``, the
-analyzer's ``graph.py`` and ``langgraph_agent.py``, which compiles an agent's
-declared parts into a graph. The graph is compiled by its owner with the run's
+This is one of three places that import LangGraph, with ``graph_checkpoints/`` and
+``langgraph_agent.py``, which compiles an agent's declared parts into a graph.
+The graph is compiled by its owner with the run's
 store (``graph_checkpoints/postgres.py`` opens it, and holds the thread for one
 attempt). Interrupts, resume values and the graph's state are written by the
 store's strict serializer, which rebuilds only plain values, so they must be

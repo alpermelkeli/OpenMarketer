@@ -23,7 +23,7 @@ conversation is in it.
 ``run_from`` runs the same graph in memory from one of its nodes, for a command line and a
 benchmark that have no workflow: it never pauses, so it cannot run an action.
 
-This is one of four places that import LangGraph (see ``langgraph_steps.py``). It
+This is one of three places that import LangGraph (see ``langgraph_steps.py``). It
 knows no workflow engine and runs no action: a node asks for one with
 ``request_action``, and the workflow answers.
 """
