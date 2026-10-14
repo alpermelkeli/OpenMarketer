@@ -25,6 +25,7 @@ from openmarketer_core.repository_analysis.intake import (
     RepositoryTokens,
 )
 from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
+from openmarketer_core.tracing import NOT_TRACING
 from openmarketer_worker import checkpoint_cleanup
 from openmarketer_worker.agent_runtime.activity_support import checkpoints_in
 from openmarketer_worker.agent_runtime.vocabulary import FORGET_RUN, RUN_ACTION, RUN_GRAPH_STEP
@@ -46,7 +47,7 @@ def wired(
 ):
     sessions = sessions or session_factory(DATABASE_URL)
     credentials = WorkspaceCredentials(sessions, environ, None)
-    return wiring.repository_analyzer(environ, sessions, database_url, credentials)
+    return wiring.repository_analyzer(environ, sessions, database_url, credentials, NOT_TRACING)
 
 
 @pytest.fixture

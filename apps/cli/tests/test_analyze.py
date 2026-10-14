@@ -83,6 +83,14 @@ def test_profile_is_printed_and_nothing_is_stored_without_save(clones, monkeypat
     assert "stored" not in result.stderr
 
 
+def test_one_key_of_langfuse_without_the_other_fails_before_anything_is_cloned(clones, monkeypatch):
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-made-up")
+    result = run()
+    assert result.exit_code == 1
+    assert "LANGFUSE_SECRET_KEY" in result.stderr
+    assert clones == []
+
+
 def test_save_without_database_url_fails_before_anything_is_cloned(clones, monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     result = run("--save")

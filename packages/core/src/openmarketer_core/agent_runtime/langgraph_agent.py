@@ -93,7 +93,11 @@ def run_from(
         raise InvalidAgent(_context_mismatch(agent.kind, shape.context))
     graph = _compile(shape, None, entry=node)
     output = graph.invoke(
-        dict(state), {"recursion_limit": recursion_limit}, context=context, version="v2"
+        dict(state),
+        # Named after the agent's kind, as a step of a workflow's run is, for tracing when it is on.
+        {"recursion_limit": recursion_limit, "run_name": agent.kind},
+        context=context,
+        version="v2",
     )
     if output.interrupts:
         asked = output.interrupts[0].value

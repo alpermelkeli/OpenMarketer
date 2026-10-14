@@ -32,6 +32,12 @@ from openmarketer_core.repository_analysis.intake import (
     Snapshot,
     run_intake,
 )
+from openmarketer_core.tracing import (
+    Tracing,
+    TracingNotConfigured,
+    TracingSettings,
+    start_tracing,
+)
 from openmarketer_evaluation.benchmark import (
     DEFAULT_MAX_EVIDENCE_JUDGEMENTS,
     DEFAULT_RUNS_PER_CASE,
@@ -97,12 +103,29 @@ def _open_store() -> SaveRun:
 
 
 @app.callback()
-def main() -> None:
+def main(ctx: typer.Context) -> None:
     """OpenMarketer: give it your repository, it markets your app."""
+    try:
+        settings = TracingSettings.from_env(os.environ)
+    except TracingNotConfigured as e:
+        raise _failure(str(e)) from e
+    if settings.enabled:
+        _say(settings.describe())
+    # Started before the command, in its context, so its graphs trace; stopped when it ends,
+    # which sends what is still queued.
+    tracing = start_tracing(settings)
+    ctx.obj = tracing
+    ctx.call_on_close(tracing.stop)
+
+
+def _tracing(ctx: typer.Context) -> Tracing:
+    """The tracing the callback started before the command."""
+    return ctx.obj
 
 
 @app.command("analyze")
 def analyze_command(
+    ctx: typer.Context,
     source: Annotated[str, typer.Argument(help="https:// repository URL or a local git folder")],
     out: Annotated[Path | None, typer.Option(help="Write the profile JSON here")] = None,
     max_cost: Annotated[
@@ -140,7 +163,7 @@ def analyze_command(
 
             result = analyze(
                 intake.files,
-                RouterChatModel.from_env(),
+                _tracing(ctx).model(RouterChatModel.from_env()),
                 facts=extraction.facts,
                 limits=Limits(max_steps=max_steps, max_cost_usd=max_cost),
             )
@@ -248,6 +271,7 @@ def _rescore(cases: Sequence[GoldenCase], folder: Path) -> None:
 
 @app.command("evaluate")
 def evaluate_command(
+    ctx: typer.Context,
     case: Annotated[
         list[str] | None, typer.Option(help="A case to run; repeat it for several. Default: all")
     ] = None,
@@ -318,7 +342,7 @@ def evaluate_command(
         raise _failure("--judge-model goes with --judge claude-code; the judge role has its model")
     if judge_model is not None and (not judge_model or judge_model.startswith("-")):
         raise _failure("--judge-model must be a model name; a name does not start with a dash")
-    judge_chat: ChatModel = chat
+    judge_chat: ChatModel = _tracing(ctx).model(chat)
     route = JudgeRoute()
     if judge_route is JudgeChoice.CLAUDE_CODE:
         judge_chat = ClaudeCodeJudge(model=judge_model, timeout_s=judge_timeout)
@@ -354,7 +378,9 @@ def evaluate_command(
         scores = run_benchmark(
             cases,
             config=config,
-            analyzer=AnalyzerSetup(model=chat, extractors=discover_extractors(), limits=limits),
+            analyzer=AnalyzerSetup(
+                model=_tracing(ctx).model(chat), extractors=discover_extractors(), limits=limits
+            ),
             judge=judge_chat,
             store=store,
             live=live,
