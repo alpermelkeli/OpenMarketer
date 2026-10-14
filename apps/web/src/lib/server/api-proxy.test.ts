@@ -195,6 +195,25 @@ describe("the routes that are forwarded", () => {
   });
 });
 
+describe("the routes of proposals", () => {
+  const proposal = (decision: string) => ["projects", PROJECT, "proposals", RUN, decision];
+
+  it("forward the list, an approval and a rejection", () => {
+    expect(allowedApiPath("GET", ["projects", PROJECT, "proposals"])).toBe(`/v1/projects/${PROJECT}/proposals`);
+    expect(allowedApiPath("POST", proposal("approval"))).toBe(`/v1/projects/${PROJECT}/proposals/${RUN}/approval`);
+    expect(allowedApiPath("POST", proposal("rejection"))).toBe(`/v1/projects/${PROJECT}/proposals/${RUN}/rejection`);
+  });
+
+  it("do not include a decision by GET, a proposal that is not an id, or a filter", () => {
+    expect(() => allowedApiPath("GET", proposal("approval"))).toThrow();
+    expect(() => allowedApiPath("POST", ["projects", PROJECT, "proposals", "latest", "approval"])).toThrow();
+    expect(() => allowedApiPath("POST", ["projects", PROJECT, "proposals", RUN])).toThrow();
+    expect(() =>
+      allowedApiTarget("GET", ["projects", PROJECT, "proposals"], new URLSearchParams("status=pending")),
+    ).toThrow();
+  });
+});
+
 describe("the routes that read", () => {
   it("are the lists, a project, a run and a version", () => {
     expect(allowedApiPath("GET", ["projects"])).toBe("/v1/projects");
