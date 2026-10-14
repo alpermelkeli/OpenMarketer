@@ -2,18 +2,18 @@
 <div id="canvas" style="width:1136px;height:1330px">
 <div class="card abs" id="br" style="background:#DCEBFA"><b>1 · Brief <span class="chip">creative_director</span></b><span class="s">structured brief: goal, platform sizes, exact copy, brand kit constraints (palette, fonts, logo, do-not-mention) and a technique plan per asset</span></div>
 
-<div class="layer orch abs" id="LP"><div class="lt">2 · Produce <small>the studio agent picks a technique per asset</small></div></div>
+<div class="layer orch abs" id="LP"><div class="lt">2 · Produce <small>the studio role picks a technique and each operation</small></div></div>
 <div class="card abs" id="ta"><b>A · Code composition</b><span class="s">Python in a sandbox, or HTML rendered to PNG. Exact text, layouts, logos, device frames, charts.</span></div>
 <div class="card abs" id="tb"><b>B · Generated background + code overlay</b><span class="s">Model makes the background or scene; code adds the text, logo and layout on top.</span></div>
 <div class="card abs" id="tc"><b>C · Direct generation and editing</b><span class="s">Full image from a model, then inpaint, outpaint, remove background, upscale.</span></div>
-<div class="card abs" id="tl" style="background:#DDF1DD"><b>Studio tools</b><span class="s">called from Produce</span><ul><li>run_python (sandbox, no network)</li><li>render_html</li><li>generate_image</li><li>edit_image, remove_background, upscale</li><li>brand_kit, view_image</li><li>ocr, measure_contrast</li></ul></div>
+<div class="card abs" id="tl" style="background:#DDF1DD"><b>Actions</b><span class="s">the graph pauses; gated; the worker runs them</span><ul><li>run_python, render_html (sandbox, no network)</li><li>generate_image, edit_image (spend)</li></ul><b style="margin-top:8px">Tools</b><span class="s">read only, inside Produce</span><ul><li>brand_kit, view_image</li><li>ocr, measure_contrast</li></ul></div>
 
 <div class="layer guard abs" id="LV"><div class="lt">3 · Verify <small>separate model from the producer</small></div></div>
 <div class="card abs" id="v1"><b>Programmatic checks</b><ul><li>size and aspect ratio per platform</li><li>safe zones and text overflow</li><li>contrast ratio, palette distance</li><li>OCR text equals the intended copy</li><li>logo present, file size</li></ul></div>
 <div class="card abs" id="v2"><b>Visual verifier <span class="chip">asset_verifier</span></b><span class="s">looks at the image like a reviewer: legibility at thumbnail size, brand fit, malformed text or hands, misleading or risky content. Returns a structured report with severity and concrete edit suggestions.</span></div>
 
 <div class="dw" id="dc"><div>Pass?</div></div>
-<div class="card abs" id="fin" style="background:#DDF1DD"><b>5 · Finalize</b><span class="s">save the asset version with code, prompts, parameters, verifier report and cost; submit it as a proposal to the policy gate</span></div>
+<div class="card abs" id="fin" style="background:#DDF1DD"><b>5 · Finalize</b><span class="s">save the asset version with code, prompts, parameters, verifier report and cost; return it to the run that asked for it, which proposes it with its post</span></div>
 <div class="card abs" id="ed" style="background:#FFF1C2"><b>4 · Edit plan <span class="chip">returns to Produce</span></b><span class="s">tweak code parameters, regenerate the background, inpaint a region, recompose, upscale, or switch technique after a repeated failure</span></div>
 <div class="card abs" id="es" style="background:#F8D9D9"><b>Escalate to a human</b><span class="s">iteration, cost or time limit reached: show the best candidate with the verifier report and the options</span></div>
 </div>

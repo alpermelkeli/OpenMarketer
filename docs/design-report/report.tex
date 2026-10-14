@@ -210,7 +210,7 @@ Figure~\ref{fig:arch} shows the system as seven layers. Requests flow downward; 
 \begin{description}
   \item[User layer.] A Next.js dashboard (approval queue, budgets, reports, profile review), a CLI for setup and dry runs, and chat notifications (Telegram, Slack, e-mail through Apprise) that carry signed one-time links to the approval page.
   \item[Control plane.] A FastAPI service exposing a typed REST API with OIDC authentication and role-based access per workspace, and the orchestrator agent behind the dashboard chat (Section~\ref{sec:console}).
-  \item[Orchestration.] Temporal workflows run scheduled and long-lived processes. Agent behaviour is written as LangGraph graphs (orchestrator, writer, creative studio, repo analyzer, planner, reader pipeline) that run inside workflow activities (Section~\ref{sec:graphs}).
+  \item[Orchestration.] Temporal workflows run scheduled and long-lived processes. Each agent (Section~\ref{sec:agents}) is a LangGraph graph that runs inside the activities of its own workflow (Section~\ref{sec:graphs}).
   \item[Guardrail layer.] A policy engine (YAML rules evaluated with CEL), a budget ledger (transactional reserve/commit/release) and a content filter (secrets, unreleased features, banned claims). It is ordinary code, not a prompt.
   \item[Connector layer.] One plugin per platform behind a common interface.
   \item[Data layer.] PostgreSQL (with pgvector), S3-compatible object storage and a secret store.
@@ -225,7 +225,7 @@ Figure~\ref{fig:arch} shows the system as seven layers. Requests flow downward; 
 \endhead
 D1 & Guardrails are code, not prompts & Language models can be talked out of instructions. A deterministic gate in front of every side-effecting tool gives guarantees that can be tested and audited.\\
 D2 & Durable workflows for everything long-lived & Approvals, scheduled posts and metric pulls span hours to days. Durable execution removes custom retry and state-recovery code.\\
-D3 & LangGraph for agent graphs, Temporal as the durable outer layer & Production, planning and chat are graphs with loops and branches; LangGraph provides typed state, conditional edges, checkpoints, interrupts and streaming that would otherwise be rebuilt. Graphs stay thin and call only our model router and policy-gated tools, so the framework can be replaced (Section~\ref{sec:graphs}).\\
+D3 & LangGraph for agent graphs, Temporal as the durable outer layer & Production, planning and chat are graphs with loops and branches; LangGraph provides typed state, conditional edges, checkpoints, interrupts and streaming that would otherwise be rebuilt. Graphs stay thin, call only our model router and reach the world only through policy-gated actions, so the framework can be replaced (Section~\ref{sec:graphs}).\\
 D4 & Structured, versioned Product Profile & Every action can cite the profile version it relied on. Profiles can be diffed, reviewed and corrected.\\
 D5 & Reader/actor separation for untrusted text & Limits prompt-injection damage by design (Section~\ref{sec:security}).\\
 D6 & Plugins for platforms, media, extractors, playbooks, policies & Platform APIs change often and communities know their niches. Isolating them keeps the core stable.\\
@@ -238,10 +238,75 @@ D12 & Agent-written code runs only in a network-less sandbox & Code composition 
 \bottomrule
 \end{longtable}
 
+\subsection{Terms: agent, run, graph, workflow, role, action, tool}\label{sec:terms}
+The report uses these words with one meaning each.
+
+\begin{longtable}{@{}p{2.1cm}p{9.8cm}>{\raggedright\arraybackslash}p{3.4cm}@{}}
+\toprule
+\textbf{Term} & \textbf{Meaning} & \textbf{Example}\\
+\midrule
+\endhead
+Agent & One capability of the product that does one kind of job from start to end. It is declared once in code: its state, the nodes and edges of its graph, the actions it may ask for, its prompts and its rules. The declaration imports no framework. & repository analyzer, writer\\
+Run & One execution of an agent, with its own record, thread and workflow. & one brief written into one post\\
+Graph & The agent's nodes and edges as LangGraph executes them inside one step of a run: loops, branches, model calls, and a checkpoint after every node. A graph does no side effect and never waits long. & draft, check, revise\\
+Workflow & The durable manager of a run in Temporal, with one workflow class and one task queue per agent. It runs the graph's steps and the actions as activities, puts every action through the policy gate, waits for people and for other runs, and survives a crash. It calls no model and holds no content. & \texttt{WriteContent}\\
+Role & The configuration of one kind of model call: the model or tier, its parameters, fallbacks and the capabilities the model must have (Section~\ref{sec:llm}). It holds no prompt, no tool and no action. Several agents may use one role. & \texttt{writer}, \texttt{critic}\\
+Action & Something an agent asks the world to do. The graph pauses, the workflow puts the action through the gate and runs it. Each action is declared with its effect: \emph{internal}, \emph{publishes} or \emph{spends}. & clone a repository, \texttt{publish\_post}\\
+Tool & A function without side effects that a model calls inside a node, such as reading a file of the clone. A tool cannot ask for an action. & reading a file\\
+Playbook & Data that sets strategy, cadence and tone presets for a type of product. It reaches a prompt as data and never adds a tool or an action. & a developer-tool playbook\\
+\bottomrule
+\end{longtable}
+
+A workflow runs one run of one agent. The agent's nodes call roles, use tools and ask for actions. Not every workflow runs an agent: the repository watcher and the metric pulls are scheduled workflows without a graph.
+
+\textbf{Three kinds of action.} An action is one of three kinds, and the graph sees all three the same way: it asks, it pauses, and it gets an outcome.
+\begin{description}
+  \item[Ordinary.] Runs as one activity, under its own time limit and retries, and returns a small outcome. Cloning a repository and publishing a post are ordinary actions.
+  \item[Start a run.] Creates the record of another agent's run and starts its workflow, keyed by the action's identifier so that a retry finds the same run, and returns the run's identifier without waiting for it. Its effect is internal, and a policy rule caps how many runs one run may start. The planner starts the week's writing runs this way and ends; their results reach the next week's plan through the database, not as a return value.
+  \item[Run and wait.] Starts another agent's run as a child workflow and waits for it with no graph running, as a run waits for an approval. The child's result comes back as the action's outcome. The writer asks the creative studio for an image this way, because its proposal needs the image. The child keeps its own actions and its own approvals.
+\end{description}
+The rule: a run waits when the next step of its graph needs the result, and starts a run when someone else, or a later run, uses the result.
+
+\textbf{Where each thing lives.}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{5.4cm}>{\raggedright\arraybackslash}p{6.0cm}>{\raggedright\arraybackslash}p{3.9cm}@{}}
+\toprule
+\textbf{What} & \textbf{Where} & \textbf{Changed by}\\
+\midrule
+\endhead
+Model and parameters & the role: \texttt{models.yaml}, environment, dashboard & operator\\
+Prompts and instructions & the agent's own modules, in code & developer, measured with the benchmark\\
+Rules: the text the prompt gives and the checks of the result & the agent's rules module, one source for both & developer\\
+Facts about the product, voice, do-not-mention list & the approved Product Profile & owner\\
+Strategy, cadence, tone presets & a playbook (a plugin of data) & owner, community\\
+Platform rules: length, links, mentions & the platform's connector & developer, plugin\\
+Tools & the agent's declaration & developer\\
+Actions and their effects & the agent's declaration; checked by the gate & developer\\
+\bottomrule
+\end{longtable}
+A prompt is not part of a role, for three reasons. One role serves several agents whose instructions differ: the critic of a post is not the critic of an image. A prompt is bound to the output that its node's code reads and checks, so the two change together. And a change to a prompt is measured on the benchmark before it ships. What a project wants to change reaches the prompt as data: the profile, the playbook, a person's note.
+
+\subsection{Agent catalogue}\label{sec:agents}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{2.5cm}>{\raggedright\arraybackslash}p{2.6cm}>{\raggedright\arraybackslash}p{2.6cm}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{3.6cm}@{}}
+\toprule
+\textbf{Agent} & \textbf{Started by} & \textbf{From, to} & \textbf{Roles (node)} & \textbf{Actions (effect)}\\
+\midrule
+\endhead
+Repository analyzer (built) & a person, through the API & repository to a draft Product Profile & \texttt{repo\_analyzer} (explore and draft) & clone the repository (internal)\\
+Writer (Section~\ref{sec:writer}) & a person; later the planner, the repository watcher, the orchestrator & brief to post & \texttt{writer} (draft, revise), \texttt{critic} (critique) & \texttt{publish\_post} (publishes); later \texttt{produce\_asset} (run and wait)\\
+Creative studio (Section~\ref{sec:studio}) & the writer, with a run-and-wait action; later other agents that publish media & brief to media asset & \texttt{creative\_director} (brief), \texttt{studio} (produce), \texttt{asset\_verifier} (verify) & sandbox runs (internal); image, video and voice generation and edits (spends)\\
+Planner & a weekly schedule & profile, playbook and metrics to a plan and its briefs & \texttt{reader} (read web pages), \texttt{researcher} (research), \texttt{planner} (plan) & start writing runs (start a run)\\
+Reply drafter & a new comment or message on the project's accounts & comment to reply & \texttt{reader} (read), \texttt{reply\_drafter} (draft), \texttt{critic} (critique) & \texttt{post\_reply} (publishes)\\
+Analyst & a schedule & metrics to a report and a digest & \texttt{analyst} (interpret, write) & send a notification (internal)\\
+Orchestrator (Section~\ref{sec:console}) & a chat message & a question or request to an answer, a run or a directive & \texttt{orchestrator} (chat turn) & start a writing run (start a run); store a directive (internal)\\
+\bottomrule
+\end{longtable}
+
+The reader is not an agent. It is the first node of every agent that takes untrusted text: a node that calls the \texttt{reader} role, which may not be sent tools, and returns schema-checked fields that the rest of the graph reads (Section~\ref{sec:security}). The \texttt{judge} of the evaluation and the \texttt{embeddings} of memory are roles used outside any agent.
+
 \subsection{Agent graphs and durable workflows}\label{sec:graphs}
 The first design used a small in-house agent loop. Two things changed that decision: production work (brief, produce, verify, edit) and chat both have loops, branches and shared state, and LangGraph, an MIT-licensed library for stateful graph-based agents, provides these directly: typed state, conditional edges, subgraphs, checkpointing (including PostgreSQL), interrupts for human input and streaming. LangGraph does not replace Temporal; each solves a different problem (Figure~\ref{fig:graphs}).
 
-\fig{fig_agentgraphs}{Agent graphs inside Temporal. Temporal owns time and reliability; LangGraph owns the reasoning flow of one task; every model and tool call goes through shared, gated services.}{fig:graphs}
+\fig{fig_agentgraphs}{Agent graphs inside Temporal. Temporal owns time and reliability; LangGraph owns the reasoning flow of one step; every model call goes through the router and every action through the policy gate.}{fig:graphs}
 
 \begin{longtable}{@{}p{3.2cm}p{5.9cm}p{6.2cm}@{}}
 \toprule
@@ -285,26 +350,28 @@ OpenRouter is the default gateway. It offers one API and one key for models from
 \fig{fig_llm}{LLM routing. Every call site is a role; the model router resolves the model from layered configuration, adds fallbacks and checks capabilities, then sends the request through OpenRouter.}{fig:llm}
 
 \subsection{Roles}
+A role is the configuration of one kind of model call (Section~\ref{sec:terms}). It chooses the model and its parameters and names the capabilities the model must have; nothing else. Two of those capabilities also limit what code may do: a role without \texttt{tools} is refused any tool, which is how the \texttt{reader} is kept from calling anything, and the router checks that the chosen model and its fallbacks support what the role needs. The role's name labels every call in traces and in the cost records. The prompt, the tools and the actions belong to the agent whose node makes the call, so the table lists where each role is used.
+
 \begin{longtable}{@{}p{3.0cm}p{6.3cm}p{3.5cm}p{1.9cm}@{}}
 \toprule
-\textbf{Role} & \textbf{Purpose} & \textbf{Needs} & \textbf{Default tier}\\
+\textbf{Role} & \textbf{Used by (agent: node)} & \textbf{Needs} & \textbf{Default tier}\\
 \midrule
 \endhead
-\texttt{orchestrator} & Dashboard chat: status questions, special requests & tools & strong\\
-\texttt{repo\_analyzer} & Explores the repository with read-only tools and drafts the Product Profile & tools, structured output & fast\\
-\texttt{researcher} & Market, competitor and trend research & tools & balanced\\
-\texttt{reader} & Quarantined classification of untrusted text & structured output, \emph{no tools} & fast\\
-\texttt{planner} & Weekly plan, channel mix, ad plan & structured output & strong\\
-\texttt{writer} & Posts, captions, threads, ad copy & structured output & balanced\\
-\texttt{reply\_drafter} & Replies to the project's own audience & none & balanced\\
-\texttt{creative\_director} & Prompts and scripts for image, video and voice providers & structured output & balanced\\
-\texttt{studio} & Creative studio agent: writes code, calls image, video and voice tools, looks at results and edits & tools, image input & strong\\
-\texttt{asset\_verifier} & Checks every produced asset against the brief; a different model from \texttt{studio} & structured output, image input & balanced\\
-\texttt{critic} & Pre-approval check against brand voice and facts & structured output & balanced\\
-\texttt{analyst} & Metrics interpretation, weekly report, proactive digests & structured output & balanced\\
-\texttt{vision} & Understanding screenshots and creative assets & image input & balanced\\
-\texttt{judge} & Offline evaluation (LLM-as-judge) & structured output & strong\\
-\texttt{embeddings} & Memory embeddings & embeddings endpoint & own model\\
+\texttt{orchestrator} & Orchestrator: the chat turn & tools & strong\\
+\texttt{repo\_analyzer} & Repository analyzer: explore with read-only tools, draft the profile & tools, structured output & fast\\
+\texttt{researcher} & Planner: market, competitor and trend research & tools & balanced\\
+\texttt{reader} & Planner, reply drafter: the first node, which reads untrusted text & structured output, \emph{no tools} & fast\\
+\texttt{planner} & Planner: weekly plan, channel mix, ad plan & structured output & strong\\
+\texttt{writer} & Writer: draft and revise & structured output & balanced\\
+\texttt{reply\_drafter} & Reply drafter: draft & none & balanced\\
+\texttt{creative\_director} & Creative studio: the brief node, which plans each asset & structured output & balanced\\
+\texttt{studio} & Creative studio: the produce node, which chooses each operation and looks at the result & tools, image input & strong\\
+\texttt{asset\_verifier} & Creative studio: verify; a different model from \texttt{studio} & structured output, image input & balanced\\
+\texttt{critic} & Writer and reply drafter: critique against voice and facts; a different model from the one it checks & structured output & balanced\\
+\texttt{analyst} & Analyst: weekly report, proactive digests & structured output & balanced\\
+\texttt{vision} & Repository analyzer and creative studio: reading screenshots and images & image input & balanced\\
+\texttt{judge} & No agent: offline evaluation (LLM-as-judge) & structured output & strong\\
+\texttt{embeddings} & No agent: memory embeddings & embeddings endpoint & own model\\
 \bottomrule
 \end{longtable}
 
@@ -515,7 +582,7 @@ The dashboard contains a chat with an \emph{orchestrator agent}. It is the singl
 \endhead
 Status question & ``How did last week's posts perform?'' & Read tools fetch metrics and plan; the answer cites numbers and links to the records.\\
 Explanation & ``Why did you propose pausing that ad set?'' & The agent opens the proposal and explains its rationale, evidence and the profile version it used.\\
-One-off request & ``Make a launch video for v2.1 tomorrow.'' & A task is created and handed to the planner and creative workflows; the resulting proposals appear in the chat as approval cards.\\
+One-off request & ``Make a launch video for v2.1 tomorrow.'' & The orchestrator starts a writing run that asks the creative studio for the video (Section~\ref{sec:terms}); the resulting proposal appears in the chat as an approval card.\\
 Standing instruction & ``Never post on Sundays.'' & A draft policy rule is shown as readable text and as a CEL rule; it becomes active only after the operator confirms.\\
 Budget or autonomy change & ``Raise the monthly cap to 600.'' & Classified as high risk: the agent prepares a change request with a diff, and the operator confirms in the settings form with re-authentication. It is not executed through the chat.\\
 Emergency & ``Pause everything.'' & Safe-direction action: the kill switch is applied immediately and the chat reports what was stopped.\\
@@ -586,9 +653,9 @@ A later phase can expose the same orchestrator through Telegram or Slack bots. A
 \subsection{Prompt injection and the reader/actor split}
 A marketing agent reads text written by strangers: comments, direct messages, competitor pages, and the README files of arbitrary repositories. Any of these can contain instructions aimed at the model. The design assumes that this will happen.
 
-\fig{fig_trust}{Trust boundaries. Untrusted text is processed by a reader agent that has no tools and returns only schema-validated fields. The action agent never sees raw untrusted text, and every proposal still passes the policy gate.}{fig:trust}
+\fig{fig_trust}{Trust boundaries. Untrusted text is read by a reader node, whose role may not be sent tools, and which returns only schema-validated fields. The agent's other nodes never see raw untrusted text, and every action still passes the policy gate.}{fig:trust}
 
-Three layers of defence work together: (1) the reader agent has no tools and no credentials, so even a successful injection cannot act; (2) its output is constrained to fixed fields, so free-form instructions cannot pass through; (3) the action agent's proposals still go through the deterministic gate, so a manipulated proposal is still limited by caps and approval rules.
+Three layers of defence work together: (1) the reader node, the first node of every agent that takes untrusted text, has no tools and no credentials, so even a successful injection cannot act; (2) its output is constrained to fixed fields, so free-form instructions cannot pass through; (3) the action agent's proposals still go through the deterministic gate, so a manipulated proposal is still limited by caps and approval rules.
 
 \subsection{Threat overview}
 \begin{longtable}{@{}p{3.4cm}p{6.2cm}p{5.7cm}@{}}
@@ -662,7 +729,7 @@ These points need review by a qualified professional before any hosted offering:
 \section{Writer: From an Approved Profile to an Approved Post}\label{sec:writer}
 
 \subsection{Purpose and scope}
-The writer turns a brief into a post for one platform, in the project's brand voice, using only facts from the approved Product Profile, and hands the post to the policy gate as a proposal. It is the first agent with an action that publishes, so it is also the first user of the approval flow (Section~\ref{sec:safety}). The first version writes single text posts for X (open question 1) and runs in \emph{dry-run}: an approved post is recorded exactly as it would be sent, and nothing is sent until the owner turns publishing on for the project. Threads, images from the creative studio (Section~\ref{sec:studio}), scheduling by the planner and replies come later. They reuse this graph or its checks.
+The writer turns a brief into a post for one platform, in the project's brand voice, using only facts from the approved Product Profile, and hands the post to the policy gate as a proposal. It is the first agent with an action that publishes, so it is also the first user of the approval flow (Section~\ref{sec:safety}). The first version writes single text posts for X (open question 1) and runs in \emph{dry-run}: an approved post is recorded exactly as it would be sent, and nothing is sent until the owner turns publishing on for the project. Threads, scheduling by the planner and replies come later and reuse this graph or its checks. Images come later too: the writer will ask the creative studio for one with a run-and-wait action (Section~\ref{sec:terms}), keep writing the text itself, and propose text and image together.
 
 \subsection{The brief}
 A brief is a small record. A person creates it in the dashboard; later the planner, the repository watcher (Section~\ref{sec:profile}) and the orchestrator (Section~\ref{sec:console}) create the same record.
@@ -695,8 +762,8 @@ Writing is a LangGraph graph (Figure~\ref{fig:writer}) with the same loop as the
 \texttt{prepare} & code & Reads the project's approved profile version and keeps its identifier in the state for the whole run, as the analyzer keeps the commit. Builds the \emph{writing context}: product, voice, audience, do-not-mention list, the platform's rules, and the \texttt{live} features with their evidence. A brief that names a feature that is not live, or a project without an approved profile, ends the run here.\\
 \texttt{draft} & \texttt{writer} & Writes the variants from the writing context alone. The output is structured: for each variant its text, its angle, and the claims it makes, each claim naming the features it rests on.\\
 \texttt{check} & code & Runs the code rules on every variant (below).\\
-\texttt{critique} & \texttt{critic} & Reads the variants that kept the code rules against the writing context. Returns a structured report per variant (pass or fail per criterion, severity, edit suggestions) and ranks the variants that pass.\\
-\texttt{decide} & code & A variant passes when it keeps every code rule and the critic passes it. One passes: propose the best. None passes and rounds and cost are left: revise. At the limit: propose the best variant that keeps every code rule, marked as not passing the critic; if no variant keeps them, the run ends as failed.\\
+\texttt{critique} & \texttt{critic} & Reads the variants that kept the code rules against the writing context. Returns a structured report per variant (pass or fail per criterion, severity, edit suggestions, and whether it makes a risky claim) and ranks the variants that pass.\\
+\texttt{decide} & code & A variant passes when it keeps every code rule and the critic passes it. One passes: propose the best. None passes and rounds and cost are left: revise. At the limit: propose the best variant that keeps every code rule and makes no risky claim, marked as not passing the critic; if there is none, the run ends as failed.\\
 \texttt{revise} & \texttt{writer} & Rewrites the failing variants with the findings, or with a person's note after a rejection, and returns to \texttt{check}.\\
 \texttt{propose} & action & Asks for the action \texttt{publish\_post}. Its effect is \emph{publishes}, so the gate holds it as a proposal (below).\\
 \texttt{record} & code & After the action's outcome, stores the content item and ends the run.\\
@@ -711,12 +778,14 @@ Every variant is checked by code first and then by a model that is not the write
 \textbf{Check} & \textbf{What it covers}\\
 \midrule
 \endhead
-Code rules (hard) & Length as the platform counts it (on X a link counts as a fixed number of characters); no term of the do-not-mention list, matched without regard to case; every claim names a feature of the writing context, and therefore a live one; no link or @mention outside the project's allow-list; at most the platform's number of hashtags; the language is one of the profile's. A number that does not appear in the profile is flagged for the critic and for the person.\\
-Critic (\texttt{critic}) & Brand voice; facts against the writing context, including what a claim implies; platform fit; risky claims (legal, medical or financial claims, comparisons with named competitors), which raise the action to L2 (Section~\ref{sec:safety}).\\
+Code rules (hard) & Length as the platform counts it; no term of the do-not-mention list, matched without regard to case; every claim names a feature of the writing context, and therefore a live one; no link and no @mention; at most the platform's number of hashtags; the language is one of the profile's. A number that does not appear in the profile is flagged for the critic and for the person.\\
+Critic (\texttt{critic}) & Brand voice; facts against the writing context, including what a claim implies; platform fit; risky claims (legal, medical or financial claims, comparisons with named competitors).\\
 \bottomrule
 \end{longtable}
 
-The two kinds of check have different weight. A code rule is a hard rule: a variant that breaks one is never proposed. The critic's judgement is advice: at the round limit a person may still see a variant the critic failed, together with the critic's report. The critic is a different model from the writer on purpose (D11), and the router warns when \texttt{writer} and \texttt{critic} resolve to the same model.
+The rules are written once, in the writer's rules module, which produces both the text the prompt gives the model and the functions that check the result, so the two cannot drift apart. The prompt is there so that first drafts pass and rounds are few; the code is the control (D1). Links and mentions are left out entirely at first: the profile has neither, and an allow-list of the project's own links and accounts, entered by a person in the project's settings, can come later. The profile never adds to it, because it is drafted from repository text.
+
+The checks have different weight. A code rule is a hard rule: a variant that breaks one is never proposed. A risky claim is a hard finding as well: the variant is revised, and one that still makes a risky claim at the round limit is never proposed. When the gate has risk levels (Section~\ref{sec:safety}), a risky claim will make the action L2 instead: a person may then publish the post themselves, and the agent never does. The rest of the critic's judgement is advice: at the round limit a person may still see a variant the critic failed, together with the critic's report. The critic is a different model from the writer on purpose (D11), and the router warns when \texttt{writer} and \texttt{critic} resolve to the same model.
 
 \subsection{The approval round}
 The proposal carries everything a person needs to decide without opening anything else: the proposed variant and the alternatives, the angle, each claim with the evidence of the features it rests on, the reports of the code rules and of the critic, and the profile version. The person can:
@@ -736,7 +805,7 @@ The writer has its own workflow and task queue, like every agent (Section~\ref{s
   \item \textbf{No tools, no credentials.} An injected instruction has nothing to call. The only thing the writer can produce is text, and that text reaches the world only through a proposal.
   \item \textbf{Rules are code.} Unreleased features and the do-not-mention list are enforced in \texttt{prepare} and \texttt{check}, and again by the gate's content filter on the action's payload. Telling the model about them in the prompt is a convenience, not the control (D1).
   \item \textbf{A person's note is input, not authority.} It is written by an authenticated user, but to the writer it is only text: it cannot change the platform, the limits or the profile version.
-  \item \textbf{Risk levels.} Every post waits for a person while the project is at the approval-queue level. When the owner later lets organic posts from the approved calendar run automatically (L0), a post with a risky claim is still L2 and is only ever drafted.
+  \item \textbf{Risk levels.} The gate does not have risk levels yet: every action that publishes waits for a person, which is the design's L1. The writer therefore depends on none. A risky claim keeps a variant from being proposed, and when risk levels come, it will make the action L2 instead, which a person may publish and the agent may not. Only then can the owner let organic posts from the approved calendar run automatically (L0).
 \end{itemize}
 
 \subsection{What is stored}
@@ -765,29 +834,29 @@ C. Direct generation and editing & An image model produces the whole image; the 
 \bottomrule
 \end{longtable}
 
-The creative director writes a \emph{brief} for each asset (goal, platform sizes, exact copy, brand-kit constraints and a first technique choice). The brand kit comes from the approved Product Profile: palette, fonts, logo, screenshots and the do-not-mention list.
+A studio run is started by the run that needs the asset, the writer at first, with a request that carries the exact copy: the studio never writes the text of a post, and it proposes nothing itself. The asset goes back to that run, which proposes it together with its post. Its first node, with the \texttt{creative\_director} role, turns the request into a \emph{brief} for each asset (goal, platform sizes, exact copy, brand-kit constraints and a first technique choice). The brand kit comes from the approved Product Profile: palette, fonts, logo, screenshots and the do-not-mention list.
 
 \subsection{The production graph}
 Production is a LangGraph graph (Figure~\ref{fig:creative}) with a loop: produce, verify, decide, edit.
 
-\fig{fig_creative}{Creative studio graph. The studio agent produces a candidate with tools; a separate verifier checks it; failures return to production through an edit plan; limits force an escalation to a human.}{fig:creative}
+\fig{fig_creative}{Creative studio graph. The produce node makes a candidate through actions (sandbox runs, generation, edits) and looks at it with tools; a separate verifier checks it; failures return to production through an edit plan; limits force an escalation to a human.}{fig:creative}
 
-\textbf{Studio tools.}
-\begin{longtable}{@{}p{3.6cm}p{11.7cm}@{}}
+\textbf{Actions and tools of the studio.} Production changes the world (it runs code and spends money with providers), so the operations of the produce node are actions: the \texttt{studio} model chooses the next operation as structured output, the node asks for it, and the graph pauses while the workflow puts it through the gate and the worker runs it. What only reads is a tool the model calls inside the node.
+\begin{longtable}{@{}p{3.6cm}p{2.4cm}p{9.3cm}@{}}
 \toprule
-\textbf{Tool} & \textbf{Purpose}\\
+\textbf{Operation} & \textbf{Kind} & \textbf{Purpose}\\
 \midrule
 \endhead
-\texttt{run\_python} & Run agent-written code in the sandbox with the brand kit and inputs mounted read-only; returns files, logs and errors.\\
-\texttt{render\_html} & Render an HTML and CSS template to PNG with Playwright, using local assets only.\\
-\texttt{generate\_image} & Text-to-image through the media provider (fal.ai by default); returns the image and its cost.\\
-\texttt{edit\_image} & Inpaint, outpaint, remove background, upscale through the provider.\\
-\texttt{brand\_kit} & Read palette, fonts, logo variants, screenshots and rules from the Product Profile.\\
-\texttt{view\_image} & Let the agent look at an image, through the vision-capable studio model.\\
-\texttt{ocr}, \texttt{measure\_contrast} & Read text from an image; compute contrast and colour distance for regions.\\
+\texttt{run\_python} & action, internal & Run agent-written code in the sandbox with the brand kit and inputs mounted read-only; returns files, logs and errors.\\
+\texttt{render\_html} & action, internal & Render an HTML and CSS template to PNG in the sandbox's browser, using local assets only.\\
+\texttt{generate\_image} & action, spends & Text-to-image through the media provider (fal.ai by default); returns the image and its cost.\\
+\texttt{edit\_image} & action, spends & Inpaint, outpaint, remove background, upscale through the provider.\\
+\texttt{brand\_kit} & tool & Read palette, fonts, logo variants, screenshots and rules from the Product Profile.\\
+\texttt{view\_image} & tool & Let the model look at an image produced in this run.\\
+\texttt{ocr}, \texttt{measure\_contrast} & tool & Read text from an image; compute contrast and colour distance for regions.\\
 \bottomrule
 \end{longtable}
-Calls to generation providers are made by the worker through policy-gated tools; agent code in the sandbox never talks to the network.
+Generation providers are called by the worker, as actions; agent code in the sandbox never talks to the network.
 
 \subsection{Verification}
 Every candidate is verified twice, by code and by a different model.
@@ -910,7 +979,7 @@ Licence & Apache-2.0 & MIT, AGPL-3.0 & Permissive with a patent grant; best for 
 \subsection{LLM usage notes}
 \begin{itemize}
   \item OpenRouter is the default gateway (Section~\ref{sec:llm}); any model that supports the capabilities a role needs can be configured. Model identifiers are configuration, not code.
-  \item Different roles use different models: a small, fast model for classification in the reader agent, a stronger model for planning and the orchestrator. The repository analyzer runs on the fast tier by design (Section~\ref{sec:llm}).
+  \item Different roles use different models: a small, fast model for classification in the reader node, a stronger model for planning and the orchestrator. The repository analyzer runs on the fast tier by design (Section~\ref{sec:llm}).
   \item The \texttt{studio} and \texttt{asset\_verifier} roles are configured as different models on purpose, to reduce the tendency of a model to approve its own work.
   \item Structured outputs are validated against Pydantic models; invalid output triggers a bounded retry, then escalation.
   \item Tools are described through a neutral interface and can be exposed as MCP servers, so other agents can reuse the connectors under the same policy gate.
@@ -1113,7 +1182,7 @@ Legal and compliance & High & Varies by market & Policy packs, disclosure labels
   \item \textbf{Sandbox technology.} Docker is the default; decide whether hosted or client deployments need gVisor or microVMs.
   \item \textbf{Studio providers.} Which image and video models and edit endpoints to support first, and how to confirm Higgsfield's programmatic access.
   \item \textbf{Golden repository set.} Which open-source apps will be used as the first benchmark.
-  \item \textbf{Writer.} Whether a variant the critic failed should reach a person at all, or end the run; what the link allow-list holds before the profile has the product's links; and when a person's edits start to change the writer's prompt (F9).
+  \item \textbf{Writer.} Whether a variant the critic failed should reach a person at all, or end the run; when the project's settings get an allow-list of its own links and accounts; and when a person's edits start to change the writer's prompt (F9).
 \end{enumerate}
 
 \section*{Reference Documentation}
