@@ -27,6 +27,7 @@ const API_ERROR_CODES: Record<ErrorCode, true> = {
   analysis_already_running: true,
   profile_already_approved: true,
   proposal_not_pending: true,
+  proposal_pending: true,
   credential_set_by_environment: true,
   encryption_key_missing: true,
   model_set_by_environment: true,

@@ -13,10 +13,14 @@ from sqlalchemy.orm import Session
 
 from openmarketer_api.dependencies import db_session
 from openmarketer_api.identity import LOCAL_USER_ID
+from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
+from openmarketer_core.agent_runtime.gate import RunScope
+from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.analysis_runs import mark_run_failed, request_analysis_run
 from openmarketer_core.db.evidence_store import local_workspace_id, save_analysis_of_project
 from openmarketer_core.db.models import Project, Workspace
 from openmarketer_core.db.profile_versions import approve_profile_version
+from openmarketer_core.db.proposals import propose_action
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.intake import Snapshot
 
@@ -265,3 +269,95 @@ def test_limit_outside_the_bounds_is_rejected(client, limit):
 
 def test_largest_limit_is_accepted(client):
     assert client.get("/v1/projects", params={"limit": 100}).status_code == 200
+
+
+# ----------------------------------------------------------------- delete
+def test_deleted_project_is_answered_with_no_content(client):
+    project_id = create(client).json()["id"]
+    response = client.delete(f"/v1/projects/{project_id}")
+    assert (response.status_code, response.content) == (204, b"")
+
+
+def test_deleted_project_can_no_longer_be_read_or_listed(client):
+    project_id = create(client).json()["id"]
+    client.delete(f"/v1/projects/{project_id}")
+    assert client.get(f"/v1/projects/{project_id}").status_code == 404
+    assert listed(client) == []
+
+
+def test_project_with_reviewed_versions_is_deleted(client, session):
+    project_id = project_created(session, minutes_ago=10)
+    analysed(session, project_id)
+    approve_profile_version(
+        session,
+        workspace_id=local_workspace_id(session),
+        project_id=uuid.UUID(project_id),
+        version=1,
+        approved_by=LOCAL_USER_ID,
+    )
+    assert client.delete(f"/v1/projects/{project_id}").status_code == 204
+    assert client.get(f"/v1/projects/{project_id}/profile/versions").status_code == 404
+
+
+def test_repository_of_a_deleted_project_can_be_registered_again(client):
+    project_id = create(client).json()["id"]
+    client.delete(f"/v1/projects/{project_id}")
+    assert create(client).status_code == 201
+
+
+def test_project_with_an_unfinished_run_is_not_deleted(client, session):
+    project_id = project_created(session, minutes_ago=10)
+    request_analysis_run(
+        session, workspace_id=local_workspace_id(session), project_id=uuid.UUID(project_id)
+    )
+    response = client.delete(f"/v1/projects/{project_id}")
+    assert (response.status_code, response.json()) == (
+        409,
+        {
+            "code": "analysis_already_running",
+            "message": f"project {project_id} has an analysis run in progress;"
+            " it can be deleted when the run has finished",
+        },
+    )
+    assert client.get(f"/v1/projects/{project_id}").status_code == 200
+
+
+def test_deleting_an_unknown_project_is_not_found(client):
+    project_id = uuid.uuid4()
+    response = client.delete(f"/v1/projects/{project_id}")
+    assert (response.status_code, response.json()) == (
+        404,
+        {"code": "project_not_found", "message": f"project {project_id} not found"},
+    )
+
+
+def test_project_of_another_workspace_is_not_deleted(client, session):
+    foreign = project_created(session, minutes_ago=10, workspace_id=elsewhere(session))
+    assert client.delete(f"/v1/projects/{foreign}").status_code == 404
+    assert session.get(Project, uuid.UUID(foreign)) is not None
+
+
+def test_delete_takes_no_body(client):
+    project_id = create(client).json()["id"]
+    response = client.request("DELETE", f"/v1/projects/{project_id}", json={"force": True})
+    assert response.status_code == 422
+    assert client.get(f"/v1/projects/{project_id}").status_code == 200
+
+
+def test_project_with_a_pending_proposal_is_not_deleted(client, session):
+    project_id = project_created(session, minutes_ago=10)
+    run = GraphRunRef(kind="writer-run", run_id=uuid.uuid4())
+    propose_action(
+        session,
+        scope=RunScope(workspace_id=local_workspace_id(session), project_id=uuid.UUID(project_id)),
+        run=run,
+        workflow_id=f"write-{run.run_id}",
+        request=ActionRequest(
+            action_id=f"writer-run:{run.run_id}:1", name="publish_post", payload={"text": "hi"}
+        ),
+        effect=ActionEffect.PUBLISHES,
+        wait_seconds=60,
+    )
+    response = client.delete(f"/v1/projects/{project_id}")
+    assert (response.status_code, response.json()["code"]) == (409, "proposal_pending")
+    assert client.get(f"/v1/projects/{project_id}").status_code == 200
