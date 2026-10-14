@@ -28,10 +28,9 @@ from openmarketer_api.routes import (
     projects,
 )
 from openmarketer_api.settings import Settings
-from openmarketer_api.temporal_workflows import TemporalAnalysisWorkflows
+from openmarketer_api.temporal_workflows import TemporalWorkflows
 from openmarketer_core.db.session import session_factory
 from openmarketer_core.llm_catalog import ModelCatalog
-from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
 
 API_VERSION = "0.1.0"
 
@@ -59,9 +58,7 @@ def app_from_env() -> FastAPI:
     app = create_app()
     app.state.services = Services(
         sessions=session_factory(settings.database_url),
-        analysis_workflows=TemporalAnalysisWorkflows(
-            settings.workflow_server, task_queue=ANALYSIS_TASK_QUEUE
-        ),
+        workflows=TemporalWorkflows(settings.workflow_server),
         environment=os.environ,
         credential_cipher=settings.credential_cipher,
         model_router=settings.model_router,

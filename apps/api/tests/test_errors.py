@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from openmarketer_api.dependencies import Services
 from openmarketer_api.identity import current_workspace_id
 from openmarketer_core.db.session import session_factory
-from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_core.workflow_start import WorkflowStart
 
 # Port 1 is reserved and nothing listens on it.
 UNREACHABLE_URL = "postgresql+psycopg://nobody:hunter2@127.0.0.1:1/nothing?connect_timeout=2"
@@ -16,7 +16,7 @@ RUN_URL = f"/v1/projects/{uuid.uuid4()}/analyses/{uuid.uuid4()}"
 
 
 class NoWorkflows:
-    async def start(self, run: AnalyzeRepositoryInput) -> None:
+    async def start(self, workflow: WorkflowStart) -> None:
         raise AssertionError("no workflow may be started without a database")
 
 
@@ -37,7 +37,7 @@ def test_unreachable_database_is_reported_without_connection_details(
 ):
     app.state.services = Services(
         sessions=session_factory(UNREACHABLE_URL),
-        analysis_workflows=NoWorkflows(),
+        workflows=NoWorkflows(),
         environment={},
         credential_cipher=None,
         model_router=repository_models,
