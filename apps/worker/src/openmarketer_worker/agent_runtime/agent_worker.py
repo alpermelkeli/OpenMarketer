@@ -25,6 +25,11 @@ words, the agent's own activities (the ones its workflow's hooks call) and its w
 An agent with an action the policy gate holds for a person also gives ``registration`` the
 worker's database sessions: it registers the gate's activities (``propose_action`` and
 ``settle_proposal``) with them, and ``run_action`` checks each such action's approval there.
+``registration`` is also given how long a run of the agent can take at most
+(``longest_run``), and adds core's rule for its kind to the cleanups of left-over checkpoints
+(``checkpoint_cleanup.stale_threads_of``), so that no agent's threads are left for nobody to
+remove.
+
 Whatever can be wrong is wrong when the worker starts, not at the first run: an action with no
 handler, an action that waits for a person with no sessions to store its proposal in, a handler
 for a model the agent did not declare or for an action that has one already,
@@ -38,6 +43,7 @@ in its ``AgentGraph`` (core's ``AgentSteps``) and its ``CheckpointAccess``.
 
 import inspect
 from collections.abc import Callable, Mapping, Sequence
+from datetime import timedelta
 from typing import Any, cast
 
 from pydantic import BaseModel
@@ -58,7 +64,7 @@ from openmarketer_worker.agent_runtime.routes import (
 )
 from openmarketer_worker.agent_runtime.vocabulary import RUN_TEXTS, FailureTexts
 from openmarketer_worker.agent_runtime.workflow_dsl import agent_of
-from openmarketer_worker.checkpoint_cleanup import CheckpointCleanup
+from openmarketer_worker.checkpoint_cleanup import CheckpointCleanup, stale_threads_of
 
 type Handler[Payload: BaseModel] = Callable[[Payload, ActionContext], Mapping[str, Any]]
 type RunEnded = Callable[[GraphRunRef], None]
@@ -138,6 +144,7 @@ class AgentWorker:
         workflows: Sequence[type],
         texts: FailureTexts = RUN_TEXTS,
         activities: Sequence[Callable[..., Any]] = (),
+        longest_run: timedelta,
         checkpoint_cleanups: Sequence[CheckpointCleanup] = (),
         sessions: sessionmaker[Session] | None = None,
     ) -> AgentRegistration:
@@ -146,11 +153,15 @@ class AgentWorker:
         ``workflows`` are the classes this agent's ``agent_workflow`` made, and ``activities``
         the agent's own (the ones its hooks call). ``texts`` are the agent's words for a run's
         failures that nobody worded, the same its workflows were given: the runtime's by
-        default. ``sessions`` are the database's, for an agent with an action that waits for a
+        default. ``longest_run`` is the most a run can take from its first step to its end, all
+        retries and waits for a person included: a thread of the agent's kind that nothing wrote
+        for longer is removed. ``checkpoint_cleanups`` are rules of the agent's own, beside that
+        one. ``sessions`` are the database's, for an agent with an action that waits for a
         person. Raises ``InvalidAgentWorker`` for an action with no handler, for an action that
-        waits for a person without ``sessions``, and for a class that is not a workflow of this
-        agent.
+        waits for a person without ``sessions``, for a ``longest_run`` shorter than such a wait,
+        and for a class that is not a workflow of this agent.
         """
+        self._require_a_run_that_outlasts_its_waits(longest_run)
         routes = self._routes()
         for workflow_class in workflows:
             self._require_a_workflow_of_this_agent(workflow_class)
@@ -177,8 +188,25 @@ class AgentWorker:
                 *gate_activities,
                 *activities,
             ],
-            checkpoint_cleanups=list(checkpoint_cleanups),
+            checkpoint_cleanups=[
+                *checkpoint_cleanups,
+                stale_threads_of(self._agent.kind, longest_run),
+            ],
         )
+
+    def _require_a_run_that_outlasts_its_waits(self, longest_run: timedelta) -> None:
+        if longest_run <= timedelta(0):
+            raise InvalidAgentWorker(
+                f"the longest run of agent {self._agent.kind!r} must be longer than nothing"
+            )
+        for action in self._held_actions():
+            wait = timedelta(seconds=self._agent.policies[action].approval_wait_seconds)
+            if longest_run < wait:
+                raise InvalidAgentWorker(
+                    f"a run of agent {self._agent.kind!r} can wait {wait} for a person to decide "
+                    f"on action {action!r}, longer than its longest run of {longest_run}: "
+                    "its checkpoints would be removed while it waits"
+                )
 
     def _held_actions(self) -> list[str]:
         return [

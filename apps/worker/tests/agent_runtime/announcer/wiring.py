@@ -3,6 +3,7 @@
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -17,6 +18,8 @@ from openmarketer_worker.agent_runtime.agent_worker import AgentWorker
 from openmarketer_worker.agent_runtime.routes import ActionContext
 
 TASK_QUEUE = "test-announcer"
+# Longer than the longest wait for a person (``announce``, ten minutes), as it must be.
+LONGEST_RUN = timedelta(hours=1)
 
 
 @dataclass
@@ -55,5 +58,9 @@ def wire(
         ),
     )
     return worker.registration(
-        checkpoints=checkpoints, graph=steps, workflows=[Announcer], sessions=sessions
+        checkpoints=checkpoints,
+        longest_run=LONGEST_RUN,
+        graph=steps,
+        workflows=[Announcer],
+        sessions=sessions,
     )

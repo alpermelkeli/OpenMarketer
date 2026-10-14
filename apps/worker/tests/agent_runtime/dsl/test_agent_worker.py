@@ -5,6 +5,7 @@ under test is what its worker makes of the declarations.
 """
 
 import uuid
+from datetime import timedelta
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -14,8 +15,9 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 from dsl.definitions import GREETER_TEXTS, Unlisted, elsewhere
-from dsl.wiring import TASK_QUEUE, GreeterWorld, wire
+from dsl.wiring import LONGEST_RUN, TASK_QUEUE, GreeterWorld, wire
 from dsl.workflow import GRAPH, Greeter
+from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_worker.agent_runtime.agent_worker import AgentWorker, InvalidAgentWorker
@@ -147,21 +149,32 @@ def test_action_with_no_handler_is_refused_when_the_worker_starts_naming_the_act
     agent, _ = an_agent_with_the_action_send()
     worker = AgentWorker(agent, task_queue="q")
     with pytest.raises(InvalidAgentWorker, match="'send' with no handler"):
-        worker.registration(checkpoints=checkpoints, graph=ScriptedGraph([]), workflows=[Greeter])
+        worker.registration(
+            checkpoints=checkpoints,
+            longest_run=LONGEST_RUN,
+            graph=ScriptedGraph([]),
+            workflows=[Greeter],
+        )
 
 
 @pytest.mark.parametrize("candidate", [Plain, ByHand], ids=lambda candidate: candidate.__name__)
 def test_class_that_agent_workflow_did_not_make_is_refused_naming_the_class(checkpoints, candidate):
     with pytest.raises(InvalidAgentWorker, match=f"{candidate.__name__} is not the workflow of"):
         a_worker_with_a_handler().registration(
-            checkpoints=checkpoints, graph=ScriptedGraph([]), workflows=[candidate]
+            checkpoints=checkpoints,
+            longest_run=LONGEST_RUN,
+            graph=ScriptedGraph([]),
+            workflows=[candidate],
         )
 
 
 def test_workflow_of_another_agent_is_refused_naming_the_class_and_both_agents(checkpoints):
     with pytest.raises(InvalidAgentWorker, match="Elsewhere.*'dsl-elsewhere'.*'dsl-fresh'"):
         a_worker_with_a_handler().registration(
-            checkpoints=checkpoints, graph=ScriptedGraph([]), workflows=[Elsewhere]
+            checkpoints=checkpoints,
+            longest_run=LONGEST_RUN,
+            graph=ScriptedGraph([]),
+            workflows=[Elsewhere],
         )
 
 
@@ -184,23 +197,58 @@ def test_registration_holds_the_queue_the_workflows_and_every_activity_the_run_n
     ]
 
 
-def test_registration_holds_the_cleanups_of_the_checkpoints_it_was_given(checkpoints):
-    agent, send = an_agent_with_the_action_send()
-    worker = AgentWorker(agent, task_queue="q")
-    worker.handler(send)(lambda payload, context: {})
+def test_registration_holds_the_cleanups_it_was_given_and_the_one_of_its_kind(checkpoints):
     cleanup = CheckpointCleanup(runs="greetings", remove=lambda session: 0)
-    registration = worker.registration(
+    registration = a_worker_with_a_handler().registration(
         checkpoints=checkpoints,
+        longest_run=LONGEST_RUN,
         graph=ScriptedGraph([]),
         workflows=[],
         checkpoint_cleanups=[cleanup],
     )
-    assert registration.checkpoint_cleanups == [cleanup]
+    given, of_its_kind = registration.checkpoint_cleanups
+    assert given == cleanup
+    assert of_its_kind.runs.startswith("dsl-fresh runs untouched")
+
+
+def test_agent_with_no_cleanup_of_its_own_still_has_its_left_over_threads_removed(checkpoints):
+    registration = a_worker_with_a_handler().registration(
+        checkpoints=checkpoints, longest_run=LONGEST_RUN, graph=ScriptedGraph([]), workflows=[]
+    )
+    [of_its_kind] = registration.checkpoint_cleanups
+    assert of_its_kind.runs.startswith("dsl-fresh runs untouched")
+
+
+@pytest.mark.parametrize("longest_run", [timedelta(0), timedelta(seconds=-1)])
+def test_longest_run_of_no_time_is_refused(checkpoints, longest_run):
+    with pytest.raises(InvalidAgentWorker, match="longer than nothing"):
+        a_worker_with_a_handler().registration(
+            checkpoints=checkpoints, longest_run=longest_run, graph=ScriptedGraph([]), workflows=[]
+        )
+
+
+def test_longest_run_shorter_than_a_wait_for_a_person_is_refused(checkpoints, sessions):
+    agent = Agent("dsl-held", state=dict)
+
+    @agent.action("publish", effect=ActionEffect.PUBLISHES, approval_wait=2 * 60 * 60)
+    class Publish(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    worker = AgentWorker(agent, task_queue="q")
+    worker.handler(Publish)(lambda payload, context: {})
+    with pytest.raises(InvalidAgentWorker, match="'publish'.*checkpoints would be removed"):
+        worker.registration(
+            checkpoints=checkpoints,
+            longest_run=timedelta(hours=1),
+            graph=ScriptedGraph([]),
+            workflows=[],
+            sessions=sessions,
+        )
 
 
 async def test_activities_registered_serve_the_runs_of_the_agent_and_no_other_kind(checkpoints):
     registration = a_worker_with_a_handler().registration(
-        checkpoints=checkpoints, graph=ScriptedGraph([]), workflows=[]
+        checkpoints=checkpoints, longest_run=LONGEST_RUN, graph=ScriptedGraph([]), workflows=[]
     )
     run_graph_step, _, forget_run = registration.activities[:3]
     stranger = GraphRunRef(kind="dsl-elsewhere", run_id=uuid.uuid4())
@@ -216,6 +264,7 @@ async def test_activities_registered_serve_the_runs_of_the_agent_and_no_other_ki
 async def test_activities_registered_word_a_failure_nobody_worded_in_the_texts_given(checkpoints):
     registration = a_worker_with_a_handler().registration(
         checkpoints=checkpoints,
+        longest_run=LONGEST_RUN,
         graph=RaisingGraph(RuntimeError("a message written for a log")),
         workflows=[],
         texts=GREETER_TEXTS,
@@ -232,7 +281,7 @@ async def test_activities_registered_tell_the_function_for_the_end_of_a_run_of_e
     released: list[GraphRunRef] = []
     worker = a_worker_with_a_handler(run_ended=released.append)
     registration = worker.registration(
-        checkpoints=checkpoints, graph=ScriptedGraph([]), workflows=[]
+        checkpoints=checkpoints, longest_run=LONGEST_RUN, graph=ScriptedGraph([]), workflows=[]
     )
     run = GraphRunRef(kind="dsl-fresh", run_id=uuid.uuid4())
     await ActivityEnvironment().run(registration.activities[2], run)
