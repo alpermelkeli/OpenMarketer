@@ -6,17 +6,28 @@ way the API does (in the database, then a signal) and reads what the graph was t
 
 import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from dsl.rig import cancel_and_let_it_be_seen
+from temporalio import activity
 from temporalio.client import WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
+from temporalio.worker import Worker
 
 from announcer.definitions import KIND
+from announcer.rig import Desk
 from announcer.wiring import wire
 from openmarketer_core.agent_runtime.actions import ActionRequest
 from openmarketer_core.agent_runtime.gate import PROPOSAL_DECIDED_SIGNAL, ProposalStatus
-from openmarketer_worker.agent_runtime.vocabulary import ACTION_NOT_APPROVED, RUN_ACTION
+from openmarketer_worker.agent_runtime.vocabulary import (
+    ACTION_NOT_APPROVED,
+    PROPOSE_ACTION,
+    RUN_ACTION,
+    ProposalHeld,
+    ProposalInput,
+)
 
 
 async def result_of(handle) -> dict:
@@ -93,6 +104,42 @@ async def test_cancelled_run_expires_the_proposal_it_waited_for(serving, board):
         await desk.pending_proposal()
 
         await handle.cancel()
+        with pytest.raises(WorkflowFailureError):
+            await result_of(handle)
+
+        assert [p.status for p in desk.proposals()] == [ProposalStatus.EXPIRED]
+    assert board.published == []
+
+
+async def test_run_cancelled_while_its_proposal_is_stored_expires_it(
+    temporal, task_queue, checkpoints, sessions, board, scope
+):
+    # The proposal is written while the workflow waits for the activity to answer; the
+    # cancellation arrives in between, and must not leave the proposal pending.
+    registration = wire(board, checkpoints, sessions)
+    real = next(a for a in registration.activities if a.__name__ == PROPOSE_ACTION)
+    arrived, release = asyncio.Event(), asyncio.Event()
+
+    @activity.defn(name=PROPOSE_ACTION)
+    async def held_proposing(proposal: ProposalInput) -> ProposalHeld:
+        held = await asyncio.to_thread(real, proposal)
+        arrived.set()
+        await asyncio.wait_for(release.wait(), timeout=30)
+        return held
+
+    activities = [held_proposing, *(a for a in registration.activities if a is not real)]
+    async with Worker(
+        temporal,
+        task_queue=task_queue,
+        workflows=registration.workflows,
+        activities=activities,
+        activity_executor=ThreadPoolExecutor(max_workers=4),
+    ):
+        desk = Desk(temporal, task_queue, sessions, scope)
+        _, handle = await desk.start()
+        await asyncio.wait_for(arrived.wait(), timeout=20)
+        await cancel_and_let_it_be_seen(handle)
+        release.set()
         with pytest.raises(WorkflowFailureError):
             await result_of(handle)
 
