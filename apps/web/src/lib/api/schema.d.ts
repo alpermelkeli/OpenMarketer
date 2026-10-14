@@ -235,6 +235,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings
+         * @description The limits a run of an analysis gets, the defaults, and what the workspace chose.
+         */
+        get: operations["getAnalysisSettings"];
+        /**
+         * Set Limits
+         * @description Choose the limits, in place of the choice before; none chosen goes back to the defaults.
+         */
+        put: operations["setAnalysisLimits"];
+        post?: never;
+        /**
+         * Remove Limits
+         * @description Go back to the analyzer's defaults.
+         */
+        delete: operations["removeAnalysisLimits"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/settings/credentials": {
         parameters: {
             query?: never;
@@ -281,10 +309,187 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings
+         * @description Every tier and role of the configuration, what it resolves to and where that comes from.
+         */
+        get: operations["getModelSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/models/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Catalog
+         * @description The provider's models, for the picker; `available` is false when it cannot be read.
+         */
+        get: operations["getModelCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/models/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check
+         * @description What each role's models lack for the role, according to the provider's catalogue.
+         *
+         *     409 while a stored choice breaks a rule.
+         */
+        get: operations["checkModelSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/models/rejected-parameters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Rejected
+         * @description Mark a model as rejecting parameters, which are then left out of a request to it.
+         *
+         *     What the configuration file lists for the model stays listed.
+         */
+        put: operations["setRejectedParameters"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/models/roles/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Role
+         * @description Choose the role's model and parameters, in place of the choice before.
+         *
+         *     A choice with nothing in it removes the one stored. 409 for a model while the
+         *     environment sets the role's.
+         */
+        put: operations["setRoleChoice"];
+        post?: never;
+        /**
+         * Remove Role
+         * @description Go back to the configuration file for every part of the role.
+         */
+        delete: operations["removeRoleChoice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/models/tiers/{tier}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Tier
+         * @description Choose the tier's model, which every role on the tier follows.
+         *
+         *     409 while the environment sets the tier's model.
+         */
+        put: operations["setTierModel"];
+        post?: never;
+        /**
+         * Remove Tier
+         * @description Go back to the configuration file's model for the tier.
+         */
+        delete: operations["removeTierModel"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AnalysisLimitsBoundsResponse */
+        AnalysisLimitsBoundsResponse: {
+            /** Max Cost Usd */
+            max_cost_usd: number;
+            /** Max Steps */
+            max_steps: number;
+            /** Min Cost Usd */
+            min_cost_usd: number;
+            /** Min Steps */
+            min_steps: number;
+        };
+        /**
+         * AnalysisLimitsRequest
+         * @description The limits the workspace chooses. A limit left out or null keeps the default.
+         */
+        AnalysisLimitsRequest: {
+            /**
+             * Max Cost Usd
+             * @description From 0.01 to 20 US dollars.
+             */
+            max_cost_usd?: number | null;
+            /**
+             * Max Steps
+             * @description From 5 to 200.
+             */
+            max_steps?: number | null;
+        };
+        /** AnalysisLimitsResponse */
+        AnalysisLimitsResponse: {
+            /**
+             * Max Cost Usd
+             * @description What its model calls may cost in one run, in USD.
+             */
+            max_cost_usd: number;
+            /**
+             * Max Steps
+             * @description Turns the agent may take in one run.
+             */
+            max_steps: number;
+        };
         /** AnalysisRunListResponse */
         AnalysisRunListResponse: {
             /**
@@ -327,6 +532,24 @@ export interface components {
          * @enum {string}
          */
         AnalysisRunStatus: "queued" | "running" | "succeeded" | "failed";
+        /** AnalysisSettingsResponse */
+        AnalysisSettingsResponse: {
+            bounds: components["schemas"]["AnalysisLimitsBoundsResponse"];
+            chosen: components["schemas"]["ChosenAnalysisLimitsResponse"] | null;
+            /** @description The analyzer's own limits. */
+            defaults: components["schemas"]["AnalysisLimitsResponse"];
+            /** @description The limits a run gets now. */
+            limits: components["schemas"]["AnalysisLimitsResponse"];
+            /** Set At */
+            set_at: string | null;
+            /** Set By */
+            set_by: string | null;
+            /**
+             * Unreadable
+             * @description A stored choice breaks a rule: the defaults are shown, and runs are refused until it is reset.
+             */
+            unreadable: boolean;
+        };
         /** Audience */
         Audience: {
             /**
@@ -376,6 +599,65 @@ export interface components {
          * @enum {string}
          */
         BusinessModelType: "free" | "subscription" | "one_time_purchase" | "ads" | "unknown";
+        /**
+         * CapabilityProblem
+         * @description Why a model may not serve a role.
+         * @enum {string}
+         */
+        CapabilityProblem: "not_in_catalog" | "no_tools" | "no_structured_output" | "no_image_input" | "rejects_temperature";
+        /** CatalogModelResponse */
+        CatalogModelResponse: {
+            /**
+             * Completion Price
+             * @description US dollars per million output tokens.
+             */
+            completion_price: number | null;
+            /** Context Length */
+            context_length: number | null;
+            /** Id */
+            id: string;
+            /** Input Modalities */
+            input_modalities: string[];
+            /** Name */
+            name: string;
+            /**
+             * Prompt Price
+             * @description US dollars per million input tokens.
+             */
+            prompt_price: number | null;
+            /** Supported Parameters */
+            supported_parameters: string[];
+        };
+        /**
+         * ChoiceBoundsResponse
+         * @description What a role's choice may hold.
+         */
+        ChoiceBoundsResponse: {
+            /** Max Fallbacks */
+            max_fallbacks: number;
+            /** Max Max Tokens */
+            max_max_tokens: number;
+            /** Max Temperature */
+            max_temperature: number;
+            /** Min Max Tokens */
+            min_max_tokens: number;
+            /** Min Temperature */
+            min_temperature: number;
+            /** Rejectable Parameters */
+            rejectable_parameters: "temperature"[];
+        };
+        /**
+         * ChoiceKind
+         * @enum {string}
+         */
+        ChoiceKind: "tier" | "role" | "rejected_parameters";
+        /** ChosenAnalysisLimitsResponse */
+        ChosenAnalysisLimitsResponse: {
+            /** Max Cost Usd */
+            max_cost_usd: number | null;
+            /** Max Steps */
+            max_steps: number | null;
+        };
         /** CreateProjectRequest */
         CreateProjectRequest: {
             /** Name */
@@ -416,7 +698,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "profile_not_found" | "credential_not_found" | "project_already_exists" | "analysis_already_running" | "profile_already_approved" | "credential_set_by_environment" | "encryption_key_missing" | "internal_error" | "analysis_not_started" | "database_unavailable";
+        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "profile_not_found" | "credential_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "profile_already_approved" | "credential_set_by_environment" | "encryption_key_missing" | "model_set_by_environment" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "database_unavailable";
         /**
          * Evidence
          * @description A location in the analysed repository that supports a claim.
@@ -477,6 +759,46 @@ export interface components {
             deep_links?: boolean | null;
             /** Evidence */
             evidence?: components["schemas"]["Evidence"][];
+        };
+        /** ModelCatalogResponse */
+        ModelCatalogResponse: {
+            /**
+             * Available
+             * @description Whether the provider's catalogue could be read.
+             */
+            available: boolean;
+            /** Models */
+            models: components["schemas"]["CatalogModelResponse"][];
+        };
+        /** ModelCheckResponse */
+        ModelCheckResponse: {
+            /**
+             * Available
+             * @description Whether the provider's catalogue could be read.
+             */
+            available: boolean;
+            /** Problems */
+            problems: components["schemas"]["ModelProblemResponse"][];
+        };
+        /** ModelProblemResponse */
+        ModelProblemResponse: {
+            /** Model */
+            model: string;
+            problem: components["schemas"]["CapabilityProblem"];
+            /** Role */
+            role: string;
+        };
+        /** ModelSettingsResponse */
+        ModelSettingsResponse: {
+            bounds: components["schemas"]["ChoiceBoundsResponse"];
+            /** Rejected Parameters */
+            rejected_parameters: components["schemas"]["RejectedParametersResponse"][];
+            /** Roles */
+            roles: components["schemas"]["RoleSettingResponse"][];
+            /** Tiers */
+            tiers: components["schemas"]["TierSettingResponse"][];
+            /** Unreadable */
+            unreadable: components["schemas"]["UnreadableChoiceResponse"][];
         };
         /**
          * Problem
@@ -651,6 +973,110 @@ export interface components {
              */
             unfinished_run_id: string | null;
         };
+        /** RejectedParametersResponse */
+        RejectedParametersResponse: {
+            changed: components["schemas"]["SettingChangeResponse"] | null;
+            /** Chosen */
+            chosen: "temperature"[];
+            /** From File */
+            from_file: "temperature"[];
+            /** Model */
+            model: string;
+        };
+        /**
+         * ResolvedModelResponse
+         * @description The model and parameters a role's request is made with.
+         */
+        ResolvedModelResponse: {
+            /** Fallbacks */
+            fallbacks: string[];
+            /** Max Tokens */
+            max_tokens: number;
+            /** Model */
+            model: string;
+            /** Reasoning Effort */
+            reasoning_effort: ("low" | "medium" | "high") | null;
+            /** Temperature */
+            temperature: number;
+        };
+        /**
+         * RoleChoiceRequest
+         * @description What the workspace chooses for a role. A part left out or null is the file's.
+         */
+        RoleChoiceRequest: {
+            /**
+             * Fallbacks
+             * @description Tried in order when the model fails; at most 4.
+             */
+            fallbacks?: string[] | null;
+            /**
+             * Max Tokens
+             * @description From 1 to 1000000.
+             */
+            max_tokens?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Reasoning Effort */
+            reasoning_effort?: ("low" | "medium" | "high") | null;
+            /**
+             * Temperature
+             * @description From 0 to 2.
+             */
+            temperature?: number | null;
+        };
+        /** RoleChoiceResponse */
+        RoleChoiceResponse: {
+            /** Fallbacks */
+            fallbacks: string[] | null;
+            /** Max Tokens */
+            max_tokens: number | null;
+            /** Model */
+            model: string | null;
+            /** Reasoning Effort */
+            reasoning_effort: ("low" | "medium" | "high") | null;
+            /** Temperature */
+            temperature: number | null;
+        };
+        /**
+         * RoleModelSource
+         * @description Where the model of a role comes from; with ``TIER``, its tier says the rest.
+         * @enum {string}
+         */
+        RoleModelSource: "environment" | "workspace" | "file" | "tier" | "default";
+        /** RoleSettingResponse */
+        RoleSettingResponse: {
+            changed: components["schemas"]["SettingChangeResponse"] | null;
+            choice: components["schemas"]["RoleChoiceResponse"] | null;
+            /** @description What the role resolves to now. */
+            effective: components["schemas"]["ResolvedModelResponse"];
+            /**
+             * Environment Variable
+             * @description The variable that sets the role's model.
+             */
+            environment_variable: string;
+            /** @description What the role resolves to without the workspace's choice for it. */
+            inherited: components["schemas"]["ResolvedModelResponse"];
+            /**
+             * Kind
+             * @description `chat`, or `embeddings` for a role that takes a model only.
+             */
+            kind: string;
+            model_source: components["schemas"]["RoleModelSource"];
+            /**
+             * Requires
+             * @description What the role's model must support.
+             */
+            requires: string[];
+            /** Role */
+            role: string;
+            /**
+             * Temperature Sent
+             * @description Whether a request carries the temperature; not when its model rejects it.
+             */
+            temperature_sent: boolean;
+            /** Tier */
+            tier: string | null;
+        };
         /** SaveProfileEditRequest */
         SaveProfileEditRequest: {
             profile: components["schemas"]["ProductProfile"];
@@ -663,6 +1089,43 @@ export interface components {
              * @description The secret. Whitespace around it is dropped; what is left is 1 to 4096 printable ASCII characters without a space. No response returns it.
              */
             value: string;
+        };
+        /** SetRejectedParametersRequest */
+        SetRejectedParametersRequest: {
+            /**
+             * Model
+             * @description The model, as provider/model.
+             */
+            model: string;
+            /**
+             * Parameters
+             * @description What to leave out of a request to the model. Empty removes the mark.
+             */
+            parameters: "temperature"[];
+        };
+        /** SetTierModelRequest */
+        SetTierModelRequest: {
+            /**
+             * Model
+             * @description The model, as provider/model.
+             */
+            model: string;
+        };
+        /**
+         * SettingChangeResponse
+         * @description Who stored a choice and when.
+         */
+        SettingChangeResponse: {
+            /**
+             * Set At
+             * Format: date-time
+             */
+            set_at: string;
+            /**
+             * Set By
+             * Format: uuid
+             */
+            set_by: string;
         };
         /**
          * StoredCredentialResponse
@@ -679,6 +1142,51 @@ export interface components {
              * Format: uuid
              */
             set_by: string;
+        };
+        /**
+         * TierModelSource
+         * @description Where the model of a tier comes from.
+         * @enum {string}
+         */
+        TierModelSource: "environment" | "workspace" | "file";
+        /** TierSettingResponse */
+        TierSettingResponse: {
+            changed: components["schemas"]["SettingChangeResponse"] | null;
+            /**
+             * Chosen
+             * @description The workspace's choice; null when it made none.
+             */
+            chosen: string | null;
+            /**
+             * Environment Variable
+             * @description The variable that sets the tier's model.
+             */
+            environment_variable: string;
+            /**
+             * File Model
+             * @description The configuration file's model for the tier.
+             */
+            file_model: string;
+            /**
+             * Model
+             * @description The model the tier resolves to now.
+             */
+            model: string;
+            source: components["schemas"]["TierModelSource"];
+            /** Tier */
+            tier: string;
+        };
+        /**
+         * UnreadableChoiceResponse
+         * @description A stored choice that breaks a rule. Runs are refused until it is reset.
+         */
+        UnreadableChoiceResponse: {
+            /**
+             * Key
+             * @description The tier, role or model the choice is for.
+             */
+            key: string;
+            kind: components["schemas"]["ChoiceKind"];
         };
         /** ValidationError */
         ValidationError: {
@@ -1468,6 +1976,131 @@ export interface operations {
             };
         };
     };
+    getAnalysisSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisSettingsResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setAnalysisLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalysisLimitsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisSettingsResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeAnalysisLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listCredentials: {
         parameters: {
             query?: never;
@@ -1583,6 +2216,434 @@ export interface operations {
             header?: never;
             path: {
                 name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getModelSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSettingsResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getModelCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCatalogResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    checkModelSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCheckResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setRejectedParameters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetRejectedParametersRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSettingsResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setRoleChoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleChoiceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSettingsResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeRoleChoice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setTierModel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tier: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetTierModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSettingsResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeTierModel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tier: string;
             };
             cookie?: never;
         };

@@ -5,9 +5,10 @@ and never build error responses themselves. Messages come from the domain
 error; database failures and anything unexpected get a fixed message, because
 their text may name hosts, statements or paths.
 
-A credential value that breaks a rule is the one domain error answered in the
-shape of a request validation error (422), beside the field it was sent in:
-it is a refusal of what the body holds, like a field of the wrong type.
+A credential value, a choice of models or a limit of an analysis that breaks a
+rule is answered in the shape of a request validation error (422), beside the
+field it was sent in: it is a refusal of what the body holds, like a field of
+the wrong type.
 
 An error body carries what a client needs to act on it as a field of its own,
 never inside the message: ``existing_project_id`` with ``project_already_exists``.
@@ -38,6 +39,14 @@ from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.session import DatabaseError
 from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.request import AnalysisNotStarted
+from openmarketer_core.workspace_settings.analysis_limits import AnalysisLimitsRefused
+from openmarketer_core.workspace_settings.model_choices import ModelChoiceRefused
+from openmarketer_core.workspace_settings.model_settings import (
+    ModelSetByEnvironment,
+    StoredModelChoiceInvalid,
+    UnknownRole,
+    UnknownTier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +58,15 @@ class ErrorCode(StrEnum):
     ANALYSIS_NOT_FOUND = "analysis_not_found"
     PROFILE_NOT_FOUND = "profile_not_found"
     CREDENTIAL_NOT_FOUND = "credential_not_found"
+    TIER_NOT_FOUND = "tier_not_found"
+    ROLE_NOT_FOUND = "role_not_found"
     PROJECT_ALREADY_EXISTS = "project_already_exists"
     ANALYSIS_ALREADY_RUNNING = "analysis_already_running"
     PROFILE_ALREADY_APPROVED = "profile_already_approved"
     CREDENTIAL_SET_BY_ENVIRONMENT = "credential_set_by_environment"
     ENCRYPTION_KEY_MISSING = "encryption_key_missing"
+    MODEL_SET_BY_ENVIRONMENT = "model_set_by_environment"
+    STORED_SETTING_INVALID = "stored_setting_invalid"
     INTERNAL_ERROR = "internal_error"
     ANALYSIS_NOT_STARTED = "analysis_not_started"
     DATABASE_UNAVAILABLE = "database_unavailable"
@@ -88,10 +101,14 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ProfileVersionNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
     ProfileNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
     UnknownCredential: (404, ErrorCode.CREDENTIAL_NOT_FOUND),
+    UnknownTier: (404, ErrorCode.TIER_NOT_FOUND),
+    UnknownRole: (404, ErrorCode.ROLE_NOT_FOUND),
     AnalysisAlreadyRunning: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
     CredentialSetByEnvironment: (409, ErrorCode.CREDENTIAL_SET_BY_ENVIRONMENT),
     EncryptionKeyMissing: (409, ErrorCode.ENCRYPTION_KEY_MISSING),
+    ModelSetByEnvironment: (409, ErrorCode.MODEL_SET_BY_ENVIRONMENT),
+    StoredModelChoiceInvalid: (409, ErrorCode.STORED_SETTING_INVALID),
     AnalysisNotStarted: (503, ErrorCode.ANALYSIS_NOT_STARTED),
 }
 
@@ -106,6 +123,8 @@ def register_error_handlers(app: FastAPI) -> None:
         app.add_exception_handler(error_type, _domain_error_handler(status, code))
     app.add_exception_handler(ProjectAlreadyExists, _project_already_exists)
     app.add_exception_handler(CredentialValueRefused, _credential_value_refused)
+    app.add_exception_handler(ModelChoiceRefused, _setting_refused)
+    app.add_exception_handler(AnalysisLimitsRefused, _setting_refused)
     app.add_exception_handler(DatabaseError, _database_error)
     app.add_exception_handler(Exception, _unexpected_error)
 
@@ -134,6 +153,13 @@ def _project_already_exists(_: Request, error: Exception) -> JSONResponse:
 def _credential_value_refused(_: Request, error: Exception) -> JSONResponse:
     # The message names the rule that was broken and never the value.
     refusal = {"type": "value_error", "loc": ["body", "value"], "msg": str(error)}
+    return JSONResponse({"detail": [refusal]}, 422)
+
+
+def _setting_refused(_: Request, error: Exception) -> JSONResponse:
+    # The message names the rule that was broken; the field is the part of the body that did.
+    field = getattr(error, "field", "")
+    refusal = {"type": "value_error", "loc": ["body", field], "msg": str(error)}
     return JSONResponse({"detail": [refusal]}, 422)
 
 

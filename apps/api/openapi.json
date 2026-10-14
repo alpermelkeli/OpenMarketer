@@ -1,6 +1,88 @@
 {
   "components": {
     "schemas": {
+      "AnalysisLimitsBoundsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "max_cost_usd": {
+            "title": "Max Cost Usd",
+            "type": "number"
+          },
+          "max_steps": {
+            "title": "Max Steps",
+            "type": "integer"
+          },
+          "min_cost_usd": {
+            "title": "Min Cost Usd",
+            "type": "number"
+          },
+          "min_steps": {
+            "title": "Min Steps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "min_steps",
+          "max_steps",
+          "min_cost_usd",
+          "max_cost_usd"
+        ],
+        "title": "AnalysisLimitsBoundsResponse",
+        "type": "object"
+      },
+      "AnalysisLimitsRequest": {
+        "additionalProperties": false,
+        "description": "The limits the workspace chooses. A limit left out or null keeps the default.",
+        "properties": {
+          "max_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From 0.01 to 20 US dollars.",
+            "title": "Max Cost Usd"
+          },
+          "max_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From 5 to 200.",
+            "title": "Max Steps"
+          }
+        },
+        "title": "AnalysisLimitsRequest",
+        "type": "object"
+      },
+      "AnalysisLimitsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "max_cost_usd": {
+            "description": "What its model calls may cost in one run, in USD.",
+            "title": "Max Cost Usd",
+            "type": "number"
+          },
+          "max_steps": {
+            "description": "Turns the agent may take in one run.",
+            "title": "Max Steps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_steps",
+          "max_cost_usd"
+        ],
+        "title": "AnalysisLimitsResponse",
+        "type": "object"
+      },
       "AnalysisRunListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -121,6 +203,72 @@
         ],
         "title": "AnalysisRunStatus",
         "type": "string"
+      },
+      "AnalysisSettingsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/AnalysisLimitsBoundsResponse"
+          },
+          "chosen": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChosenAnalysisLimitsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/AnalysisLimitsResponse",
+            "description": "The analyzer's own limits."
+          },
+          "limits": {
+            "$ref": "#/components/schemas/AnalysisLimitsResponse",
+            "description": "The limits a run gets now."
+          },
+          "set_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set At"
+          },
+          "set_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set By"
+          },
+          "unreadable": {
+            "description": "A stored choice breaks a rule: the defaults are shown, and runs are refused until it is reset.",
+            "title": "Unreadable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "limits",
+          "defaults",
+          "chosen",
+          "set_at",
+          "set_by",
+          "unreadable",
+          "bounds"
+        ],
+        "title": "AnalysisSettingsResponse",
+        "type": "object"
       },
       "Audience": {
         "additionalProperties": false,
@@ -256,6 +404,177 @@
         "title": "BusinessModelType",
         "type": "string"
       },
+      "CapabilityProblem": {
+        "description": "Why a model may not serve a role.",
+        "enum": [
+          "not_in_catalog",
+          "no_tools",
+          "no_structured_output",
+          "no_image_input",
+          "rejects_temperature"
+        ],
+        "title": "CapabilityProblem",
+        "type": "string"
+      },
+      "CatalogModelResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "completion_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "US dollars per million output tokens.",
+            "title": "Completion Price"
+          },
+          "context_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Length"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "prompt_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "US dollars per million input tokens.",
+            "title": "Prompt Price"
+          },
+          "supported_parameters": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported Parameters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "context_length",
+          "prompt_price",
+          "completion_price",
+          "supported_parameters",
+          "input_modalities"
+        ],
+        "title": "CatalogModelResponse",
+        "type": "object"
+      },
+      "ChoiceBoundsResponse": {
+        "additionalProperties": false,
+        "description": "What a role's choice may hold.",
+        "properties": {
+          "max_fallbacks": {
+            "title": "Max Fallbacks",
+            "type": "integer"
+          },
+          "max_max_tokens": {
+            "title": "Max Max Tokens",
+            "type": "integer"
+          },
+          "max_temperature": {
+            "title": "Max Temperature",
+            "type": "number"
+          },
+          "min_max_tokens": {
+            "title": "Min Max Tokens",
+            "type": "integer"
+          },
+          "min_temperature": {
+            "title": "Min Temperature",
+            "type": "number"
+          },
+          "rejectable_parameters": {
+            "items": {
+              "const": "temperature",
+              "type": "string"
+            },
+            "title": "Rejectable Parameters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "max_fallbacks",
+          "min_temperature",
+          "max_temperature",
+          "min_max_tokens",
+          "max_max_tokens",
+          "rejectable_parameters"
+        ],
+        "title": "ChoiceBoundsResponse",
+        "type": "object"
+      },
+      "ChoiceKind": {
+        "enum": [
+          "tier",
+          "role",
+          "rejected_parameters"
+        ],
+        "title": "ChoiceKind",
+        "type": "string"
+      },
+      "ChosenAnalysisLimitsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "max_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cost Usd"
+          },
+          "max_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Steps"
+          }
+        },
+        "required": [
+          "max_steps",
+          "max_cost_usd"
+        ],
+        "title": "ChosenAnalysisLimitsResponse",
+        "type": "object"
+      },
       "CreateProjectRequest": {
         "additionalProperties": false,
         "properties": {
@@ -355,11 +674,15 @@
           "analysis_not_found",
           "profile_not_found",
           "credential_not_found",
+          "tier_not_found",
+          "role_not_found",
           "project_already_exists",
           "analysis_already_running",
           "profile_already_approved",
           "credential_set_by_environment",
           "encryption_key_missing",
+          "model_set_by_environment",
+          "stored_setting_invalid",
           "internal_error",
           "analysis_not_started",
           "database_unavailable"
@@ -519,6 +842,120 @@
           }
         },
         "title": "Measurement",
+        "type": "object"
+      },
+      "ModelCatalogResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "description": "Whether the provider's catalogue could be read.",
+            "title": "Available",
+            "type": "boolean"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogModelResponse"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "available",
+          "models"
+        ],
+        "title": "ModelCatalogResponse",
+        "type": "object"
+      },
+      "ModelCheckResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "description": "Whether the provider's catalogue could be read.",
+            "title": "Available",
+            "type": "boolean"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/ModelProblemResponse"
+            },
+            "title": "Problems",
+            "type": "array"
+          }
+        },
+        "required": [
+          "available",
+          "problems"
+        ],
+        "title": "ModelCheckResponse",
+        "type": "object"
+      },
+      "ModelProblemResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/CapabilityProblem"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "model",
+          "problem"
+        ],
+        "title": "ModelProblemResponse",
+        "type": "object"
+      },
+      "ModelSettingsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/ChoiceBoundsResponse"
+          },
+          "rejected_parameters": {
+            "items": {
+              "$ref": "#/components/schemas/RejectedParametersResponse"
+            },
+            "title": "Rejected Parameters",
+            "type": "array"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/RoleSettingResponse"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "tiers": {
+            "items": {
+              "$ref": "#/components/schemas/TierSettingResponse"
+            },
+            "title": "Tiers",
+            "type": "array"
+          },
+          "unreadable": {
+            "items": {
+              "$ref": "#/components/schemas/UnreadableChoiceResponse"
+            },
+            "title": "Unreadable",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tiers",
+          "roles",
+          "rejected_parameters",
+          "unreadable",
+          "bounds"
+        ],
+        "title": "ModelSettingsResponse",
         "type": "object"
       },
       "Problem": {
@@ -946,6 +1383,351 @@
         "title": "ProjectResponse",
         "type": "object"
       },
+      "RejectedParametersResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "changed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SettingChangeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chosen": {
+            "items": {
+              "const": "temperature",
+              "type": "string"
+            },
+            "title": "Chosen",
+            "type": "array"
+          },
+          "from_file": {
+            "items": {
+              "const": "temperature",
+              "type": "string"
+            },
+            "title": "From File",
+            "type": "array"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "from_file",
+          "chosen",
+          "changed"
+        ],
+        "title": "RejectedParametersResponse",
+        "type": "object"
+      },
+      "ResolvedModelResponse": {
+        "additionalProperties": false,
+        "description": "The model and parameters a role's request is made with.",
+        "properties": {
+          "fallbacks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fallbacks",
+            "type": "array"
+          },
+          "max_tokens": {
+            "title": "Max Tokens",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "temperature": {
+            "title": "Temperature",
+            "type": "number"
+          }
+        },
+        "required": [
+          "model",
+          "fallbacks",
+          "temperature",
+          "max_tokens",
+          "reasoning_effort"
+        ],
+        "title": "ResolvedModelResponse",
+        "type": "object"
+      },
+      "RoleChoiceRequest": {
+        "additionalProperties": false,
+        "description": "What the workspace chooses for a role. A part left out or null is the file's.",
+        "properties": {
+          "fallbacks": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tried in order when the model fails; at most 4.",
+            "title": "Fallbacks"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From 1 to 1000000.",
+            "title": "Max Tokens"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From 0 to 2.",
+            "title": "Temperature"
+          }
+        },
+        "title": "RoleChoiceRequest",
+        "type": "object"
+      },
+      "RoleChoiceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "fallbacks": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallbacks"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
+          }
+        },
+        "required": [
+          "model",
+          "fallbacks",
+          "temperature",
+          "max_tokens",
+          "reasoning_effort"
+        ],
+        "title": "RoleChoiceResponse",
+        "type": "object"
+      },
+      "RoleModelSource": {
+        "description": "Where the model of a role comes from; with ``TIER``, its tier says the rest.",
+        "enum": [
+          "environment",
+          "workspace",
+          "file",
+          "tier",
+          "default"
+        ],
+        "title": "RoleModelSource",
+        "type": "string"
+      },
+      "RoleSettingResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "changed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SettingChangeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "choice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoleChoiceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective": {
+            "$ref": "#/components/schemas/ResolvedModelResponse",
+            "description": "What the role resolves to now."
+          },
+          "environment_variable": {
+            "description": "The variable that sets the role's model.",
+            "title": "Environment Variable",
+            "type": "string"
+          },
+          "inherited": {
+            "$ref": "#/components/schemas/ResolvedModelResponse",
+            "description": "What the role resolves to without the workspace's choice for it."
+          },
+          "kind": {
+            "description": "`chat`, or `embeddings` for a role that takes a model only.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model_source": {
+            "$ref": "#/components/schemas/RoleModelSource"
+          },
+          "requires": {
+            "description": "What the role's model must support.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Requires",
+            "type": "array"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "temperature_sent": {
+            "description": "Whether a request carries the temperature; not when its model rejects it.",
+            "title": "Temperature Sent",
+            "type": "boolean"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          }
+        },
+        "required": [
+          "role",
+          "kind",
+          "tier",
+          "requires",
+          "effective",
+          "model_source",
+          "temperature_sent",
+          "inherited",
+          "choice",
+          "changed",
+          "environment_variable"
+        ],
+        "title": "RoleSettingResponse",
+        "type": "object"
+      },
       "SaveProfileEditRequest": {
         "additionalProperties": false,
         "properties": {
@@ -976,6 +1758,68 @@
         "title": "SetCredentialRequest",
         "type": "object"
       },
+      "SetRejectedParametersRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "description": "The model, as provider/model.",
+            "title": "Model",
+            "type": "string"
+          },
+          "parameters": {
+            "description": "What to leave out of a request to the model. Empty removes the mark.",
+            "items": {
+              "const": "temperature",
+              "type": "string"
+            },
+            "title": "Parameters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "model",
+          "parameters"
+        ],
+        "title": "SetRejectedParametersRequest",
+        "type": "object"
+      },
+      "SetTierModelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "description": "The model, as provider/model.",
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "title": "SetTierModelRequest",
+        "type": "object"
+      },
+      "SettingChangeResponse": {
+        "additionalProperties": false,
+        "description": "Who stored a choice and when.",
+        "properties": {
+          "set_at": {
+            "format": "date-time",
+            "title": "Set At",
+            "type": "string"
+          },
+          "set_by": {
+            "format": "uuid",
+            "title": "Set By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "set_at",
+          "set_by"
+        ],
+        "title": "SettingChangeResponse",
+        "type": "object"
+      },
       "StoredCredentialResponse": {
         "additionalProperties": false,
         "description": "That a value is stored: who stored it and when, never the value.",
@@ -996,6 +1840,96 @@
           "set_by"
         ],
         "title": "StoredCredentialResponse",
+        "type": "object"
+      },
+      "TierModelSource": {
+        "description": "Where the model of a tier comes from.",
+        "enum": [
+          "environment",
+          "workspace",
+          "file"
+        ],
+        "title": "TierModelSource",
+        "type": "string"
+      },
+      "TierSettingResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "changed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SettingChangeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chosen": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The workspace's choice; null when it made none.",
+            "title": "Chosen"
+          },
+          "environment_variable": {
+            "description": "The variable that sets the tier's model.",
+            "title": "Environment Variable",
+            "type": "string"
+          },
+          "file_model": {
+            "description": "The configuration file's model for the tier.",
+            "title": "File Model",
+            "type": "string"
+          },
+          "model": {
+            "description": "The model the tier resolves to now.",
+            "title": "Model",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/TierModelSource"
+          },
+          "tier": {
+            "title": "Tier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tier",
+          "model",
+          "source",
+          "file_model",
+          "environment_variable",
+          "chosen",
+          "changed"
+        ],
+        "title": "TierSettingResponse",
+        "type": "object"
+      },
+      "UnreadableChoiceResponse": {
+        "additionalProperties": false,
+        "description": "A stored choice that breaks a rule. Runs are refused until it is reset.",
+        "properties": {
+          "key": {
+            "description": "The tier, role or model the choice is for.",
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChoiceKind"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "title": "UnreadableChoiceResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -2100,6 +3034,141 @@
         ]
       }
     },
+    "/v1/settings/analysis": {
+      "delete": {
+        "description": "Go back to the analyzer's defaults.",
+        "operationId": "removeAnalysisLimits",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Remove Limits",
+        "tags": [
+          "settings"
+        ]
+      },
+      "get": {
+        "description": "The limits a run of an analysis gets, the defaults, and what the workspace chose.",
+        "operationId": "getAnalysisSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Settings",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "description": "Choose the limits, in place of the choice before; none chosen goes back to the defaults.",
+        "operationId": "setAnalysisLimits",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisLimitsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Set Limits",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
     "/v1/settings/credentials": {
       "get": {
         "description": "Every credential the installation has, in a fixed order, and where its value comes from.",
@@ -2296,6 +3365,522 @@
           }
         },
         "summary": "Set One",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/settings/models": {
+      "get": {
+        "description": "Every tier and role of the configuration, what it resolves to and where that comes from.",
+        "operationId": "getModelSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Settings",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/settings/models/catalog": {
+      "get": {
+        "description": "The provider's models, for the picker; `available` is false when it cannot be read.",
+        "operationId": "getModelCatalog",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Catalog",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/settings/models/check": {
+      "get": {
+        "description": "What each role's models lack for the role, according to the provider's catalogue.\n\n409 while a stored choice breaks a rule.",
+        "operationId": "checkModelSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Check",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/settings/models/rejected-parameters": {
+      "put": {
+        "description": "Mark a model as rejecting parameters, which are then left out of a request to it.\n\nWhat the configuration file lists for the model stays listed.",
+        "operationId": "setRejectedParameters",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRejectedParametersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Set Rejected",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/settings/models/roles/{role}": {
+      "delete": {
+        "description": "Go back to the configuration file for every part of the role.",
+        "operationId": "removeRoleChoice",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "role",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Role",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Remove Role",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "description": "Choose the role's model and parameters, in place of the choice before.\n\nA choice with nothing in it removes the one stored. 409 for a model while the\nenvironment sets the role's.",
+        "operationId": "setRoleChoice",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "role",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Role",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleChoiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Set Role",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/settings/models/tiers/{tier}": {
+      "delete": {
+        "description": "Go back to the configuration file's model for the tier.",
+        "operationId": "removeTierModel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tier",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Tier",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Remove Tier",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "description": "Choose the tier's model, which every role on the tier follows.\n\n409 while the environment sets the tier's model.",
+        "operationId": "setTierModel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tier",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "title": "Tier",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTierModelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Set Tier",
         "tags": [
           "settings"
         ]

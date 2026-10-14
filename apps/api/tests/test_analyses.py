@@ -74,11 +74,16 @@ def workspace_id(sessions) -> uuid.UUID:
 
 
 @pytest.fixture
-def workflows(app, sessions, workspace_id) -> FakeWorkflows:
+def workflows(app, sessions, workspace_id, repository_models, no_catalog) -> FakeWorkflows:
     """The application wired to the test database, this test's workspace and fake workflows."""
     fake = FakeWorkflows()
     app.state.services = Services(
-        sessions=sessions, analysis_workflows=fake, environment={}, credential_cipher=None
+        sessions=sessions,
+        analysis_workflows=fake,
+        environment={},
+        credential_cipher=None,
+        model_router=repository_models,
+        model_catalog=no_catalog,
     )
     app.dependency_overrides[current_workspace_id] = lambda: workspace_id
     return fake

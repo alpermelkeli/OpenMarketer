@@ -28,6 +28,17 @@ OPERATIONS = {
     "listCredentials": ("get", "/v1/settings/credentials"),
     "setCredential": ("put", "/v1/settings/credentials/{name}"),
     "removeCredential": ("delete", "/v1/settings/credentials/{name}"),
+    "getModelSettings": ("get", "/v1/settings/models"),
+    "setTierModel": ("put", "/v1/settings/models/tiers/{tier}"),
+    "removeTierModel": ("delete", "/v1/settings/models/tiers/{tier}"),
+    "setRoleChoice": ("put", "/v1/settings/models/roles/{role}"),
+    "removeRoleChoice": ("delete", "/v1/settings/models/roles/{role}"),
+    "setRejectedParameters": ("put", "/v1/settings/models/rejected-parameters"),
+    "getModelCatalog": ("get", "/v1/settings/models/catalog"),
+    "checkModelSettings": ("get", "/v1/settings/models/check"),
+    "getAnalysisSettings": ("get", "/v1/settings/analysis"),
+    "setAnalysisLimits": ("put", "/v1/settings/analysis"),
+    "removeAnalysisLimits": ("delete", "/v1/settings/analysis"),
 }
 
 
