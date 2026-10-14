@@ -30,6 +30,11 @@ not JSON, for good: a step's outcome over ``MAX_STEP_BYTES`` and an action's ove
 ``MAX_RESULT_BYTES``. A retry could not make either smaller, and an action's result is
 checked after the handler ran, so a retry would run it again.
 
+An action the policy gate holds for a person (``held_actions``) runs only when ``is_approved``
+says a person approved that very action: the workflow waits for the approval before it asks for
+the action, and this is the check that holds when a workflow did not (``ACTION_NOT_APPROVED``,
+which ends the run).
+
 Activities run at least once. A step is safe to run again: an outcome that an
 earlier attempt applied is not applied twice (``GraphThread.advance``). An
 action is not, by itself: its handler gets ``ActionContext.action_id``, the
@@ -57,7 +62,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from typing import Any, Protocol
 
 from pydantic import BaseModel
@@ -92,6 +97,7 @@ from openmarketer_worker.agent_runtime.activity_support import (
 )
 from openmarketer_worker.agent_runtime.routes import ActionContext, ActionRoute, ActionRoutes
 from openmarketer_worker.agent_runtime.vocabulary import (
+    ACTION_NOT_APPROVED,
     ACTION_RESULT_TOO_LARGE,
     ACTION_TEXTS,
     ATTEMPT_STILL_RUNNING,
@@ -144,20 +150,31 @@ class RuntimeActivities:
         kind: str,
         texts: FailureTexts,
         on_run_end: Callable[[GraphRunRef], None] | None = None,
+        held_actions: Collection[str] = (),
+        is_approved: Callable[[str], bool] | None = None,
     ) -> None:
         """The activities of the agent whose runs are of ``kind``, in its ``texts``.
 
         ``texts`` word what a step or a forgetting cannot word otherwise; the agent's stored
         errors say what its own texts say. ``on_run_end`` is called with each run that is
-        forgotten. Raises ``ValueError`` for a ``kind`` that cannot name a thread.
+        forgotten. ``held_actions`` are the names of the actions the gate holds for a person,
+        and ``is_approved`` says, blocking, whether a person approved an action by its id.
+        Raises ``ValueError`` for a ``kind`` that cannot name a thread, and for held actions
+        with no way to check an approval.
         """
         validate_kind(kind)
+        if held_actions and is_approved is None:
+            raise ValueError(
+                f"agent {kind!r} has actions that wait for a person and no way to check approvals"
+            )
         self._checkpoints = checkpoints
         self._graph = graph
         self._routes = routes
         self._kind = kind
         self._texts = texts
         self._on_run_end = on_run_end
+        self._held_actions = frozenset(held_actions)
+        self._is_approved = is_approved
 
     @activity.defn(name=RUN_GRAPH_STEP)
     async def run_graph_step(self, step: StepInput) -> StepOutcome:
@@ -186,6 +203,8 @@ class RuntimeActivities:
         subject = f"action {request.action_id}"
         with worded_failures(ACTION_TEXTS, subject=subject):
             payload = self._validated(request, subject)
+            if request.name in self._held_actions:
+                await self._require_approval(request, subject)
             route = self._routes.route(request.name)
             result = await self._run_handler(
                 route, payload, ActionContext(request.action_id), subject
@@ -239,6 +258,17 @@ class RuntimeActivities:
             raise ApplicationError(
                 str(e), type=INVALID_ACTION_PAYLOAD, non_retryable=True
             ) from None
+
+    async def _require_approval(self, request: ActionRequest, subject: str) -> None:
+        is_approved = self._is_approved
+        if is_approved is not None and await asyncio.to_thread(is_approved, request.action_id):
+            return
+        logger.warning("%s was refused: a person has not approved it", subject)
+        raise ApplicationError(
+            f"action {request.name} was not approved by a person",
+            type=ACTION_NOT_APPROVED,
+            non_retryable=True,
+        )
 
     async def _run_handler(
         self, route: ActionRoute, payload: BaseModel, context: ActionContext, subject: str

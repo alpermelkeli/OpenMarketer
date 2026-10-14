@@ -139,8 +139,9 @@ def get(
     dependencies=[Depends(no_request_body)],
 )
 def delete(project_id: uuid.UUID, session: DbSession, workspace_id: CurrentWorkspaceId) -> None:
-    """Delete the project with its analyses, evidence and every profile version, for good.
+    """Delete the project with its analyses, evidence, profile versions and proposals, for good.
 
-    Refused while an analysis of the project is queued or running. The repository is not touched.
+    Refused while an analysis of the project is queued or running, or a proposal of it waits
+    for a decision. The repository is not touched.
     """
     delete_project(session, workspace_id=workspace_id, project_id=project_id)

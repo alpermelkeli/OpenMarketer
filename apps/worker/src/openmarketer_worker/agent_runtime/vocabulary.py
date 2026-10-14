@@ -14,14 +14,23 @@ nothing: which failure ends a run and what a text says are used by ``driver.py``
 ``workflow_support.py`` and the activities.
 """
 
+import uuid
 from dataclasses import dataclass, fields
 
-from openmarketer_core.agent_runtime.actions import ActionOutcome, require_positive
+from openmarketer_core.agent_runtime.actions import (
+    ActionOutcome,
+    ActionRequest,
+    require_positive,
+)
+from openmarketer_core.agent_runtime.gate import ProposalStatus, RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 
 RUN_GRAPH_STEP = "run_graph_step"
 RUN_ACTION = "run_action"
 FORGET_RUN = "forget_run"
+# The activities of the policy gate, for an agent that has an action a person must approve.
+PROPOSE_ACTION = "propose_action"
+SETTLE_PROPOSAL = "settle_proposal"
 
 # The action's own input is core's ``ActionRequest`` and its result an ``ActionOutcome``;
 # the step's result is a ``StepOutcome``. ``forget_run`` is given the run's ``GraphRunRef``
@@ -36,6 +45,39 @@ class StepInput:
     resume: ActionOutcome | None  # None for the first step of a run
 
 
+@dataclass(frozen=True)
+class ProposalInput:
+    """What ``propose_action`` is given: the action the gate holds, and whose it is.
+
+    ``effect`` is the value of the action's declared ``ActionEffect``, and ``wait_seconds`` how
+    long a person has to decide, both from the action's policy.
+    """
+
+    scope: RunScope
+    run: GraphRunRef
+    workflow_id: str
+    request: ActionRequest
+    effect: str
+    wait_seconds: float
+
+
+@dataclass(frozen=True)
+class ProposalHeld:
+    """What ``propose_action`` answers: the proposal, and how long is left until its deadline."""
+
+    proposal_id: uuid.UUID
+    seconds_left: float
+
+
+@dataclass(frozen=True)
+class SettleInput:
+    """What ``settle_proposal`` is given; it answers with the proposal's status, as text."""
+
+    scope: RunScope
+    action_id: str
+    deadline_passed: bool
+
+
 # Failure types of the runtime's activities and of the driver.
 DATABASE_UNAVAILABLE = "DatabaseUnavailable"  # the database refused or was unreachable
 UNEXPECTED = "Unexpected"  # an error nobody worded; its detail is in the log only
@@ -47,6 +89,8 @@ ACTION_RESULT_TOO_LARGE = "ActionResultTooLarge"  # the result is over ``MAX_RES
 INVALID_ACTION_RESULT = "InvalidActionResult"  # the result is not JSON
 TOO_MANY_ACTIONS = "TooManyActions"  # the run asked for more actions than its policy allows
 RUN_OF_ANOTHER_KIND = "RunOfAnotherKind"  # a workflow was started with another agent's run
+PROPOSAL_REFUSED = "ProposalRefused"  # a proposal cannot be stored or found for the run's project
+ACTION_NOT_APPROVED = "ActionNotApproved"  # an action the gate holds was asked to run unapproved
 
 # A failure of these types ends the run instead of being told to the graph: the fault is in the
 # agent's graph, routes or handlers and not in the world, so the graph would only ask again.
@@ -55,6 +99,7 @@ RUN_ENDING_ACTION_FAILURES = (
     INVALID_ACTION_PAYLOAD,
     ACTION_RESULT_TOO_LARGE,
     INVALID_ACTION_RESULT,
+    ACTION_NOT_APPROVED,
 )
 
 # The failure types of the runtime itself whose message was chosen for whoever reads it: a fixed
@@ -75,6 +120,8 @@ WORDED_BY_THE_RUNTIME = (
     ATTEMPT_STILL_RUNNING,
     DATABASE_UNAVAILABLE,
     UNEXPECTED,
+    PROPOSAL_REFUSED,
+    ACTION_NOT_APPROVED,
 )
 
 # What the runtime lets into the workflow history, which is stored for as long as the namespace
@@ -91,6 +138,18 @@ RETRY_BACKOFF = 2.0
 
 # What the runtime's own step activity says when another attempt holds the run's thread.
 EARLIER_ATTEMPT_RUNNING = "an earlier attempt at the run is still running"
+
+# What the graph is told of an action the gate held that a person did not approve. It goes into
+# the model's context, so the agent can revise what it asked for or give up.
+NOT_APPROVED_TEXTS = {
+    ProposalStatus.REJECTED: "a person rejected the action",
+    ProposalStatus.EXPIRED: "nobody approved the action before its deadline",
+}
+
+# While a run waits for a person, it reads the proposal again this often even if no signal came:
+# a signal the API could not send, or that reached a worker that stopped, delays a decision by
+# this much at most, and never loses it.
+APPROVAL_RECHECK_SECONDS = 15 * 60
 
 
 @dataclass(frozen=True)
@@ -175,6 +234,16 @@ class DatabaseWritePolicy:
 # stays open for rows it cannot remove, which is as long as an outage the run's own record rides
 # out, and no longer.
 FORGET_RUN_LIMITS = DatabaseWritePolicy(
+    attempt_timeout_seconds=30,
+    retry_after_seconds=1,
+    max_retry_wait_seconds=60,
+    give_up_after_seconds=60 * 60,
+)
+
+
+# Storing and settling a proposal: single short writes, with the waits of recording a run's
+# failure. An hour bounds how long a run keeps trying while the database is down.
+PROPOSAL_WRITE_LIMITS = DatabaseWritePolicy(
     attempt_timeout_seconds=30,
     retry_after_seconds=1,
     max_retry_wait_seconds=60,

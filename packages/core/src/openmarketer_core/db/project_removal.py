@@ -1,14 +1,18 @@
 """Deleting a project, and everything stored about it, for good.
 
 A project is deleted with its analysis runs, its snapshots, the evidence found
-in them and every Product Profile version, approved ones included. Nothing is
+in them, every Product Profile version, approved ones included, and the
+proposals of its runs, decided or expired. Nothing is
 kept to restore it from: deleting is final, and a project made again for the
 same repository starts with no history.
 
 A project with an unfinished run is not deleted (``ProjectHasUnfinishedRun``):
 the worker that runs it would store a profile for a project that is gone, and
-the workflow cannot be stopped from here. Deleting takes the workspace lock, as
-every write of a workspace does, so a run cannot be stored in the middle of it.
+the workflow cannot be stopped from here. Nor is a project with a pending
+proposal (``ProjectHasPendingProposal``): a run waits for a person to decide
+it, and would find neither the proposal nor its project. Deleting takes the
+workspace lock, as every write of a workspace does, so a run cannot be stored
+in the middle of it.
 
 Profile versions cannot be deleted with plain SQL; the trigger that guards
 them makes one exception, a deletion made while the transaction names their
@@ -30,12 +34,14 @@ import uuid
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.db.analysis_runs import FINISHED
 from openmarketer_core.db.models import (
     AnalysisRunRecord,
     Evidence,
     ProductProfileRecord,
     Project,
+    ProposalRecord,
     RepoSnapshot,
 )
 from openmarketer_core.db.projects import ProjectNotFound
@@ -55,11 +61,22 @@ class ProjectHasUnfinishedRun(Exception):
         )
 
 
+class ProjectHasPendingProposal(Exception):
+    """A run of the project waits for a person to decide a proposal; it is deleted once decided."""
+
+    def __init__(self, project_id: uuid.UUID) -> None:
+        super().__init__(
+            f"project {project_id} has a proposal waiting for a decision;"
+            " it can be deleted when the proposal has been decided or has expired"
+        )
+
+
 def delete_project(session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID) -> None:
     """Delete the project and everything stored about it.
 
     Raises ``ProjectNotFound`` when the workspace has no such project, and
-    ``ProjectHasUnfinishedRun`` while one of its runs is queued or running.
+    ``ProjectHasUnfinishedRun`` while one of its analysis runs is queued or running,
+    and ``ProjectHasPendingProposal`` while one of its proposals waits for a decision.
     """
     wait_for_other_writes(session, workspace_id)
     # Locked as well, so that a run requested meanwhile is either seen below or refused
@@ -73,7 +90,10 @@ def delete_project(session: Session, *, workspace_id: uuid.UUID, project_id: uui
         raise ProjectNotFound(f"project {project_id} not found")
     if _has_unfinished_run(session, project_id):
         raise ProjectHasUnfinishedRun(project_id)
+    if _has_pending_proposal(session, project_id):
+        raise ProjectHasPendingProposal(project_id)
 
+    session.execute(delete(ProposalRecord).where(ProposalRecord.project_id == project_id))
     session.execute(delete(AnalysisRunRecord).where(AnalysisRunRecord.project_id == project_id))
     session.execute(delete(Evidence).where(Evidence.project_id == project_id))
     _delete_profile_versions(session, project_id)
@@ -91,6 +111,18 @@ def _has_unfinished_run(session: Session, project_id: uuid.UUID) -> bool:
         .exists()
     )
     return session.scalar(select(unfinished)) is True
+
+
+def _has_pending_proposal(session: Session, project_id: uuid.UUID) -> bool:
+    pending = (
+        select(ProposalRecord.id)
+        .where(
+            ProposalRecord.project_id == project_id,
+            ProposalRecord.status == ProposalStatus.PENDING,
+        )
+        .exists()
+    )
+    return session.scalar(select(pending)) is True
 
 
 def _delete_profile_versions(session: Session, project_id: uuid.UUID) -> None:

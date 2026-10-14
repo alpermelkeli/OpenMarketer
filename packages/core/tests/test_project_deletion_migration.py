@@ -9,7 +9,7 @@ from alembic import command
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
-BEFORE = "bbcf991fe9b4"
+BEFORE = "ae28cb0a146e"
 LETS_A_DELETED_PROJECT_TAKE_ITS_VERSIONS = "3c8d1e5f7a92"
 STORED_DRAFT = """
 WITH workspace AS (

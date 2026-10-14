@@ -46,6 +46,9 @@ class FakeWorkflows:
             raise WorkflowNotStarted("no workflow server in this test")
         self.started.append(workflow)
 
+    async def tell_decided(self, workflow_id: str, proposal_id: uuid.UUID) -> None:
+        raise AssertionError("an analysis tells no run of a decision")
+
 
 @pytest.fixture
 def sessions(engine) -> sessionmaker[Session]:

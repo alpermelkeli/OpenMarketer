@@ -12,11 +12,11 @@ any session that can change this function can drop it. What it prevents is
 what the trigger always prevented, a version deleted by mistake, on its own,
 while its project stays.
 
-The downgrade restores the function as the previous revision wrote it, so
+The downgrade restores the function as ``ebeeaa3e3f08`` wrote it, so
 versions cannot be deleted at all again.
 
 Revision ID: 3c8d1e5f7a92
-Revises: bbcf991fe9b4
+Revises: ae28cb0a146e
 Create Date: 2026-10-14 15:12:40.118204
 """
 
@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "3c8d1e5f7a92"
-down_revision: str | None = "bbcf991fe9b4"
+down_revision: str | None = "ae28cb0a146e"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

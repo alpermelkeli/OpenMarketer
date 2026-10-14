@@ -20,7 +20,7 @@ Write these down in the pull request description:
 
 - **The kind of run.** A slug like `analysis-run`. It names the thread of every checkpoint: `<kind>:<run id>`.
 - **What a run produces** and where it is stored. `finish` stores it and returns only an id and a summary.
-- **Its actions**, each one with a payload of identifiers only, and whether repeating it is harmless (`attempts=`). **No action that publishes or spends money**: there is no policy gate and no approval yet (`worker.md`, "Rules"). If the agent needs one, stop and raise it, because the gate goes in the driver first.
+- **Its actions**, each one with a payload of identifiers only, and whether repeating it is harmless (`attempts=`). An action that **publishes or spends** is declared with `effect=ActionEffect.PUBLISHES` or `SPENDS` (and `approval_wait=` if three days do not fit): the policy gate then holds it for a person's approval, the workflow needs `scope_of` and the registration `sessions=` (`worker.md`, "Rules"). The gate weighs no budget or content yet; if the agent needs that, raise it first.
 - **Who starts it**: the API, a schedule or another workflow. Also, which **credentials** it uses.
 - **Whether it keeps checkpoints.** Every graph run by the runtime does, so it needs a cleanup rule (step 7).
 

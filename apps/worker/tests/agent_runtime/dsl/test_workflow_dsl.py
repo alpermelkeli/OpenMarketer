@@ -38,6 +38,10 @@ class HasARun:
 class InheritsRun(HasARun): ...
 
 
+class DefinesTheSignal:
+    def proposal_decided(self, proposal_id): ...
+
+
 class BeforeIsNotAsync:
     def before(self, run): ...
 
@@ -69,6 +73,7 @@ class FailedTakesNoReason:
     [
         (DefinesRun, "defines run"),
         (InheritsRun, "defines run"),
+        (DefinesTheSignal, "defines proposal_decided"),
         (BeforeIsNotAsync, "hook before"),
         (BeforeIsNotAFunction, "hook before"),
         (BeforeTakesNothing, "hook before"),

@@ -13,10 +13,14 @@ from sqlalchemy.orm import Session
 
 from openmarketer_api.dependencies import db_session
 from openmarketer_api.identity import LOCAL_USER_ID
+from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
+from openmarketer_core.agent_runtime.gate import RunScope
+from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.analysis_runs import mark_run_failed, request_analysis_run
 from openmarketer_core.db.evidence_store import local_workspace_id, save_analysis_of_project
 from openmarketer_core.db.models import Project, Workspace
 from openmarketer_core.db.profile_versions import approve_profile_version
+from openmarketer_core.db.proposals import propose_action
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.intake import Snapshot
 
@@ -337,4 +341,23 @@ def test_delete_takes_no_body(client):
     project_id = create(client).json()["id"]
     response = client.request("DELETE", f"/v1/projects/{project_id}", json={"force": True})
     assert response.status_code == 422
+    assert client.get(f"/v1/projects/{project_id}").status_code == 200
+
+
+def test_project_with_a_pending_proposal_is_not_deleted(client, session):
+    project_id = project_created(session, minutes_ago=10)
+    run = GraphRunRef(kind="writer-run", run_id=uuid.uuid4())
+    propose_action(
+        session,
+        scope=RunScope(workspace_id=local_workspace_id(session), project_id=uuid.UUID(project_id)),
+        run=run,
+        workflow_id=f"write-{run.run_id}",
+        request=ActionRequest(
+            action_id=f"writer-run:{run.run_id}:1", name="publish_post", payload={"text": "hi"}
+        ),
+        effect=ActionEffect.PUBLISHES,
+        wait_seconds=60,
+    )
+    response = client.delete(f"/v1/projects/{project_id}")
+    assert (response.status_code, response.json()["code"]) == (409, "proposal_pending")
     assert client.get(f"/v1/projects/{project_id}").status_code == 200

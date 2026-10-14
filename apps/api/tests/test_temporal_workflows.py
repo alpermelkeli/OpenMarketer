@@ -1,4 +1,5 @@
-"""Tests for the Temporal adapter that starts the workflows of stored runs.
+"""Tests for the Temporal adapter that starts the workflows of stored runs and tells a run of
+a decision on one of its proposals.
 
 Those that start a workflow use the dev stack's Temporal server (``make up``)
 and are skipped when it is not reachable, the way the worker's tests are. Each
@@ -16,6 +17,8 @@ import pytest
 from temporalio.client import Client, WorkflowExecutionStatus
 
 from openmarketer_api.temporal_workflows import TemporalWorkflows
+from openmarketer_core.agent_runtime.gate import PROPOSAL_DECIDED_SIGNAL
+from openmarketer_core.approvals.decision import RunNotTold
 from openmarketer_core.repository_analysis.workflow_contract import (
     AnalyzeRepositoryInput,
     analysis_workflow,
@@ -124,3 +127,30 @@ async def test_starting_a_workflow_that_is_already_started_is_not_an_error(start
 async def test_unreachable_server_is_reported_as_not_started():
     with pytest.raises(WorkflowNotStarted, match="not reachable at 127.0.0.1:1"):
         await TemporalWorkflows(NOWHERE).start(analysis_on("unused"))
+
+
+async def test_signal_reaches_the_workflow_of_the_run_with_the_proposal_id(temporal, started):
+    proposal_id = uuid.uuid4()
+
+    await TemporalWorkflows(DEV_STACK).tell_decided(started.workflow_id, proposal_id)
+
+    history = await temporal.get_workflow_handle(started.workflow_id).fetch_history()
+    signals = [
+        event.workflow_execution_signaled_event_attributes
+        for event in history.events
+        if event.HasField("workflow_execution_signaled_event_attributes")
+    ]
+    assert [signal.signal_name for signal in signals] == [PROPOSAL_DECIDED_SIGNAL]
+    assert str(proposal_id) in signals[0].input.payloads[0].data.decode()
+
+
+async def test_signal_to_a_workflow_that_does_not_exist_is_reported_as_not_told(temporal):
+    with pytest.raises(RunNotTold, match="Temporal refused"):
+        await TemporalWorkflows(DEV_STACK).tell_decided(
+            f"no-such-workflow-{uuid.uuid4()}", uuid.uuid4()
+        )
+
+
+async def test_signal_to_an_unreachable_server_is_reported_as_not_told():
+    with pytest.raises(RunNotTold, match="not reachable at 127.0.0.1:1"):
+        await TemporalWorkflows(NOWHERE).tell_decided("unused", uuid.uuid4())

@@ -26,6 +26,7 @@ from openmarketer_api.routes import (
     model_settings,
     profiles,
     projects,
+    proposals,
 )
 from openmarketer_api.settings import Settings
 from openmarketer_api.temporal_workflows import TemporalWorkflows
@@ -47,7 +48,15 @@ def create_app() -> FastAPI:
     workspace_routes = APIRouter(
         prefix="/v1", dependencies=[Depends(current_user_id)], responses=problems(403, 503)
     )
-    for resource in (projects, analyses, profiles, credentials, model_settings, analysis_settings):
+    for resource in (
+        projects,
+        analyses,
+        profiles,
+        proposals,
+        credentials,
+        model_settings,
+        analysis_settings,
+    ):
         workspace_routes.include_router(resource.router)
     app.include_router(workspace_routes)
     return app

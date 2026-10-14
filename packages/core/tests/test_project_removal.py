@@ -8,6 +8,9 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
+from openmarketer_core.agent_runtime.gate import RunScope
+from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.analysis_runs import (
     mark_run_failed,
     mark_run_started,
@@ -20,12 +23,18 @@ from openmarketer_core.db.models import (
     Evidence,
     ProductProfileRecord,
     Project,
+    ProposalRecord,
     RepoSnapshot,
     Workspace,
 )
 from openmarketer_core.db.profile_versions import approve_profile_version, save_edited_profile
-from openmarketer_core.db.project_removal import ProjectHasUnfinishedRun, delete_project
+from openmarketer_core.db.project_removal import (
+    ProjectHasPendingProposal,
+    ProjectHasUnfinishedRun,
+    delete_project,
+)
 from openmarketer_core.db.projects import ProjectNotFound, create_project
+from openmarketer_core.db.proposals import decide_proposal, propose_action
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.extraction import ExtractedFact
 from openmarketer_core.repository_analysis.intake import Snapshot
@@ -70,6 +79,22 @@ def analysed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -
     mark_run_succeeded(session, **scope, run_id=run.id, profile_id=saved.profile_id)
 
 
+def proposed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -> uuid.UUID:
+    """A pending proposal of an action a run of the project asked for."""
+    run = GraphRunRef(kind="writer-run", run_id=uuid.uuid4())
+    return propose_action(
+        session,
+        scope=RunScope(workspace_id=workspace_id, project_id=project_id),
+        run=run,
+        workflow_id=f"write-{run.run_id}",
+        request=ActionRequest(
+            action_id=f"writer-run:{run.run_id}:1", name="publish_post", payload={"text": "hi"}
+        ),
+        effect=ActionEffect.PUBLISHES,
+        wait_seconds=60,
+    ).id
+
+
 def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
     """How many rows each table holds for the project."""
     tables = {
@@ -78,6 +103,7 @@ def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
         "evidence": Evidence.project_id,
         "product_profile": ProductProfileRecord.project_id,
         "repo_snapshot": RepoSnapshot.project_id,
+        "proposal": ProposalRecord.project_id,
     }
     return {
         name: session.scalar(select(func.count()).where(column == project_id)) or 0
@@ -91,6 +117,7 @@ NOTHING = {
     "evidence": 0,
     "product_profile": 0,
     "repo_snapshot": 0,
+    "proposal": 0,
 }
 
 
@@ -103,7 +130,9 @@ def test_project_without_history_is_deleted(session, workspace_id):
 def test_project_is_deleted_with_its_runs_evidence_snapshots_and_versions(session, workspace_id):
     project_id = new_project(session, workspace_id)
     analysed(session, workspace_id, project_id)
-    assert all(count > 0 for count in rows_of(session, project_id).values())
+    assert all(
+        count > 0 for name, count in rows_of(session, project_id).items() if name != "proposal"
+    )
     delete_project(session, workspace_id=workspace_id, project_id=project_id)
     assert rows_of(session, project_id) == NOTHING
 
@@ -116,6 +145,28 @@ def test_approved_and_edited_versions_are_deleted_too(session, workspace_id):
     save_edited_profile(session, **scope, edited_version=1, profile=PROFILE)
     delete_project(session, **scope)
     assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_is_deleted_with_its_decided_proposals(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    decide_proposal(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        proposal_id=proposed(session, workspace_id, project_id),
+        approved=False,
+        decided_by=REVIEWER,
+    )
+    delete_project(session, workspace_id=workspace_id, project_id=project_id)
+    assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_with_a_pending_proposal_is_not_deleted(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    proposed(session, workspace_id, project_id)
+    with pytest.raises(ProjectHasPendingProposal):
+        delete_project(session, workspace_id=workspace_id, project_id=project_id)
+    assert rows_of(session, project_id)["proposal"] == 1
 
 
 def test_project_with_a_failed_run_is_deleted(session, workspace_id):

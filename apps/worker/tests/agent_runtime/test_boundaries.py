@@ -18,13 +18,21 @@ import openmarketer_worker.agent_runtime as runtime
 
 SOURCE = Path(runtime.__file__).parent
 MODULES = sorted(SOURCE.glob("*.py"))
-WORKFLOW_MODULES = ["__init__", "vocabulary", "workflow_support", "driver", "workflow_dsl"]
+WORKFLOW_MODULES = [
+    "__init__",
+    "vocabulary",
+    "workflow_support",
+    "approval_wait",
+    "driver",
+    "workflow_dsl",
+]
 DATABASE = ("sqlalchemy", "psycopg", "openmarketer_core.db", "openmarketer_core.graph_checkpoints")
 ACTIVITY_CODE = (
     "temporalio.activity",
     "openmarketer_worker.agent_runtime.activities",
     "openmarketer_worker.agent_runtime.activity_support",
     "openmarketer_worker.agent_runtime.agent_worker",
+    "openmarketer_worker.agent_runtime.proposal_activities",
     "openmarketer_worker.agent_runtime.routes",
 )
 
@@ -67,7 +75,9 @@ def test_the_runtime_has_the_modules_these_tests_know():
         "activities",
         "activity_support",
         "agent_worker",
+        "approval_wait",
         "driver",
+        "proposal_activities",
         "routes",
         "vocabulary",
         "workflow_dsl",

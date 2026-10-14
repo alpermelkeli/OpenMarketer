@@ -1,6 +1,16 @@
 {
   "components": {
     "schemas": {
+      "ActionEffect": {
+        "description": "What an action does to the world beyond the run, as its declaration says.\n\n``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it\nruns when the graph asks. ``PUBLISHES`` puts something in front of other people and\n``SPENDS`` costs money; the gate holds both for a person's approval.",
+        "enum": [
+          "internal",
+          "publishes",
+          "spends"
+        ],
+        "title": "ActionEffect",
+        "type": "string"
+      },
       "AnalysisLimitsBoundsResponse": {
         "additionalProperties": false,
         "properties": {
@@ -675,11 +685,14 @@
           "analysis_not_found",
           "profile_not_found",
           "credential_not_found",
+          "proposal_not_found",
           "tier_not_found",
           "role_not_found",
           "project_already_exists",
           "analysis_already_running",
           "profile_already_approved",
+          "proposal_not_pending",
+          "proposal_pending",
           "credential_set_by_environment",
           "encryption_key_missing",
           "model_set_by_environment",
@@ -1383,6 +1396,141 @@
         ],
         "title": "ProjectResponse",
         "type": "object"
+      },
+      "ProposalListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the last page; otherwise the `cursor` of the next request.",
+            "title": "Next Cursor"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/ProposalResponse"
+            },
+            "title": "Proposals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "proposals",
+          "next_cursor"
+        ],
+        "title": "ProposalListResponse",
+        "type": "object"
+      },
+      "ProposalResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "action_name": {
+            "description": "The action the agent asked for, as the agent declared it.",
+            "title": "Action Name",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "effect": {
+            "$ref": "#/components/schemas/ActionEffect",
+            "description": "What the action does beyond the run."
+          },
+          "expires_at": {
+            "description": "Undecided by then, the proposal expires and the action does not run.",
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "description": "What the agent asked the action to do: what a person approves or rejects.",
+            "title": "Payload",
+            "type": "object"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "run_kind": {
+            "description": "The kind of run that asked, such as `analysis-run`.",
+            "title": "Run Kind",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProposalStatus"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "action_name",
+          "effect",
+          "payload",
+          "status",
+          "run_kind",
+          "run_id",
+          "created_at",
+          "expires_at",
+          "decided_by",
+          "decided_at"
+        ],
+        "title": "ProposalResponse",
+        "type": "object"
+      },
+      "ProposalStatus": {
+        "description": "Where a proposal stands. It leaves ``PENDING`` once and never changes again.",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "expired"
+        ],
+        "title": "ProposalStatus",
+        "type": "string"
       },
       "RejectedParametersResponse": {
         "additionalProperties": false,
@@ -2164,7 +2312,7 @@
     },
     "/v1/projects/{project_id}": {
       "delete": {
-        "description": "Delete the project with its analyses, evidence and every profile version, for good.\n\nRefused while an analysis of the project is queued or running. The repository is not touched.",
+        "description": "Delete the project with its analyses, evidence, profile versions and proposals, for good.\n\nRefused while an analysis of the project is queued or running, or a proposal of it waits\nfor a decision. The repository is not touched.",
         "operationId": "deleteProject",
         "parameters": [
           {
@@ -3107,6 +3255,388 @@
         "summary": "Save Edit",
         "tags": [
           "profiles"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/proposals": {
+      "get": {
+        "description": "The project's proposals as they are now, newest first, one page at a time.",
+        "operationId": "listProposals",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the proposals with this status. Leave out for all of them.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ProposalStatus",
+              "description": "Only the proposals with this status. Leave out for all of them."
+            }
+          },
+          {
+            "description": "The most items one response may hold.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most items one response may hold.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+              "maxLength": 200,
+              "title": "Cursor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List All",
+        "tags": [
+          "proposals"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/proposals/{proposal_id}": {
+      "get": {
+        "description": "One proposal as it is now.",
+        "operationId": "getProposal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get",
+        "tags": [
+          "proposals"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/proposals/{proposal_id}/approval": {
+      "post": {
+        "description": "Approve a pending proposal as the current user; its run then runs the action.\n\n409 `proposal_not_pending` when it was decided already or its deadline passed. The request\ntakes no body; one is a 422.",
+        "operationId": "approveProposal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Approve",
+        "tags": [
+          "proposals"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/proposals/{proposal_id}/rejection": {
+      "post": {
+        "description": "Reject a pending proposal as the current user; its run is told the action was refused.\n\n409 `proposal_not_pending` when it was decided already or its deadline passed. The request\ntakes no body; one is a 422.",
+        "operationId": "rejectProposal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Reject",
+        "tags": [
+          "proposals"
         ]
       }
     },

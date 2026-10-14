@@ -3,7 +3,8 @@
 ``database_write`` runs an activity that is one short transaction, with the
 timeouts and retries of its policy. ``reason_shown`` turns whatever stopped an
 activity (or the workflow itself) into a text that may be stored on a run and
-shown to the person who asked for it.
+shown to the person who asked for it. ``until_it_ends`` waits for work that has to finish
+even when the workflow is cancelled while it runs.
 
 This is workflow code: deterministic, with nothing that reaches the network,
 the file system, the clock or the environment, and the sandbox loads it. It
@@ -13,7 +14,8 @@ arguments (``FailureTexts``, the types whose messages were chosen to be shown).
 
 from __future__ import annotations
 
-from collections.abc import Collection
+import asyncio
+from collections.abc import Awaitable, Collection
 from datetime import timedelta
 from typing import Any
 
@@ -85,3 +87,20 @@ def reason_shown(
     if isinstance(reason, TimeoutError):
         return texts.worker_stopped if reason.type is TimeoutType.HEARTBEAT else texts.timed_out
     return texts.stopped_unexpectedly
+
+
+async def until_it_ends[Result](work: Awaitable[Result]) -> Result:
+    """What ``work`` gives, waited for to its end even if the workflow is cancelled meanwhile.
+
+    ``work`` runs as a task of its own, and the workflow waits for it with ``workflow.wait``,
+    which when cancelled leaves the task alone (as ``asyncio.wait`` does, and unlike awaiting the
+    task or a shield of it): a cancellation that arrives now finds the run over, and the task is
+    what writes how it ended. Whatever ``work`` raises is raised here.
+    """
+    task = asyncio.ensure_future(work)
+    while not task.done():
+        try:
+            await workflow.wait([task])
+        except asyncio.CancelledError:
+            continue
+    return task.result()
