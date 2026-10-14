@@ -235,6 +235,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List All
+         * @description The project's proposals as they are now, newest first, one page at a time.
+         */
+        get: operations["listProposals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/proposals/{proposal_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get
+         * @description One proposal as it is now.
+         */
+        get: operations["getProposal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/proposals/{proposal_id}/approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve
+         * @description Approve a pending proposal as the current user; its run then runs the action.
+         *
+         *     409 `proposal_not_pending` when it was decided already or its deadline passed. The request
+         *     takes no body; one is a 422.
+         */
+        post: operations["approveProposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/proposals/{proposal_id}/rejection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject
+         * @description Reject a pending proposal as the current user; its run is told the action was refused.
+         *
+         *     409 `proposal_not_pending` when it was decided already or its deadline passed. The request
+         *     takes no body; one is a 422.
+         */
+        post: operations["rejectProposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/settings/credentials": {
         parameters: {
             query?: never;
@@ -285,6 +371,16 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * ActionEffect
+         * @description What an action does to the world beyond the run, as its declaration says.
+         *
+         *     ``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it
+         *     runs when the graph asks. ``PUBLISHES`` puts something in front of other people and
+         *     ``SPENDS`` costs money; the gate holds both for a person's approval.
+         * @enum {string}
+         */
+        ActionEffect: "internal" | "publishes" | "spends";
         /** AnalysisRunListResponse */
         AnalysisRunListResponse: {
             /**
@@ -416,7 +512,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "profile_not_found" | "credential_not_found" | "project_already_exists" | "analysis_already_running" | "profile_already_approved" | "credential_set_by_environment" | "encryption_key_missing" | "internal_error" | "analysis_not_started" | "database_unavailable";
+        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "project_already_exists" | "analysis_already_running" | "profile_already_approved" | "proposal_not_pending" | "credential_set_by_environment" | "encryption_key_missing" | "internal_error" | "analysis_not_started" | "database_unavailable";
         /**
          * Evidence
          * @description A location in the analysed repository that supports a claim.
@@ -651,6 +747,75 @@ export interface components {
              */
             unfinished_run_id: string | null;
         };
+        /** ProposalListResponse */
+        ProposalListResponse: {
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+            /** Proposals */
+            proposals: components["schemas"]["ProposalResponse"][];
+        };
+        /** ProposalResponse */
+        ProposalResponse: {
+            /**
+             * Action Name
+             * @description The action the agent asked for, as the agent declared it.
+             */
+            action_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /** @description What the action does beyond the run. */
+            effect: components["schemas"]["ActionEffect"];
+            /**
+             * Expires At
+             * Format: date-time
+             * @description Undecided by then, the proposal expires and the action does not run.
+             */
+            expires_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Payload
+             * @description What the agent asked the action to do: what a person approves or rejects.
+             */
+            payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Run Kind
+             * @description The kind of run that asked, such as `analysis-run`.
+             */
+            run_kind: string;
+            status: components["schemas"]["ProposalStatus"];
+        };
+        /**
+         * ProposalStatus
+         * @description Where a proposal stands. It leaves ``PENDING`` once and never changes again.
+         * @enum {string}
+         */
+        ProposalStatus: "pending" | "approved" | "rejected" | "expired";
         /** SaveProfileEditRequest */
         SaveProfileEditRequest: {
             profile: components["schemas"]["ProductProfile"];
@@ -1441,6 +1606,266 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listProposals: {
+        parameters: {
+            query?: {
+                /** @description Only the proposals with this status. Leave out for all of them. */
+                status?: components["schemas"]["ProposalStatus"];
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    approveProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rejectProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

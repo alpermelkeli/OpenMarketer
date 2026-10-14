@@ -5,13 +5,14 @@ attaches them, and tests override the dependencies below instead. Identity has
 its own module (``identity.py``).
 
 Routes are plain functions that FastAPI runs in worker threads, so database
-work never blocks the event loop. The one asynchronous thing a route needs,
-starting a workflow, is handed to it as a plain function that runs on the
-event loop and waits for it.
+work never blocks the event loop. The asynchronous things a route needs,
+starting a workflow and telling a run of a decision, are handed to it as plain
+functions that run on the event loop and wait for it.
 """
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -22,6 +23,7 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_api.analysis_workflows import AnalysisWorkflows
+from openmarketer_api.run_signals import RunSignals
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.session import transaction
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
@@ -33,6 +35,7 @@ class Services:
 
     sessions: sessionmaker[Session]
     analysis_workflows: AnalysisWorkflows
+    run_signals: RunSignals
     # The process environment, for core to see which credentials it sets. Kept out of
     # the repr, which would print every secret in it.
     environment: Mapping[str, str] = field(repr=False)
@@ -69,6 +72,21 @@ def start_workflow(
     return start
 
 
+def run_signals(services: Annotated[Services, Depends(_services)]) -> RunSignals:
+    return services.run_signals
+
+
+def tell_run(
+    signals: Annotated[RunSignals, Depends(run_signals)],
+) -> Callable[[str, uuid.UUID], None]:
+    """Telling a run of a decision, as a function a route's worker thread can call."""
+
+    def tell(workflow_id: str, proposal_id: uuid.UUID) -> None:
+        from_thread.run(signals.tell_decided, workflow_id, proposal_id)
+
+    return tell
+
+
 def environment(services: Annotated[Services, Depends(_services)]) -> Mapping[str, str]:
     return services.environment
 
@@ -98,3 +116,4 @@ Sessions = Annotated[sessionmaker[Session], Depends(sessions)]
 Environment = Annotated[Mapping[str, str], Depends(environment)]
 StoringCipher = Annotated[CredentialCipher | None, Depends(credential_cipher)]
 StartWorkflow = Annotated[Callable[[AnalyzeRepositoryInput], None], Depends(start_workflow)]
+TellRun = Annotated[Callable[[str, uuid.UUID], None], Depends(tell_run)]

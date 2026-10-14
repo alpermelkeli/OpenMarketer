@@ -1,5 +1,5 @@
-"""Tables for projects, repository evidence, Product Profile versions, analysis runs and
-stored credentials.
+"""Tables for projects, repository evidence, Product Profile versions, analysis runs, stored
+credentials and the proposals of actions that wait for a person.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project; ``credential`` belongs to
@@ -31,6 +31,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from openmarketer_core.agent_runtime.actions import ActionEffect
+from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.db.base import Base
 
 
@@ -245,3 +247,41 @@ class AnalysisRunRecord(Base):
     created_at: Mapped[datetime] = _created_at()
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# -------------------------------------------------------------- proposals
+class ProposalRecord(Base):
+    """An action an agent asked for that the policy gate held for a person's decision.
+
+    ``action_id`` is the action's idempotency key (``ActionRequest.action_id``), so a run that
+    asks again for the same action finds the same proposal. ``workflow_id`` is the run's
+    workflow, which is told when a person decides. The payload is what the agent asked to do,
+    as the action's model read it: what the person approves.
+    """
+
+    __tablename__ = "proposal"
+    __table_args__ = (
+        CheckConstraint("effect <> 'internal'", name="effect_held"),
+        CheckConstraint(
+            "(status IN ('approved', 'rejected')) = (decided_by IS NOT NULL)", name="decided_by"
+        ),
+        CheckConstraint("(status = 'pending') = (decided_at IS NULL)", name="decided_at"),
+        Index("ix_proposal_project_id_status", "project_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    run_kind: Mapped[str] = mapped_column(Text)
+    run_id: Mapped[uuid.UUID]
+    workflow_id: Mapped[str] = mapped_column(Text)
+    action_id: Mapped[str] = mapped_column(Text, unique=True)
+    action_name: Mapped[str] = mapped_column(Text)
+    effect: Mapped[ActionEffect] = mapped_column(_enum(ActionEffect, "effect"))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    status: Mapped[ProposalStatus] = mapped_column(
+        _enum(ProposalStatus, "status"), server_default=ProposalStatus.PENDING.value
+    )
+    created_at: Mapped[datetime] = _created_at()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[uuid.UUID | None]
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

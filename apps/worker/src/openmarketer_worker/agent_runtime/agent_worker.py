@@ -22,8 +22,12 @@ called by ``forget_run`` and blocking too.
 ``registration`` turns the handlers into what the process serves: the runtime's activities
 (``run_graph_step``, ``run_action`` and ``forget_run``) with the agent's routes, graph, kind and
 words, the agent's own activities (the ones its workflow's hooks call) and its workflows.
+An agent with an action the policy gate holds for a person also gives ``registration`` the
+worker's database sessions: it registers the gate's activities (``propose_action`` and
+``settle_proposal``) with them, and ``run_action`` checks each such action's approval there.
 Whatever can be wrong is wrong when the worker starts, not at the first run: an action with no
-handler, a handler for a model the agent did not declare or for an action that has one already,
+handler, an action that waits for a person with no sessions to store its proposal in, a handler
+for a model the agent did not declare or for an action that has one already,
 a workflow class that is not one this agent's ``agent_workflow`` made. The errors name the
 action, the model or the class, never a payload.
 
@@ -37,12 +41,15 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
 from pydantic import BaseModel
+from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.agent_runtime.agent import Agent
+from openmarketer_core.agent_runtime.gate import GateVerdict, verdict_for
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_worker import AgentRegistration
 from openmarketer_worker.agent_runtime.activities import AgentGraph, RuntimeActivities
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess
+from openmarketer_worker.agent_runtime.proposal_activities import ProposalActivities
 from openmarketer_worker.agent_runtime.routes import (
     ActionContext,
     ActionHandler,
@@ -132,18 +139,23 @@ class AgentWorker:
         texts: FailureTexts = RUN_TEXTS,
         activities: Sequence[Callable[..., Any]] = (),
         checkpoint_cleanups: Sequence[CheckpointCleanup] = (),
+        sessions: sessionmaker[Session] | None = None,
     ) -> AgentRegistration:
         """What the worker registers for the agent: its workflows and every activity they call.
 
         ``workflows`` are the classes this agent's ``agent_workflow`` made, and ``activities``
         the agent's own (the ones its hooks call). ``texts`` are the agent's words for a run's
         failures that nobody worded, the same its workflows were given: the runtime's by
-        default. Raises ``InvalidAgentWorker`` for an action with no handler and for a class
-        that is not a workflow of this agent.
+        default. ``sessions`` are the database's, for an agent with an action that waits for a
+        person. Raises ``InvalidAgentWorker`` for an action with no handler, for an action that
+        waits for a person without ``sessions``, and for a class that is not a workflow of this
+        agent.
         """
         routes = self._routes()
         for workflow_class in workflows:
             self._require_a_workflow_of_this_agent(workflow_class)
+        held = self._held_actions()
+        gate = self._gate_of(held, sessions)
         runtime = RuntimeActivities(
             checkpoints,
             graph,
@@ -151,7 +163,10 @@ class AgentWorker:
             kind=self._agent.kind,
             texts=texts,
             on_run_end=self._run_ended,
+            held_actions=held,
+            is_approved=None if gate is None else gate.is_approved,
         )
+        gate_activities = [] if gate is None else [gate.propose_action, gate.settle_proposal]
         return AgentRegistration(
             task_queue=self._task_queue,
             workflows=list(workflows),
@@ -159,10 +174,30 @@ class AgentWorker:
                 runtime.run_graph_step,
                 runtime.run_action,
                 runtime.forget_run,
+                *gate_activities,
                 *activities,
             ],
             checkpoint_cleanups=list(checkpoint_cleanups),
         )
+
+    def _held_actions(self) -> list[str]:
+        return [
+            action
+            for action, policy in self._agent.policies.items()
+            if verdict_for(policy) is GateVerdict.ASK_A_PERSON
+        ]
+
+    def _gate_of(
+        self, held: list[str], sessions: sessionmaker[Session] | None
+    ) -> ProposalActivities | None:
+        if not held:
+            return None
+        if sessions is None:
+            raise InvalidAgentWorker(
+                f"action {held[0]!r} of agent {self._agent.kind!r} waits for a person's approval: "
+                "give registration the database sessions its proposals are stored with"
+            )
+        return ProposalActivities(sessions)
 
     def _action_declared_for(self, payload: type[BaseModel]) -> str:
         for definition in self._agent.definitions:

@@ -43,7 +43,7 @@ Most tools automate one slice: scheduling, ad rules or copy generation. Strategy
 | Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 55 pages) |
 | Per-role LLM model configuration through OpenRouter | Built and used by the analyzer (`config/models.yaml`) |
 | Repository analyzer and Product Profile | **Built, quality not measured**: intake, extractors and the analyzer agent run from the CLI, which can store a run as a draft; the API registers projects, starts analyses, and reads, edits and approves profiles; the worker runs each analysis as a durable workflow; the dashboard reviews the profiles and, in Settings, stores the model provider's key and the repository tokens encrypted. The golden-repository benchmark (`make evaluate`) runs, with one case so far, whose label no person has reviewed |
-| Agent runtime: LangGraph graphs inside Temporal workflows, declared with decorators | Built and used by the analyzer; no policy gate or human approval of actions yet, so nothing that publishes or spends runs on it |
+| Agent runtime: LangGraph graphs inside Temporal workflows, declared with decorators | Built and used by the analyzer, with a first policy gate: an action that publishes or spends waits for a person's approval through the API. Budgets, the content filter and risk levels are not built |
 | Content engine and approved publishing (X, Instagram) | Planned |
 | Creative studio (compose with code, generate, verify, edit) | Designed |
 | Orchestrator console and proactive mode | Designed |

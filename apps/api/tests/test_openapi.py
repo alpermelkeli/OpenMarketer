@@ -28,6 +28,10 @@ OPERATIONS = {
     "listCredentials": ("get", "/v1/settings/credentials"),
     "setCredential": ("put", "/v1/settings/credentials/{name}"),
     "removeCredential": ("delete", "/v1/settings/credentials/{name}"),
+    "listProposals": ("get", "/v1/projects/{project_id}/proposals"),
+    "getProposal": ("get", "/v1/projects/{project_id}/proposals/{proposal_id}"),
+    "approveProposal": ("post", "/v1/projects/{project_id}/proposals/{proposal_id}/approval"),
+    "rejectProposal": ("post", "/v1/projects/{project_id}/proposals/{proposal_id}/rejection"),
 }
 
 

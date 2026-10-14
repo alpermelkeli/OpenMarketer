@@ -36,6 +36,7 @@ def test_unreachable_database_is_reported_without_connection_details(app, client
     app.state.services = Services(
         sessions=session_factory(UNREACHABLE_URL),
         analysis_workflows=NoWorkflows(),
+        run_signals=None,  # pyright: ignore[reportArgumentType]
         environment={},
         credential_cipher=None,
     )

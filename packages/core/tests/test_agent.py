@@ -16,6 +16,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from openmarketer_core.agent_runtime.actions import (
+    ActionEffect,
     ActionPolicy,
     InvalidActionDefinition,
     NotAnAction,
@@ -111,9 +112,27 @@ def test_limit_that_is_not_a_positive_number_is_refused_on_the_line_of_the_decor
         agent.action("send_email", **{limit: value})
 
 
+def test_action_that_says_nothing_of_its_effect_works_for_the_run_itself(agent):
+    agent.action("clone")(new_model())
+
+    assert agent.policies["clone"].effect is ActionEffect.INTERNAL
+
+
+def test_effect_and_approval_wait_of_an_action_become_its_policy(agent):
+    agent.action("publish_post", effect=ActionEffect.PUBLISHES, approval_wait=3600)(new_model())
+
+    policy = agent.policies["publish_post"]
+    assert (policy.effect, policy.approval_wait_seconds) == (ActionEffect.PUBLISHES, 3600)
+
+
 @pytest.mark.parametrize(
     ("limit", "value"),
-    [("attempts", 11), ("timeout", 24 * 60 * 60 + 1), ("retry_after", 60 * 60 + 1)],
+    [
+        ("attempts", 11),
+        ("timeout", 24 * 60 * 60 + 1),
+        ("retry_after", 60 * 60 + 1),
+        ("approval_wait", 30 * 24 * 60 * 60 + 1),
+    ],
 )
 def test_limit_beyond_what_a_policy_allows_is_refused_on_the_line_of_the_decorator(
     agent, limit, value

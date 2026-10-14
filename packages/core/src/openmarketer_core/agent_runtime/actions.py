@@ -21,14 +21,17 @@ not declare.
 A payload model carries the name of its action (``mark_as_action``, which an
 agent's ``action`` decorator calls), so that a node asks with the payload alone
 (``action_name_of``) and cannot misspell the name. ``ActionPolicy`` is how an
-action is tried: its timeout and attempts, within ceilings.
+action is tried: its timeout and attempts, within ceilings, and its effect on the
+world (``ActionEffect``), which the policy gate (``gate.py``) reads to decide whether
+a person must approve it first. The effect is declared in code, with the action, and
+never read from a request: what a model wrote cannot make an action look harmless.
 
 ``request_digest`` says what a request is, so that the outcome of a request
 is delivered only to a node that asks for the same thing again.
 
 This module runs nothing and knows no workflow engine, graph framework or
-database. Which activity runs an action, how the policy is applied and whether a
-person must approve it are the worker's.
+database. Which activity runs an action and how the policy is applied are the
+worker's; whether a person must approve it is the gate's.
 
 The annotations of the dataclasses are real types, not text: a workflow decodes
 their values in the workflow sandbox, whose data converter evaluates the
@@ -42,6 +45,7 @@ import json
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
@@ -65,6 +69,11 @@ from openmarketer_core.agent_runtime.model_input import (
 MAX_ATTEMPTS = 10
 MAX_ATTEMPT_TIMEOUT_SECONDS = 24 * 60 * 60
 MAX_RETRY_AFTER_SECONDS = 60 * 60
+# How long an action that needs a person's approval waits for one, unless its declaration says
+# otherwise, and the most it may wait. Three days cover a weekend; a month is longer than any
+# proposal is worth keeping open, and the run's workflow stays open for as long as it waits.
+DEFAULT_APPROVAL_WAIT_SECONDS = 3 * 24 * 60 * 60
+MAX_APPROVAL_WAIT_SECONDS = 30 * 24 * 60 * 60
 
 # Where a payload model keeps the name of its action. A dunder cannot be a field of a model, so it
 # never clashes with one; it is read from the class itself, so a subclass is not an action unless
@@ -143,6 +152,19 @@ class ActionOutcome:
             raise ValueError("a failed outcome must say what went wrong")
 
 
+class ActionEffect(StrEnum):
+    """What an action does to the world beyond the run, as its declaration says.
+
+    ``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it
+    runs when the graph asks. ``PUBLISHES`` puts something in front of other people and
+    ``SPENDS`` costs money; the gate holds both for a person's approval.
+    """
+
+    INTERNAL = "internal"
+    PUBLISHES = "publishes"
+    SPENDS = "spends"
+
+
 @dataclass(frozen=True)
 class ActionPolicy:
     """Limits of one action. An action is tried again only when it fails in a way that may pass.
@@ -156,6 +178,10 @@ class ActionPolicy:
     watches. The activity heartbeats three times in it, taking the timeout from what the
     workflow scheduled it with, so this is the one place it is set. A short action needs none.
 
+    ``effect`` is what the action does beyond the run (``ActionEffect``), and
+    ``approval_wait_seconds`` how long it waits for a person when the gate asks for one, at
+    most ``MAX_APPROVAL_WAIT_SECONDS``; an action nobody decided on in that time is not run.
+
     The values are checked when the policy is made, so a policy is made when the
     agent's module is loaded (``Agent.action``) and is never part of a workflow's
     input: a ``ValueError`` while Temporal decodes the input fails the workflow
@@ -166,19 +192,25 @@ class ActionPolicy:
     max_attempts: int
     retry_after_seconds: float
     heartbeat_timeout_seconds: float | None = None
+    effect: ActionEffect = ActionEffect.INTERNAL
+    approval_wait_seconds: float = DEFAULT_APPROVAL_WAIT_SECONDS
 
     def __post_init__(self) -> None:
         require_positive(
             attempt_timeout_seconds=self.attempt_timeout_seconds,
             max_attempts=self.max_attempts,
             retry_after_seconds=self.retry_after_seconds,
+            approval_wait_seconds=self.approval_wait_seconds,
         )
+        if not isinstance(self.effect, ActionEffect):
+            raise ValueError(f"effect must be an ActionEffect, not {self.effect!r}")
         if not isinstance(self.max_attempts, int):
             raise ValueError(f"max_attempts must be a whole number, not {self.max_attempts}")
         _require_at_most(
             attempt_timeout_seconds=(self.attempt_timeout_seconds, MAX_ATTEMPT_TIMEOUT_SECONDS),
             max_attempts=(self.max_attempts, MAX_ATTEMPTS),
             retry_after_seconds=(self.retry_after_seconds, MAX_RETRY_AFTER_SECONDS),
+            approval_wait_seconds=(self.approval_wait_seconds, MAX_APPROVAL_WAIT_SECONDS),
         )
         if self.heartbeat_timeout_seconds is not None:
             require_positive(heartbeat_timeout_seconds=self.heartbeat_timeout_seconds)

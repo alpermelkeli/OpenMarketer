@@ -14,6 +14,11 @@ a request and its side effect stands here:
   runs, and the model's text never becomes an activity.
 - A run may ask for ``policy.max_actions`` actions and no more: each one adds to
   its history.
+- The policy gate (core's ``gate.py``) holds an action that publishes or spends until a person
+  approves it (``approval_wait.wait_for_a_person``). One that is rejected, or that nobody
+  decided on in time, does not run: the graph is told so as a failed outcome
+  (``NOT_APPROVED_TEXTS``), as it is told of any action that failed, and may revise what it
+  asked for. The run's ``scope`` says which project the proposal belongs to.
 - An action that failed for good is told to the graph as a failed outcome, so
   the agent decides what to do. Only a defect of the agent ends the run
   (``RUN_ENDING_ACTION_FAILURES``).
@@ -68,10 +73,22 @@ with workflow.unsafe.imports_passed_through():
         ActionRequest,
         UnknownAction,
     )
+    from openmarketer_core.agent_runtime.gate import (
+        GateVerdict,
+        ProposalStatus,
+        RunScope,
+        verdict_for,
+    )
     from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
+    from openmarketer_worker.agent_runtime.approval_wait import (
+        DecidedProposals,
+        wait_for_a_person,
+    )
     from openmarketer_worker.agent_runtime.vocabulary import (
         ACTION_TEXTS,
         MAX_ERROR_CHARACTERS,
+        NOT_APPROVED_TEXTS,
+        PROPOSAL_REFUSED,
         RETRY_BACKOFF,
         RUN_ACTION,
         RUN_ENDING_ACTION_FAILURES,
@@ -92,13 +109,17 @@ async def run_graph_with_actions(
     actions: Mapping[str, ActionPolicy],
     policy: GraphRunPolicy,
     worded_types: Collection[str] = WORDED_BY_THE_RUNTIME,
+    scope: RunScope | None = None,
+    decided: DecidedProposals | None = None,
 ) -> dict[str, Any]:
     """Run the graph of ``run`` and the actions it asks for; the graph's final output.
 
     ``actions`` is the allowlist: the name of each action the graph may ask for,
     with the limits it runs under. It is plain data that the agent's workflow
     module holds, so the sandbox can load it. ``worded_types`` are the failure types whose
-    message the graph is told, as the module's docstring says.
+    message the graph is told, as the module's docstring says. ``scope`` and ``decided`` are
+    for an agent whose actions the gate may hold: the project its proposals belong to, and
+    the decisions its workflow heard of. Without them such an action ends the run.
     """
     resume: ActionOutcome | None = None
     asked = 0
@@ -127,7 +148,36 @@ async def run_graph_with_actions(
                 non_retryable=True,
             )
         asked += 1
+        if verdict_for(limits) == GateVerdict.ASK_A_PERSON:
+            status = await _ask_a_person(run, scope, decided, request, limits)
+            if status != ProposalStatus.APPROVED:
+                resume = ActionOutcome(
+                    action_id=request.action_id,
+                    succeeded=False,
+                    result={},
+                    error=NOT_APPROVED_TEXTS[status],
+                )
+                continue
         resume = await _take_action(request, limits, worded_types)
+
+
+async def _ask_a_person(
+    run: GraphRunRef,
+    scope: RunScope | None,
+    decided: DecidedProposals | None,
+    request: ActionRequest,
+    limits: ActionPolicy,
+) -> ProposalStatus:
+    if scope is None or decided is None:
+        # ``agent_workflow`` refuses such a workflow when it is declared; this is the driver
+        # used without it.
+        raise ApplicationError(
+            f"action {request.name} needs a person's approval and the run has no project "
+            "to propose it in",
+            type=PROPOSAL_REFUSED,
+            non_retryable=True,
+        )
+    return await wait_for_a_person(run, scope, request, limits, decided)
 
 
 async def _take_step(step: StepInput, policy: GraphRunPolicy) -> StepOutcome:

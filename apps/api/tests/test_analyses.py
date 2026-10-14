@@ -78,7 +78,11 @@ def workflows(app, sessions, workspace_id) -> FakeWorkflows:
     """The application wired to the test database, this test's workspace and fake workflows."""
     fake = FakeWorkflows()
     app.state.services = Services(
-        sessions=sessions, analysis_workflows=fake, environment={}, credential_cipher=None
+        sessions=sessions,
+        analysis_workflows=fake,
+        run_signals=None,  # pyright: ignore[reportArgumentType]
+        environment={},
+        credential_cipher=None,
     )
     app.dependency_overrides[current_workspace_id] = lambda: workspace_id
     return fake
