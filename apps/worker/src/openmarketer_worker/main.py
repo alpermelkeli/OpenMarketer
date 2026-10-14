@@ -2,14 +2,20 @@
 
 This module holds what belongs to the process and to no agent: its settings,
 the database sessions, how the installation's credentials are resolved for a
-run's workspace (``credentials.py``), the connection to Temporal, the ``Worker`` with its
-executor and concurrency, the signals that stop it, the schedule of checkpoint
-cleanups that runs while it serves, whether runs are traced to Langfuse (``tracing.py`` in
-core: started first, so that everything the worker starts traces, and stopped last), and the
-wording of a start that cannot happen (``StartupError``). How an agent is set up (its
-settings, models, tokens, workflows, activities and the cleanup of its runs' checkpoints)
-is in the agent's ``wiring.py``, called here by name; this module reads no
-agent's settings or policy and holds no rule.
+run's workspace (``credentials.py``), the connection to Temporal, a ``Worker`` for each
+agent with its executor and concurrency, the signals that stop them, the schedule of
+checkpoint cleanups that runs while they serve, whether runs are traced to Langfuse
+(``tracing.py`` in core: started first, so that everything the worker starts traces, and
+stopped last), and the wording of a start that cannot happen (``StartupError``). How an
+agent is set up (its settings, models, tokens, workflows, activities and the cleanup of its
+runs' checkpoints) is in the agent's ``wiring.py``, called here by name in ``agents``; this
+module reads no agent's settings or policy and holds no rule.
+
+Each agent is served by a ``Worker`` of its own, on its own task queue. The runtime's
+activities have the same names for every agent (``run_graph_step``, ``run_action``,
+``forget_run``), which one ``Worker`` refuses twice, and a workflow schedules its activities
+on its own queue: so the queue is what keeps one agent's steps from reaching another's
+graph. Two agents on one queue are refused when the process starts.
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ import os
 import signal
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import AsyncExitStack
 
 from sqlalchemy.orm import Session, sessionmaker
 from temporalio.client import Client
@@ -50,6 +57,37 @@ logger = logging.getLogger(__name__)
 
 class StartupError(Exception):
     """The worker cannot start with this environment; the message says what to change."""
+
+
+def agents(
+    environ: Mapping[str, str],
+    sessions: sessionmaker[Session],
+    database_url: str,
+    credentials: WorkspaceCredentials,
+    tracing: Tracing,
+) -> list[AgentRegistration]:
+    """Every agent this process serves, each set up by its own wiring."""
+    return [repository_analyzer(environ, sessions, database_url, credentials, tracing)]
+
+
+def build_workers(
+    client: Client, registrations: Sequence[AgentRegistration], *, max_concurrent_activities: int
+) -> list[Worker]:
+    """A worker for each agent, each on the agent's own task queue.
+
+    Raises ``StartupError`` for two agents on one queue: their activities have the same names,
+    and a step of one could be taken by the other.
+    """
+    queues = [registration.task_queue for registration in registrations]
+    shared = sorted({queue for queue in queues if queues.count(queue) > 1})
+    if shared:
+        raise StartupError(
+            f"agents share the task queue {', '.join(shared)}: each agent needs a queue of its own"
+        )
+    return [
+        build_worker(client, registration, max_concurrent_activities=max_concurrent_activities)
+        for registration in registrations
+    ]
 
 
 def build_worker(
@@ -90,7 +128,7 @@ async def _serve_traced(environ: Mapping[str, str], tracing: Tracing) -> None:
         settings = Settings.from_env(environ)
         sessions = session_factory(settings.database_url)
         credentials = WorkspaceCredentials(sessions, environ, settings.credential_cipher)
-        agent = repository_analyzer(environ, sessions, settings.database_url, credentials, tracing)
+        served = agents(environ, sessions, settings.database_url, credentials, tracing)
     except (
         SettingsError,
         EncryptionKeyInvalid,
@@ -110,8 +148,8 @@ async def _serve_traced(environ: Mapping[str, str], tracing: Tracing) -> None:
             "the dev stack's server is localhost:7233 from the host (`make up`)"
         ) from e
 
-    worker = build_worker(
-        client, agent, max_concurrent_activities=settings.max_concurrent_activities
+    workers = build_workers(
+        client, served, max_concurrent_activities=settings.max_concurrent_activities
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -119,27 +157,33 @@ async def _serve_traced(environ: Mapping[str, str], tracing: Tracing) -> None:
         loop.add_signal_handler(signal_number, stop.set)
     logger.info(
         "worker serving %s on %s (namespace %s)",
-        agent.task_queue,
+        ", ".join(registration.task_queue for registration in served),
         settings.temporal_address,
         settings.temporal_namespace,
     )
-    await serve_until(stop, worker, sessions, agent.checkpoint_cleanups)
+    cleanups = [cleanup for registration in served for cleanup in registration.checkpoint_cleanups]
+    await serve_until(stop, workers, sessions, cleanups)
 
 
 async def serve_until(
     stop: asyncio.Event,
-    worker: Worker,
+    workers: Sequence[Worker],
     sessions: sessionmaker[Session],
     checkpoint_cleanups: Sequence[CheckpointCleanup],
 ) -> None:
-    """Serve the worker's queue, and run the checkpoint cleanups, until ``stop`` is set."""
+    """Serve every worker's queue, and run the checkpoint cleanups, until ``stop`` is set.
+
+    The workers stop together, each once the work it has in progress returned.
+    """
     cleanup = asyncio.create_task(
         keep_removing_leftover_checkpoints(
             sessions, checkpoint_cleanups, every_seconds=CLEANUP_EVERY_SECONDS
         )
     )
     try:
-        async with worker:
+        async with AsyncExitStack() as serving:
+            for worker in workers:
+                await serving.enter_async_context(worker)
             await stop.wait()
             logger.info("stopping; the process ends when work in progress has returned")
     finally:

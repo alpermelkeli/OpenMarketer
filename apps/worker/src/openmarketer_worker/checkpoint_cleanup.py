@@ -7,11 +7,14 @@ process that died in between, an attempt that still wrote after its run was
 recorded as over, and a run that never ends because its workflow was
 terminated or lost.
 
-This module only keeps the schedule and knows no rule. Each kind of run has
-its own rule for which of its checkpoints may go, in core, touching only the
-threads of its kind; the wiring of the agent that runs them hands it over as a
-``CheckpointCleanup``, and ``main.py`` passes on the ones it was given. Every
-round runs each of them in a transaction of its own. One that fails is logged
+This module keeps the schedule and knows no rule. Each kind of run has rules
+for which of its checkpoints may go, in core, touching only the threads of its
+kind. Every agent gets one without writing it: ``stale_threads_of`` wraps core's
+rule for any kind, which removes the threads nothing wrote for longer than a run
+of the kind can take, and the agent's registration adds it for the agent's kind
+(``agent_worker.py``). An agent may hand over a stricter rule of its own as well,
+as the analyzer does. ``main.py`` passes on the ones of every agent it serves.
+Every round runs each of them in a transaction of its own. One that fails is logged
 and tried again the next round: it does not keep the others from running and
 never stops the worker or a run. With none given there is nothing to do.
 """
@@ -22,9 +25,11 @@ import asyncio
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from openmarketer_core.db.checkpoint_cleanup import remove_stale_checkpoints
 from openmarketer_core.db.session import DatabaseError, transaction
 
 logger = logging.getLogger(__name__)
@@ -42,6 +47,17 @@ class CheckpointCleanup:
     runs: str  # what the runs are called in the log, in the plural
     # Removes them within the given session, without committing, and says of how many runs.
     remove: Callable[[Session], int]
+
+
+def stale_threads_of(kind: str, longest_run: timedelta) -> CheckpointCleanup:
+    """Core's rule for any kind of run: the threads of ``kind`` untouched for ``longest_run``."""
+
+    def remove(session: Session) -> int:
+        return remove_stale_checkpoints(session, kind=kind, untouched_for=longest_run)
+
+    return CheckpointCleanup(
+        runs=f"{kind} runs untouched for longer than a run takes", remove=remove
+    )
 
 
 def remove_leftover_checkpoints(

@@ -464,7 +464,7 @@ async def test_worker_removes_leftover_checkpoints_when_it_starts(
     stop = asyncio.Event()
     serving = asyncio.create_task(
         main.serve_until(
-            stop, worker_serving(analyzer), sessions, [wiring.cleanup_of_analysis_runs(QUICK)]
+            stop, [worker_serving(analyzer)], sessions, [wiring.cleanup_of_analysis_runs(QUICK)]
         )
     )
     try:

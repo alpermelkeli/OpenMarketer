@@ -26,6 +26,7 @@ from openmarketer_core.repository_analysis.intake import (
 )
 from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
 from openmarketer_core.tracing import NOT_TRACING
+from openmarketer_worker import checkpoint_cleanup
 from openmarketer_worker.agent_runtime.activity_support import checkpoints_in
 from openmarketer_worker.agent_runtime.vocabulary import FORGET_RUN, RUN_ACTION, RUN_GRAPH_STEP
 from openmarketer_worker.credentials import WorkspaceCredentials
@@ -182,12 +183,30 @@ def test_cleanup_is_the_rule_of_analysis_runs_with_the_longest_run_of_the_config
 
     monkeypatch.setattr(wiring, "remove_checkpoints_of_analysis_runs", rule)
     agent = wired({**MODEL, "ANALYSIS_TIMEOUT_MINUTES": "10", "ANALYSIS_MAX_ATTEMPTS": "2"})
-    (cleanup,) = agent.checkpoint_cleanups
+    cleanup, _ = agent.checkpoint_cleanups
     session = Session()
 
     assert (cleanup.runs, cleanup.remove(session)) == ("analysis runs", 3)
     configured = AnalysisPolicy(attempt_timeout_seconds=600, max_attempts=2)
     assert asked == [(session, timedelta(seconds=longest_analysis_seconds(configured)))]
+
+
+def test_threads_of_analysis_runs_untouched_for_a_run_are_removed_by_the_rule_of_any_kind(
+    monkeypatch,
+):
+    asked: list[tuple[str, timedelta]] = []
+
+    def rule(session: object, *, kind: str, untouched_for: timedelta) -> int:
+        asked.append((kind, untouched_for))
+        return 0
+
+    monkeypatch.setattr(checkpoint_cleanup, "remove_stale_checkpoints", rule)
+    agent = wired({**MODEL, "ANALYSIS_TIMEOUT_MINUTES": "10", "ANALYSIS_MAX_ATTEMPTS": "2"})
+    _, of_any_kind = agent.checkpoint_cleanups
+    of_any_kind.remove(Session())
+
+    configured = AnalysisPolicy(attempt_timeout_seconds=600, max_attempts=2)
+    assert asked == [("analysis-run", timedelta(seconds=longest_analysis_seconds(configured)))]
 
 
 def test_limit_that_is_not_a_number_is_a_settings_error_naming_it():

@@ -1,4 +1,5 @@
-"""Removing the graph checkpoints that analysis runs no longer need.
+"""Removing the graph checkpoints that runs no longer need: the analysis runs' rule, and one
+for any kind of run.
 
 A run's checkpoints hold the analyzer's conversation, which is repository
 content, and are forgotten when the run ends (``graph_checkpoints/postgres.py``).
@@ -30,8 +31,10 @@ So these go:
 
 A thread of any other name is not this rule's and is left alone, whatever its
 age. Another kind of run names its threads with its own prefix and brings its
-own rule. The price is stated plainly: a thread of a kind no rule knows, such
-as one whose prefix was given up, is nobody's to remove and its rows stay.
+own rule: one written for its runs like this one, or ``remove_stale_checkpoints``,
+which needs no table of runs. A thread of a kind no rule knows, such as one whose
+prefix was given up, is nobody's to remove and its rows stay; the worker refuses an
+agent whose kind has no rule, so that is only ever a kind no agent runs any more.
 
 The age is counted from ``started_at``, not ``created_at``. A run may wait in
 the queue for as long as no worker serves it, which has no limit and leaves no
@@ -50,9 +53,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from sqlalchemy import Text, cast, column, delete, func, or_, select, table, union
+from sqlalchemy import DateTime, Text, cast, column, delete, func, or_, select, table, union
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
+from openmarketer_core.agent_runtime.threads import validate_kind
 from openmarketer_core.db.analysis_runs import ANALYSIS_RUN_THREADS, FINISHED
 from openmarketer_core.db.checkpoint_schema import CHECKPOINT_TABLES_OF_THREADS
 from openmarketer_core.db.models import AnalysisRunRecord
@@ -101,7 +107,46 @@ def remove_checkpoints_of_analysis_runs(session: Session, *, longest_run: timede
         )
         .exists()
     )
-    removable = select(threads.c.thread_id).where(~run_in_progress).cte("removable")
+    return _remove_threads(session, select(threads.c.thread_id).where(~run_in_progress))
+
+
+def remove_stale_checkpoints(session: Session, *, kind: str, untouched_for: timedelta) -> int:
+    """Remove the checkpoints of the threads of ``kind`` that nothing wrote for ``untouched_for``;
+    say how many threads.
+
+    The rule for a kind of run that has no table of runs to consult, or whose agent did not
+    write one: a run in progress stores a checkpoint after every step of its graph, so a
+    thread whose newest checkpoint is older than the longest a run of its kind can take
+    belongs to no run in progress. ``untouched_for`` is that longest run, and has to count
+    everything a run can spend between two steps: an action at all its attempts, and the wait
+    for a person's approval. The time of a checkpoint is the one the library writes into it
+    (``checkpoint ->> 'ts'``), compared with the database's clock.
+
+    Only threads named ``<kind>:`` that have a checkpoint are looked at; their rows go from
+    every table. A thread with rows in the other tables and no checkpoint at all is left: the
+    library writes a step's checkpoint with its blobs, and such rows are not known to be stale.
+    Like the analysis runs' rule, this is maintenance of the whole database, one statement,
+    and it does not commit.
+    """
+    validate_kind(kind)
+    checkpoints = table("checkpoints", column("thread_id", Text), column("checkpoint", JSONB))
+    written_at = cast(checkpoints.c.checkpoint["ts"].astext, DateTime(timezone=True))
+    stale = (
+        select(checkpoints.c.thread_id)
+        .where(checkpoints.c.thread_id.startswith(f"{kind}:", autoescape=True))
+        .group_by(checkpoints.c.thread_id)
+        .having(func.max(written_at) < func.now() - untouched_for)
+    )
+    return _remove_threads(session, stale)
+
+
+def _remove_threads(session: Session, threads: Select) -> int:
+    """Delete every row of the threads ``threads`` selects, from each table; say how many."""
+    # The library's tables have no model (see ``checkpoint_schema.py``); only this column is used.
+    tables = [
+        table(name, column("thread_id", Text)) for name in sorted(CHECKPOINT_TABLES_OF_THREADS)
+    ]
+    removable = threads.cte("removable")
     removed = [
         delete(t)
         .where(t.c.thread_id.in_(select(removable.c.thread_id)))
