@@ -1,15 +1,18 @@
 """Tests for the settings the API process reads at start-up."""
 
 import base64
+from pathlib import Path
 
 import pytest
 
 from openmarketer_api.dependencies import Services
 from openmarketer_api.settings import Settings, SettingsError
 from openmarketer_core.credentials.cipher import CredentialCipher
+from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.workflow_server import WorkflowServer
 
 DATABASE = {"DATABASE_URL": "postgresql+psycopg://u:p@localhost/db"}
+MODELS_FILE = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
 
 
 def test_database_url_is_read_from_the_environment():
@@ -67,12 +70,38 @@ def test_settings_do_not_show_the_encryption_key_when_printed():
     assert key not in repr(Settings.from_env({**DATABASE, "ENCRYPTION_KEY": key}))
 
 
-def test_services_do_not_show_the_environment_when_printed():
+def test_services_do_not_show_the_environment_when_printed(no_catalog):
     services = Services(
         sessions=None,  # pyright: ignore[reportArgumentType]
-        analysis_workflows=None,  # pyright: ignore[reportArgumentType]
-        run_signals=None,  # pyright: ignore[reportArgumentType]
+        workflows=None,  # pyright: ignore[reportArgumentType]
         environment={"GITHUB_TOKEN": "ghp_made_up_value"},
         credential_cipher=None,
+        model_router=ModelRouter.from_file(MODELS_FILE, env={"GITHUB_TOKEN": "ghp_made_up_value"}),
+        model_catalog=no_catalog,
     )
     assert "ghp_made_up_value" not in repr(services)
+
+
+def test_model_configuration_is_read_with_the_environment_over_it():
+    settings = Settings.from_env(
+        {**DATABASE, "LLM_CONFIG_PATH": str(MODELS_FILE), "LLM_MODEL_FAST": "openai/env-fast"}
+    )
+    assert settings.model_router.tier_model("fast") == ("openai/env-fast", "env-tier:fast")
+
+
+def test_start_without_a_readable_model_configuration_is_refused(tmp_path):
+    missing = tmp_path / "models.yaml"
+    with pytest.raises(SettingsError, match="cannot be read"):
+        Settings.from_env({**DATABASE, "LLM_CONFIG_PATH": str(missing)})
+
+
+def test_start_with_a_model_configuration_that_is_not_valid_is_refused(tmp_path):
+    broken = tmp_path / "models.yaml"
+    broken.write_text("tiers: {fast: not-a-slug}\ndefaults: {model: a/b}\nroles: {}\n")
+    with pytest.raises(SettingsError, match="is not valid"):
+        Settings.from_env({**DATABASE, "LLM_CONFIG_PATH": str(broken)})
+
+
+def test_settings_do_not_show_the_environment_through_the_model_configuration():
+    settings = Settings.from_env({**DATABASE, "OPENROUTER_API_KEY": "sk-made-up-value"})
+    assert "sk-made-up-value" not in repr(settings)

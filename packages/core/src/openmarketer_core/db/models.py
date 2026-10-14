@@ -1,9 +1,10 @@
 """Tables for projects, repository evidence, Product Profile versions, analysis runs, stored
-credentials and the proposals of actions that wait for a person.
+credentials, the settings a workspace chose from the dashboard, and the proposals of actions
+that wait for a person.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
-security can bind a database session to one project; ``credential`` belongs to
-the workspace itself and carries ``workspace_id``.
+security can bind a database session to one project; ``credential`` and
+``workspace_setting`` belong to the workspace itself and carry ``workspace_id``.
 """
 
 from __future__ import annotations
@@ -126,6 +127,24 @@ class CredentialRecord(Base):
     name: Mapped[str] = mapped_column(Text, primary_key=True)
     nonce: Mapped[bytes] = mapped_column(LargeBinary)
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    set_by: Mapped[uuid.UUID]
+    set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WorkspaceSettingRecord(Base):
+    """One choice a workspace made in the dashboard's settings, as JSON.
+
+    ``name`` says what was chosen (``model.tier.fast``, ``analysis.limits``); the
+    names and the shape of each value are code (``workspace_settings/``), and a
+    value is checked again when it is read. The database checks neither: a
+    name the code no longer knows is never read.
+    """
+
+    __tablename__ = "workspace_setting"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspace.id"), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSONB)
     set_by: Mapped[uuid.UUID]
     set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

@@ -2,7 +2,8 @@
 
 They need no Temporal server and no model. A database is named, never connected to, and no
 credential is resolved: how one is, is tested with ``WorkspaceCredentials`` and with the
-analyzer's tokens. The
+analyzer's tokens. The tests that make the chat model of an attempt read the workspace's
+model choices, so they need PostgreSQL (see the root ``conftest.py``). The
 worker's own folder of clones is under the system's temporary folder, which every test of the
 worker has replaced with one of its own (``temporary_folder`` in ``conftest.py``).
 """
@@ -14,7 +15,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.db.session import DatabaseError, session_factory
 from openmarketer_core.llm import RouterChatModel
@@ -37,8 +38,12 @@ MODEL = {"LLM_CONFIG_PATH": MODELS, "OPENROUTER_API_KEY": "not-a-real-key"}
 DATABASE_URL = "postgresql+psycopg://app:hunter2@db.internal:5432/marketer"
 
 
-def wired(environ: dict[str, str], database_url: str = DATABASE_URL):
-    sessions = session_factory(DATABASE_URL)
+def wired(
+    environ: dict[str, str],
+    database_url: str = DATABASE_URL,
+    sessions: sessionmaker[Session] | None = None,
+):
+    sessions = sessions or session_factory(DATABASE_URL)
     credentials = WorkspaceCredentials(sessions, environ, None)
     return wiring.repository_analyzer(environ, sessions, database_url, credentials)
 
@@ -78,29 +83,29 @@ def test_commit_of_the_run_reaches_the_clone(monkeypatch, tmp_path):
     assert asked == ["a" * 40]
 
 
-def test_each_attempt_gets_a_chat_model_of_its_own_from_one_router(parts):
-    wired(MODEL)
+def test_each_attempt_gets_a_chat_model_of_its_own_from_one_configuration(parts, sessions):
+    wired(MODEL, sessions=sessions)
     workspace_id = uuid.uuid4()
     first, second = parts[0].new_model(workspace_id), parts[0].new_model(workspace_id)
     assert isinstance(first, RouterChatModel) and isinstance(second, RouterChatModel)
     assert first is not second
-    assert first.router is second.router
+    assert first.router.config is second.router.config
 
 
-def test_chat_model_of_an_attempt_carries_the_key_of_the_environment(parts):
-    wired(MODEL)
+def test_chat_model_of_an_attempt_carries_the_key_of_the_environment(parts, sessions):
+    wired(MODEL, sessions=sessions)
     model = parts[0].new_model(uuid.uuid4())
     assert isinstance(model, RouterChatModel)
     assert model.api_key == MODEL["OPENROUTER_API_KEY"]
 
 
-def test_no_credential_is_in_the_text_of_what_the_analyzer_is_built_of(parts):
+def test_no_credential_is_in_the_text_of_what_the_analyzer_is_built_of(parts, sessions):
     secrets = {
         "OPENROUTER_API_KEY": "made-up-model-key",
         "GITHUB_TOKEN": "made-up-github-token",
         "GITLAB_TOKEN": "made-up-gitlab-token",
     }
-    wired({"LLM_CONFIG_PATH": MODELS, **secrets})
+    wired({"LLM_CONFIG_PATH": MODELS, **secrets}, sessions=sessions)
     workspace_id = uuid.uuid4()
     shown = [
         repr(parts[0]),

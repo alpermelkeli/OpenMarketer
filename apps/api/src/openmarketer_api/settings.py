@@ -1,21 +1,25 @@
 """Settings of the API process, read from the environment at the edge.
 
-Only what the API itself needs is here: the database, the workflow server and
-the key that credentials are stored under. The API reads no model configuration
-and never the value of a credential, from the environment or from the database:
-analyses run in the worker. ``ENCRYPTION_KEY`` is read to encrypt a credential
-the user sets; without it nothing can be stored, and a key that is not one
-stops the start. Whether the environment sets a credential is not a setting:
-core's ``credential_statuses`` is handed the environment (``main.py``) and
-looks only at whether each credential's variable is empty.
+Only what the API itself needs is here: the database, the workflow server, the
+key that credentials are stored under and the model configuration. The API never
+reads the value of a credential, from the environment or from the database:
+analyses run in the worker. It reads the model configuration (``LLM_CONFIG_PATH``)
+to show what each role resolves to and to store a workspace's choices of models;
+a configuration that cannot be read stops the start, as it stops the worker's.
+``ENCRYPTION_KEY`` is read to encrypt a credential the user sets; without it
+nothing can be stored, and a key that is not one stops the start. Whether the
+environment sets a credential is not a setting: core's ``credential_statuses``
+is handed the environment (``main.py``) and looks only at whether each
+credential's variable is empty.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from openmarketer_core.credentials.cipher import CredentialCipher, EncryptionKeyInvalid
+from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ModelRouter
 from openmarketer_core.workflow_server import WorkflowServer
 
 
@@ -29,6 +33,9 @@ class Settings:
     workflow_server: WorkflowServer
     # None when the installation has no ENCRYPTION_KEY: credentials cannot be stored.
     credential_cipher: CredentialCipher | None
+    # The model configuration with the environment's overrides; kept out of the repr, since
+    # it holds the environment.
+    model_router: ModelRouter = field(repr=False)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Settings:
@@ -39,7 +46,21 @@ class Settings:
             database_url=database_url,
             workflow_server=WorkflowServer.from_environment(environ),
             credential_cipher=_credential_cipher(environ),
+            model_router=_model_router(environ),
         )
+
+
+def _model_router(environ: Mapping[str, str]) -> ModelRouter:
+    path = environ.get("LLM_CONFIG_PATH") or DEFAULT_CONFIG_PATH
+    try:
+        return ModelRouter.from_file(path, env=environ)
+    except OSError as e:
+        raise SettingsError(
+            f"the model configuration {path} cannot be read: {e.strerror}"
+        ) from None
+    except ValueError as e:
+        # ConfigError, and the schema's refusal of the file.
+        raise SettingsError(f"the model configuration {path} is not valid: {e}") from None
 
 
 def _credential_cipher(environ: Mapping[str, str]) -> CredentialCipher | None:
