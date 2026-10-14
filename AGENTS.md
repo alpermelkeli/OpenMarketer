@@ -18,13 +18,13 @@ Phase 1 is in progress. Intake, extractors and the analyzer agent run from the C
 | `config/models.yaml` | Model per role, through OpenRouter |
 | `evals/` | Golden cases (`cases/<name>/case.yaml` and `expected_profile.json`) and committed benchmark results (`results/<id>/`) |
 | `docs/status.md` | What is built, how it was checked, and where the code differs from the design. Keep it current in the same change as the code |
-| `deploy/compose/dev.yml` | Dev stack: PostgreSQL + pgvector (5433), Temporal (7233, UI 8233), S3-compatible storage (9000/9001) |
+| `deploy/compose/dev.yml` | Dev stack: PostgreSQL + pgvector (5433), Temporal (7233, UI 8233), S3-compatible storage (9000/9001); the profile `tracing` adds a self-hosted Langfuse (3001) |
 
 ## Commands
 
 ```bash
 make install     # uv sync + pnpm install
-make up          # start the dev stack
+make up          # start the dev stack (tracing=1 adds Langfuse on http://localhost:3001)
 make migrate     # apply database migrations
 make check       # lint, type-check, tests: what CI runs
 make analyze repo=https://github.com/owner/name          # add save=1 to store the run (needs make up, make migrate)

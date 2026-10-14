@@ -1,4 +1,11 @@
 COMPOSE := docker compose -f deploy/compose/dev.yml
+# The dev stack with its optional Langfuse (profile `tracing`), for the targets that stop,
+# list or follow it, so that they reach Langfuse too once `make up tracing=1` started it.
+COMPOSE_ALL := $(COMPOSE) --profile tracing
+
+# What a target reads counts only when given on the command line: make also turns
+# environment variables into variables, and one named `live` must not spend credit.
+given = $(if $(filter command line,$(origin $(1))),$($(1)))
 
 .PHONY: help install up down reset logs ps psql analyze evaluate migrate migration api openapi worker web lint format typecheck test check
 
@@ -9,30 +16,26 @@ install: ## Install Python and web dependencies
 	uv sync
 	cd apps/web && pnpm install
 
-up: ## Start PostgreSQL, Temporal and object storage
-	$(COMPOSE) up -d
+up: ## Start PostgreSQL, Temporal and object storage; tracing=1 adds Langfuse on http://localhost:3001
+	$(if $(filter 1,$(call given,tracing)),$(COMPOSE_ALL),$(COMPOSE)) up -d
 
 down: ## Stop the dev stack (data is kept)
-	$(COMPOSE) down
+	$(COMPOSE_ALL) down
 
 reset: ## Stop the dev stack and delete its data
-	$(COMPOSE) down -v
+	$(COMPOSE_ALL) down -v
 
 logs: ## Follow dev stack logs
-	$(COMPOSE) logs -f
+	$(COMPOSE_ALL) logs -f
 
 ps: ## Show dev stack status
-	$(COMPOSE) ps -a
+	$(COMPOSE_ALL) ps -a
 
 psql: ## Open a psql shell in the dev database
 	$(COMPOSE) exec postgres psql -U openmarketer -d openmarketer
 
 analyze: ## Draft a Product Profile: make analyze repo=https://github.com/owner/name (save=1 stores it)
 	uv run --env-file .env openmarketer analyze $(repo) $(if $(save),--save)
-
-# What `make evaluate` reads counts only when given on the command line: make also turns
-# environment variables into variables, and one named `live` must not spend credit.
-given = $(if $(filter command line,$(origin $(1))),$($(1)))
 
 evaluate: ## Benchmark the analyzer on evals/cases; spends nothing unless live=1 is given (case=, runs=, judge=claude-code, judge_model=, rescore=evals/results/<id>)
 	uv run --env-file .env openmarketer evaluate $(if $(call given,case),--case $(call given,case)) $(if $(call given,runs),--runs $(call given,runs)) $(if $(call given,judge),--judge $(call given,judge)) $(if $(call given,judge_model),--judge-model $(call given,judge_model)) $(if $(call given,rescore),--rescore $(call given,rescore)) $(if $(filter 1,$(call given,live)),--live)
