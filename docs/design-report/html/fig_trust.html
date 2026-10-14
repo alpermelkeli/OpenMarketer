@@ -6,11 +6,11 @@
 <div class="card abs" id="u1"><b>Comments and DMs</b><span class="s">from the project's own audience</span></div>
 <div class="card abs" id="u2"><b>Web pages</b><span class="s">competitor sites, search results</span></div>
 <div class="card abs" id="u3"><b>Repository content</b><span class="s">README, code comments, issues of any repo</span></div>
-<div class="card abs" id="rd"><b>Reader agent</b><span class="s">classifies and summarizes untrusted text; cannot call connectors, cannot write to the database, cannot see credentials</span></div>
+<div class="card abs" id="rd"><b>Reader node <span class="chip">reader</span></b><span class="s">the agent's first node: classifies and summarizes untrusted text; its role may not be sent tools; cannot write to the database, cannot see credentials</span></div>
 <div class="card abs" id="sc"><b>Strict schema validation</b><span class="s">output must match fixed fields (sentiment, topic, intent, language, quoted text flagged); anything else is dropped</span></div>
 <div class="card abs" id="ih"><b>Injection heuristics</b><span class="s">suspicious patterns ("ignore previous instructions", hidden text) raise a flag for human review</span></div>
 <div class="card abs" id="op"><b>Operator instructions</b><span class="s">authenticated dashboard input only</span></div>
-<div class="card abs" id="ag"><b>Action agent</b><span class="s">plans and proposes actions; sees structured fields, never raw untrusted text</span></div>
+<div class="card abs" id="ag"><b>The agent's other nodes</b><span class="s">plan and ask for actions; see structured fields, never raw untrusted text</span></div>
 <div class="card abs" id="pf"><b>Approved Product Profile</b><span class="s">versioned, human-reviewed facts</span></div>
 <div class="card abs" id="gt" style="background:#E7DFF5"><b>Policy engine: deterministic gate</b><span class="s">risk level, budget caps, content filter, approvals</span></div>
 <div class="card abs" id="tl" style="background:#DCEBFA"><b>Connectors</b><span class="s">the only components with side effects</span></div>
