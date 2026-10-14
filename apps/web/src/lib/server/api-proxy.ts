@@ -27,6 +27,8 @@ const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-
 const VERSION = "[1-9][0-9]{0,8}";
 // The form every credential's name has in the API. Nothing else reaches it as one.
 const CREDENTIAL_NAME = "[a-z][a-z0-9_]{0,63}";
+// The form of a tier's and a role's name in the model configuration, as the API matches it.
+const SETTING_KEY = "[a-z][a-z0-9_]{0,63}";
 
 // The whole of a Host header that names this machine, as the API itself matches it.
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i;
@@ -46,7 +48,8 @@ function route(method: Method, template: keyof paths, paged = false): AllowedRou
   const pattern = template
     .replace(/\{(project_id|run_id|proposal_id)\}/g, UUID)
     .replace(/\{version\}/g, VERSION)
-    .replace(/\{name\}/g, CREDENTIAL_NAME);
+    .replace(/\{name\}/g, CREDENTIAL_NAME)
+    .replace(/\{(tier|role)\}/g, SETTING_KEY);
   return { method, template, pattern: new RegExp(`^${pattern}$`), paged };
 }
 
@@ -70,6 +73,17 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/settings/credentials"),
   route("PUT", "/v1/settings/credentials/{name}"),
   route("DELETE", "/v1/settings/credentials/{name}"),
+  route("GET", "/v1/settings/models"),
+  route("PUT", "/v1/settings/models/tiers/{tier}"),
+  route("DELETE", "/v1/settings/models/tiers/{tier}"),
+  route("PUT", "/v1/settings/models/roles/{role}"),
+  route("DELETE", "/v1/settings/models/roles/{role}"),
+  route("PUT", "/v1/settings/models/rejected-parameters"),
+  route("GET", "/v1/settings/models/catalog"),
+  route("GET", "/v1/settings/models/check"),
+  route("GET", "/v1/settings/analysis"),
+  route("PUT", "/v1/settings/analysis"),
+  route("DELETE", "/v1/settings/analysis"),
 ];
 
 // What a page of a list may be asked for, as the contract has it: 1 to 100 items,

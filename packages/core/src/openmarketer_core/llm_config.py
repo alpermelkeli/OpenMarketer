@@ -8,12 +8,20 @@ order (first match wins):
     2. project override       (dashboard settings, stored in the database)
     3. workspace override     (dashboard settings, stored in the database)
     4. models.yaml            roles.<role>.model
-    5. models.yaml            tiers.<tier>   (LLM_MODEL_<TIER> env overrides a tier)
+    5. the role's tier        LLM_MODEL_<TIER>, then the workspace's choice for the tier
+                              (dashboard settings), then models.yaml tiers.<tier>
     6. models.yaml            defaults.model
 
 It also builds OpenRouter chat-completion requests. OpenRouter exposes an
 OpenAI-compatible API, so the same payload also works with other compatible
-endpoints by changing ``base_url``.
+endpoints by changing ``base_url``. A parameter a model's providers reject is
+left out of its requests: those listed in models.yaml and those a workspace
+marked from the dashboard.
+
+What the router knows of the dashboard's settings is handed to it as plain
+mappings (``with_workspace``); it reads no database. Whether a model has what a
+role needs is checked against the provider's catalogue (``check_capabilities``),
+which the caller fetches (``llm_catalog.py``).
 
 Usage:
     python config/llm_config.py show               # table of role -> model + source
@@ -29,7 +37,9 @@ import json
 import os
 import re
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,6 +50,9 @@ DEFAULT_CONFIG_PATH = "config/models.yaml"  # relative to the repository root
 
 Capability = Literal["tools", "structured_output", "vision"]
 Tier = Literal["fast", "balanced", "strong"]
+# The request parameters a model can be marked as rejecting. Only one so far.
+RejectableParameter = Literal["temperature"]
+REJECTABLE_PARAMETERS: tuple[RejectableParameter, ...] = ("temperature",)
 
 # OpenRouter slugs look like "provider/model" with an optional ":variant" suffix.
 SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._:+/-]+$")
@@ -143,7 +156,7 @@ class Config(BaseModel):
     # With routing.require_parameters on, a request carrying a parameter that none of a
     # model's providers accept finds no endpoint (OpenRouter answers 404), so a parameter
     # listed here for a model is left out of its requests.
-    unsupported_parameters: dict[str, list[Literal["temperature"]]] = Field(default_factory=dict)
+    unsupported_parameters: dict[str, list[RejectableParameter]] = Field(default_factory=dict)
 
     @field_validator("tiers")
     @classmethod
@@ -179,6 +192,42 @@ class Resolved(BaseModel):
         return "tools" in self.requires
 
 
+@dataclass(frozen=True)
+class CatalogModel:
+    """What the provider's catalogue says of one model, as far as a role's needs go.
+
+    Prices are in US dollars per million tokens, ``None`` when the catalogue gives none.
+    """
+
+    id: str
+    name: str
+    context_length: int | None
+    prompt_price: float | None
+    completion_price: float | None
+    supported_parameters: frozenset[str]
+    input_modalities: frozenset[str]
+
+
+class CapabilityProblem(StrEnum):
+    """Why a model may not serve a role."""
+
+    NOT_IN_CATALOG = "not_in_catalog"
+    NO_TOOLS = "no_tools"
+    NO_STRUCTURED_OUTPUT = "no_structured_output"
+    NO_IMAGE_INPUT = "no_image_input"
+    REJECTS_TEMPERATURE = "rejects_temperature"
+    # A fallback is sent the request made for the first model, temperature included.
+    FALLBACK_REJECTS_TEMPERATURE = "fallback_rejects_temperature"
+
+
+@dataclass(frozen=True)
+class ModelProblem:
+    """One model of a role's request, and what it lacks for that role."""
+
+    model: str
+    problem: CapabilityProblem
+
+
 # ----------------------------------------------------------------- router
 class ModelRouter:
     """Resolve per-role model settings and build OpenRouter requests."""
@@ -191,14 +240,51 @@ class ModelRouter:
         env: Mapping[str, str] | None = None,
         workspace_overrides: dict[str, dict[str, Any]] | None = None,
         project_overrides: dict[str, dict[str, Any]] | None = None,
+        workspace_tiers: Mapping[str, str] | None = None,
+        workspace_rejected_parameters: Mapping[str, Collection[str]] | None = None,
     ) -> None:
+        """``workspace_tiers`` maps a tier to the model the workspace chose for it, and
+        ``workspace_rejected_parameters`` a model to the parameters the workspace marked it as
+        rejecting; both come from the dashboard, as the two override layers do.
+        """
         self.config = config
         self.env = dict(os.environ if env is None else env)
         self.workspace = workspace_overrides or {}
         self.project = project_overrides or {}
+        self.workspace_tiers = dict(workspace_tiers or {})
+        self.workspace_rejected_parameters = {
+            model: frozenset(parameters)
+            for model, parameters in (workspace_rejected_parameters or {}).items()
+        }
         for scope, data in (("workspace", self.workspace), ("project", self.project)):
             for role, values in data.items():
                 self._validate_override(scope, role, values)
+        for tier, model in self.workspace_tiers.items():
+            if tier not in self.config.tiers:
+                raise ConfigError(f"workspace choice for unknown tier '{tier}'")
+            _check_slug(model, f"workspace choice for tier '{tier}'")
+        for model, parameters in self.workspace_rejected_parameters.items():
+            _check_slug(model, "workspace rejected parameters")
+            unknown = set(parameters) - set(REJECTABLE_PARAMETERS)
+            if unknown:
+                raise ConfigError(f"workspace rejected parameters: unknown {sorted(unknown)}")
+
+    def with_workspace(
+        self,
+        *,
+        overrides: dict[str, dict[str, Any]],
+        tiers: Mapping[str, str],
+        rejected_parameters: Mapping[str, Collection[str]],
+    ) -> ModelRouter:
+        """This router with a workspace's choices from the dashboard in place of its own."""
+        return ModelRouter(
+            self.config,
+            env=self.env,
+            workspace_overrides=overrides,
+            project_overrides=self.project,
+            workspace_tiers=tiers,
+            workspace_rejected_parameters=rejected_parameters,
+        )
 
     # -- loading -------------------------------------------------------
     @classmethod
@@ -221,11 +307,19 @@ class ModelRouter:
             _check_slug(fb, f"{scope} override for '{role}' fallbacks")
 
     # -- resolution ----------------------------------------------------
-    def _tier_model(self, tier: str) -> tuple[str, str]:
+    def tier_model(self, tier: str) -> tuple[str, str]:
+        """The model of ``tier`` and where it comes from: environment, workspace or file."""
         override = self.env.get(f"LLM_MODEL_{tier.upper()}", "").strip()
         if override:
             return _check_slug(override, f"LLM_MODEL_{tier.upper()}"), f"env-tier:{tier}"
+        if tier in self.workspace_tiers:
+            return self.workspace_tiers[tier], f"workspace-tier:{tier}"
         return self.config.tiers[tier], f"tier:{tier}"  # type: ignore[index]
+
+    def rejected_parameters(self, model: str) -> frozenset[str]:
+        """The parameters left out of a request to ``model``: the file's and the workspace's."""
+        from_file = self.config.unsupported_parameters.get(model, [])
+        return frozenset(from_file) | self.workspace_rejected_parameters.get(model, frozenset())
 
     def resolve(self, role: str) -> Resolved:
         if role not in self.config.roles:
@@ -243,7 +337,7 @@ class ModelRouter:
         elif rc.model:
             model, source = rc.model, "role"
         elif rc.tier:
-            model, source = self._tier_model(rc.tier)
+            model, source = self.tier_model(rc.tier)
         else:
             model, source = d.model, "default"
 
@@ -274,33 +368,41 @@ class ModelRouter:
         return {r: self.resolve(r) for r in self.config.roles}
 
     # -- capability check ---------------------------------------------
-    @staticmethod
     def check_capabilities(
-        resolved: Resolved, catalog: Mapping[str, Mapping[str, Any]]
-    ) -> list[str]:
-        """Return human-readable problems for the chosen model, given an OpenRouter-style catalog.
+        self, resolved: Resolved, catalog: Mapping[str, CatalogModel]
+    ) -> list[ModelProblem]:
+        """What each model of the role's request lacks for the role, given the provider's catalogue.
 
-        ``catalog`` maps model id -> entry with ``supported_parameters`` (list) and
-        ``architecture.input_modalities`` (list), as returned by GET /models.
-        Unknown models are reported, not guessed.
+        Every model of the request is checked, the fallbacks too: they are sent the same
+        request. A model the catalogue does not list is reported, not guessed. Temperature
+        is a problem only when the request carries it, which the first model decides; a
+        fallback that rejects it is reported as such, since marking it would not help.
         """
-        problems: list[str] = []
-        for slug in [resolved.model, *resolved.fallbacks]:
+        rejected = self.rejected_parameters(resolved.model)
+        sends_temperature = resolved.kind == "chat" and "temperature" not in rejected
+        problems: list[ModelProblem] = []
+        for position, slug in enumerate([resolved.model, *resolved.fallbacks]):
             entry = catalog.get(slug)
             if entry is None:
-                problems.append(f"{slug}: not found in model catalog")
+                problems.append(ModelProblem(slug, CapabilityProblem.NOT_IN_CATALOG))
                 continue
-            params = set(entry.get("supported_parameters", []))
-            modalities = set((entry.get("architecture") or {}).get("input_modalities", []))
+            params = entry.supported_parameters
             if "tools" in resolved.requires and "tools" not in params:
-                problems.append(f"{slug}: does not support tool calling")
+                problems.append(ModelProblem(slug, CapabilityProblem.NO_TOOLS))
             if "structured_output" in resolved.requires and not params & {
                 "structured_outputs",
                 "response_format",
             }:
-                problems.append(f"{slug}: does not support structured output")
-            if "vision" in resolved.requires and "image" not in modalities:
-                problems.append(f"{slug}: does not accept image input")
+                problems.append(ModelProblem(slug, CapabilityProblem.NO_STRUCTURED_OUTPUT))
+            if "vision" in resolved.requires and "image" not in entry.input_modalities:
+                problems.append(ModelProblem(slug, CapabilityProblem.NO_IMAGE_INPUT))
+            if sends_temperature and "temperature" not in params:
+                problem = (
+                    CapabilityProblem.REJECTS_TEMPERATURE
+                    if position == 0
+                    else CapabilityProblem.FALLBACK_REJECTS_TEMPERATURE
+                )
+                problems.append(ModelProblem(slug, problem))
         return problems
 
     # -- requests ------------------------------------------------------
@@ -353,7 +455,7 @@ class ModelRouter:
             "max_tokens": r.max_tokens,
             "provider": routing.model_dump(),
         }
-        if "temperature" not in self.config.unsupported_parameters.get(r.model, []):
+        if "temperature" not in self.rejected_parameters(r.model):
             payload["temperature"] = r.temperature
         if r.fallbacks:
             payload["models"] = [r.model, *r.fallbacks]  # OpenRouter tries these in order
@@ -381,17 +483,6 @@ class ModelRouter:
         )
         with urllib.request.urlopen(req, timeout=self.resolve(role).timeout_s) as resp:  # noqa: S310
             return json.load(resp)
-
-
-def fetch_catalog(router: ModelRouter) -> dict[str, dict[str, Any]]:
-    """Fetch the OpenRouter model catalog (id -> entry) for the dashboard's model picker."""
-    req = urllib.request.Request(
-        router.config.provider.base_url.rstrip("/") + "/models",
-        headers={"Accept": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-        data = json.load(resp)
-    return {m["id"]: m for m in data.get("data", [])}
 
 
 # ----------------------------------------------------------------- CLI

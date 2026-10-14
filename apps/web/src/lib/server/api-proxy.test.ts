@@ -306,6 +306,42 @@ describe("the query of a list", () => {
   });
 });
 
+describe("the routes of the model and analysis settings", () => {
+  const MODELS = ["settings", "models"];
+
+  it("forward the settings, a tier, a role, the rejected parameters, the catalogue and the check", () => {
+    expect(allowedApiPath("GET", MODELS)).toBe("/v1/settings/models");
+    expect(allowedApiPath("PUT", [...MODELS, "tiers", "fast"])).toBe("/v1/settings/models/tiers/fast");
+    expect(allowedApiPath("DELETE", [...MODELS, "tiers", "fast"])).toBe("/v1/settings/models/tiers/fast");
+    expect(allowedApiPath("PUT", [...MODELS, "roles", "repo_analyzer"])).toBe(
+      "/v1/settings/models/roles/repo_analyzer",
+    );
+    expect(allowedApiPath("DELETE", [...MODELS, "roles", "repo_analyzer"])).toBe(
+      "/v1/settings/models/roles/repo_analyzer",
+    );
+    expect(allowedApiPath("PUT", [...MODELS, "rejected-parameters"])).toBe("/v1/settings/models/rejected-parameters");
+    expect(allowedApiPath("GET", [...MODELS, "catalog"])).toBe("/v1/settings/models/catalog");
+    expect(allowedApiPath("GET", [...MODELS, "check"])).toBe("/v1/settings/models/check");
+  });
+
+  it("forward reading, choosing and removing the limits of an analysis", () => {
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      expect(allowedApiPath(method, ["settings", "analysis"])).toBe("/v1/settings/analysis");
+    }
+  });
+
+  it("do not include a tier or a role of another form, or a path below one", () => {
+    for (const name of ["", "Fast", "repo-analyzer", "..", "fast%2F..", `a${"b".repeat(64)}`]) {
+      expect(() => allowedApiPath("PUT", [...MODELS, "tiers", name])).toThrow();
+      expect(() => allowedApiPath("PUT", [...MODELS, "roles", name])).toThrow();
+    }
+    expect(() => allowedApiPath("PUT", [...MODELS, "roles", "writer", "model"])).toThrow();
+    expect(() => allowedApiPath("GET", [...MODELS, "tiers", "fast"])).toThrow();
+    expect(() => allowedApiPath("POST", ["settings", "analysis"])).toThrow();
+    expect(() => allowedApiPath("DELETE", [...MODELS])).toThrow();
+  });
+});
+
 describe("the credential routes", () => {
   const LIST = ["settings", "credentials"];
   const ONE = ["settings", "credentials", "github_token"];

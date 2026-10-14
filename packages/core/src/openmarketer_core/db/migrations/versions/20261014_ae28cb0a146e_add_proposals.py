@@ -6,7 +6,7 @@ Autogenerate wrote the effect and status CHECKs twice; the copies made by the
 enum types are removed by hand, and so are its markers.
 
 Revision ID: ae28cb0a146e
-Revises: e96ec2276ea4
+Revises: bbcf991fe9b4
 Create Date: 2026-10-14 09:38:36.918867
 """
 
@@ -17,7 +17,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "ae28cb0a146e"
-down_revision: str | None = "e96ec2276ea4"
+down_revision: str | None = "bbcf991fe9b4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

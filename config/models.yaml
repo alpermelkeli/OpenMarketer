@@ -10,8 +10,13 @@
 #   2. project setting        dashboard, stored in the database
 #   3. workspace setting      dashboard, stored in the database
 #   4. this file: role.model
-#   5. this file: tier mapping (role.tier -> tiers.<tier>)
+#   5. the role's tier: LLM_MODEL_<TIER>, then the workspace's choice in the
+#      dashboard, then this file's tiers.<tier>
 #   6. this file: defaults.model
+#
+# The dashboard also marks models whose requests leave out the temperature, in
+# addition to unsupported_parameters below. The command line reads this file and
+# the environment only.
 #
 # IMPORTANT: model slugs use OpenRouter's "provider/model" form and change as
 # models are released and retired. Check them against the catalogue at

@@ -13,8 +13,8 @@ Each time it reads the proposal back (``settle_proposal``), which expires it onc
 passed, and returns its status as soon as it is no longer pending. The decision is read from the
 database and never taken from the signal: anybody who reaches the workflow server can send a
 signal, and a signal says only that there is something to read. A run that is cancelled while it
-waits expires its proposal before the cancellation goes on, so nobody approves an action whose
-run is gone.
+stores the proposal or waits expires the proposal before the cancellation goes on, so nobody
+approves an action whose run is gone.
 
 This is workflow code, loaded by the sandbox: what it waits on is the workflow's own timer and
 state, and every read or write is an activity.
@@ -69,22 +69,11 @@ async def wait_for_a_person(
     decided: DecidedProposals,
 ) -> ProposalStatus:
     """Store ``request`` as a proposal and wait until it is approved, rejected or expired."""
-    held: ProposalHeld = await database_write(
-        PROPOSE_ACTION,
-        ProposalInput(
-            scope=scope,
-            run=run,
-            workflow_id=workflow.info().workflow_id,
-            request=request,
-            effect=limits.effect.value,
-            wait_seconds=limits.approval_wait_seconds,
-        ),
-        PROPOSAL_WRITE_LIMITS,
-        not_retried=[PROPOSAL_REFUSED],
-        result_type=ProposalHeld,
-    )
-    deadline = workflow.now() + timedelta(seconds=held.seconds_left)
+    held, cancelled = await _proposed(run, scope, request, limits)
     try:
+        if cancelled:
+            raise asyncio.CancelledError
+        deadline = workflow.now() + timedelta(seconds=held.seconds_left)
         while True:
             left = (deadline - workflow.now()).total_seconds()
             if left > 0:
@@ -98,6 +87,42 @@ async def wait_for_a_person(
     except asyncio.CancelledError:
         await until_it_ends(_settle(scope, request, deadline_passed=True))
         raise
+
+
+async def _proposed(
+    run: GraphRunRef, scope: RunScope, request: ActionRequest, limits: ActionPolicy
+) -> tuple[ProposalHeld, bool]:
+    """The proposal, stored to its end even if the workflow is cancelled meanwhile, and whether
+    it was.
+
+    A cancellation that arrived while the row was being written would otherwise leave the
+    proposal stored and pending, with no run waiting for it to expire it. Like
+    ``workflow_support.until_it_ends``, the write runs as a task of its own that a cancellation
+    does not reach; unlike it, the cancellation is reported instead of dropped.
+    """
+    storing = asyncio.ensure_future(
+        database_write(
+            PROPOSE_ACTION,
+            ProposalInput(
+                scope=scope,
+                run=run,
+                workflow_id=workflow.info().workflow_id,
+                request=request,
+                effect=limits.effect.value,
+                wait_seconds=limits.approval_wait_seconds,
+            ),
+            PROPOSAL_WRITE_LIMITS,
+            not_retried=[PROPOSAL_REFUSED],
+            result_type=ProposalHeld,
+        )
+    )
+    cancelled = False
+    while not storing.done():
+        try:
+            await workflow.wait([storing])
+        except asyncio.CancelledError:
+            cancelled = True
+    return storing.result(), cancelled
 
 
 async def _hear_or_time_out(

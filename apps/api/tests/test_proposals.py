@@ -19,14 +19,19 @@ from openmarketer_core.approvals.decision import RunNotTold
 from openmarketer_core.db.models import Project, Workspace
 from openmarketer_core.db.proposals import ActionProposal, propose_action
 from openmarketer_core.db.session import session_factory, transaction
+from openmarketer_core.workflow_start import WorkflowStart
 
 
 class FakeSignals:
-    """Records the runs it was asked to tell; refuses while ``reachable`` is false."""
+    """The workflow engine of these tests: records the runs it was asked to tell, refuses while
+    ``reachable`` is false, and starts nothing."""
 
     def __init__(self) -> None:
         self.told: list[tuple[str, uuid.UUID]] = []
         self.reachable = True
+
+    async def start(self, workflow: WorkflowStart) -> None:
+        raise AssertionError("deciding on a proposal starts no workflow")
 
     async def tell_decided(self, workflow_id: str, proposal_id: uuid.UUID) -> None:
         if not self.reachable:
@@ -54,15 +59,16 @@ def scope(sessions) -> RunScope:
 
 
 @pytest.fixture
-def signals(app, sessions, scope) -> FakeSignals:
+def signals(app, sessions, scope, repository_models, no_catalog) -> FakeSignals:
     """The application wired to the test database, this test's workspace and fake signals."""
     fake = FakeSignals()
     app.state.services = Services(
         sessions=sessions,
-        analysis_workflows=None,  # pyright: ignore[reportArgumentType]
-        run_signals=fake,
+        workflows=fake,
         environment={},
         credential_cipher=None,
+        model_router=repository_models,
+        model_catalog=no_catalog,
     )
     app.dependency_overrides[current_workspace_id] = lambda: scope.workspace_id
     return fake

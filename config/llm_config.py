@@ -11,11 +11,10 @@ from openmarketer_core.llm_config import (
     ConfigError,
     ModelRouter,
     Resolved,
-    fetch_catalog,
     main,
 )
 
-__all__ = ["Config", "ConfigError", "ModelRouter", "Resolved", "fetch_catalog", "main"]
+__all__ = ["Config", "ConfigError", "ModelRouter", "Resolved", "main"]
 
 if __name__ == "__main__":
     main()

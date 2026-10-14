@@ -6,7 +6,11 @@ export type SettingsSection = {
   label: string;
 };
 
-export const SETTINGS_SECTIONS: readonly SettingsSection[] = [{ href: "/settings/credentials", label: "Credentials" }];
+export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  { href: "/settings/credentials", label: "Credentials" },
+  { href: "/settings/models", label: "Models" },
+  { href: "/settings/analysis", label: "Analysis" },
+];
 
 /** The section `/settings` itself opens. */
 export const FIRST_SECTION = SETTINGS_SECTIONS[0];

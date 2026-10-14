@@ -5,7 +5,8 @@ the worker finds the row it is asked to execute. If the workflow cannot be
 started, the run is marked failed at once: an unfinished run blocks its
 project, and nobody would ever execute this one.
 
-How a workflow is started is the caller's business; it passes a function. This
+Which workflow executes the run is the contract's (``analysis_workflow``); how
+a workflow is started is the caller's business, and it passes a function. This
 module does not wait for the analysis and does not read a run's status.
 """
 
@@ -20,17 +21,13 @@ from openmarketer_core.db.analysis_runs import AnalysisRun, mark_run_failed, req
 from openmarketer_core.db.projects import get_project
 from openmarketer_core.db.session import transaction
 from openmarketer_core.repository_analysis.intake import remote_repository_url
-from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_core.repository_analysis.workflow_contract import (
+    AnalyzeRepositoryInput,
+    analysis_workflow,
+)
+from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
 
 WORKFLOW_NOT_STARTED = "the analysis could not be handed to a worker"
-
-
-class WorkflowNotStarted(Exception):
-    """The workflow engine could not be reached, or refused to start the workflow.
-
-    Raised by the function that starts workflows. A workflow that exists
-    already is not this error: for the caller it has been started.
-    """
 
 
 class AnalysisNotStarted(Exception):
@@ -49,7 +46,7 @@ def request_analysis(
     *,
     workspace_id: uuid.UUID,
     project_id: uuid.UUID,
-    start_workflow: Callable[[AnalyzeRepositoryInput], None],
+    start_workflow: Callable[[WorkflowStart], None],
 ) -> AnalysisRun:
     """Queue an analysis of the project's repository and start its workflow.
 
@@ -63,7 +60,7 @@ def request_analysis(
         remote_repository_url(project.source_repo_url)
         run = request_analysis_run(session, **scope)
     try:
-        start_workflow(AnalyzeRepositoryInput(run_id=run.id, **scope))
+        start_workflow(analysis_workflow(AnalyzeRepositoryInput(run_id=run.id, **scope)))
     except WorkflowNotStarted as e:
         with transaction(sessions) as session:
             mark_run_failed(session, run_id=run.id, error=WORKFLOW_NOT_STARTED, **scope)

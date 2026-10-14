@@ -5,8 +5,9 @@ and this worker's database, disk and model, one method for each thing the agent 
 an agent for:
 
 - ``initial_state``: what a run starts from, which is the run's own identifiers;
-- ``context``: what the nodes of one attempt are given: a chat model of the attempt's own,
-  made for the run's workspace, the limits, and the run's repository through ``LocalClones``;
+- ``context``: what the nodes of one attempt are given: a chat model of the attempt's own and
+  the limits, both made for the run's workspace, and the run's repository through
+  ``LocalClones``;
 - ``clone``: the handler of the action ``clone_repository``;
 - ``finish``: storing the profile and marking the run succeeded, both or neither;
 - ``release``: removing the run's clone once the run is over.
@@ -25,10 +26,11 @@ by the runtime when the run ends; here only by an attempt that finds, when it is
 its run was recorded failed meanwhile, for what it wrote since. Dependencies are handed in
 when the worker starts; nothing here reads the environment.
 
-No credential is kept here or put in the graph's state: the model of an attempt and the
-tokens of a clone are asked for with the run's workspace (``new_model``, ``tokens_of``),
-each time one is needed, so a key set from the dashboard is the one the next attempt uses.
-One that is set nowhere, or is stored and cannot be read (``CREDENTIAL_FAILURES``), ends the
+No credential is kept here or put in the graph's state: the model of an attempt, the tokens
+of a clone and the limits of an attempt are asked for with the run's workspace
+(``new_model``, ``tokens_of``, ``limits_of``), each time one is needed, so a key or a model
+set from the dashboard is the one the next attempt uses. A key that is set nowhere, or a
+credential or setting that is stored and cannot be read (``WORKSPACE_FAILURES``), ends the
 analysis in the words of its error, which name what to set and hold no value.
 """
 
@@ -79,6 +81,8 @@ from openmarketer_core.repository_analysis.intake import (
     remote_repository_url,
 )
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_core.workspace_settings.analysis_settings import StoredAnalysisLimitsInvalid
+from openmarketer_core.workspace_settings.model_settings import StoredModelChoiceInvalid
 from openmarketer_worker.agent_runtime.activities import AgentGraph
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, forget_quietly
 from openmarketer_worker.agent_runtime.vocabulary import DATABASE_UNAVAILABLE
@@ -89,10 +93,15 @@ from openmarketer_worker.repository_analyzer.clones import LocalClones, TokensOf
 
 logger = logging.getLogger(__name__)
 
-# What the credentials of a run's workspace are refused with: the model provider's key is set
-# nowhere, or a stored value does not open. Neither passes by itself, and both are worded for
-# whoever asked for the analysis.
-CREDENTIAL_FAILURES = (ModelKeyNotSet, CredentialUnreadable)
+# What the credentials and settings of a run's workspace are refused with: the model
+# provider's key is set nowhere, a stored value does not open, or a stored choice breaks a
+# rule. None passes by itself, and each is worded for whoever asked for the analysis.
+WORKSPACE_FAILURES = (
+    ModelKeyNotSet,
+    CredentialUnreadable,
+    StoredModelChoiceInvalid,
+    StoredAnalysisLimitsInvalid,
+)
 
 
 class AnalysisWork:
@@ -105,13 +114,14 @@ class AnalysisWork:
         new_model: Callable[[uuid.UUID], ChatModel],
         tokens_of: Callable[[uuid.UUID], RepositoryTokens],
         extractors: Sequence[Extractor],
-        limits: Limits,
+        limits_of: Callable[[uuid.UUID], Limits],
     ) -> None:
         """``new_model`` makes the chat model of one attempt: a model keeps what it served.
 
         It is given the workspace of the run, as ``tokens_of`` is, which gives the tokens a
-        clone for a run of that workspace may carry. Either may raise one of
-        ``CREDENTIAL_FAILURES``, which ends the analysis.
+        clone for a run of that workspace may carry, and ``limits_of``, which gives the
+        limits of an attempt. Each may raise one of ``WORKSPACE_FAILURES``, which ends the
+        analysis.
         """
         self._sessions = sessions
         self._checkpoints = checkpoints
@@ -119,7 +129,7 @@ class AnalysisWork:
         self._new_model = new_model
         self._tokens_of = tokens_of
         self._extractors = extractors
-        self._limits = limits
+        self._limits_of = limits_of
 
     def initial_state(self, run: GraphRunRef) -> AnalyzerState:
         """What the graph of ``run`` starts from: the run with its project and workspace."""
@@ -135,9 +145,10 @@ class AnalysisWork:
                 run.run_id, source, commit_sha, self._tokens_for(found)
             ).files
 
+        workspace_id = self._run_to_execute(run).workspace_id
         return AnalyzerContext(
-            model=self._new_model(self._run_to_execute(run).workspace_id),
-            limits=self._limits,
+            model=self._new_model(workspace_id),
+            limits=self._limits_of(workspace_id),
             files_at=files_at,
             facts_of=self._facts_of,
         )
@@ -156,7 +167,7 @@ class AnalysisWork:
         source = self._repository_of(run)
         try:
             intake = self._clones.clone(run.run_id, source, self._tokens_for(run))
-        except (IntakeError, *CREDENTIAL_FAILURES) as e:
+        except (IntakeError, *WORKSPACE_FAILURES) as e:
             logger.info("analysis run %s: its repository was not cloned: %s", run.run_id, e)
             raise failure(
                 steps.ANALYSIS_FAILED, failure_message(e, self._clones.folder_of(run.run_id))
@@ -286,7 +297,7 @@ class WordedSteps:
         """
         try:
             return self._graph.advance(run, checkpoints, resume)
-        except (*ANALYSIS_FAILURES, *CREDENTIAL_FAILURES) as e:
+        except (*ANALYSIS_FAILURES, *WORKSPACE_FAILURES) as e:
             logger.info("analysis run %s failed: %s", run.run_id, e)
             passing = isinstance(e, LLMError) and e.may_pass
             kind = steps.MODEL_UNAVAILABLE if passing else steps.ANALYSIS_FAILED

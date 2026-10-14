@@ -6,6 +6,7 @@ starting a workflow is a function the test supplies.
 """
 
 import uuid
+from typing import cast
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
@@ -18,10 +19,15 @@ from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.request import (
     WORKFLOW_NOT_STARTED,
     AnalysisNotStarted,
-    WorkflowNotStarted,
     request_analysis,
 )
-from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_core.repository_analysis.workflow_contract import (
+    ANALYSIS_TASK_QUEUE,
+    ANALYZE_REPOSITORY_WORKFLOW,
+    AnalyzeRepositoryInput,
+    analysis_workflow_id,
+)
+from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
 
 
 @pytest.fixture
@@ -58,7 +64,7 @@ def stored(sessions, workspace_id: uuid.UUID, run: AnalysisRun) -> AnalysisRun:
         )
 
 
-def unreachable(_: AnalyzeRepositoryInput) -> None:
+def unreachable(_: WorkflowStart) -> None:
     raise WorkflowNotStarted("connection refused")
 
 
@@ -71,25 +77,33 @@ def test_requested_run_is_queued(sessions, workspace_id, project_id):
 
 
 def test_workflow_is_started_for_the_stored_run(sessions, workspace_id, project_id):
-    started: list[AnalyzeRepositoryInput] = []
+    started: list[WorkflowStart] = []
     run = request_analysis(
         sessions, workspace_id=workspace_id, project_id=project_id, start_workflow=started.append
     )
     assert started == [
-        AnalyzeRepositoryInput(workspace_id=workspace_id, project_id=project_id, run_id=run.id)
+        WorkflowStart(
+            workflow=ANALYZE_REPOSITORY_WORKFLOW,
+            workflow_id=analysis_workflow_id(run.id),
+            task_queue=ANALYSIS_TASK_QUEUE,
+            input=AnalyzeRepositoryInput(
+                workspace_id=workspace_id, project_id=project_id, run_id=run.id
+            ),
+        )
     ]
 
 
 def test_run_is_committed_before_its_workflow_is_started(sessions, workspace_id, project_id):
     seen_by_the_worker: list[AnalysisRunStatus] = []
 
-    def start(workflow: AnalyzeRepositoryInput) -> None:
+    def start(workflow: WorkflowStart) -> None:
+        ids = cast(AnalyzeRepositoryInput, workflow.input)
         with transaction(sessions) as session:
             run = analysis_run(
                 session,
-                workspace_id=workflow.workspace_id,
-                project_id=workflow.project_id,
-                run_id=workflow.run_id,
+                workspace_id=ids.workspace_id,
+                project_id=ids.project_id,
+                run_id=ids.run_id,
             )
         seen_by_the_worker.append(run.status)
 
@@ -130,7 +144,7 @@ def test_project_is_not_blocked_by_a_run_that_was_never_started(sessions, worksp
 def test_second_request_while_a_run_is_unfinished_starts_no_workflow(
     sessions, workspace_id, project_id
 ):
-    started: list[AnalyzeRepositoryInput] = []
+    started: list[WorkflowStart] = []
     request_analysis(
         sessions, workspace_id=workspace_id, project_id=project_id, start_workflow=started.append
     )
@@ -148,7 +162,7 @@ def test_second_request_while_a_run_is_unfinished_starts_no_workflow(
 def test_project_that_is_not_an_https_repository_gets_no_run(
     sessions, workspace_id, repository_url
 ):
-    started: list[AnalyzeRepositoryInput] = []
+    started: list[WorkflowStart] = []
     local = new_project(sessions, workspace_id, repository_url)
     with pytest.raises(IntakeError, match="must start with https://"):
         request_analysis(
