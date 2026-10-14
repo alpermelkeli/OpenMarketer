@@ -604,7 +604,7 @@ export interface components {
          * @description Why a model may not serve a role.
          * @enum {string}
          */
-        CapabilityProblem: "not_in_catalog" | "no_tools" | "no_structured_output" | "no_image_input" | "rejects_temperature";
+        CapabilityProblem: "not_in_catalog" | "no_tools" | "no_structured_output" | "no_image_input" | "rejects_temperature" | "fallback_rejects_temperature";
         /** CatalogModelResponse */
         CatalogModelResponse: {
             /**

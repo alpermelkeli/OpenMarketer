@@ -34,6 +34,26 @@ export type CredentialStatus = Schemas["CredentialStatusResponse"];
 export type CredentialList = Schemas["CredentialListResponse"];
 export type CredentialSource = Schemas["CredentialSource"];
 
+export type ModelSettings = Schemas["ModelSettingsResponse"];
+export type TierSetting = Schemas["TierSettingResponse"];
+export type TierModelSource = Schemas["TierModelSource"];
+export type RoleSetting = Schemas["RoleSettingResponse"];
+export type RoleModelSource = Schemas["RoleModelSource"];
+export type RoleChoiceRequest = Schemas["RoleChoiceRequest"];
+export type ResolvedModel = Schemas["ResolvedModelResponse"];
+export type RejectedParameters = Schemas["RejectedParametersResponse"];
+export type RejectableParameter = RejectedParameters["chosen"][number];
+export type ChoiceBounds = Schemas["ChoiceBoundsResponse"];
+export type UnreadableChoice = Schemas["UnreadableChoiceResponse"];
+export type ModelCatalog = Schemas["ModelCatalogResponse"];
+export type CatalogModel = Schemas["CatalogModelResponse"];
+export type ModelCheck = Schemas["ModelCheckResponse"];
+export type ModelProblem = Schemas["ModelProblemResponse"];
+export type CapabilityProblem = Schemas["CapabilityProblem"];
+
+export type AnalysisSettings = Schemas["AnalysisSettingsResponse"];
+export type AnalysisLimitsRequest = Schemas["AnalysisLimitsRequest"];
+
 export type Problem = Schemas["Problem"];
 export type ErrorCode = Schemas["ErrorCode"];
 export type RequestValidationError = Schemas["HTTPValidationError"];
