@@ -11,6 +11,7 @@ import threading
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from temporalio import activity
@@ -32,6 +33,8 @@ from openmarketer_worker.agent_runtime.agent_worker import AgentWorker
 from openmarketer_worker.agent_runtime.routes import ActionContext
 
 TASK_QUEUE = "dsl-greeter"
+# Longer than any run of the tests takes, so the cleanup of left-over threads never meets one.
+LONGEST_RUN = timedelta(hours=1)
 DEFAULT_SUBJECT = "Ada"
 
 
@@ -126,6 +129,7 @@ def wire(world: GreeterWorld, checkpoints: CheckpointAccess) -> AgentRegistratio
     )
     return worker.registration(
         checkpoints=checkpoints,
+        longest_run=LONGEST_RUN,
         graph=steps,
         workflows=[
             Greeter,

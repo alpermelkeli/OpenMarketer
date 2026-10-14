@@ -22,7 +22,7 @@ Write these down in the pull request description:
 - **What a run produces** and where it is stored. `finish` stores it and returns only an id and a summary.
 - **Its actions**, each one with a payload of identifiers only, and whether repeating it is harmless (`attempts=`). An action that **publishes or spends** is declared with `effect=ActionEffect.PUBLISHES` or `SPENDS` (and `approval_wait=` if three days do not fit): the policy gate then holds it for a person's approval, the workflow needs `scope_of` and the registration `sessions=` (`worker.md`, "Rules"). The gate weighs no budget or content yet; if the agent needs that, raise it first.
 - **Who starts it**: the API, a schedule or another workflow. Also, which **credentials** it uses.
-- **Whether it keeps checkpoints.** Every graph run by the runtime does, so it needs a cleanup rule (step 7).
+- **Whether it keeps checkpoints.** Every graph run by the runtime does, so its registration needs the longest a run can take, which bounds the cleanup of its left-over threads (step 7).
 
 ## 1. The contract (core, `<feature>/workflow_contract.py`)
 
@@ -79,17 +79,11 @@ Use `before`, `after` and `failed` as `worker.md` says. Every way a run can end 
 
 ## 6. Serving it (worker agent, `main.py`)
 
-**This does not exist yet.** `main.py` serves exactly one agent with one `Worker`. The runtime's activity names (`run_graph_step`, `run_action`, `forget_run`) are fixed, and Temporal refuses two activities with the same name on one `Worker`. So the second agent needs:
-
-- **A `Worker` of its own** on its own task queue. Build one per `AgentRegistration`, serve them all until `stop`, and add the new agent's start-up errors to the ones `serve` words.
-- **The cleanups of every agent**, handed to `keep_removing_leftover_checkpoints`.
-- **Updated tests**: `test_worker.py`.
-
-Do this as a separate commit before the agent is wired, and update "The worker serves exactly one agent" in `docs/status.md`.
+Add the agent's wiring function to `agents` in `main.py`. Each agent gets a `Worker` of its own on its own task queue, and `build_workers` refuses two agents on one queue, so the contract's queue (step 1) must be new. Add the new agent's start-up errors to the ones `serve` words, and a start-up test to `test_worker.py`.
 
 ## 7. Removing left-over checkpoints (persistence agent, then worker agent)
 
-The current rule, `remove_checkpoints_of_analysis_runs` (`db/checkpoint_cleanup.py`), touches only `analysis-run:` threads. Add a rule in core for the new kind's threads only, with its own test. Then hand it to the worker as a `CheckpointCleanup` from `wiring.py`, with the longest run from `policy.py`.
+Give `registration` the agent's `longest_run` from `policy.py`: everything a run can spend, every attempt and wait of every step and action, and the longest wait for a person of an action that publishes or spends. The registration then adds core's rule for the agent's kind (`remove_stale_checkpoints`), which removes the threads nothing wrote for that long. If the run has a table, a stricter rule like `remove_checkpoints_of_analysis_runs` (`db/checkpoint_cleanup.py`) may be added in core for the new kind's threads only, with its own test, and handed over as a `CheckpointCleanup` from `wiring.py`.
 
 ## 8. Credentials (worker agent)
 

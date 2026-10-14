@@ -188,6 +188,7 @@ def registration(parts: AnalyzerParts) -> AgentRegistration:
         workflows=[AnalyzeRepository],
         texts=steps.ANALYSIS_TEXTS,
         activities=[activities.start_run, activities.record_failure],
+        longest_run=timedelta(seconds=longest_analysis_seconds(parts.policy)),
         checkpoint_cleanups=[cleanup_of_analysis_runs(parts.policy)],
     )
 
