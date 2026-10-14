@@ -173,7 +173,8 @@ describe("the routes that are forwarded", () => {
 
   it("do not include other methods of a known path", () => {
     expect(() => allowedApiPath("PUT", ["projects"])).toThrow();
-    expect(() => allowedApiPath("DELETE", ["projects", PROJECT])).toThrow();
+    expect(() => allowedApiPath("DELETE", ["projects"])).toThrow();
+    expect(() => allowedApiPath("PUT", ["projects", PROJECT])).toThrow();
     expect(() => allowedApiPath("GET", APPROVAL)).toThrow();
   });
 
@@ -192,6 +193,18 @@ describe("the routes that are forwarded", () => {
     ]) {
       expect(() => allowedApiPath("GET", segments)).toThrow();
     }
+  });
+});
+
+describe("the route that deletes a project", () => {
+  it("takes one project by its id", () => {
+    expect(allowedApiPath("DELETE", ["projects", PROJECT])).toBe(`/v1/projects/${PROJECT}`);
+  });
+
+  it("deletes nothing under a project and no project named otherwise", () => {
+    expect(() => allowedApiPath("DELETE", ["projects", PROJECT, "profile", "versions", "1"])).toThrow();
+    expect(() => allowedApiPath("DELETE", ["projects", "not-a-uuid"])).toThrow();
+    expect(() => allowedApiPath("DELETE", ["projects", PROJECT, ".."])).toThrow();
   });
 });
 

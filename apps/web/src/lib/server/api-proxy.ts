@@ -60,6 +60,7 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/projects", PAGED),
   route("POST", "/v1/projects"),
   route("GET", "/v1/projects/{project_id}"),
+  route("DELETE", "/v1/projects/{project_id}"),
   route("GET", "/v1/projects/{project_id}/analyses", PAGED),
   route("POST", "/v1/projects/{project_id}/analyses"),
   route("GET", "/v1/projects/{project_id}/analyses/{run_id}"),

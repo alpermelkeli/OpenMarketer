@@ -35,6 +35,7 @@ from openmarketer_core.credentials.resolution import (
 )
 from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
 from openmarketer_core.db.profile_versions import ProfileAlreadyApproved, ProfileVersionNotFound
+from openmarketer_core.db.project_removal import ProjectHasUnfinishedRun
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.session import DatabaseError
 from openmarketer_core.repository_analysis.intake import IntakeError
@@ -104,6 +105,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     UnknownTier: (404, ErrorCode.TIER_NOT_FOUND),
     UnknownRole: (404, ErrorCode.ROLE_NOT_FOUND),
     AnalysisAlreadyRunning: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
+    ProjectHasUnfinishedRun: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
     CredentialSetByEnvironment: (409, ErrorCode.CREDENTIAL_SET_BY_ENVIRONMENT),
     EncryptionKeyMissing: (409, ErrorCode.ENCRYPTION_KEY_MISSING),
