@@ -98,7 +98,7 @@ The key design choices are:
 
 \begin{itemize}
   \item \textbf{Generic by construction.} Nothing is hard-coded for one product. The repository is analysed into a structured, versioned, human-approved Product Profile; strategy comes from replaceable \emph{playbooks}.
-  \item \textbf{Safety outside the model.} Budget limits, approval rules and content filters are enforced by deterministic code at the tool boundary. Untrusted text (comments, web pages, README files) is processed by a quarantined reader agent and can inform decisions but never authorise actions.
+  \item \textbf{Safety outside the model.} Budget limits, approval rules and content filters are enforced by deterministic code where an action starts. Untrusted text (comments, web pages, README files) is read by a quarantined reader node with no tools and can inform decisions but never authorise actions.
   \item \textbf{Durable, human-in-the-loop workflows.} Approvals can take days. Temporal workflows make waiting, retrying and resuming reliable.
   \item \textbf{OpenRouter by default, a model per role.} Every place that calls a language model is a named role (writer, planner, reader, orchestrator, and so on). Each role resolves its model through OpenRouter and can be changed from the dashboard settings, from \texttt{models.yaml} or from environment variables, without code changes.
   \item \textbf{Agent graphs and an agentic creative studio.} Agent workflows are written as graphs with LangGraph, running inside Temporal for durability. Asset production works like a coding agent: it writes code to compose text and layouts, generates backgrounds or whole images, then verifies the result with programmatic checks and a separate vision model, and edits until it passes or escalates to a human.
@@ -107,7 +107,7 @@ The key design choices are:
   \item \textbf{Boring, widely known technology.} Python and FastAPI for the backend, Next.js for the dashboard, PostgreSQL with pgvector for data, Temporal for workflows, Docker Compose for self-hosting, Apache-2.0 for the licence.
 \end{itemize}
 
-The report covers the concept (Section~\ref{sec:concept}), requirements, architecture, LLM access and per-role model configuration (Section~\ref{sec:llm}), the repository-to-profile pipeline, the safety model, the orchestrator console (Section~\ref{sec:console}), the security model, platform and media integrations, the writer (Section~\ref{sec:writer}), the data model, the technology selection with rationale, the open-source strategy, deployment, evaluation, a commercial path for deploying the system at companies (Section~\ref{sec:commercial}), and a twelve-month roadmap with risks.
+The report covers the concept (Section~\ref{sec:concept}), requirements, architecture, LLM access and per-role model configuration (Section~\ref{sec:llm}), the repository-to-profile pipeline, the safety model, the orchestrator console (Section~\ref{sec:console}), the security model, platform and media integrations, the writer and the researcher (Sections~\ref{sec:writer} and~\ref{sec:researcher}), the data model, the technology selection with rationale, the open-source strategy, deployment, evaluation, a commercial path for deploying the system at companies (Section~\ref{sec:commercial}), and a twelve-month roadmap with risks.
 
 \clearpage
 % ---------------------------------------------------------------- 1
@@ -263,9 +263,11 @@ A workflow runs one run of one agent. The agent's nodes call roles, use tools an
 \begin{description}
   \item[Ordinary.] Runs as one activity, under its own time limit and retries, and returns a small outcome. Cloning a repository and publishing a post are ordinary actions.
   \item[Start a run.] Creates the record of another agent's run and starts its workflow, keyed by the action's identifier so that a retry finds the same run, and returns the run's identifier without waiting for it. Its effect is internal, and a policy rule caps how many runs one run may start. The planner starts the week's writing runs this way and ends; their results reach the next week's plan through the database, not as a return value.
-  \item[Run and wait.] Starts another agent's run as a child workflow and waits for it with no graph running, as a run waits for an approval. The child's result comes back as the action's outcome. The writer asks the creative studio for an image this way, because its proposal needs the image. The child keeps its own actions and its own approvals.
+  \item[Run and wait.] Starts another agent's run as a child workflow and waits for it with no graph running, as a run waits for an approval. The child's result comes back as the action's outcome. The writer asks the researcher for findings and the creative studio for an image this way, because its next step needs them. The child keeps its own actions and its own approvals.
 \end{description}
 The rule: a run waits when the next step of its graph needs the result, and starts a run when someone else, or a later run, uses the result.
+
+\textbf{An agent does not know who started it.} A person through the API, another agent with a start-a-run action, and another agent with a run-and-wait action all start the same workflow with the same request, and the run does the same work. Only who receives the result differs: the person (in the dashboard and a notification), the database for a later run, or the waiting parent. So every agent of the catalogue can be used on its own: a person can ask the creative studio for a poster, or the researcher for a report, without a post.
 
 \textbf{Where each thing lives.}
 \begin{longtable}{@{}>{\raggedright\arraybackslash}p{5.4cm}>{\raggedright\arraybackslash}p{6.0cm}>{\raggedright\arraybackslash}p{3.9cm}@{}}
@@ -292,16 +294,17 @@ A prompt is not part of a role, for three reasons. One role serves several agent
 \midrule
 \endhead
 Repository analyzer (built) & a person, through the API & repository to a draft Product Profile & \texttt{repo\_analyzer} (explore and draft) & clone the repository (internal)\\
-Writer (Section~\ref{sec:writer}) & a person; later the planner, the repository watcher, the orchestrator & brief to post & \texttt{writer} (draft, revise), \texttt{critic} (critique) & \texttt{publish\_post} (publishes); later \texttt{produce\_asset} (run and wait)\\
-Creative studio (Section~\ref{sec:studio}) & the writer, with a run-and-wait action; later other agents that publish media & brief to media asset & \texttt{creative\_director} (brief), \texttt{studio} (produce), \texttt{asset\_verifier} (verify) & sandbox runs (internal); image, video and voice generation and edits (spends)\\
-Planner & a weekly schedule & profile, playbook and metrics to a plan and its briefs & \texttt{reader} (read web pages), \texttt{researcher} (research), \texttt{planner} (plan) & start writing runs (start a run)\\
+Writer (Section~\ref{sec:writer}) & a person; the planner, the repository watcher, the orchestrator & brief to post: text, and an image when needed & \texttt{writer} (plan, draft, revise), \texttt{critic} (critique) & \texttt{research} (run and wait); \texttt{illustrate} (run and wait); \texttt{publish\_post} (publishes)\\
+Creative studio (Section~\ref{sec:studio}) & a person; the orchestrator, the planner (start a run); the writer (run and wait) & request to media asset in the library & \texttt{creative\_director} (brief), \texttt{studio} (produce), \texttt{asset\_verifier} (verify) & sandbox runs (internal); image, video and voice generation and edits (spends)\\
+Planner & a weekly schedule; a person & profile, playbook and metrics to a plan and its briefs & \texttt{planner} (plan) & \texttt{research} (run and wait); start writing and studio runs (start a run)\\
+Researcher (Section~\ref{sec:researcher}) & a person; the orchestrator; another agent's \texttt{research} action (run and wait) & questions to findings with sources & \texttt{researcher} (scope, synthesize), \texttt{reader} (read) & search, fetch a page (internal)\\
 Reply drafter & a new comment or message on the project's accounts & comment to reply & \texttt{reader} (read), \texttt{reply\_drafter} (draft), \texttt{critic} (critique) & \texttt{post\_reply} (publishes)\\
 Analyst & a schedule & metrics to a report and a digest & \texttt{analyst} (interpret, write) & send a notification (internal)\\
-Orchestrator (Section~\ref{sec:console}) & a chat message & a question or request to an answer, a run or a directive & \texttt{orchestrator} (chat turn) & start a writing run (start a run); store a directive (internal)\\
+Orchestrator (Section~\ref{sec:console}) & a chat message & a question or request to an answer, a run or a directive & \texttt{orchestrator} (chat turn) & start a run of an agent it may start (start a run); store a directive (internal)\\
 \bottomrule
 \end{longtable}
 
-The reader is not an agent. It is the first node of every agent that takes untrusted text: a node that calls the \texttt{reader} role, which may not be sent tools, and returns schema-checked fields that the rest of the graph reads (Section~\ref{sec:security}). The \texttt{judge} of the evaluation and the \texttt{embeddings} of memory are roles used outside any agent.
+The reader is not an agent. It is the node of every agent that takes untrusted text (the researcher, the reply drafter) that reads it first: a node that calls the \texttt{reader} role, which may not be sent tools, and returns schema-checked fields that the rest of the graph reads (Section~\ref{sec:security}). The \texttt{judge} of the evaluation and the \texttt{embeddings} of memory are roles used outside any agent.
 
 \subsection{Agent graphs and durable workflows}\label{sec:graphs}
 The first design used a small in-house agent loop. Two things changed that decision: production work (brief, produce, verify, edit) and chat both have loops, branches and shared state, and LangGraph, an MIT-licensed library for stateful graph-based agents, provides these directly: typed state, conditional edges, subgraphs, checkpointing (including PostgreSQL), interrupts for human input and streaming. LangGraph does not replace Temporal; each solves a different problem (Figure~\ref{fig:graphs}).
@@ -359,10 +362,10 @@ A role is the configuration of one kind of model call (Section~\ref{sec:terms}).
 \endhead
 \texttt{orchestrator} & Orchestrator: the chat turn & tools & strong\\
 \texttt{repo\_analyzer} & Repository analyzer: explore with read-only tools, draft the profile & tools, structured output & fast\\
-\texttt{researcher} & Planner: market, competitor and trend research & tools & balanced\\
-\texttt{reader} & Planner, reply drafter: the first node, which reads untrusted text & structured output, \emph{no tools} & fast\\
+\texttt{researcher} & Researcher: scope the queries, synthesize the findings & structured output & balanced\\
+\texttt{reader} & Researcher, reply drafter: the node that reads untrusted text & structured output, \emph{no tools} & fast\\
 \texttt{planner} & Planner: weekly plan, channel mix, ad plan & structured output & strong\\
-\texttt{writer} & Writer: draft and revise & structured output & balanced\\
+\texttt{writer} & Writer: plan, draft and revise & structured output & balanced\\
 \texttt{reply\_drafter} & Reply drafter: draft & none & balanced\\
 \texttt{creative\_director} & Creative studio: the brief node, which plans each asset & structured output & balanced\\
 \texttt{studio} & Creative studio: the produce node, which chooses each operation and looks at the result & tools, image input & strong\\
@@ -582,14 +585,17 @@ The dashboard contains a chat with an \emph{orchestrator agent}. It is the singl
 \endhead
 Status question & ``How did last week's posts perform?'' & Read tools fetch metrics and plan; the answer cites numbers and links to the records.\\
 Explanation & ``Why did you propose pausing that ad set?'' & The agent opens the proposal and explains its rationale, evidence and the profile version it used.\\
-One-off request & ``Make a launch video for v2.1 tomorrow.'' & The orchestrator starts a writing run that asks the creative studio for the video (Section~\ref{sec:terms}); the resulting proposal appears in the chat as an approval card.\\
+One-off request & ``Write a post announcing offline mode.'' ``Make a poster for the launch.'' & The orchestrator starts a writing run, or a studio run on its own (Section~\ref{sec:terms}). A post's proposal appears in the chat as an approval card; a poster appears in the library with a link.\\
+Research & ``What did our competitors post last month?'' & The orchestrator starts a researcher run; the report appears in the chat with its sources.\\
 Standing instruction & ``Never post on Sundays.'' & A draft policy rule is shown as readable text and as a CEL rule; it becomes active only after the operator confirms.\\
 Budget or autonomy change & ``Raise the monthly cap to 600.'' & Classified as high risk: the agent prepares a change request with a diff, and the operator confirms in the settings form with re-authentication. It is not executed through the chat.\\
 Emergency & ``Pause everything.'' & Safe-direction action: the kill switch is applied immediately and the chat reports what was stopped.\\
 \bottomrule
 \end{longtable}
 
-\fig{fig_console}{Orchestrator console. The agent has read tools and request tools only. Requests become proposals and directives that pass the same policy engine as every other action; approvals come from a human click on an approval card.}{fig:console}
+The orchestrator can do only what the agents of the catalogue do (Section~\ref{sec:agents}). Each agent declares whether the orchestrator may start it, and the request is read strictly against that agent's request schema, as a request from the API is. A request no agent can carry out, such as opening a pull request on the repository or posting to a platform that has no connector, is answered as such and recorded as an unmet request, never improvised; the record shows which agent is worth building next.
+
+\fig{fig_console}{Orchestrator console. The agent has read tools and request actions only. Requests start runs of the catalogue's agents and store directives, through the same policy engine as every other action; approvals come from a human click on an approval card.}{fig:console}
 
 \subsection{Proactive mode}\label{sec:proactive}
 The scheduled workflows run whether or not anyone opens the dashboard, so the system must also be able to reach the operator. In proactive mode the console speaks first, through the dashboard thread, chat apps and e-mail (Figure~\ref{fig:proactive}).
@@ -633,11 +639,11 @@ WATCHDOG_AUTO_BRAKE=true
 
 \subsection{Design rules}
 \begin{enumerate}
-  \item \textbf{Chat prepares, a human approves.} The orchestrator can create tasks, directives, proposals and draft rules. It cannot approve a proposal, raise a budget cap or change the autonomy level. Approval is a button press by an authenticated user, handled by the policy engine, never a statement produced by the model.
-  \item \textbf{Read tools and request tools are separate.} Read tools have no side effects. Request tools create records and never execute external actions. External effects happen only in workflows, after the policy gate.
+  \item \textbf{Chat prepares, a human approves.} The orchestrator can start runs, and create directives and draft rules. It cannot approve a proposal, raise a budget cap or change the autonomy level. Approval is a button press by an authenticated user, handled by the policy engine, never a statement produced by the model.
+  \item \textbf{Read tools and request actions are separate.} Read tools have no side effects. Request actions are internal: they create records and start runs, and never execute external actions. External effects happen only in the started runs, after the policy gate.
   \item \textbf{Safe direction is immediate.} Actions that reduce spend or exposure (pause a campaign, lower a cap, switch on the kill switch) can run at once. Actions that increase exposure need confirmation.
   \item \textbf{Operator text is trusted, but bounded.} The operator is authenticated and role-checked (viewer, approver, admin), yet every resulting action still passes the policy engine.
-  \item \textbf{Untrusted text stays out.} The orchestrator receives structured data and reader-agent summaries, never raw comments, direct messages or web pages.
+  \item \textbf{Untrusted text stays out.} The orchestrator receives structured data and the reader's fields, never raw comments, direct messages or web pages.
   \item \textbf{Notifications inform, they never decide.} Proactive messages carry links to the dashboard; approval or rejection happens only through an authenticated action there.
   \item \textbf{Everything is traceable.} Each proposal or directive created from chat stores the message that caused it. Standing instructions are versioned like any other policy.
 \end{enumerate}
@@ -729,30 +735,35 @@ These points need review by a qualified professional before any hosted offering:
 \section{Writer: From an Approved Profile to an Approved Post}\label{sec:writer}
 
 \subsection{Purpose and scope}
-The writer turns a brief into a post for one platform, in the project's brand voice, using only facts from the approved Product Profile, and hands the post to the policy gate as a proposal. It is the first agent with an action that publishes, so it is also the first user of the approval flow (Section~\ref{sec:safety}). The first version writes single text posts for X (open question 1) and runs in \emph{dry-run}: an approved post is recorded exactly as it would be sent, and nothing is sent until the owner turns publishing on for the project. Threads, scheduling by the planner and replies come later and reuse this graph or its checks. Images come later too: the writer will ask the creative studio for one with a run-and-wait action (Section~\ref{sec:terms}), keep writing the text itself, and propose text and image together.
+The writer turns a brief into a social-media post for one platform, in the project's brand voice, and hands it to the policy gate as a proposal. A post is its text and, when it needs one, an image. The writer always writes the text itself. It decides first what the post needs, and asks other agents for what it cannot make: the researcher for findings (Section~\ref{sec:researcher}) and the creative studio for an image (Section~\ref{sec:studio}). Its claims about the product rest only on facts of the approved Product Profile. It is the first agent with an action that publishes, so it is also the first user of the approval flow (Section~\ref{sec:safety}).
+
+The first version writes single text posts for X (open question 1) and runs in \emph{dry-run}: an approved post is recorded exactly as it would be sent, and nothing is sent until the owner turns publishing on for the project. How the rest is added is described at the end of this section.
 
 \subsection{The brief}
-A brief is a small record. A person creates it in the dashboard; later the planner, the repository watcher (Section~\ref{sec:profile}) and the orchestrator (Section~\ref{sec:console}) create the same record.
+A brief is a small record. A person creates it in the dashboard; the planner, the repository watcher (Section~\ref{sec:profile}) and the orchestrator (Section~\ref{sec:console}) create the same record.
 
 \begin{longtable}{@{}p{3.0cm}p{12.3cm}@{}}
 \toprule
 \textbf{Field} & \textbf{Meaning}\\
 \midrule
 \endhead
-\texttt{platform} & Where the post goes; its rules (length, links, mentions, hashtags) come from the platform's connector.\\
+\texttt{platform} & Where the post goes; its rules (length, links, mentions, hashtags, whether it takes an image) come from the platform's connector.\\
 \texttt{goal} & \texttt{introduce} the product, \texttt{announce} a feature, or \texttt{angle}: a direction in a person's own words.\\
 \texttt{feature} & For an announcement: the feature's identifier in the profile. It must be \texttt{live}.\\
 \texttt{angle} & For \texttt{angle}: the person's text, at most a few sentences.\\
-\texttt{variants} & How many candidates to write, three by default and five at most.\\
+\texttt{image} & \texttt{none}, \texttt{required}, or \texttt{auto} to let the plan decide.\\
+\texttt{asset} & An asset from the project's library to use as the image, such as a poster the studio made earlier. When it is given, no new image is made.\\
+\texttt{research} & \texttt{none}, or \texttt{auto} to let the plan ask questions.\\
+\texttt{variants} & How many texts to write, three by default and five at most.\\
 \bottomrule
 \end{longtable}
 
 A brief is data. It cannot choose the profile version, raise a limit or change the platform's rules.
 
 \subsection{The graph}
-Writing is a LangGraph graph (Figure~\ref{fig:writer}) with the same loop as the creative studio (Section~\ref{sec:studio}): produce, verify, decide, revise. The difference is that the writer needs no tools.
+Writing is a LangGraph graph (Figure~\ref{fig:writer}). It plans first, then runs the same loop as the creative studio: produce, verify, decide, revise. The writer has no tools: what it needs from outside it asks for as actions, and the research and the image are each a run of another agent that the writer waits for.
 
-\fig{fig_writer}{Writer graph. Code builds the writing context from the approved profile; the writer drafts variants without tools; code rules and a different model check them; a passing variant is proposed through the policy gate; a person approves, edits or rejects; the post is published (or, in dry-run, recorded) and stored as a content item.}{fig:writer}
+\fig{fig_writer}{Writer graph. Code builds the writing context; the writer plans the post as structured output, which code holds to the brief; research and an image are asked from other agents only when the plan needs them; the text is drafted without tools and checked by code rules and a different model; the image is made only for a text that passed; a person approves, edits or rejects the post; it is published (or, in dry-run, recorded) and stored.}{fig:writer}
 
 \begin{longtable}{@{}p{2.3cm}p{3.2cm}p{9.8cm}@{}}
 \toprule
@@ -760,15 +771,29 @@ Writing is a LangGraph graph (Figure~\ref{fig:writer}) with the same loop as the
 \midrule
 \endhead
 \texttt{prepare} & code & Reads the project's approved profile version and keeps its identifier in the state for the whole run, as the analyzer keeps the commit. Builds the \emph{writing context}: product, voice, audience, do-not-mention list, the platform's rules, and the \texttt{live} features with their evidence. A brief that names a feature that is not live, or a project without an approved profile, ends the run here.\\
-\texttt{draft} & \texttt{writer} & Writes the variants from the writing context alone. The output is structured: for each variant its text, its angle, and the claims it makes, each claim naming the features it rests on.\\
+\texttt{plan} & \texttt{writer} & Decides what the post needs, as structured output: the angle, the features it rests on, the format, at most three research questions, and whether it needs an image, with what the image shows and the words on it. Code then holds the plan to the brief and the project (below).\\
+\texttt{research} & action & Only when the plan has questions: asks the researcher for findings, as a run-and-wait action, and continues with them.\\
+\texttt{draft} & \texttt{writer} & Writes the texts from the writing context, the plan and the findings. The output is structured: for each variant its text, its angle, and the claims it makes, each claim naming the features it rests on.\\
 \texttt{check} & code & Runs the code rules on every variant (below).\\
 \texttt{critique} & \texttt{critic} & Reads the variants that kept the code rules against the writing context. Returns a structured report per variant (pass or fail per criterion, severity, edit suggestions, and whether it makes a risky claim) and ranks the variants that pass.\\
-\texttt{decide} & code & A variant passes when it keeps every code rule and the critic passes it. One passes: propose the best. None passes and rounds and cost are left: revise. At the limit: propose the best variant that keeps every code rule and makes no risky claim, marked as not passing the critic; if there is none, the run ends as failed.\\
-\texttt{revise} & \texttt{writer} & Rewrites the failing variants with the findings, or with a person's note after a rejection, and returns to \texttt{check}.\\
-\texttt{propose} & action & Asks for the action \texttt{publish\_post}. Its effect is \emph{publishes}, so the gate holds it as a proposal (below).\\
+\texttt{decide} & code & A variant passes when it keeps every code rule and the critic passes it. One passes: go on. None passes and rounds and cost are left: revise. At the limit: go on with the best variant that keeps every code rule and makes no risky claim, marked as not passing the critic; if there is none, the run ends as failed.\\
+\texttt{revise} & \texttt{writer} & Takes the findings, or a person's note after a rejection, and decides as structured output what to redo: the text, the image, or both. Rewrites the text and returns to \texttt{check}, or goes back to \texttt{illustrate} with a changed image plan.\\
+\texttt{illustrate} & action & Only when the plan has an image and the brief names no asset: asks the creative studio for it, as a run-and-wait action, after a text passed, so that nothing is spent on a text that fails. The request carries the image plan and its exact words. The studio returns an asset, or none: the post then goes without an image, or the run ends as failed if the brief required one.\\
+\texttt{propose} & action & Asks for the action \texttt{publish\_post}, with the text and the image. Its effect is \emph{publishes}, so the gate holds it as a proposal (below).\\
 \texttt{record} & code & After the action's outcome, stores the content item and ends the run.\\
 \bottomrule
 \end{longtable}
+
+\textbf{The plan is checked by code.} The plan is a model's output, so it is read strictly against its schema and then held to the brief and the project before anything is asked for:
+\begin{itemize}
+  \item The brief's choices win: \texttt{image: none} and \texttt{research: none} drop what the plan asked for, and \texttt{image: required} makes an image part of the plan.
+  \item An image is kept only when the platform takes one, and only when the creative studio and the project's creative budget are available (Section~\ref{sec:studio}); otherwise it is dropped and the reason is stored.
+  \item At most three research questions, and only when the researcher is available.
+  \item The plan can only choose among the actions the writer declares. It cannot add one, change the platform or raise a limit.
+\end{itemize}
+A plan the code changed is still used, and the change is shown to the person with the proposal.
+
+\textbf{Findings are data.} What the researcher returns was read from untrusted pages. The writer receives it as quoted findings with their sources. Findings may shape the angle, such as what people are discussing this week, but a claim about the product still has to name a live feature of the profile: a finding is never the evidence of a claim.
 
 \subsection{Checks}
 Every variant is checked by code first and then by a model that is not the writer's.
@@ -785,34 +810,91 @@ Critic (\texttt{critic}) & Brand voice; facts against the writing context, inclu
 
 The rules are written once, in the writer's rules module, which produces both the text the prompt gives the model and the functions that check the result, so the two cannot drift apart. The prompt is there so that first drafts pass and rounds are few; the code is the control (D1). Links and mentions are left out entirely at first: the profile has neither, and an allow-list of the project's own links and accounts, entered by a person in the project's settings, can come later. The profile never adds to it, because it is drafted from repository text.
 
-The checks have different weight. A code rule is a hard rule: a variant that breaks one is never proposed. A risky claim is a hard finding as well: the variant is revised, and one that still makes a risky claim at the round limit is never proposed. When the gate has risk levels (Section~\ref{sec:safety}), a risky claim will make the action L2 instead: a person may then publish the post themselves, and the agent never does. The rest of the critic's judgement is advice: at the round limit a person may still see a variant the critic failed, together with the critic's report. The critic is a different model from the writer on purpose (D11), and the router warns when \texttt{writer} and \texttt{critic} resolve to the same model.
+The checks have different weight. A code rule is a hard rule: a variant that breaks one is never proposed. A risky claim is a hard finding as well: the variant is revised, and one that still makes a risky claim at the round limit is never proposed. When the gate has risk levels (Section~\ref{sec:safety}), a risky claim will make the action L2 instead: a person may then publish the post themselves, and the agent never does. The rest of the critic's judgement is advice: at the round limit a person may still see a variant the critic failed, together with the critic's report. The critic is a different model from the writer on purpose (D11), and the router warns when \texttt{writer} and \texttt{critic} resolve to the same model. The image is checked by the studio's own verifier before it comes back.
 
 \subsection{The approval round}
-The proposal carries everything a person needs to decide without opening anything else: the proposed variant and the alternatives, the angle, each claim with the evidence of the features it rests on, the reports of the code rules and of the critic, and the profile version. The person can:
+The proposal carries everything a person needs to decide without opening anything else: the proposed text and its alternatives, the image and the studio's verifier report, the angle, each claim with the evidence of the features it rests on, the findings with their sources, the reports of the code rules and of the critic, what the code changed in the plan, and the profile version. The person can:
 \begin{itemize}
-  \item \textbf{Approve} the proposed variant, or approve one of the alternatives instead.
+  \item \textbf{Approve} the post, or approve it with one of the alternative texts. The image does not depend on which text is chosen: its words come from the plan, not from a variant.
   \item \textbf{Edit and approve.} The edited text is a new payload: it passes the code rules again before the approval is stored, and an edit that breaks one is refused with the findings. The difference between the proposed and the approved text is stored as a learning signal (F9).
-  \item \textbf{Reject with a note.} The note goes back to the graph as the reason of the outcome, and the writer revises once more if rounds are left. The new variant is a new proposal.
+  \item \textbf{Reject with a note.} The note goes back to the graph as the reason of the outcome, and \texttt{revise} redoes the text, the image or both if rounds are left. The new post is a new proposal.
   \item \textbf{Reject}, or let the proposal expire. Nothing is published; expiry counts as a rejection.
 \end{itemize}
 
 \subsection{Running on Temporal}
-The writer has its own workflow and task queue, like every agent (Section~\ref{sec:graphs}). Its thread is named for the writing run. The first step of the graph runs \texttt{prepare} to \texttt{propose} in one activity and pauses at the action. The workflow then puts the action through the gate, stores the proposal and waits for a person's decision with no graph running. An approved \texttt{publish\_post} runs as an activity of its own. Its handler calls the platform's connector with the action's identifier as the key that makes the post happen once, and keeps the platform's identifier of the post. The second step resumes the graph with the outcome: \texttt{record}, or \texttt{revise} after a rejection with a note. Limits live in the state, so they hold across attempts: rounds (three by default), variants, steps, and a cost cap per brief that covers every model call of the run.
+The writer has its own workflow and task queue, like every agent (Section~\ref{sec:graphs}), and does not know who started it. Its thread is named for the writing run. The graph runs in steps that end where it asks for an action:
+\begin{enumerate}
+  \item \texttt{prepare} and \texttt{plan}; the graph pauses at \texttt{research} if the plan has questions. The workflow starts a researcher run as a child workflow and waits.
+  \item \texttt{draft} to \texttt{decide}, with revisions; the graph pauses at \texttt{illustrate} if the plan has an image. The workflow starts a studio run as a child workflow and waits.
+  \item \texttt{propose}; the graph pauses at \texttt{publish\_post}. The workflow puts it through the gate, stores the proposal and waits for a person's decision with no graph running. An approved \texttt{publish\_post} runs as an activity. Its handler calls the platform's connector with the action's identifier as the key that makes the post happen once, and keeps the platform's identifier of the post.
+  \item \texttt{record}, or \texttt{revise} after a rejection with a note.
+\end{enumerate}
+A step that is not needed is not taken: a text post without research runs \texttt{prepare} to \texttt{propose} in one step. Limits live in the state, so they hold across attempts: rounds (three by default), variants, steps, and a cost cap per brief. The cap covers the writer's own model calls; the research and the image count against their own runs' caps and, for the image, the creative budget.
 
 \subsection{Safety}
 \begin{itemize}
-  \item \textbf{The writer reads only approved data.} Its prompt holds the writing context and the brief, never repository files, comments, web pages or anyone's messages (Section~\ref{sec:security}). Feature descriptions were drafted from repository text and then reviewed by a person; they are still placed in the prompt as quoted data.
-  \item \textbf{No tools, no credentials.} An injected instruction has nothing to call. The only thing the writer can produce is text, and that text reaches the world only through a proposal.
+  \item \textbf{The writer reads only approved data and quoted findings.} Its prompt holds the writing context, the brief and, when there are any, the researcher's findings as quoted data with their sources. Never repository files, comments, raw web pages or anyone's messages (Section~\ref{sec:security}). Feature descriptions were drafted from repository text and then reviewed by a person; they are still placed in the prompt as quoted data.
+  \item \textbf{No tools, no credentials.} An injected instruction has nothing to call. What the writer produces is a plan and text. The plan can only ask for the writer's declared actions, after code has checked it, and the text reaches the world only through a proposal.
   \item \textbf{Rules are code.} Unreleased features and the do-not-mention list are enforced in \texttt{prepare} and \texttt{check}, and again by the gate's content filter on the action's payload. Telling the model about them in the prompt is a convenience, not the control (D1).
   \item \textbf{A person's note is input, not authority.} It is written by an authenticated user, but to the writer it is only text: it cannot change the platform, the limits or the profile version.
   \item \textbf{Risk levels.} The gate does not have risk levels yet: every action that publishes waits for a person, which is the design's L1. The writer therefore depends on none. A risky claim keeps a variant from being proposed, and when risk levels come, it will make the action L2 instead, which a person may publish and the agent may not. Only then can the owner let organic posts from the approved calendar run automatically (L0).
 \end{itemize}
 
 \subsection{What is stored}
-Each run ends with a \texttt{content\_item}: the platform, the text as published (or as it would have been), its status (\texttt{published}, \texttt{dry\_run}, \texttt{rejected}, \texttt{expired} or \texttt{failed}), the profile version, the claims and their evidence, both reports, the person's edit, the cost, the proposal and the platform's identifier of the post. The model calls are kept in \texttt{llm\_call}. This is the record the connector's \texttt{publish} receives (Section~\ref{sec:oss}) and the one analytics later attaches metrics to.
+Each run ends with a \texttt{content\_item}: the platform, the text as published (or as it would have been), its status (\texttt{published}, \texttt{dry\_run}, \texttt{rejected}, \texttt{expired} or \texttt{failed}), the plan and what code changed in it, the profile version, the claims and their evidence, the image's asset, the research report, both reports, the person's edit, the cost, the proposal and the platform's identifier of the post. The model calls are kept in \texttt{llm\_call}. This is the record the connector's \texttt{publish} receives (Section~\ref{sec:oss}) and the one analytics later attaches metrics to.
+
+\subsection{Building it in steps}
+\begin{enumerate}
+  \item \textbf{Text posts.} The whole graph, with \texttt{image} and \texttt{research} held at \texttt{none} by code, so \texttt{plan} still runs but can ask for neither. This needs nothing that is not built: the gate as it is, and dry-run publishing.
+  \item \textbf{Research}, once the researcher exists: the plan may ask questions.
+  \item \textbf{Images}, once the creative studio exists, which first needs the gate's budget ledger and automatic small spends (Section~\ref{sec:studio}). A brief may name an asset of the library before then.
+  \item \textbf{Live publishing} through the X connector, \textbf{threads}, and \textbf{scheduled posts}: the brief gets a time, and after the approval the workflow waits with a timer before \texttt{publish\_post} runs.
+\end{enumerate}
 
 \subsection{Measuring it}
-On a set of recurring briefs across golden profiles: the share of first drafts that pass, rounds per proposal, cost per approved post, the approval rate, how much people edit (the difference between proposed and approved text), and agreement between the critic and people. The content-quality rubric of the evaluation section (brand voice, factual accuracy against the profile, platform fit) scores the result.
+On a set of recurring briefs across golden profiles: the share of first drafts that pass, rounds per proposal, how often the plan asks for an image or research and how often code drops it, cost per approved post, the approval rate, how much people edit (the difference between proposed and approved text), and agreement between the critic and people. The content-quality rubric of the evaluation section (brand voice, factual accuracy against the profile, platform fit) scores the result.
+
+% ---------------------------------------------------------------- researcher
+\section{Researcher: Sourced Findings from Public Sources}\label{sec:researcher}
+
+\subsection{Purpose and who starts it}
+The researcher answers questions from public sources and returns \emph{findings}: short statements, each with the sources it was read from. It publishes nothing and spends only its own model and search costs. It can be started three ways, and does the same work each time:
+\begin{itemize}
+  \item \textbf{By another agent, as an action.} An agent that needs research declares the run-and-wait action \texttt{research} (Section~\ref{sec:terms}): its graph asks for it with its questions, the workflow runs the researcher as a child workflow, and the findings come back as the action's outcome. The writer asks what people are saying about a topic before choosing an angle; the planner asks what competitors posted before planning a week.
+  \item \textbf{By a person}, from the dashboard: the result is a research report in the project.
+  \item \textbf{By the orchestrator}, from a chat request such as ``What did our competitors post last month?'' (Section~\ref{sec:console}).
+\end{itemize}
+
+The request holds the questions (at most five), the scope (topics, named competitors, a time window), and how many sources to read at most.
+
+\subsection{The graph}
+\fig{fig_researcher}{Researcher graph. The researcher plans queries; search and fetch are actions that store public pages; a reader node with no tools turns each page into fixed fields; the researcher writes findings from those fields only; code checks that every finding cites a page read in this run; gaps lead to follow-up queries within limits.}{fig:researcher}
+
+\begin{longtable}{@{}p{2.3cm}p{3.2cm}p{9.8cm}@{}}
+\toprule
+\textbf{Node} & \textbf{Done by} & \textbf{What it does}\\
+\midrule
+\endhead
+\texttt{scope} & \texttt{researcher} & Turns the questions into search queries and the kinds of source to read, as structured output. Code caps the number of queries and pages and drops domains on the project's block list.\\
+\texttt{search} & action, internal & Runs the queries through a search provider's official API. Returns results with their address, title and snippet.\\
+\texttt{fetch} & action, internal & Fetches public pages only: no login, \texttt{robots.txt} honoured, size and type limits, HTTPS. The page is stored in object storage; the graph gets its identifier, not its text.\\
+\texttt{read} & \texttt{reader} & One page at a time, with no tools: returns fixed fields (summary, key points, exact quotes, date, relevance to each question). Anything else is dropped, and injection heuristics raise a flag on the page (Section~\ref{sec:security}).\\
+\texttt{synthesize} & \texttt{researcher} & Answers each question from the reader's fields only, never from raw pages. Each finding names the pages it rests on and how sure it is.\\
+\texttt{check} & code & Every finding cites at least one page fetched in this run; every quote appears in the stored page; findings that rest only on flagged pages are marked.\\
+\texttt{decide} & code & Questions left without findings, and rounds and cost left: back to \texttt{scope} for follow-up queries. Otherwise: finish.\\
+\texttt{report} & code & Stores the research report and ends the run. Its outcome is the report's identifier and the findings, which are small.\\
+\bottomrule
+\end{longtable}
+
+\subsection{Safety}
+\begin{itemize}
+  \item \textbf{The reader is the only node that sees a page.} It has no tools: its role may not be sent any, so even a successful injection cannot act. The \texttt{researcher} model reads only the reader's fixed fields.
+  \item \textbf{Findings are data, not instructions.} Every agent that receives findings treats them as untrusted-derived text: they may inform a plan or an angle, never cause an action and never stand as evidence for a claim about the product.
+  \item \textbf{Search and fetch are actions.} They are internal: they publish nothing. Their number is capped per run by code, and a search provider's charges count against the run's cost cap. Only public pages are read, through official APIs where a platform has one (Section~\ref{sec:abuse}).
+\end{itemize}
+
+\subsection{What is stored}
+A \texttt{research\_report}: the questions, the findings with their sources (address, title, when it was read, the stored page), the flags, who asked (a person, the orchestrator, or another run), and the cost. The stored pages are working material and are removed after a retention period; the report keeps the quotes it relied on.
 
 % ---------------------------------------------------------------- studio
 \section{Creative Studio: Agentic Image, Video and Voice Production}\label{sec:studio}
@@ -834,7 +916,7 @@ C. Direct generation and editing & An image model produces the whole image; the 
 \bottomrule
 \end{longtable}
 
-A studio run is started by the run that needs the asset, the writer at first, with a request that carries the exact copy: the studio never writes the text of a post, and it proposes nothing itself. The asset goes back to that run, which proposes it together with its post. Its first node, with the \texttt{creative\_director} role, turns the request into a \emph{brief} for each asset (goal, platform sizes, exact copy, brand-kit constraints and a first technique choice). The brand kit comes from the approved Product Profile: palette, fonts, logo, screenshots and the do-not-mention list.
+A studio run can be started on its own, by a person or the orchestrator (a poster for a launch), by the planner, or by the writer, which waits for it as a child (Section~\ref{sec:terms}). The request carries the exact words of the asset: the studio never writes the text of a post. The studio publishes nothing and proposes nothing. Its asset goes into the project's library, where a person accepts, downloads or rejects it, or asks for another round; when the writer asked for it, it also goes back to the writer, which proposes it together with its post. Publishing an asset is always a post, through the writer and the gate. Its first node, with the \texttt{creative\_director} role, turns the request into a \emph{brief} for each asset (goal, platform sizes, exact copy, brand-kit constraints and a first technique choice). The brand kit comes from the approved Product Profile: palette, fonts, logo, screenshots and the do-not-mention list.
 
 \subsection{The production graph}
 Production is a LangGraph graph (Figure~\ref{fig:creative}) with a loop: produce, verify, decide, edit.
@@ -893,6 +975,8 @@ Same failure twice & Switch technique (for example from direct generation to bac
 
 \subsection{Limits and escalation}
 A loop must end. The graph stops when the asset passes, or when any limit is hit: maximum number of rounds (default four), time limit, or a per-asset cost cap that covers generation and model calls together. When a limit is hit, the studio escalates: it shows the best candidate, the verifier report and the available options, and a human decides. Costs are checked against the creative budget in the ledger before each generation, and expensive operations such as video follow the approval policy.
+
+\textbf{What the studio needs from the gate.} Generation and edits are actions that spend. With a gate that holds every spending action for a person, a single asset would need an approval for each generation, three to five of them. The studio therefore needs two things the gate does not have in its first form: the budget ledger, which reserves the cost before a generation and holds the cap, and automatic execution of small spends within that cap (L0 in Section~\ref{sec:safety}). The studio is built after them.
 
 \subsection{Sandbox for agent-written code}
 Letting an agent write and run code is what makes composition exact, and it needs containment:
@@ -1183,6 +1267,7 @@ Legal and compliance & High & Varies by market & Policy packs, disclosure labels
   \item \textbf{Studio providers.} Which image and video models and edit endpoints to support first, and how to confirm Higgsfield's programmatic access.
   \item \textbf{Golden repository set.} Which open-source apps will be used as the first benchmark.
   \item \textbf{Writer.} Whether a variant the critic failed should reach a person at all, or end the run; when the project's settings get an allow-list of its own links and accounts; and when a person's edits start to change the writer's prompt (F9).
+  \item \textbf{Researcher.} Which search provider's official API comes first, how long stored pages are kept, and the default list of blocked domains.
 \end{enumerate}
 
 \section*{Reference Documentation}

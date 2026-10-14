@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>.dw{position:absolute;z-index:10;background:#1b1b1b;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}.dw>div{position:absolute;inset:2px;background:#FFF1C2;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);display:flex;align-items:center;justify-content:center;text-align:center;font-weight:700;font-size:17px;color:#000}</style></head><body>
+<div id="canvas" style="width:1136px;height:1300px">
+<div class="card abs" id="q" style="background:#DCEBFA"><b>1 · Questions</b><span class="s">from a person or the orchestrator (a report in the project), or from another agent's <i>research</i> action, which waits for the findings: at most five questions, the scope (topics, competitors, a time window) and how many sources to read</span></div>
+
+<div class="card abs" id="sc" style="background:#FFF1C2"><b>2 · Scope <span class="chip">researcher</span> <span class="chip">structured output</span></b><span class="s">turns the questions into search queries and the kinds of source to read; code caps the queries and pages and drops domains on the project's block list</span></div>
+
+<div class="layer conn abs" id="LA"><div class="lt">3 · Search and fetch <small>actions, internal; the graph pauses for each</small></div></div>
+<div class="card abs" id="s1"><b>search</b><span class="s">through a search provider's official API; results with their address, title and snippet</span></div>
+<div class="card abs" id="s2"><b>fetch</b><span class="s">public pages only: no login, robots.txt honoured, HTTPS, size and type limits. The page is stored; the graph gets its id, not its text.</span></div>
+
+<div class="layer orch abs" id="LQ"><div class="lt">4 · Read <small>quarantine: the only node that sees a page</small></div></div>
+<div class="card abs" id="rd"><b>Reader node <span class="chip">reader</span></b><span class="s">one page at a time, with no tools (its role may not be sent any): summary, key points, exact quotes, date, relevance to each question. Anything else is dropped; injection heuristics flag the page.</span></div>
+
+<div class="card abs" id="sy" style="background:#FFF1C2"><b>5 · Synthesize <span class="chip">researcher</span></b><span class="s">answers each question from the reader's fields only, never from a raw page; every finding names the pages it rests on and how sure it is</span></div>
+<div class="card abs" id="ck" style="background:#ECECEC"><b>6 · Check <span class="chip">code</span></b><span class="s">every finding cites a page fetched in this run; every quote is in the stored page; findings resting only on flagged pages are marked</span></div>
+
+<div class="dw" id="dc"><div>Answered?</div></div>
+<div class="card abs" id="rp" style="background:#DDF1DD"><b>7 · Report</b><span class="s">store the research report: questions, findings with their sources and when each was read, flags, who asked, cost. The outcome is its id and the findings, to the person or to the run that waits.</span></div>
+
+<div class="card abs" id="nt"><b>Findings are data</b><span class="s">they come from untrusted pages. Whoever receives them may let them inform a plan or an angle; they never cause an action and are never the evidence of a claim about the product.</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('q',28,28,1080,100);
+ place('sc',28,180,1080,96);
+ place('LA',28,334,1080,200);
+ place('s1',46,386,510,128);place('s2',580,386,510,128);
+ place('LQ',28,592,1080,180);
+ place('rd',46,644,1044,110);
+ place('sy',28,830,650,120);place('ck',720,830,388,120);
+ const dc=$('dc');dc.style.left='789px';dc.style.top='1012px';dc.style.width='250px';dc.style.height='120px';
+ place('rp',28,1010,650,124);
+ place('nt',28,1176,1080,90);
+ edge('q','sc',{from:'b',to:'t',label:'questions'});
+ edge('sc','LA',{from:'b',to:'t',label:'queries, pages to read'});
+ edge('LA','LQ',{from:'b',to:'t',label:'stored pages'});
+ edge('LQ','sy',{from:'b',to:'t',oa:-215,ob:0,label:'fixed fields only'});
+ edge('sy','ck',{from:'r',to:'l'});
+ edge('ck','dc',{from:'b',to:'t',oa:0,ob:0});
+ edge('dc','rp',{from:'l',to:'r',label:'yes'});
+ edge('dc','sc',{from:'r',to:'r',mx:1124,dash:true,la:'gaps left',lax:8,lay:-18});
+});
+</script></body></html>
