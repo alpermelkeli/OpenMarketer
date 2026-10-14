@@ -53,6 +53,7 @@ from openmarketer_core.db.models import ProductProfileRecord, Project, RepoSnaps
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatModel, ChatReply
+from openmarketer_core.repository_analysis.analyzer_agent import Limits
 from openmarketer_core.repository_analysis.intake import (
     NO_TOKENS,
     IntakeResult,
@@ -283,6 +284,7 @@ def analyzer_with(sessions, checkpoints, clones_root, model, intake):
         clones: LocalClones | None = None,
         new_model: Callable[[uuid.UUID], ChatModel] | None = None,
         tokens_of: Callable[[uuid.UUID], RepositoryTokens] = lambda workspace_id: NO_TOKENS,
+        limits_of: Callable[[uuid.UUID], Limits] = lambda workspace_id: Limits(),
     ) -> Analyzer:
         return Analyzer(
             wiring.AnalyzerParts(
@@ -293,6 +295,7 @@ def analyzer_with(sessions, checkpoints, clones_root, model, intake):
                 tokens_of=tokens_of,
                 extractors=[],
                 policy=policy,
+                limits_of=limits_of,
             )
         )
 

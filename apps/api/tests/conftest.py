@@ -6,6 +6,7 @@ single-user local mode requires.
 """
 
 import uuid
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -15,6 +16,31 @@ from sqlalchemy.orm import Session
 from openmarketer_api.dependencies import db_session
 from openmarketer_api.identity import current_workspace_id
 from openmarketer_api.main import create_app
+from openmarketer_core.llm_catalog import ModelCatalog
+from openmarketer_core.llm_config import ModelRouter
+
+MODELS_FILE = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
+
+
+class UnreadableCatalog(ModelCatalog):
+    """A provider's catalogue that cannot be read, so no test reaches the network."""
+
+    def __init__(self) -> None:
+        super().__init__("http://catalogue.invalid")
+
+    def models(self):
+        return None
+
+
+@pytest.fixture
+def repository_models() -> ModelRouter:
+    """The repository's own model configuration, with an empty environment."""
+    return ModelRouter.from_file(MODELS_FILE, env={})
+
+
+@pytest.fixture
+def no_catalog() -> ModelCatalog:
+    return UnreadableCatalog()
 
 
 @pytest.fixture

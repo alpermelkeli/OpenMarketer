@@ -13,4 +13,11 @@ export const queryKeys = {
     ["projects", "one", projectId, "versions", "one", version] as const,
   /** Where each credential's value comes from. Never a value: no response holds one. */
   credentials: () => ["settings", "credentials"] as const,
+  /** Everything about the models: the settings, and the check that depends on them. */
+  modelScope: () => ["settings", "models"] as const,
+  modelSettings: () => ["settings", "models", "settings"] as const,
+  modelCheck: () => ["settings", "models", "check"] as const,
+  /** The provider's catalogue: it does not change with the workspace's choices. */
+  modelCatalog: () => ["settings", "model-catalog"] as const,
+  analysisSettings: () => ["settings", "analysis"] as const,
 };

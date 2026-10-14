@@ -24,6 +24,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from openmarketer_api.workflows import Workflows
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.session import transaction
+from openmarketer_core.llm_catalog import ModelCatalog
+from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.workflow_start import WorkflowStart
 
 
@@ -38,6 +40,9 @@ class Services:
     environment: Mapping[str, str] = field(repr=False)
     # None when the installation has no ENCRYPTION_KEY.
     credential_cipher: CredentialCipher | None
+    # The model configuration with the environment's overrides; it holds the environment too.
+    model_router: ModelRouter = field(repr=False)
+    model_catalog: ModelCatalog = field(repr=False)
 
 
 def _services(request: Request) -> Services:
@@ -79,6 +84,14 @@ def credential_cipher(
     return services.credential_cipher
 
 
+def model_router(services: Annotated[Services, Depends(_services)]) -> ModelRouter:
+    return services.model_router
+
+
+def model_catalog(services: Annotated[Services, Depends(_services)]) -> ModelCatalog:
+    return services.model_catalog
+
+
 async def no_request_body(request: Request) -> None:
     """Refuse a body on a route that takes none, instead of ignoring what the client sent.
 
@@ -97,4 +110,6 @@ DbSession = Annotated[Session, Depends(db_session, scope="function")]
 Sessions = Annotated[sessionmaker[Session], Depends(sessions)]
 Environment = Annotated[Mapping[str, str], Depends(environment)]
 StoringCipher = Annotated[CredentialCipher | None, Depends(credential_cipher)]
+Models = Annotated[ModelRouter, Depends(model_router)]
+Catalog = Annotated[ModelCatalog, Depends(model_catalog)]
 StartWorkflow = Annotated[Callable[[WorkflowStart], None], Depends(start_workflow)]
