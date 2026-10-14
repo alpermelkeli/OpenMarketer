@@ -55,7 +55,7 @@ class Traced:
         return next(span for span in self.spans() if span.name == name)
 
     def parent_of(self, span: ReadableSpan) -> str | None:
-        by_id = {other.context.span_id: other.name for other in self.spans()}
+        by_id = {other.context.span_id: other.name for other in self.spans() if other.context}
         return None if span.parent is None else by_id.get(span.parent.span_id)
 
     def sent(self) -> str:
