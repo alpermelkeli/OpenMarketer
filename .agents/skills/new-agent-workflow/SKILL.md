@@ -79,7 +79,7 @@ Use `before`, `after` and `failed` as `worker.md` says. Every way a run can end 
 
 ## 6. Serving it (worker agent, `main.py`)
 
-Add the agent's wiring function to `agents` in `main.py`. Each agent gets a `Worker` of its own on its own task queue, and `build_workers` refuses two agents on one queue, so the contract's queue (step 1) must be new. Add the new agent's start-up errors to the ones `serve` words, and a start-up test to `test_worker.py`.
+Add the agent's wiring function to `agents` in `main.py`. It is given the process's `Tracing`: wrap each model the agent calls in `tracing.model(...)`, as `repository_analyzer/wiring.py` does, so its model calls are traced under its nodes (the nodes are traced either way). Each agent gets a `Worker` of its own on its own task queue, and `build_workers` refuses two agents on one queue, so the contract's queue (step 1) must be new. Add the new agent's start-up errors to the ones `serve` words, and a start-up test to `test_worker.py`.
 
 ## 7. Removing left-over checkpoints (persistence agent, then worker agent)
 
