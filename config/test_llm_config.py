@@ -146,6 +146,20 @@ def test_capability_check_reports_temperature_only_when_the_request_carries_it()
     assert marked.check_capabilities(only(marked, "writer", "openai/o9"), catalog) == []
 
 
+def test_capability_check_tells_a_fallback_that_rejects_temperature_apart():
+    catalog = {
+        "openai/o9": catalog_entry("openai/o9", []),
+        "openai/warm": catalog_entry("openai/warm", ["temperature"]),
+    }
+    r = router()
+    resolved = r.resolve("writer").model_copy(
+        update={"model": "openai/warm", "fallbacks": ["openai/o9"]}
+    )
+    assert r.check_capabilities(resolved, catalog) == [
+        ModelProblem("openai/o9", CapabilityProblem.FALLBACK_REJECTS_TEMPERATURE)
+    ]
+
+
 def test_workspace_tier_is_used_unless_the_environment_sets_the_tier():
     chosen = router(workspace_tiers={"balanced": "openai/ws-tier"})
     assert chosen.resolve("writer").model == "openai/ws-tier"

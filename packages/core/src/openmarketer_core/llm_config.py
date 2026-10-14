@@ -216,6 +216,8 @@ class CapabilityProblem(StrEnum):
     NO_STRUCTURED_OUTPUT = "no_structured_output"
     NO_IMAGE_INPUT = "no_image_input"
     REJECTS_TEMPERATURE = "rejects_temperature"
+    # A fallback is sent the request made for the first model, temperature included.
+    FALLBACK_REJECTS_TEMPERATURE = "fallback_rejects_temperature"
 
 
 @dataclass(frozen=True)
@@ -373,12 +375,13 @@ class ModelRouter:
 
         Every model of the request is checked, the fallbacks too: they are sent the same
         request. A model the catalogue does not list is reported, not guessed. Temperature
-        is a problem only when the request carries it.
+        is a problem only when the request carries it, which the first model decides; a
+        fallback that rejects it is reported as such, since marking it would not help.
         """
         rejected = self.rejected_parameters(resolved.model)
         sends_temperature = resolved.kind == "chat" and "temperature" not in rejected
         problems: list[ModelProblem] = []
-        for slug in [resolved.model, *resolved.fallbacks]:
+        for position, slug in enumerate([resolved.model, *resolved.fallbacks]):
             entry = catalog.get(slug)
             if entry is None:
                 problems.append(ModelProblem(slug, CapabilityProblem.NOT_IN_CATALOG))
@@ -394,7 +397,12 @@ class ModelRouter:
             if "vision" in resolved.requires and "image" not in entry.input_modalities:
                 problems.append(ModelProblem(slug, CapabilityProblem.NO_IMAGE_INPUT))
             if sends_temperature and "temperature" not in params:
-                problems.append(ModelProblem(slug, CapabilityProblem.REJECTS_TEMPERATURE))
+                problem = (
+                    CapabilityProblem.REJECTS_TEMPERATURE
+                    if position == 0
+                    else CapabilityProblem.FALLBACK_REJECTS_TEMPERATURE
+                )
+                problems.append(ModelProblem(slug, problem))
         return problems
 
     # -- requests ------------------------------------------------------

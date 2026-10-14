@@ -411,7 +411,8 @@
           "no_tools",
           "no_structured_output",
           "no_image_input",
-          "rejects_temperature"
+          "rejects_temperature",
+          "fallback_rejects_temperature"
         ],
         "title": "CapabilityProblem",
         "type": "string"
