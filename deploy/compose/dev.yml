@@ -147,7 +147,9 @@ services:
 
   langfuse-clickhouse:
     profiles: [tracing]
-    image: clickhouse/clickhouse-server:25.12
+    # 25.8, the long-term support release, and not the 25.12 of Langfuse's own compose file:
+    # the arm64 build of 25.12 crashes on start on an Apple M1, where 25.8 runs.
+    image: clickhouse/clickhouse-server:25.8
     user: "101:101"
     environment:
       CLICKHOUSE_DB: default
