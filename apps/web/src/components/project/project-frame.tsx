@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/error-message";
 import { useDeleteProject, useProject } from "@/lib/api/projects";
+import { useProposals } from "@/lib/api/proposals";
 import type { Project } from "@/lib/api/types";
 import { isProjectId } from "@/lib/projects/project-id";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,9 @@ export function ProjectFrame({ projectId, children }: ProjectFrameProps) {
 function KnownProjectFrame({ projectId, children }: ProjectFrameProps) {
   const pathname = usePathname();
   const project = useProject(projectId);
+  const proposals = useProposals(projectId);
+  // Of the proposals loaded so far: enough to say that something waits, which is what the tab is for.
+  const waiting = proposals.data?.filter((proposal) => proposal.status === "pending").length ?? 0;
 
   if (project.error !== null) {
     const missing = project.error.code === "project_not_found";
@@ -64,8 +68,9 @@ function KnownProjectFrame({ projectId, children }: ProjectFrameProps) {
   }
 
   const tabs = [
-    { href: `/projects/${projectId}/profile`, label: "Profile" },
-    { href: `/projects/${projectId}/analyses`, label: "Analyses" },
+    { href: `/projects/${projectId}/profile`, label: "Profile", waiting: 0 },
+    { href: `/projects/${projectId}/analyses`, label: "Analyses", waiting: 0 },
+    { href: `/projects/${projectId}/approvals`, label: "Approvals", waiting },
   ];
 
   return (
@@ -92,6 +97,12 @@ function KnownProjectFrame({ projectId, children }: ProjectFrameProps) {
               )}
             >
               {tab.label}
+              {tab.waiting > 0 && (
+                <span className="ml-1.5 rounded-full border border-warning/50 px-1.5 font-mono text-2xs text-warning tabular-nums">
+                  {tab.waiting}
+                  <span className="sr-only"> waiting for your decision</span>
+                </span>
+              )}
             </Link>
           );
         })}

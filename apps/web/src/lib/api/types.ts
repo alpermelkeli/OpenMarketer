@@ -30,6 +30,11 @@ export type BusinessModelType = Schemas["BusinessModelType"];
 export type Measurement = Schemas["Measurement"];
 export type Evidence = Schemas["Evidence"];
 
+export type Proposal = Schemas["ProposalResponse"];
+export type ProposalList = Schemas["ProposalListResponse"];
+export type ProposalStatus = Schemas["ProposalStatus"];
+export type ActionEffect = Schemas["ActionEffect"];
+
 export type CredentialStatus = Schemas["CredentialStatusResponse"];
 export type CredentialList = Schemas["CredentialListResponse"];
 export type CredentialSource = Schemas["CredentialSource"];

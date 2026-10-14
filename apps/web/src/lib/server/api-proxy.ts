@@ -46,7 +46,7 @@ type AllowedRoute = {
 
 function route(method: Method, template: keyof paths, paged = false): AllowedRoute {
   const pattern = template
-    .replace(/\{(project_id|run_id)\}/g, UUID)
+    .replace(/\{(project_id|run_id|proposal_id)\}/g, UUID)
     .replace(/\{version\}/g, VERSION)
     .replace(/\{name\}/g, CREDENTIAL_NAME)
     .replace(/\{(tier|role)\}/g, SETTING_KEY);
@@ -68,6 +68,9 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/projects/{project_id}/profile/versions/{version}"),
   route("POST", "/v1/projects/{project_id}/profile/versions/{version}/edits"),
   route("POST", "/v1/projects/{project_id}/profile/versions/{version}/approval"),
+  route("GET", "/v1/projects/{project_id}/proposals", PAGED),
+  route("POST", "/v1/projects/{project_id}/proposals/{proposal_id}/approval"),
+  route("POST", "/v1/projects/{project_id}/proposals/{proposal_id}/rejection"),
   route("GET", "/v1/settings/credentials"),
   route("PUT", "/v1/settings/credentials/{name}"),
   route("DELETE", "/v1/settings/credentials/{name}"),
