@@ -42,8 +42,9 @@ export function ApproveDialog({
         <AlertDialogHeader>
           <AlertDialogTitle className="font-heading text-title">Approve version {version}?</AlertDialogTitle>
           <AlertDialogDescription>
-            Approval is permanent. An approved version can never be changed or deleted, by you, by this dashboard or
-            by the agent. To correct something later you edit it into a new draft and approve that one.
+            Approval is permanent. An approved version can never be changed, by you, by this dashboard or by the
+            agent, and is deleted only with its whole project. To correct something later you edit it into a new draft
+            and approve that one.
           </AlertDialogDescription>
         </AlertDialogHeader>
         {flaggedCount > 0 && (

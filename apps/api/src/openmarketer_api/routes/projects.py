@@ -1,8 +1,8 @@
-"""Projects: registering the repository of a product, reading it back and listing them.
+"""Projects: registering the repository of a product, reading it back, listing and deleting them.
 
 A project comes with where its review stands (latest draft, latest approved
 version, unfinished run), so the list needs no further request per project.
-Changing or deleting a project is not here.
+Changing a project is not here.
 """
 
 from __future__ import annotations
@@ -11,13 +11,14 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from openmarketer_api.dependencies import DbSession
+from openmarketer_api.dependencies import DbSession, no_request_body
 from openmarketer_api.errors import problems
 from openmarketer_api.identity import CurrentWorkspaceId
 from openmarketer_api.pagination import DEFAULT_PAGE_SIZE, CreatedBefore, PageLimit, created_cursor
+from openmarketer_core.db.project_removal import delete_project
 from openmarketer_core.db.projects import (
     ProjectOverview,
     StoredProject,
@@ -128,3 +129,19 @@ def get(
     """One project of the workspace, with where its review stands now."""
     overview = project_overview(session, workspace_id=workspace_id, project_id=project_id)
     return _response(overview)
+
+
+@router.delete(
+    "/{project_id}",
+    operation_id="deleteProject",
+    status_code=204,
+    responses=problems(404, 409),
+    dependencies=[Depends(no_request_body)],
+)
+def delete(project_id: uuid.UUID, session: DbSession, workspace_id: CurrentWorkspaceId) -> None:
+    """Delete the project with its analyses, evidence, profile versions and proposals, for good.
+
+    Refused while an analysis of the project is queued or running, or a proposal of it waits
+    for a decision. The repository is not touched.
+    """
+    delete_project(session, workspace_id=workspace_id, project_id=project_id)

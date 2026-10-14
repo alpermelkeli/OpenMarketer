@@ -13,6 +13,7 @@ OPERATIONS = {
     "createProject": ("post", "/v1/projects"),
     "listProjects": ("get", "/v1/projects"),
     "getProject": ("get", "/v1/projects/{project_id}"),
+    "deleteProject": ("delete", "/v1/projects/{project_id}"),
     "startAnalysis": ("post", "/v1/projects/{project_id}/analyses"),
     "listAnalyses": ("get", "/v1/projects/{project_id}/analyses"),
     "getAnalysis": ("get", "/v1/projects/{project_id}/analyses/{run_id}"),

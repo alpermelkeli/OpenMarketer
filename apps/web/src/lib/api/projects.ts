@@ -2,10 +2,10 @@
 
 /** Query and mutation hooks for projects. */
 
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type InfiniteData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { ApiError } from "./api-error";
-import { api, dataOf } from "./client";
+import { api, dataOf, doneOf } from "./client";
 import { PAGE_SIZE, mergePages, nextCursor } from "./pages";
 import { queryKeys } from "./query-keys";
 import type { CreateProjectRequest, Project, ProjectList } from "./types";
@@ -43,5 +43,34 @@ export function useCreateProject() {
       queryClient.setQueryData(queryKeys.project(project.id), project);
       return queryClient.invalidateQueries({ queryKey: queryKeys.projects() });
     },
+  });
+}
+
+/**
+ * Delete a project for good, with its analyses and every profile version. The list
+ * drops it at once; what was held about the project itself is left for the screen
+ * that showed it to leave, so that screen does not ask for a project that is gone.
+ */
+export function useDeleteProject(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, ApiError, void>({
+    mutationFn: async () =>
+      doneOf(await api.DELETE("/v1/projects/{project_id}", { params: { path: { project_id: projectId } } })),
+    onSuccess: () => {
+      queryClient.setQueryData<InfiniteData<ProjectList, string | undefined>>(queryKeys.projects(), (list) =>
+        list === undefined
+          ? list
+          : {
+              ...list,
+              pages: list.pages.map((page) => ({
+                ...page,
+                projects: page.projects.filter((project) => project.id !== projectId),
+              })),
+            },
+      );
+      return queryClient.invalidateQueries({ queryKey: queryKeys.projects() });
+    },
+    // A 409 means a run started since the project was read; show it.
+    onError: () => queryClient.invalidateQueries({ queryKey: queryKeys.project(projectId) }),
   });
 }

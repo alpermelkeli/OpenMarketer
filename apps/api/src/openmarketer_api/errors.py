@@ -35,6 +35,10 @@ from openmarketer_core.credentials.resolution import (
 )
 from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
 from openmarketer_core.db.profile_versions import ProfileAlreadyApproved, ProfileVersionNotFound
+from openmarketer_core.db.project_removal import (
+    ProjectHasPendingProposal,
+    ProjectHasUnfinishedRun,
+)
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.proposals import ProposalNotFound, ProposalNotPending
 from openmarketer_core.db.session import DatabaseError
@@ -66,6 +70,7 @@ class ErrorCode(StrEnum):
     ANALYSIS_ALREADY_RUNNING = "analysis_already_running"
     PROFILE_ALREADY_APPROVED = "profile_already_approved"
     PROPOSAL_NOT_PENDING = "proposal_not_pending"
+    PROPOSAL_PENDING = "proposal_pending"
     CREDENTIAL_SET_BY_ENVIRONMENT = "credential_set_by_environment"
     ENCRYPTION_KEY_MISSING = "encryption_key_missing"
     MODEL_SET_BY_ENVIRONMENT = "model_set_by_environment"
@@ -108,8 +113,10 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     UnknownTier: (404, ErrorCode.TIER_NOT_FOUND),
     UnknownRole: (404, ErrorCode.ROLE_NOT_FOUND),
     AnalysisAlreadyRunning: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
+    ProjectHasUnfinishedRun: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
     ProposalNotPending: (409, ErrorCode.PROPOSAL_NOT_PENDING),
+    ProjectHasPendingProposal: (409, ErrorCode.PROPOSAL_PENDING),
     CredentialSetByEnvironment: (409, ErrorCode.CREDENTIAL_SET_BY_ENVIRONMENT),
     EncryptionKeyMissing: (409, ErrorCode.ENCRYPTION_KEY_MISSING),
     ModelSetByEnvironment: (409, ErrorCode.MODEL_SET_BY_ENVIRONMENT),
