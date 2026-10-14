@@ -26,6 +26,11 @@ A graph compiled with a context type is given the run's context for each attempt
 (``GraphThread``'s ``context``): it is never stored, so an attempt that resumes a paused
 thread has its own.
 
+Each step is a graph run named after the thread's kind, with the thread as its Langfuse session
+(the metadata key ``langfuse_session_id``), which is what tracing sees of it when it is on
+(``tracing.py``): the steps of one run of an agent are one session. The context is not part of a
+run's inputs and is not traced.
+
 Nothing here decides what an action is allowed to do (``ActionCatalog``), runs
 one, retries one or names a thread (``threads.thread_id``). It does not remove
 checkpoints either, except when asked to ``forget`` them. Only a node asks for an action:
@@ -155,9 +160,12 @@ class GraphThread:
         self._graph = graph
         self._checkpoints = checkpoints
         self._context = context
+        kind, _, _ = checkpoints.thread_id.partition(":")
         self._config: RunnableConfig = {
             "configurable": {"thread_id": checkpoints.thread_id},
             "recursion_limit": recursion_limit,
+            "run_name": kind,
+            "metadata": {"langfuse_session_id": checkpoints.thread_id},
         }
 
     def state(self) -> ThreadState:

@@ -12,6 +12,7 @@ dependencies = [
     "langchain-core>=1.6.7,<2",
     "langgraph>=1.2.14,<2",
     "langgraph-checkpoint-postgres>=3.1.2,<4",
+    "langfuse>=5.0.1,<6",
     "openai>=3.26.0",
     "pgvector>=0.5.0",
     "psycopg[binary,pool]>=3.3.6",

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from google.protobuf.json_format import MessageToDict
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from temporalio.client import WorkflowFailureError, WorkflowHistory
 from temporalio.exceptions import CancelledError
 from temporalio.worker import Worker
@@ -34,6 +35,7 @@ from openmarketer_core.repository_analysis.workflow_contract import (
     AnalyzeRepositoryInput,
     analysis_workflow_id,
 )
+from openmarketer_core.tracing import TracingSettings, start_tracing
 from openmarketer_worker import main
 from openmarketer_worker.credentials import ModelKeyNotSet, WorkspaceCredentials
 from openmarketer_worker.repository_analyzer import wiring
@@ -106,6 +108,30 @@ def execute(temporal, task_queue, worker_serving):
 
 
 # -------------------------------------------------------------- how a run ends
+
+
+async def test_run_on_a_traced_worker_sends_its_steps_nodes_and_model_calls(
+    execute, analyzer_with, model, run
+):
+    # Tracing is started in the task that builds the worker, as ``serve`` starts it; the graph
+    # runs in the threads of the worker's activities, which must trace all the same.
+    exporter = InMemorySpanExporter()
+    settings = TracingSettings(
+        public_key=f"pk-lf-{uuid.uuid4()}", secret_key="sk-lf-test", base_url="http://127.0.0.1:1"
+    )
+    tracing = start_tracing(settings, span_exporter=exporter)
+    try:
+        await execute(run, analyzer_with(new_model=lambda workspace_id: tracing.model(model)))
+        tracing.flush()
+    finally:
+        tracing.stop()
+
+    names = {span.name for span in exporter.get_finished_spans()}
+    assert {"analysis-run", "clone", "repo_analyzer"} <= names
+    sent = str([dict(span.attributes or {}) for span in exporter.get_finished_spans()])
+    assert run_thread_id(run.run_id) in sent
+
+
 async def test_run_ends_succeeded_with_the_one_profile_version_it_stored(
     execute, quick, run, database
 ):
@@ -458,6 +484,25 @@ async def test_worker_does_not_start_with_a_limit_that_is_not_a_number(name):
 async def test_worker_does_not_start_with_a_token_host_that_is_not_a_host():
     environ = {**DATABASE, **MODEL, "GITLAB_HOST": "https://gitlab.example.com"}
     with pytest.raises(main.StartupError, match="GITLAB_HOST"):
+        await main.serve(environ)
+
+
+async def test_worker_does_not_start_with_one_key_of_langfuse_and_not_the_other():
+    environ = {**DATABASE, **MODEL, "LANGFUSE_PUBLIC_KEY": "pk-lf-made-up"}
+    with pytest.raises(main.StartupError, match="LANGFUSE_SECRET_KEY"):
+        await main.serve(environ)
+
+
+async def test_traced_worker_that_cannot_start_stops_its_tracing_and_says_why():
+    environ = {
+        **DATABASE,
+        **MODEL,
+        "TEMPORAL_ADDRESS": "127.0.0.1:1",
+        "LANGFUSE_PUBLIC_KEY": f"pk-lf-{uuid.uuid4()}",
+        "LANGFUSE_SECRET_KEY": "sk-lf-made-up",
+        "LANGFUSE_BASE_URL": "http://127.0.0.1:1",
+    }
+    with pytest.raises(main.StartupError, match="TEMPORAL_ADDRESS"):
         await main.serve(environ)
 
 

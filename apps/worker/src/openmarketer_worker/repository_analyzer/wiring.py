@@ -61,6 +61,7 @@ from openmarketer_core.repository_analysis.intake import (
     run_intake,
 )
 from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
+from openmarketer_core.tracing import Tracing
 from openmarketer_core.workspace_settings.analysis_limits import LARGEST_LIMITS
 from openmarketer_worker import AgentRegistration
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, checkpoints_in
@@ -107,13 +108,14 @@ def repository_analyzer(
     sessions: sessionmaker[Session],
     database_url: str,
     credentials: WorkspaceCredentials,
+    tracing: Tracing,
 ) -> AgentRegistration:
     """The repository analyzer as this installation runs it, ready for the worker.
 
     The configuration is read and checked now, so a mistake in it stops the
     worker at start-up instead of failing every run. The credentials are not:
     a run asks for the ones of its workspace, and one that is missing ends
-    that run.
+    that run. ``tracing`` is the worker's: each attempt's model is traced with it.
     """
     policy = RepositoryAnalyzerSettings.from_env(environ).policy
     checkpoints = checkpoints_in(database_url)
@@ -132,8 +134,11 @@ def repository_analyzer(
             clones=clones,
             # A chat model per attempt: it keeps the replies of the attempt it served, and
             # carries the models and the key its workspace has at that moment.
-            new_model=lambda workspace_id: model_of_workspace(
-                settings.router_for(workspace_id, router), workspace_id, credentials
+            # Traced when tracing is on: each call is a generation under the node that made it.
+            new_model=lambda workspace_id: tracing.model(
+                model_of_workspace(
+                    settings.router_for(workspace_id, router), workspace_id, credentials
+                )
             ),
             tokens_of=tokens.of,
             extractors=list(discover_extractors()),

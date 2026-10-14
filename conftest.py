@@ -1,4 +1,5 @@
-"""Database fixtures shared by the tests of every package that need PostgreSQL.
+"""Database fixtures shared by the tests of every package that need PostgreSQL, and tracing kept
+off for every test.
 
 They use the dev stack (``make up``) or DATABASE_URL. Each test module gets its
 own temporary database, and the tests are skipped when no server is reachable.
@@ -17,6 +18,18 @@ from sqlalchemy.orm import Session
 
 DEV_STACK_URL = "postgresql+psycopg://openmarketer:openmarketer@localhost:5433/openmarketer"
 ALEMBIC_INI = Path(__file__).resolve().parent / "alembic.ini"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Keep tracing off in every test, whatever the developer's shell set.
+
+    Tests reach no network. The tests of tracing turn it on themselves, with spans kept in
+    memory (``packages/core/tests/test_tracing.py``); LangChain's own tracing to LangSmith,
+    which its environment variables would turn on, stays off as well.
+    """
+    for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGCHAIN_TRACING_V2"):
+        os.environ.pop(name, None)
+    os.environ["LANGSMITH_TRACING"] = "false"
 
 
 @pytest.fixture(scope="module")
