@@ -2,8 +2,10 @@
 
 The API starts a workflow for a run it has stored (``db.analysis_runs``); the
 worker executes it. Entry points do not import each other, so the names both
-need are here: plain values, with no import of the workflow engine. Where the
-engine is, which both also need, is not about analyses: ``workflow_server.py``.
+need are here: plain values, with no import of the workflow engine.
+``analysis_workflow`` puts them together as the ``WorkflowStart`` the API's
+starter is given. Where the engine is, which both also need, is not about
+analyses: ``workflow_server.py``.
 
 The input names the run and nothing else. The engine stores every input in its
 history, where it can be read, so no repository URL, token or profile ever
@@ -14,6 +16,8 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+
+from openmarketer_core.workflow_start import WorkflowStart
 
 ANALYZE_REPOSITORY_WORKFLOW = "AnalyzeRepository"
 ANALYSIS_TASK_QUEUE = "openmarketer-analysis"
@@ -36,3 +40,13 @@ class AnalyzeRepositoryInput:
 def analysis_workflow_id(run_id: uuid.UUID) -> str:
     """The workflow of a run. It is derived, never stored: one run, one workflow."""
     return f"analyze-repository-{run_id}"
+
+
+def analysis_workflow(run: AnalyzeRepositoryInput) -> WorkflowStart:
+    """The workflow that executes ``run``, as the API's starter is asked to start it."""
+    return WorkflowStart(
+        workflow=ANALYZE_REPOSITORY_WORKFLOW,
+        workflow_id=analysis_workflow_id(run.run_id),
+        task_queue=ANALYSIS_TASK_QUEUE,
+        input=run,
+    )

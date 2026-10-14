@@ -21,10 +21,10 @@ from fastapi import Depends, Request
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
-from openmarketer_api.analysis_workflows import AnalysisWorkflows
+from openmarketer_api.workflows import Workflows
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.session import transaction
-from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_core.workflow_start import WorkflowStart
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class Services:
     """Everything that outlives a request."""
 
     sessions: sessionmaker[Session]
-    analysis_workflows: AnalysisWorkflows
+    workflows: Workflows
     # The process environment, for core to see which credentials it sets. Kept out of
     # the repr, which would print every secret in it.
     environment: Mapping[str, str] = field(repr=False)
@@ -54,17 +54,17 @@ def db_session(services: Annotated[Services, Depends(_services)]) -> Iterator[Se
         yield session
 
 
-def analysis_workflows(services: Annotated[Services, Depends(_services)]) -> AnalysisWorkflows:
-    return services.analysis_workflows
+def workflows(services: Annotated[Services, Depends(_services)]) -> Workflows:
+    return services.workflows
 
 
 def start_workflow(
-    workflows: Annotated[AnalysisWorkflows, Depends(analysis_workflows)],
-) -> Callable[[AnalyzeRepositoryInput], None]:
+    workflows: Annotated[Workflows, Depends(workflows)],
+) -> Callable[[WorkflowStart], None]:
     """Starting a workflow, as a function a route's worker thread can call."""
 
-    def start(run: AnalyzeRepositoryInput) -> None:
-        from_thread.run(workflows.start, run)
+    def start(workflow: WorkflowStart) -> None:
+        from_thread.run(workflows.start, workflow)
 
     return start
 
@@ -97,4 +97,4 @@ DbSession = Annotated[Session, Depends(db_session, scope="function")]
 Sessions = Annotated[sessionmaker[Session], Depends(sessions)]
 Environment = Annotated[Mapping[str, str], Depends(environment)]
 StoringCipher = Annotated[CredentialCipher | None, Depends(credential_cipher)]
-StartWorkflow = Annotated[Callable[[AnalyzeRepositoryInput], None], Depends(start_workflow)]
+StartWorkflow = Annotated[Callable[[WorkflowStart], None], Depends(start_workflow)]

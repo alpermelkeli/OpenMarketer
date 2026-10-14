@@ -24,23 +24,27 @@ from openmarketer_core.db.models import Project, Workspace
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.intake import Snapshot
-from openmarketer_core.repository_analysis.request import WORKFLOW_NOT_STARTED, WorkflowNotStarted
-from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_core.repository_analysis.request import WORKFLOW_NOT_STARTED
+from openmarketer_core.repository_analysis.workflow_contract import (
+    AnalyzeRepositoryInput,
+    analysis_workflow,
+)
+from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
 
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
 
 
 class FakeWorkflows:
-    """Records the runs whose workflow was started; refuses while ``reachable`` is false."""
+    """Records the workflows that were started; refuses while ``reachable`` is false."""
 
     def __init__(self) -> None:
-        self.started: list[AnalyzeRepositoryInput] = []
+        self.started: list[WorkflowStart] = []
         self.reachable = True
 
-    async def start(self, run: AnalyzeRepositoryInput) -> None:
+    async def start(self, workflow: WorkflowStart) -> None:
         if not self.reachable:
             raise WorkflowNotStarted("no workflow server in this test")
-        self.started.append(run)
+        self.started.append(workflow)
 
 
 @pytest.fixture
@@ -78,7 +82,7 @@ def workflows(app, sessions, workspace_id) -> FakeWorkflows:
     """The application wired to the test database, this test's workspace and fake workflows."""
     fake = FakeWorkflows()
     app.state.services = Services(
-        sessions=sessions, analysis_workflows=fake, environment={}, credential_cipher=None
+        sessions=sessions, workflows=fake, environment={}, credential_cipher=None
     )
     app.dependency_overrides[current_workspace_id] = lambda: workspace_id
     return fake
@@ -167,7 +171,9 @@ def test_started_analysis_is_stored_and_can_be_polled(client, workflows, project
 def test_workflow_is_started_for_the_stored_run(client, workflows, workspace_id, project_id):
     run_id = uuid.UUID(client.post(analyses_url(project_id)).json()["id"])
     assert workflows.started == [
-        AnalyzeRepositoryInput(workspace_id=workspace_id, project_id=project_id, run_id=run_id)
+        analysis_workflow(
+            AnalyzeRepositoryInput(workspace_id=workspace_id, project_id=project_id, run_id=run_id)
+        )
     ]
 
 
