@@ -70,7 +70,7 @@ def test_settings_do_not_show_the_encryption_key_when_printed():
 def test_services_do_not_show_the_environment_when_printed():
     services = Services(
         sessions=None,  # pyright: ignore[reportArgumentType]
-        analysis_workflows=None,  # pyright: ignore[reportArgumentType]
+        workflows=None,  # pyright: ignore[reportArgumentType]
         environment={"GITHUB_TOKEN": "ghp_made_up_value"},
         credential_cipher=None,
     )

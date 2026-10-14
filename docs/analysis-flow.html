@@ -194,8 +194,8 @@
         <span class="n">3</span>
         <h3>Its workflow is started</h3>
         <ul class="where">
-          <li><span class="f">apps/api/…/temporal_workflows.py</span> <b>TemporalAnalysisWorkflows.start()</b></li>
-          <li><span class="f">core/repository_analysis/workflow_contract.py</span> <b>analysis_workflow_id()</b>, <b>AnalyzeRepositoryInput</b>, <b>ANALYSIS_TASK_QUEUE</b></li>
+          <li><span class="f">apps/api/…/temporal_workflows.py</span> <b>TemporalWorkflows.start()</b></li>
+          <li><span class="f">core/repository_analysis/workflow_contract.py</span> <b>analysis_workflow()</b>: name, id, task queue and <b>AnalyzeRepositoryInput</b></li>
         </ul>
         <p>Temporal gets three identifiers (workspace, project, run) and nothing else.
            If it cannot be reached: <b>mark_run_failed()</b>, answer 503.</p>
