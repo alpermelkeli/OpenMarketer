@@ -107,7 +107,7 @@ The key design choices are:
   \item \textbf{Boring, widely known technology.} Python and FastAPI for the backend, Next.js for the dashboard, PostgreSQL with pgvector for data, Temporal for workflows, Docker Compose for self-hosting, Apache-2.0 for the licence.
 \end{itemize}
 
-The report covers the concept (Section~\ref{sec:concept}), requirements, architecture, LLM access and per-role model configuration (Section~\ref{sec:llm}), the repository-to-profile pipeline, the safety model, the orchestrator console (Section~\ref{sec:console}), the security model, platform and media integrations, the data model, the technology selection with rationale, the open-source strategy, deployment, evaluation, a commercial path for deploying the system at companies (Section~\ref{sec:commercial}), and a twelve-month roadmap with risks.
+The report covers the concept (Section~\ref{sec:concept}), requirements, architecture, LLM access and per-role model configuration (Section~\ref{sec:llm}), the repository-to-profile pipeline, the safety model, the orchestrator console (Section~\ref{sec:console}), the security model, platform and media integrations, the writer (Section~\ref{sec:writer}), the data model, the technology selection with rationale, the open-source strategy, deployment, evaluation, a commercial path for deploying the system at companies (Section~\ref{sec:commercial}), and a twelve-month roadmap with risks.
 
 \clearpage
 % ---------------------------------------------------------------- 1
@@ -210,7 +210,7 @@ Figure~\ref{fig:arch} shows the system as seven layers. Requests flow downward; 
 \begin{description}
   \item[User layer.] A Next.js dashboard (approval queue, budgets, reports, profile review), a CLI for setup and dry runs, and chat notifications (Telegram, Slack, e-mail through Apprise) that carry signed one-time links to the approval page.
   \item[Control plane.] A FastAPI service exposing a typed REST API with OIDC authentication and role-based access per workspace, and the orchestrator agent behind the dashboard chat (Section~\ref{sec:console}).
-  \item[Orchestration.] Temporal workflows run scheduled and long-lived processes. Agent behaviour is written as LangGraph graphs (orchestrator, creative studio, repo analyzer, planner, reader pipeline) that run inside workflow activities (Section~\ref{sec:graphs}).
+  \item[Orchestration.] Temporal workflows run scheduled and long-lived processes. Agent behaviour is written as LangGraph graphs (orchestrator, writer, creative studio, repo analyzer, planner, reader pipeline) that run inside workflow activities (Section~\ref{sec:graphs}).
   \item[Guardrail layer.] A policy engine (YAML rules evaluated with CEL), a budget ledger (transactional reserve/commit/release) and a content filter (secrets, unreleased features, banned claims). It is ordinary code, not a prompt.
   \item[Connector layer.] One plugin per platform behind a common interface.
   \item[Data layer.] PostgreSQL (with pgvector), S3-compatible object storage and a secret store.
@@ -295,7 +295,7 @@ OpenRouter is the default gateway. It offers one API and one key for models from
 \texttt{researcher} & Market, competitor and trend research & tools & balanced\\
 \texttt{reader} & Quarantined classification of untrusted text & structured output, \emph{no tools} & fast\\
 \texttt{planner} & Weekly plan, channel mix, ad plan & structured output & strong\\
-\texttt{writer} & Posts, captions, threads, ad copy & none & balanced\\
+\texttt{writer} & Posts, captions, threads, ad copy & structured output & balanced\\
 \texttt{reply\_drafter} & Replies to the project's own audience & none & balanced\\
 \texttt{creative\_director} & Prompts and scripts for image, video and voice providers & structured output & balanced\\
 \texttt{studio} & Creative studio agent: writes code, calls image, video and voice tools, looks at results and edits & tools, image input & strong\\
@@ -657,6 +657,93 @@ This is a design commitment and a licence-adjacent policy, not a guarantee; fork
 
 \subsection{Legal and compliance notes}
 These points need review by a qualified professional before any hosted offering: advertising rules and endorsement disclosure, platform advertising policies (health, finance and similar categories), labelling of AI-generated content, data-protection law (GDPR, Turkish KVKK) for stored comments and messages, and the terms of each API. The system is designed so that these rules are configurable policy packs rather than hard-coded behaviour.
+
+% ---------------------------------------------------------------- writer
+\section{Writer: From an Approved Profile to an Approved Post}\label{sec:writer}
+
+\subsection{Purpose and scope}
+The writer turns a brief into a post for one platform, in the project's brand voice, using only facts from the approved Product Profile, and hands the post to the policy gate as a proposal. It is the first agent with an action that publishes, so it is also the first user of the approval flow (Section~\ref{sec:safety}). The first version writes single text posts for X (open question 1) and runs in \emph{dry-run}: an approved post is recorded exactly as it would be sent, and nothing is sent until the owner turns publishing on for the project. Threads, images from the creative studio (Section~\ref{sec:studio}), scheduling by the planner and replies come later. They reuse this graph or its checks.
+
+\subsection{The brief}
+A brief is a small record. A person creates it in the dashboard; later the planner, the repository watcher (Section~\ref{sec:profile}) and the orchestrator (Section~\ref{sec:console}) create the same record.
+
+\begin{longtable}{@{}p{3.0cm}p{12.3cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Meaning}\\
+\midrule
+\endhead
+\texttt{platform} & Where the post goes; its rules (length, links, mentions, hashtags) come from the platform's connector.\\
+\texttt{goal} & \texttt{introduce} the product, \texttt{announce} a feature, or \texttt{angle}: a direction in a person's own words.\\
+\texttt{feature} & For an announcement: the feature's identifier in the profile. It must be \texttt{live}.\\
+\texttt{angle} & For \texttt{angle}: the person's text, at most a few sentences.\\
+\texttt{variants} & How many candidates to write, three by default and five at most.\\
+\bottomrule
+\end{longtable}
+
+A brief is data. It cannot choose the profile version, raise a limit or change the platform's rules.
+
+\subsection{The graph}
+Writing is a LangGraph graph (Figure~\ref{fig:writer}) with the same loop as the creative studio (Section~\ref{sec:studio}): produce, verify, decide, revise. The difference is that the writer needs no tools.
+
+\fig{fig_writer}{Writer graph. Code builds the writing context from the approved profile; the writer drafts variants without tools; code rules and a different model check them; a passing variant is proposed through the policy gate; a person approves, edits or rejects; the post is published (or, in dry-run, recorded) and stored as a content item.}{fig:writer}
+
+\begin{longtable}{@{}p{2.3cm}p{3.2cm}p{9.8cm}@{}}
+\toprule
+\textbf{Node} & \textbf{Done by} & \textbf{What it does}\\
+\midrule
+\endhead
+\texttt{prepare} & code & Reads the project's approved profile version and keeps its identifier in the state for the whole run, as the analyzer keeps the commit. Builds the \emph{writing context}: product, voice, audience, do-not-mention list, the platform's rules, and the \texttt{live} features with their evidence. A brief that names a feature that is not live, or a project without an approved profile, ends the run here.\\
+\texttt{draft} & \texttt{writer} & Writes the variants from the writing context alone. The output is structured: for each variant its text, its angle, and the claims it makes, each claim naming the features it rests on.\\
+\texttt{check} & code & Runs the code rules on every variant (below).\\
+\texttt{critique} & \texttt{critic} & Reads the variants that kept the code rules against the writing context. Returns a structured report per variant (pass or fail per criterion, severity, edit suggestions) and ranks the variants that pass.\\
+\texttt{decide} & code & A variant passes when it keeps every code rule and the critic passes it. One passes: propose the best. None passes and rounds and cost are left: revise. At the limit: propose the best variant that keeps every code rule, marked as not passing the critic; if no variant keeps them, the run ends as failed.\\
+\texttt{revise} & \texttt{writer} & Rewrites the failing variants with the findings, or with a person's note after a rejection, and returns to \texttt{check}.\\
+\texttt{propose} & action & Asks for the action \texttt{publish\_post}. Its effect is \emph{publishes}, so the gate holds it as a proposal (below).\\
+\texttt{record} & code & After the action's outcome, stores the content item and ends the run.\\
+\bottomrule
+\end{longtable}
+
+\subsection{Checks}
+Every variant is checked by code first and then by a model that is not the writer's.
+
+\begin{longtable}{@{}p{4.2cm}p{11.1cm}@{}}
+\toprule
+\textbf{Check} & \textbf{What it covers}\\
+\midrule
+\endhead
+Code rules (hard) & Length as the platform counts it (on X a link counts as a fixed number of characters); no term of the do-not-mention list, matched without regard to case; every claim names a feature of the writing context, and therefore a live one; no link or @mention outside the project's allow-list; at most the platform's number of hashtags; the language is one of the profile's. A number that does not appear in the profile is flagged for the critic and for the person.\\
+Critic (\texttt{critic}) & Brand voice; facts against the writing context, including what a claim implies; platform fit; risky claims (legal, medical or financial claims, comparisons with named competitors), which raise the action to L2 (Section~\ref{sec:safety}).\\
+\bottomrule
+\end{longtable}
+
+The two kinds of check have different weight. A code rule is a hard rule: a variant that breaks one is never proposed. The critic's judgement is advice: at the round limit a person may still see a variant the critic failed, together with the critic's report. The critic is a different model from the writer on purpose (D11), and the router warns when \texttt{writer} and \texttt{critic} resolve to the same model.
+
+\subsection{The approval round}
+The proposal carries everything a person needs to decide without opening anything else: the proposed variant and the alternatives, the angle, each claim with the evidence of the features it rests on, the reports of the code rules and of the critic, and the profile version. The person can:
+\begin{itemize}
+  \item \textbf{Approve} the proposed variant, or approve one of the alternatives instead.
+  \item \textbf{Edit and approve.} The edited text is a new payload: it passes the code rules again before the approval is stored, and an edit that breaks one is refused with the findings. The difference between the proposed and the approved text is stored as a learning signal (F9).
+  \item \textbf{Reject with a note.} The note goes back to the graph as the reason of the outcome, and the writer revises once more if rounds are left. The new variant is a new proposal.
+  \item \textbf{Reject}, or let the proposal expire. Nothing is published; expiry counts as a rejection.
+\end{itemize}
+
+\subsection{Running on Temporal}
+The writer has its own workflow and task queue, like every agent (Section~\ref{sec:graphs}). Its thread is named for the writing run. The first step of the graph runs \texttt{prepare} to \texttt{propose} in one activity and pauses at the action. The workflow then puts the action through the gate, stores the proposal and waits for a person's decision with no graph running. An approved \texttt{publish\_post} runs as an activity of its own. Its handler calls the platform's connector with the action's identifier as the key that makes the post happen once, and keeps the platform's identifier of the post. The second step resumes the graph with the outcome: \texttt{record}, or \texttt{revise} after a rejection with a note. Limits live in the state, so they hold across attempts: rounds (three by default), variants, steps, and a cost cap per brief that covers every model call of the run.
+
+\subsection{Safety}
+\begin{itemize}
+  \item \textbf{The writer reads only approved data.} Its prompt holds the writing context and the brief, never repository files, comments, web pages or anyone's messages (Section~\ref{sec:security}). Feature descriptions were drafted from repository text and then reviewed by a person; they are still placed in the prompt as quoted data.
+  \item \textbf{No tools, no credentials.} An injected instruction has nothing to call. The only thing the writer can produce is text, and that text reaches the world only through a proposal.
+  \item \textbf{Rules are code.} Unreleased features and the do-not-mention list are enforced in \texttt{prepare} and \texttt{check}, and again by the gate's content filter on the action's payload. Telling the model about them in the prompt is a convenience, not the control (D1).
+  \item \textbf{A person's note is input, not authority.} It is written by an authenticated user, but to the writer it is only text: it cannot change the platform, the limits or the profile version.
+  \item \textbf{Risk levels.} Every post waits for a person while the project is at the approval-queue level. When the owner later lets organic posts from the approved calendar run automatically (L0), a post with a risky claim is still L2 and is only ever drafted.
+\end{itemize}
+
+\subsection{What is stored}
+Each run ends with a \texttt{content\_item}: the platform, the text as published (or as it would have been), its status (\texttt{published}, \texttt{dry\_run}, \texttt{rejected}, \texttt{expired} or \texttt{failed}), the profile version, the claims and their evidence, both reports, the person's edit, the cost, the proposal and the platform's identifier of the post. The model calls are kept in \texttt{llm\_call}. This is the record the connector's \texttt{publish} receives (Section~\ref{sec:oss}) and the one analytics later attaches metrics to.
+
+\subsection{Measuring it}
+On a set of recurring briefs across golden profiles: the share of first drafts that pass, rounds per proposal, cost per approved post, the approval rate, how much people edit (the difference between proposed and approved text), and agreement between the critic and people. The content-quality rubric of the evaluation section (brand voice, factual accuracy against the profile, platform fit) scores the result.
 
 % ---------------------------------------------------------------- studio
 \section{Creative Studio: Agentic Image, Video and Voice Production}\label{sec:studio}
@@ -1026,6 +1113,7 @@ Legal and compliance & High & Varies by market & Policy packs, disclosure labels
   \item \textbf{Sandbox technology.} Docker is the default; decide whether hosted or client deployments need gVisor or microVMs.
   \item \textbf{Studio providers.} Which image and video models and edit endpoints to support first, and how to confirm Higgsfield's programmatic access.
   \item \textbf{Golden repository set.} Which open-source apps will be used as the first benchmark.
+  \item \textbf{Writer.} Whether a variant the critic failed should reach a person at all, or end the run; what the link allow-list holds before the profile has the product's links; and when a person's edits start to change the writer's prompt (F9).
 \end{enumerate}
 
 \section*{Reference Documentation}
