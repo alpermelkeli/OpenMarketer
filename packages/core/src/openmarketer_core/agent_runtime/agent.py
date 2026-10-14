@@ -41,7 +41,9 @@ from typing import Any, overload
 from pydantic import BaseModel
 
 from openmarketer_core.agent_runtime.actions import (
+    DEFAULT_APPROVAL_WAIT_SECONDS,
     ActionDefinition,
+    ActionEffect,
     ActionPolicy,
     InvalidActionDefinition,
     mark_as_action,
@@ -209,6 +211,8 @@ class Agent:
         attempts: int = DEFAULT_ATTEMPTS,
         retry_after: float = DEFAULT_RETRY_AFTER_SECONDS,
         heartbeat: float | None = None,
+        effect: ActionEffect = ActionEffect.INTERNAL,
+        approval_wait: float = DEFAULT_APPROVAL_WAIT_SECONDS,
     ) -> Callable[[type[Payload]], type[Payload]]:
         """Declare the model it decorates as the payload of the action ``name``.
 
@@ -216,7 +220,9 @@ class Agent:
         the tries, the first included, as ``ActionPolicy.max_attempts`` does: the
         default is one, and more is for an action whose handler is safe to repeat.
         ``retry_after`` is the seconds before the second attempt, and
-        ``heartbeat`` the heartbeat timeout of an action that runs long. A limit
+        ``heartbeat`` the heartbeat timeout of an action that runs long. ``effect`` is what
+        the action does beyond the run: one that publishes or spends waits for a person's
+        approval, for at most ``approval_wait`` seconds, before it runs (``gate.py``). A limit
         that is not finite and positive, or goes beyond what ``ActionPolicy`` allows,
         raises ``ValueError`` here, on the line of the decorator.
 
@@ -231,6 +237,8 @@ class Agent:
             max_attempts=attempts,
             retry_after_seconds=retry_after,
             heartbeat_timeout_seconds=heartbeat,
+            effect=effect,
+            approval_wait_seconds=approval_wait,
         )
 
         def declare(model: type[Payload]) -> type[Payload]:

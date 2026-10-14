@@ -5,6 +5,7 @@ checkpoints and the clone of a run older than it are removed. The parts are writ
 as numbers, so that a part the workflow gains and the function forgets fails a test.
 """
 
+from openmarketer_core.agent_runtime.gate import GateVerdict, verdict_for
 from openmarketer_core.repository_analysis.analyzer_agent.definitions import (
     CLONE_REPOSITORY,
     agent,
@@ -77,3 +78,11 @@ def test_start_of_a_run_is_counted_with_the_limits_it_is_written_under():
         start.retry_after_seconds,
         start.max_retry_wait_seconds,
     ) == (30, 5, 0.5, 10)
+
+
+def test_no_action_of_the_analyzer_waits_for_a_person():
+    # The clone works for the run itself. An action that waited for an approval would add its
+    # wait to what the workflow can spend, which the sum above does not count.
+    assert {name: verdict_for(p) for name, p in agent.policies.items()} == {
+        CLONE_REPOSITORY: GateVerdict.RUN
+    }

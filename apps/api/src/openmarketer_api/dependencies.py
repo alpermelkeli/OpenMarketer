@@ -5,13 +5,14 @@ attaches them, and tests override the dependencies below instead. Identity has
 its own module (``identity.py``).
 
 Routes are plain functions that FastAPI runs in worker threads, so database
-work never blocks the event loop. The one asynchronous thing a route needs,
-starting a workflow, is handed to it as a plain function that runs on the
-event loop and waits for it.
+work never blocks the event loop. The asynchronous things a route needs,
+starting a workflow and telling a run of a decision, are handed to it as plain
+functions that run on the event loop and wait for it.
 """
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -74,6 +75,17 @@ def start_workflow(
     return start
 
 
+def tell_run(
+    workflows: Annotated[Workflows, Depends(workflows)],
+) -> Callable[[str, uuid.UUID], None]:
+    """Telling a run of a decision, as a function a route's worker thread can call."""
+
+    def tell(workflow_id: str, proposal_id: uuid.UUID) -> None:
+        from_thread.run(workflows.tell_decided, workflow_id, proposal_id)
+
+    return tell
+
+
 def environment(services: Annotated[Services, Depends(_services)]) -> Mapping[str, str]:
     return services.environment
 
@@ -113,3 +125,4 @@ StoringCipher = Annotated[CredentialCipher | None, Depends(credential_cipher)]
 Models = Annotated[ModelRouter, Depends(model_router)]
 Catalog = Annotated[ModelCatalog, Depends(model_catalog)]
 StartWorkflow = Annotated[Callable[[WorkflowStart], None], Depends(start_workflow)]
+TellRun = Annotated[Callable[[str, uuid.UUID], None], Depends(tell_run)]

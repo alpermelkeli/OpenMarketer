@@ -1,14 +1,15 @@
 """Temporal adapter of ``Workflows``; the only module of the API that imports Temporal.
 
-It starts any workflow it is given, for every kind of run: the name, the task
+It starts any workflow it is given, for every kind of run, and signals a run that waits for a
+person once one of its proposals was decided: the name, the task
 queue, the id and the input come from the run's contract in core
 (``WorkflowStart``), so adding a workflow adds nothing here. One connection
 serves them all.
 
-The connection is made on the first start and then kept. The API therefore
-starts without a Temporal server, and everything that does not start a
-workflow works without one; a start made while the server is unreachable fails
-and the next one tries to connect again.
+The connection is made on the first start or signal and then kept. The API therefore
+starts without a Temporal server, and everything that does not start a workflow or tell a run
+of a decision works without one; a call made while the server is unreachable fails and the
+next one tries to connect again.
 
 What holds for every workflow is decided here, once. A workflow id is never
 used twice, so one run has one workflow even after it ended. No execution or
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import timedelta
 
 from temporalio.client import Client
@@ -28,6 +30,8 @@ from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError
 
+from openmarketer_core.agent_runtime.gate import PROPOSAL_DECIDED_SIGNAL
+from openmarketer_core.approvals.decision import RunNotTold
 from openmarketer_core.workflow_server import WorkflowServer
 from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
 
@@ -36,6 +40,11 @@ logger = logging.getLogger(__name__)
 # A request waits this long for Temporal before the start counts as failed.
 CONNECT_TIMEOUT_SECONDS = 5
 START_TIMEOUT_SECONDS = 10
+SIGNAL_TIMEOUT_SECONDS = 10
+
+
+class TemporalUnreachable(Exception):
+    """The workflow server did not answer the connection in time."""
 
 
 class TemporalWorkflows:
@@ -45,7 +54,10 @@ class TemporalWorkflows:
         self._connecting = asyncio.Lock()
 
     async def start(self, workflow: WorkflowStart) -> None:
-        client = await self._connected()
+        try:
+            client = await self._connected()
+        except TemporalUnreachable as e:
+            raise WorkflowNotStarted(str(e)) from e
         try:
             await client.start_workflow(
                 workflow.workflow,
@@ -61,6 +73,21 @@ class TemporalWorkflows:
             logger.error("Temporal did not start the workflow %s: %s", workflow.workflow_id, e)
             raise WorkflowNotStarted(f"Temporal refused: {e.status.name}") from e
 
+    async def tell_decided(self, workflow_id: str, proposal_id: uuid.UUID) -> None:
+        try:
+            client = await self._connected()
+            await client.get_workflow_handle(workflow_id).signal(
+                PROPOSAL_DECIDED_SIGNAL,
+                proposal_id,
+                rpc_timeout=timedelta(seconds=SIGNAL_TIMEOUT_SECONDS),
+            )
+        except TemporalUnreachable as e:
+            raise RunNotTold(str(e)) from e
+        except RPCError as e:
+            # A workflow that ended is told nothing; its proposal was expired when it ended.
+            logger.warning("Temporal did not signal workflow %s: %s", workflow_id, e)
+            raise RunNotTold(f"Temporal refused: {e.status.name}") from e
+
     async def _connected(self) -> Client:
         async with self._connecting:
             if self._client is None:
@@ -75,4 +102,4 @@ class TemporalWorkflows:
             )
         except (RuntimeError, TimeoutError) as e:
             logger.error("Temporal is not reachable at %s", self._server.address)
-            raise WorkflowNotStarted(f"Temporal is not reachable at {self._server.address}") from e
+            raise TemporalUnreachable(f"Temporal is not reachable at {self._server.address}") from e

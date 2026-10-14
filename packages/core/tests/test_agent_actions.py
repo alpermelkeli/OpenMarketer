@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ImportString, create_model
 from pydantic import dataclasses as pydantic_dataclasses
 
 from openmarketer_core import agent_runtime
-from openmarketer_core.agent_runtime import actions, agent, model_input, steps, threads, tools
+from openmarketer_core.agent_runtime import actions, agent, gate, model_input, steps, threads, tools
 from openmarketer_core.agent_runtime.actions import (
     MAX_ATTEMPT_TIMEOUT_SECONDS,
     MAX_ATTEMPTS,
@@ -449,7 +449,7 @@ def test_action_policy_without_a_heartbeat_has_none():
     assert ActionPolicy(30, 2, 1).heartbeat_timeout_seconds is None
 
 
-def limits_with(**changes):
+def limits_with(**changes) -> dict[str, Any]:
     return {"attempt_timeout_seconds": 30, "max_attempts": 2, "retry_after_seconds": 1} | changes
 
 
@@ -647,10 +647,10 @@ def test_kind_with_anything_but_lower_case_letters_digits_and_hyphens_is_refused
 
 
 # ------------------------------------------------- no framework in the contract
-FRAMEWORK_FREE = (agent_runtime, actions, agent, model_input, steps, threads, tools)
+FRAMEWORK_FREE = (agent_runtime, actions, agent, gate, model_input, steps, threads, tools)
 # The modules of the package, those that import LangGraph and those that do not.
 LANGGRAPH_MODULES = {"langgraph_steps", "langgraph_agent"}
-PLAIN_MODULES = {"__init__", "actions", "agent", "model_input", "steps", "threads", "tools"}
+PLAIN_MODULES = {"__init__", "actions", "agent", "gate", "model_input", "steps", "threads", "tools"}
 FRAMEWORKS = (
     "langgraph",
     "langchain",

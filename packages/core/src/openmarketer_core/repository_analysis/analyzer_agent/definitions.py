@@ -29,6 +29,7 @@ from typing import Annotated, Any, TypedDict
 
 from pydantic import BaseModel, ConfigDict
 
+from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.llm import ChatModel
 from openmarketer_core.profile import ProductProfile
@@ -111,6 +112,9 @@ agent = Agent(ANALYSIS_RUN_KIND, state=AnalyzerState, context=AnalyzerContext)
     attempts=CLONE_ATTEMPTS,
     retry_after=CLONE_RETRY_AFTER_SECONDS,
     heartbeat=CLONE_HEARTBEAT_SECONDS,
+    # Cloning reads the project's own repository for the run: nothing is published and nothing
+    # is spent, so the policy gate lets it run without a person's approval.
+    effect=ActionEffect.INTERNAL,
 )
 class CloneRepository(BaseModel):
     """Clone the repository of the run's project, and say which commit was cloned.

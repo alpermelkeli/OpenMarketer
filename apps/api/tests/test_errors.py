@@ -19,6 +19,9 @@ class NoWorkflows:
     async def start(self, workflow: WorkflowStart) -> None:
         raise AssertionError("no workflow may be started without a database")
 
+    async def tell_decided(self, workflow_id: str, proposal_id: uuid.UUID) -> None:
+        raise AssertionError("no run may be told of a decision without a database")
+
 
 @pytest.fixture
 def client(app) -> TestClient:
