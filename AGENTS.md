@@ -99,4 +99,4 @@ If a change deviates from the design report, record it in `docs/status.md` and s
 
 ## Agents
 
-Specialised agents are defined in `.agents/agents/`, one Markdown file each. `.claude/agents` is a symlink to that folder and `CLAUDE.md` imports this file, so Claude Code and other tools read the same instructions.
+Specialised agents are defined in `.agents/agents/`, one Markdown file each. `.claude/agents` is a symlink to that folder and `CLAUDE.md` imports this file, so Claude Code and other tools read the same instructions. Procedures that cross several agents' areas are skills in `.agents/skills/` (`.claude/skills` is a symlink): `new-agent-workflow` is the order of work for adding a product agent and its Temporal workflow.
