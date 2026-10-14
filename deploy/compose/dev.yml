@@ -145,9 +145,11 @@ services:
         done
         exit 1
 
+  # Langfuse 4's migrations create full-text indexes, which need ClickHouse 26.1 or later
+  # (25.12's arm64 image crashes on start on Apple silicon).
   langfuse-clickhouse:
     profiles: [tracing]
-    image: clickhouse/clickhouse-server:25.12
+    image: clickhouse/clickhouse-server:26.3
     user: "101:101"
     environment:
       CLICKHOUSE_DB: default
