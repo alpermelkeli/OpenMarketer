@@ -269,6 +269,19 @@ The rule: a run waits when the next step of its graph needs the result, and star
 
 \textbf{An agent does not know who started it.} A person through the API, another agent with a start-a-run action, and another agent with a run-and-wait action all start the same workflow with the same request, and the run does the same work. Only who receives the result differs: the person (in the dashboard and a notification), the database for a later run, or the waiting parent. So every agent of the catalogue can be used on its own: a person can ask the creative studio for a poster, or the researcher for a report, without a post.
 
+\textbf{What may vary at run time, and what may not.} A model chooses freely only what has no side effect, and chooses among fixed options everywhere else:
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{6.4cm}>{\raggedright\arraybackslash}p{5.9cm}@{}}
+\toprule
+\textbf{Where} & \textbf{Chosen by the model at run time} & \textbf{Fixed in code}\\
+\midrule
+\endhead
+Orchestrator's chat turn & which read tools to call, in which order, project memory included & the request actions\\
+Orchestrator's task & which agents run, in which order, with which requests, and how the plan changes after each result & the catalogue, the agents' request schemas, the task's limits; a person approves a plan that can spend\\
+An agent & the fields of its plan, which optional branches it takes, the next operation from a fixed menu, which tools to call & the mandatory nodes (checks, critique), the actions and their effects, the gate\\
+\bottomrule
+\end{longtable}
+A model never names a tool or an action that is not declared, and never generates a graph: what varies is data that fixed code reads and routes. That keeps every run replayable from its checkpoints and its history, and keeps the checks of an agent from being skipped.
+
 \textbf{Where each thing lives.}
 \begin{longtable}{@{}>{\raggedright\arraybackslash}p{5.4cm}>{\raggedright\arraybackslash}p{6.0cm}>{\raggedright\arraybackslash}p{3.9cm}@{}}
 \toprule
@@ -300,7 +313,7 @@ Planner & a weekly schedule; a person & profile, playbook and metrics to a plan 
 Researcher (Section~\ref{sec:researcher}) & a person; the orchestrator; another agent's \texttt{research} action (run and wait) & questions to findings with sources & \texttt{researcher} (scope, synthesize), \texttt{reader} (read) & search, fetch a page (internal)\\
 Reply drafter & a new comment or message on the project's accounts & comment to reply & \texttt{reader} (read), \texttt{reply\_drafter} (draft), \texttt{critic} (critique) & \texttt{post\_reply} (publishes)\\
 Analyst & a schedule & metrics to a report and a digest & \texttt{analyst} (interpret, write) & send a notification (internal)\\
-Orchestrator (Section~\ref{sec:console}) & a chat message & a question or request to an answer, a run or a directive & \texttt{orchestrator} (chat turn) & start a run of an agent it may start (start a run); store a directive (internal)\\
+Orchestrator (Section~\ref{sec:console}) & a chat message; a task started from a chat turn & a question or request to an answer, a run, a directive or a task; a task to finished runs and a summary & \texttt{orchestrator} (chat turn; the task's plan and review) & start a run (start a run); the task's steps (run and wait); confirm a plan that can spend (held for a person when it can); store a directive, follow up (internal)\\
 \bottomrule
 \end{longtable}
 
@@ -587,6 +600,7 @@ Status question & ``How did last week's posts perform?'' & Read tools fetch metr
 Explanation & ``Why did you propose pausing that ad set?'' & The agent opens the proposal and explains its rationale, evidence and the profile version it used.\\
 One-off request & ``Write a post announcing offline mode.'' ``Make a poster for the launch.'' & The orchestrator starts a writing run, or a studio run on its own (Section~\ref{sec:terms}). A post's proposal appears in the chat as an approval card; a poster appears in the library with a link.\\
 Research & ``What did our competitors post last month?'' & The orchestrator starts a researcher run; the report appears in the chat with its sources.\\
+Request for several agents & ``Research what competitors posted, write three posts on it, put a poster on one.'' & The orchestrator starts a task (Section~\ref{sec:tasks}): it plans the steps, has a plan that spends approved, runs the agents, reviews each result and reports in the chat when it is done.\\
 Standing instruction & ``Never post on Sundays.'' & A draft policy rule is shown as readable text and as a CEL rule; it becomes active only after the operator confirms.\\
 Budget or autonomy change & ``Raise the monthly cap to 600.'' & Classified as high risk: the agent prepares a change request with a diff, and the operator confirms in the settings form with re-authentication. It is not executed through the chat.\\
 Emergency & ``Pause everything.'' & Safe-direction action: the kill switch is applied immediately and the chat reports what was stopped.\\
@@ -595,7 +609,41 @@ Emergency & ``Pause everything.'' & Safe-direction action: the kill switch is ap
 
 The orchestrator can do only what the agents of the catalogue do (Section~\ref{sec:agents}). Each agent declares whether the orchestrator may start it, and the request is read strictly against that agent's request schema, as a request from the API is. A request no agent can carry out, such as opening a pull request on the repository or posting to a platform that has no connector, is answered as such and recorded as an unmet request, never improvised; the record shows which agent is worth building next.
 
-\fig{fig_console}{Orchestrator console. The agent has read tools and request actions only. Requests start runs of the catalogue's agents and store directives, through the same policy engine as every other action; approvals come from a human click on an approval card.}{fig:console}
+\fig{fig_console}{Orchestrator console. The agent has read tools and request actions only. Requests start runs of the catalogue's agents or tasks that follow several of them, and store directives, through the same policy engine as every other action; approvals come from a human click on an approval card.}{fig:console}
+
+\subsection{Two halves: the chat turn and the task}\label{sec:tasks}
+The orchestrator has two halves. The \emph{chat turn} answers one message, quickly. The \emph{task} carries a request that needs several agents to its end, over hours or days. It is the supervisor of the other agents: it gives them work and sees that the work is finished, but it does none of that work itself.
+
+\textbf{The chat turn.} A turn is a loop over read tools, not a fixed graph: for each message the model chooses what to read and in which order (the status of runs, proposals and their reasons, metrics, reports, project memory, directives), up to a fixed number of tool calls per turn. It then answers, starts one run of an agent of the catalogue, stores a directive, or starts a task. Reading is free to vary because it has no side effects; doing is limited to the request actions.
+
+\textbf{The task.} A request such as ``Find out what our competitors posted last month, write three posts on it, and put a poster on one of them'' is a task: a run of the orchestrator with a workflow of its own, like every agent's (Figure~\ref{fig:task}).
+
+\fig{fig_task}{Orchestrator task. The orchestrator plans the task as structured output; code checks the plan, and a plan whose steps can spend waits for a person's approval; the steps run as runs of the catalogue's agents while the task waits with no graph running; after each one finishes, the orchestrator reviews the result and continues, changes the plan within its scope, asks the person, or finishes with a report.}{fig:task}
+
+\begin{longtable}{@{}p{2.3cm}p{3.2cm}p{9.8cm}@{}}
+\toprule
+\textbf{Node} & \textbf{Done by} & \textbf{What it does}\\
+\midrule
+\endhead
+\texttt{plan} & \texttt{orchestrator} & Writes the plan as structured output: the goal, and the steps, each an agent of the catalogue with its request and the steps it depends on; and the task's scope: a cost cap, the number of runs, a deadline.\\
+\texttt{check} & code & Every step names an agent the orchestrator may start, every request is read strictly against that agent's schema, and the plan stays within the limits of a task. A step's request may refer to an earlier step's result only by reference (``the findings of step 1'').\\
+\texttt{confirm} & action & Only when a step can spend (the creative studio, later ads) or the scope is above the project's defaults: the plan is held by the gate as a proposal, and the person approves or rejects it. Otherwise the task goes on.\\
+\texttt{dispatch} & action & Starts every step whose dependencies are met, each as a run-and-wait action; the workflow waits, with no graph running, until the next one finishes.\\
+\texttt{review} & \texttt{orchestrator} & Reads the finished step's outcome (its status, its proposal and what the person decided, its findings or asset) and decides as structured output: dispatch the next steps; change the plan within its scope, for instance a new writing run with the note of a rejected post; ask the person a question; or finish. A change that adds spending or leaves the scope goes back to \texttt{check} and \texttt{confirm}.\\
+\texttt{follow up} & action & Internal: reminds the person of a proposal that has waited long, through the proactive channels (Section~\ref{sec:proactive}).\\
+\texttt{report} & code, \texttt{orchestrator} & Writes the summary into the chat thread: what was done, with links to the posts, assets and reports, what was rejected, and the cost; stores the task record.\\
+\bottomrule
+\end{longtable}
+
+\textbf{Limits of a task.} The steps, the runs it may start, the number of times it may change its plan, a deadline, and a cost cap that covers its own model calls and the runs it starts; each run keeps its own caps as well. Limits live in the state, as in every graph.
+
+\textbf{What the orchestrator does not do.}
+\begin{itemize}
+  \item \textbf{It does not do an agent's work.} It never writes a post or makes an image. The writer's checks, the studio's verification and the gate run inside the agents, every time, so a wrong decision of the orchestrator is at worst a wrong request to an agent.
+  \item \textbf{It does not approve.} The proposals of the runs it starts wait for a person, as any proposal does; the task waits with them and may remind the person, nothing more.
+  \item \textbf{It does not go beyond the scope.} The results of its steps are data: findings and outcomes inform its review, but cannot raise its limits or replace an approval.
+  \item \textbf{It is not a hub everything must pass through.} Scheduled work runs without it (the planner's week, the analyst's digests, the repository watcher), and a button in the dashboard starts an agent directly. Because an agent does not know who started it (Section~\ref{sec:terms}), the orchestrator is the front door for people and the coordinator of work that needs several agents, not a step every action must take.
+\end{itemize}
 
 \subsection{Proactive mode}\label{sec:proactive}
 The scheduled workflows run whether or not anyone opens the dashboard, so the system must also be able to reach the operator. In proactive mode the console speaks first, through the dashboard thread, chat apps and e-mail (Figure~\ref{fig:proactive}).
@@ -639,6 +687,7 @@ WATCHDOG_AUTO_BRAKE=true
 
 \subsection{Design rules}
 \begin{enumerate}
+  \item \textbf{The orchestrator delegates.} It chooses which agent does what and follows the work to its end; the work itself, with its checks, is done by the agents.
   \item \textbf{Chat prepares, a human approves.} The orchestrator can start runs, and create directives and draft rules. It cannot approve a proposal, raise a budget cap or change the autonomy level. Approval is a button press by an authenticated user, handled by the policy engine, never a statement produced by the model.
   \item \textbf{Read tools and request actions are separate.} Read tools have no side effects. Request actions are internal: they create records and start runs, and never execute external actions. External effects happen only in the started runs, after the policy gate.
   \item \textbf{Safe direction is immediate.} Actions that reduce spend or exposure (pause a campaign, lower a cap, switch on the kill switch) can run at once. Actions that increase exposure need confirmation.
@@ -649,7 +698,7 @@ WATCHDOG_AUTO_BRAKE=true
 \end{enumerate}
 
 \subsection{Implementation notes}
-The chat uses streaming responses from the API. A thread belongs to a project; a workspace-level thread gives an overview across projects. The orchestrator is an agent graph like the others (Section~\ref{sec:graphs}), with the \texttt{orchestrator} role of Section~\ref{sec:llm}. Short interactions run inside the API process; long-running work is delegated to Temporal workflows, whose progress events are pushed back into the thread. Context is assembled on demand from the Product Profile, the current plan, the approval queue, recent metrics, project memory and the audit log, with older conversation turns summarised to stay within the model's context window.
+The chat uses streaming responses from the API. A thread belongs to a project; a workspace-level thread gives an overview across projects. The orchestrator is an agent graph like the others (Section~\ref{sec:graphs}), with the \texttt{orchestrator} role of Section~\ref{sec:llm}. Chat turns run inside the API process; runs and tasks are Temporal workflows, whose progress events are pushed back into the thread. Context is assembled on demand from the Product Profile, the current plan, the approval queue, recent metrics, project memory and the audit log, with older conversation turns summarised to stay within the model's context window.
 
 A later phase can expose the same orchestrator through Telegram or Slack bots. Approval in those channels would still use signed, expiring links that open the dashboard, so that a chat message alone can never approve anything.
 
@@ -1267,6 +1316,7 @@ Legal and compliance & High & Varies by market & Policy packs, disclosure labels
   \item \textbf{Studio providers.} Which image and video models and edit endpoints to support first, and how to confirm Higgsfield's programmatic access.
   \item \textbf{Golden repository set.} Which open-source apps will be used as the first benchmark.
   \item \textbf{Writer.} Whether a variant the critic failed should reach a person at all, or end the run; when the project's settings get an allow-list of its own links and accounts; and when a person's edits start to change the writer's prompt (F9).
+  \item \textbf{Tasks.} Which plans need a person's confirmation beyond those that spend, how often a task may change its plan, and how long a task may wait for people before it reports and ends.
   \item \textbf{Researcher.} Which search provider's official API comes first, how long stored pages are kept, and the default list of blocked domains.
 \end{enumerate}
 

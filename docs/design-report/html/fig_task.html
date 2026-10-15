@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>.dw{position:absolute;z-index:10;background:#1b1b1b;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}.dw>div{position:absolute;inset:2px;background:#FFF1C2;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);display:flex;align-items:center;justify-content:center;text-align:center;font-weight:700;font-size:17px;color:#000}</style></head><body>
+<div id="canvas" style="width:1136px;height:1370px">
+<div class="card abs" id="rq" style="background:#DCEBFA"><b>1 · Request</b><span class="s">from a chat turn: something that needs several agents, such as "research what competitors posted, write three posts on it, put a poster on one"</span></div>
+
+<div class="card abs" id="pl" style="background:#FFF1C2"><b>2 · Plan <span class="chip">orchestrator</span> <span class="chip">structured output</span></b><span class="s">the goal; the steps, each an agent of the catalogue with its request and the steps it depends on; the scope: a cost cap, how many runs, a deadline</span></div>
+
+<div class="card abs" id="ck" style="background:#ECECEC"><b>3 · Check <span class="chip">code</span></b><span class="s">every step names an agent the orchestrator may start; every request fits that agent's schema; a step refers to an earlier result only by reference; the plan stays within a task's limits</span></div>
+
+<div class="dw" id="dc"><div>Can it spend?</div></div>
+<div class="card abs" id="cf" style="background:#E7DFF5"><b>Confirm <span class="chip">action, held by the gate</span></b><span class="s">a plan whose steps can spend, or whose scope is above the project's defaults, waits for a person's approval; rejected, the task ends</span></div>
+
+<div class="card abs" id="ds" style="background:#E7DFF5"><b>4 · Dispatch <span class="chip">run and wait, per ready step</span></b><span class="s">starts every step whose dependencies are met; the workflow waits, with no graph running, until the next one finishes</span></div>
+
+<div class="layer ui abs" id="LS"><div class="lt">Steps <small>runs of the catalogue's agents, each with its own checks, gate and approvals</small></div></div>
+<div class="card abs" id="a1"><b>Researcher</b><span class="s">findings on competitors' posts</span></div>
+<div class="card abs" id="a2"><b>Creative studio</b><span class="s">the poster, into the library</span></div>
+<div class="card abs" id="a3"><b>Writer × 3</b><span class="s">uses the findings; one post takes the poster; each post is a proposal for the person</span></div>
+
+<div class="card abs" id="rv" style="background:#FFF1C2"><b>5 · Review <span class="chip">orchestrator</span> <span class="chip">structured output</span></b><span class="s">reads the finished step's outcome: its status, its proposal and what the person decided, its findings or asset. Decides: the next steps; a change of plan within the scope (a new writing run with a rejected post's note); a question to the person; or finish.</span></div>
+
+<div class="card abs" id="rp" style="background:#DDF1DD"><b>6 · Report</b><span class="s">the summary in the chat: what was done, with links, what was rejected, the cost; the task record</span></div>
+<div class="card abs" id="fu" style="background:#E7DFF5"><b>Follow up <span class="chip">action, internal</span></b><span class="s">reminds the person of a proposal that has waited long</span></div>
+</div>
+<script src="common.js"></script>
+<script>
+run(()=>{
+ place('rq',28,28,1080,90);
+ place('pl',28,166,1080,96);
+ place('ck',28,312,1080,96);
+ const dc=$('dc');dc.style.left='170px';dc.style.top='462px';dc.style.width='260px';dc.style.height='120px';
+ place('cf',600,458,508,128);
+ place('ds',28,648,1080,90);
+ place('LS',28,790,1080,176);
+ place('a1',46,842,330,104);place('a2',394,842,330,104);place('a3',742,842,348,104);
+ place('rv',28,1030,650,160);
+ place('rp',28,1250,650,96);place('fu',720,1250,388,96);
+ edge('rq','pl',{from:'b',to:'t',label:'request'});
+ edge('pl','ck',{from:'b',to:'t',label:'plan'});
+ edge('ck','dc',{from:'b',to:'t',oa:-268,ob:0,label:'valid plan'});
+ edge('dc','cf',{from:'r',to:'l',label:'yes'});
+ edge('dc','ds',{from:'b',to:'t',oa:0,ob:-268,label:'no'});
+ edge('cf','ds',{from:'b',to:'t',oa:0,ob:286,label:'approved'});
+ edge('ds','LS',{from:'b',to:'t',label:'starts runs'});
+ edge('LS','rv',{from:'b',to:'t',oa:-215,ob:0,label:'the next one finished'});
+ edge('rv','ds',{from:'l',to:'l',mx:14,dash:true});
+ edge('rv','ck',{from:'r',to:'r',mx:1124,dash:true,la:'change of plan',lax:46,lay:-16});
+ edge('rv','rp',{from:'b',to:'t',label:'finish'});
+ edge('rv','fu',{from:'b',to:'t',oa:200,ob:0,dash:true,label:'waiting long'});
+});
+</script></body></html>
