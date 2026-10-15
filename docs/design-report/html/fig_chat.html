@@ -1,0 +1,57 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>
+.frame{border:1.6px solid var(--line);border-radius:14px;overflow:hidden;background:#fff}
+.top{display:flex;align-items:flex-end;gap:26px;padding:14px 20px 0;border-bottom:1.4px solid var(--line);background:#F7F7F7}
+.top .name{font-weight:700;font-size:18px;padding-bottom:12px;margin-right:12px}
+.top .tab{font-size:15px;padding-bottom:11px;color:#333}
+.top .tab.on{font-weight:700;color:#000;border-bottom:3px solid #000}
+.body{display:flex;height:730px}
+.list{width:290px;border-right:1.4px solid var(--line);padding:16px;background:#FBFBFB}
+.new{border:1.3px solid var(--line);border-radius:9px;padding:8px 12px;font-weight:700;font-size:14.5px;margin-bottom:14px;background:#fff}
+.item{border-radius:9px;padding:10px 12px;margin-bottom:8px;font-size:14.5px;line-height:1.35}
+.item.on{background:#DCEBFA;border:1.3px solid var(--line)}
+.item b{display:block;font-size:15px}
+.item small{color:#444}
+.badge{display:inline-block;margin-top:5px;padding:1px 8px;border-radius:20px;background:#FFF1C2;border:1px solid var(--line);font-size:12.5px}
+.conv{flex:1;padding:16px 22px;display:flex;flex-direction:column;gap:11px;position:relative}
+.ttl{font-weight:700;font-size:18px;margin-bottom:2px}
+.msg{max-width:78%;border:1.3px solid var(--line);border-radius:11px;padding:9px 13px;font-size:14.6px;line-height:1.38}
+.me{align-self:flex-end;background:#DCEBFA}
+.bot{align-self:flex-start;background:#fff}
+.who{font-weight:700;font-size:13px;margin-bottom:2px}
+.ev{align-self:stretch;font-size:13.8px;color:#222;background:#F1F1F1;border-radius:8px;padding:6px 12px;border-left:4px solid #888}
+.ev.fu{background:#FFF7DD;border-left-color:#C9A227}
+.card2{align-self:flex-start;max-width:78%;border:1.4px solid var(--line);border-radius:11px;padding:9px 13px;font-size:14.4px;line-height:1.38;background:#E7DFF5}
+.card2 b{display:block;font-size:14.8px}
+.btns{margin-top:7px;display:flex;gap:7px;flex-wrap:wrap}
+.btn{border:1.2px solid var(--line);border-radius:20px;padding:2px 11px;font-size:13px;background:#fff}
+.state{font-size:12.8px;margin-top:6px;color:#333}
+.input{position:absolute;left:22px;right:22px;bottom:16px;border:1.4px solid var(--line);border-radius:10px;padding:10px 14px;color:#666;font-size:14.5px;background:#fff}
+</style></head><body>
+<div id="canvas" style="width:1136px">
+<div class="frame">
+ <div class="top"><span class="name">Example App</span><span class="tab">Profile</span><span class="tab">Analyses</span><span class="tab">Approvals</span><span class="tab on">Chat</span></div>
+ <div class="body">
+  <div class="list">
+   <div class="new">+ New thread</div>
+   <div class="item on"><b>Launch week</b><small>task running · 2 min ago</small><br><span class="badge">waits for you</span></div>
+   <div class="item"><b>Competitor analysis</b><small>yesterday</small></div>
+   <div class="item"><b>September summary</b><small>3 days ago</small></div>
+   <div class="item"><small>Archived (2)</small></div>
+  </div>
+  <div class="conv">
+   <div class="ttl">Launch week</div>
+   <div class="msg me"><div class="who">You</div>Research what competitors posted last month, write three posts on it, and put a poster on one.</div>
+   <div class="msg bot"><div class="who">Orchestrator</div>Plan: research, then a poster, then three posts. The poster spends from the creative budget (about $1.20), so the plan needs your approval.</div>
+   <div class="card2"><b>Plan · 5 steps, cap $4</b>researcher → studio → writer × 3<div class="state">Approved by you, 10:04</div></div>
+   <div class="ev">Step 1 · Researcher finished: 9 findings from 12 pages · <u>report</u></div>
+   <div class="ev">Step 2 · Creative studio: the poster is in the library · <u>asset</u></div>
+   <div class="card2"><b>Proposal · post 1 of 3, X, with the poster</b>"Wi-Fi gone? Your notes are not…"<div class="btns"><span class="btn">Approve</span><span class="btn">Edit</span><span class="btn">Reject with a note</span></div></div>
+   <div class="ev fu">Follow-up · post 2 has waited 24 hours; it expires in 2 days · <u>open</u></div>
+   <div class="card2" style="background:#FFF1C2"><b>Question from the task</b>Post 3: lead with offline mode or with sync?<div class="btns"><span class="btn">Offline mode</span><span class="btn">Sync</span></div><div class="state">Default: offline mode, at 18:00</div></div>
+   <div class="input">Message…</div>
+  </div>
+ </div>
+</div>
+</div>
+<script src="common.js"></script>
+<script>run(()=>{});</script></body></html>
