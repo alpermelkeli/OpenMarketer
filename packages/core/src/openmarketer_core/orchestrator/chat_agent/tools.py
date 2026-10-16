@@ -107,7 +107,7 @@ def explain_proposal(context: ChatTurnContext, proposal_id: str) -> str:
 
 
 @agent.tool
-def get_run(context: ChatTurnContext, run_id: str) -> str:
+def get_analysis_run(context: ChatTurnContext, run_id: str) -> str:
     """One analysis run: its status, its times, and the profile version it stored or why it
     failed. run_id comes from list_runs or the operator's message."""
     wanted = _uuid_of(run_id)
@@ -120,7 +120,7 @@ def get_run(context: ChatTurnContext, run_id: str) -> str:
 
 
 @agent.tool
-def list_runs(context: ChatTurnContext, limit: int = 10) -> str:
+def list_analysis_runs(context: ChatTurnContext, limit: int = 10) -> str:
     """The project's recent analysis runs, newest first, at most limit of them. Each has an
     id for get_run."""
     runs = context.reads.recent_runs(max(1, min(limit, MAX_LISTED_RECORDS)))

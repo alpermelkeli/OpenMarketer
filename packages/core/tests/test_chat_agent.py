@@ -31,7 +31,7 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
 from openmarketer_core.orchestrator.chat_agent.tools import (
     list_pending_proposals,
     list_research_runs,
-    list_runs,
+    list_analysis_runs,
     read_profile,
     read_research_report,
     start_research,
@@ -568,7 +568,7 @@ def test_empty_readings_are_plain_sentences():
         model=ScriptedModel(), reads=FakeReads(empty=True), limits=ChatLimits()
     )
     assert list_pending_proposals(context) == "No proposals wait for a person."
-    assert list_runs(context) == "The project has no analysis runs."
+    assert list_analysis_runs(context) == "The project has no analysis runs."
     assert read_profile(context) == "The project has no Product Profile yet."
 
 
