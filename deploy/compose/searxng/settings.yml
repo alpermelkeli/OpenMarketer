@@ -1,0 +1,18 @@
+# SearXNG for the dev stack: a private, self-hosted metasearch instance the researcher agent
+# queries over its JSON API. The API must be enabled here (`json` under `search.formats`):
+# asking any instance for a format its settings do not offer is a 403.
+#
+# `SEARXNG_SECRET` and `SEARXNG_BASE_URL` come from the environment (the compose file);
+# everything else falls back to the image's defaults.
+use_default_settings: true
+
+server:
+  secret_key: "dev-only-overwritten-by-SEARXNG_SECRET"
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json

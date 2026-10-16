@@ -115,6 +115,36 @@ def list_runs(context: ChatTurnContext, limit: int = 10) -> str:
     return _text([asdict(run) for run in runs])
 
 
+@agent.tool
+def list_research_runs(context: ChatTurnContext, limit: int = 10) -> str:
+    """The project's recent research runs, newest first, at most limit of them: the questions
+    they answer, who asked for them, whether each has a report, and why one failed. Each has
+    an id for read_research_report."""
+    runs = context.reads.recent_research(max(1, min(limit, MAX_LISTED_RECORDS)))
+    if not runs:
+        return "The project has no research runs."
+    return _text([asdict(run) for run in runs])
+
+
+@agent.tool
+def read_research_report(context: ChatTurnContext, run_id: str = "") -> str:
+    """The findings of a research run: every statement with its confidence and the pages it
+    rests on (their address and the quotes from them), the questions it answered, and the
+    notes of what the code dropped. Without run_id, the latest run that has a report.
+    run_id comes from list_research_runs."""
+    wanted: uuid.UUID | None = None
+    if run_id:
+        wanted = _uuid_of(run_id)
+        if wanted is None:
+            return "error: run_id must be a UUID; take one from list_research_runs"
+    report = context.reads.research_report(wanted)
+    if report is None:
+        if wanted is None:
+            return "No research run of this project has a report yet."
+        return f"error: research run {wanted} has no report"
+    return _text(asdict(report))
+
+
 def _uuid_of(value: str) -> uuid.UUID | None:
     try:
         return uuid.UUID(value)

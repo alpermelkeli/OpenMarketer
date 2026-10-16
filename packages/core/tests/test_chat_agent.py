@@ -13,7 +13,12 @@ import pytest
 from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.agent_runtime.langgraph_agent import compile_agent
-from openmarketer_core.db.models import AnalysisRunStatus, ProfileStatus, ProjectStatus
+from openmarketer_core.db.models import (
+    AnalysisRunStatus,
+    ProfileStatus,
+    ProjectStatus,
+    ResearchRunStatus,
+)
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContext, agent
 from openmarketer_core.orchestrator.chat_agent.graph import FORCE_SUBMIT, answer_message
@@ -25,8 +30,10 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
 )
 from openmarketer_core.orchestrator.chat_agent.tools import (
     list_pending_proposals,
+    list_research_runs,
     list_runs,
     read_profile,
+    read_research_report,
 )
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
@@ -35,6 +42,8 @@ from openmarketer_core.orchestrator.reads import (
     ProfileReading,
     ProjectStatusReading,
     ProposalReading,
+    ResearchReportReading,
+    ResearchRunReading,
     RunReading,
     UnknownProfileSection,
 )
@@ -42,6 +51,7 @@ from openmarketer_core.orchestrator.reads import (
 PROJECT_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
 PROPOSAL_ID = uuid.UUID("00000000-0000-4000-8000-000000000003")
+RESEARCH_RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000004")
 
 
 def call(name: str, **arguments) -> dict:
@@ -92,6 +102,8 @@ class FakeReads:
         self.proposal_calls: list[uuid.UUID] = []
         self.run_calls: list[uuid.UUID] = []
         self.run_limits: list[int] = []
+        self.research_limits: list[int] = []
+        self.report_calls: list[uuid.UUID | None] = []
 
     def project_status(self) -> ProjectStatusReading:
         self.status_calls += 1
@@ -150,6 +162,16 @@ class FakeReads:
         self.run_limits.append(limit)
         return [] if self.empty else [self._run()]
 
+    def recent_research(self, limit: int) -> list[ResearchRunReading]:
+        self.research_limits.append(limit)
+        return [] if self.empty else [self._research_run()]
+
+    def research_report(self, run_id: uuid.UUID | None = None) -> ResearchReportReading | None:
+        self.report_calls.append(run_id)
+        if self.empty or (run_id is not None and run_id != RESEARCH_RUN_ID):
+            return None
+        return self._research_report()
+
     def _content(self, section: str | None) -> object | None:
         if section is None:
             return None
@@ -182,6 +204,41 @@ class FakeReads:
             created_at=now,
             expires_at=now,
             decided_at=None,
+        )
+
+    def _research_run(self) -> ResearchRunReading:
+        now = datetime.now(UTC)
+        return ResearchRunReading(
+            id=RESEARCH_RUN_ID,
+            status=ResearchRunStatus.SUCCEEDED,
+            requested_by="person",
+            error=None,
+            report_id=PROPOSAL_ID,
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+        )
+
+    def _research_report(self) -> ResearchReportReading:
+        return ResearchReportReading(
+            run_id=RESEARCH_RUN_ID,
+            requested_by="person",
+            questions=["What did competitors post last month?"],
+            findings=[
+                {
+                    "question_index": 0,
+                    "statement": "A competitor shipped a dark mode.",
+                    "confidence": 0.8,
+                    "flagged": False,
+                    "sources": [
+                        {"page_id": str(RUN_ID), "url": "https://example.com/a", "quotes": []}
+                    ],
+                }
+            ],
+            notes=[],
+            cost_usd=0.12,
+            model="fake/model",
+            created_at=datetime.now(UTC),
         )
 
 
@@ -331,6 +388,45 @@ def test_list_runs_bounds_the_limit(reads):
     assert reads.run_limits == [MAX_LISTED_RECORDS]
 
 
+def test_list_research_runs_bounds_the_limit(reads):
+    model = ScriptedModel([call("list_research_runs", limit=100)], [call(SUBMIT, answer="ok")])
+    answer_message(reads, model, history())
+    assert reads.research_limits == [MAX_LISTED_RECORDS]
+
+
+def test_read_research_report_passes_the_run_and_can_default_to_the_latest(reads):
+    model = ScriptedModel(
+        [call("read_research_report", run_id=str(RESEARCH_RUN_ID))],
+        [call("read_research_report")],
+        [call(SUBMIT, answer="ok")],
+    )
+    answer_message(reads, model, history())
+    assert reads.report_calls == [RESEARCH_RUN_ID, None]
+    first, second = model.tool_results()
+    assert json.loads(first)["findings"][0]["statement"].startswith("A competitor")
+    assert json.loads(second)["run_id"] == str(RESEARCH_RUN_ID)
+
+
+def test_read_research_report_refuses_a_non_uuid(reads):
+    model = ScriptedModel(
+        [call("read_research_report", run_id="not-an-id")], [call(SUBMIT, answer="ok")]
+    )
+    answer_message(reads, model, history())
+    assert reads.report_calls == []
+    assert model.tool_results()[0].startswith("error:")
+
+
+def test_read_research_report_without_a_report_says_so():
+    context = ChatTurnContext(
+        model=ScriptedModel(), reads=FakeReads(empty=True), limits=ChatLimits()
+    )
+    assert read_research_report(context) == "No research run of this project has a report yet."
+    assert (
+        list_research_runs(context) == "The project has no research runs."
+    )
+    assert read_research_report(context, run_id=str(RESEARCH_RUN_ID)).startswith("error:")
+
+
 def test_empty_readings_are_plain_sentences():
     context = ChatTurnContext(
         model=ScriptedModel(), reads=FakeReads(empty=True), limits=ChatLimits()
@@ -349,6 +445,8 @@ def test_tool_schemas_are_the_reads_plus_the_submission():
         "explain_proposal",
         "get_run",
         "list_runs",
+        "list_research_runs",
+        "read_research_report",
     ]
     assert submit_schema()["function"]["name"] == SUBMIT
     by_name = {schema["function"]["name"]: schema for schema in schemas}

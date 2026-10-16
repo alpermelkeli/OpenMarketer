@@ -28,6 +28,7 @@ from openmarketer_api.routes import (
     profiles,
     projects,
     proposals,
+    research,
 )
 from openmarketer_api.settings import Settings
 from openmarketer_api.temporal_workflows import TemporalWorkflows
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     for resource in (
         projects,
         analyses,
+        research,
         profiles,
         proposals,
         chat,

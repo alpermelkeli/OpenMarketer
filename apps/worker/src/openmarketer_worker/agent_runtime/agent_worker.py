@@ -52,7 +52,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.agent_runtime.gate import GateVerdict, verdict_for
 from openmarketer_core.agent_runtime.steps import GraphRunRef
-from openmarketer_worker import AgentRegistration
+from openmarketer_worker import AgentRegistration, PeriodicTask
 from openmarketer_worker.agent_runtime.activities import AgentGraph, RuntimeActivities
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess
 from openmarketer_worker.agent_runtime.proposal_activities import ProposalActivities
@@ -146,6 +146,7 @@ class AgentWorker:
         activities: Sequence[Callable[..., Any]] = (),
         longest_run: timedelta,
         checkpoint_cleanups: Sequence[CheckpointCleanup] = (),
+        periodic_tasks: Sequence[PeriodicTask] = (),
         sessions: sessionmaker[Session] | None = None,
     ) -> AgentRegistration:
         """What the worker registers for the agent: its workflows and every activity they call.
@@ -156,10 +157,12 @@ class AgentWorker:
         default. ``longest_run`` is the most a run can take from its first step to its end, all
         retries and waits for a person included: a thread of the agent's kind that nothing wrote
         for longer is removed. ``checkpoint_cleanups`` are rules of the agent's own, beside that
-        one. ``sessions`` are the database's, for an agent with an action that waits for a
-        person. Raises ``InvalidAgentWorker`` for an action with no handler, for an action that
-        waits for a person without ``sessions``, for a ``longest_run`` shorter than such a wait,
-        and for a class that is not a workflow of this agent.
+        one. ``periodic_tasks`` are schedules of the agent's own, which the process runs while
+        it serves (the researcher's page retention). ``sessions`` are the database's, for an
+        agent with an action that waits for a person. Raises ``InvalidAgentWorker`` for an
+        action with no handler, for an action that waits for a person without ``sessions``, for
+        a ``longest_run`` shorter than such a wait, and for a class that is not a workflow of
+        this agent.
         """
         self._require_a_run_that_outlasts_its_waits(longest_run)
         routes = self._routes()
@@ -192,6 +195,7 @@ class AgentWorker:
                 *checkpoint_cleanups,
                 stale_threads_of(self._agent.kind, longest_run),
             ],
+            periodic_tasks=list(periodic_tasks),
         )
 
     def _require_a_run_that_outlasts_its_waits(self, longest_run: timedelta) -> None:

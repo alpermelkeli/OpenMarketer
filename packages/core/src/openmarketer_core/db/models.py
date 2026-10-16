@@ -1,6 +1,7 @@
-"""Tables for projects, repository evidence, Product Profile versions, analysis runs, stored
-credentials, the settings a workspace chose from the dashboard, the proposals of actions
-that wait for a person, and the operator's chat threads about a project.
+"""Tables for projects, repository evidence, Product Profile versions, analysis runs, research
+runs and their reports and pages, stored credentials, the settings a workspace chose from the
+dashboard, the proposals of actions that wait for a person, and the operator's chat threads
+about a project.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project; ``credential`` and
@@ -18,6 +19,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -35,6 +37,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.db.base import Base
+from openmarketer_core.research.questions import MAX_SOURCES
 
 
 class ProjectStatus(StrEnum):
@@ -56,8 +59,18 @@ class AnalysisRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class ResearchRunStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 # A failure message can carry git output or a traceback; the row keeps only its start.
 ANALYSIS_ERROR_MAX_LENGTH = 2000
+# The same for a research run, whose failures come from a model or a service and can carry
+# a provider's answer.
+RUN_ERROR_MAX_LENGTH = 2000
 
 
 def _enum(enum_cls: type[StrEnum], name: str) -> Enum:
@@ -266,6 +279,112 @@ class AnalysisRunRecord(Base):
     created_at: Mapped[datetime] = _created_at()
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ----------------------------------------------------------------- research
+class ResearchRunRecord(Base):
+    """One requested research run of a project, from the request to its outcome.
+
+    Unlike an analysis, a project may have several research runs at once: a run
+    reads nothing of the project's own and pays for nothing but its model
+    calls. The request (its questions, its scope and its page budget) is stored
+    with the run and checked again when the run starts, and ``requested_by``
+    says who asked: a person, the orchestrator's chat, or another run. A
+    succeeded run points at the report it stored, which must belong to the same
+    project.
+    """
+
+    __tablename__ = "research_run"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["report_id", "project_id"], ["research_report.id", "research_report.project_id"]
+        ),
+        CheckConstraint("(status = 'succeeded') = (report_id IS NOT NULL)", name="report_id"),
+        CheckConstraint("(status = 'failed') = (error IS NOT NULL)", name="error"),
+        CheckConstraint(f"char_length(error) <= {RUN_ERROR_MAX_LENGTH}", name="error_length"),
+        # A run can fail before a worker picks it up, so a failed run may have no start.
+        CheckConstraint(
+            "status = 'failed' OR (status = 'queued') = (started_at IS NULL)", name="started_at"
+        ),
+        CheckConstraint(
+            "(status IN ('succeeded', 'failed')) = (finished_at IS NOT NULL)", name="finished_at"
+        ),
+        CheckConstraint("requested_by IN ('person', 'orchestrator', 'run')", name="requested_by"),
+        CheckConstraint(f"max_sources BETWEEN 1 AND {MAX_SOURCES}", name="max_sources"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    status: Mapped[ResearchRunStatus] = mapped_column(
+        _enum(ResearchRunStatus, "status"), server_default=ResearchRunStatus.QUEUED.value
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    report_id: Mapped[uuid.UUID | None]
+    requested_by: Mapped[str] = mapped_column(Text, server_default="person")
+    questions: Mapped[list[str]] = mapped_column(JSONB)
+    scope: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    max_sources: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = _created_at()
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ResearchReportRecord(Base):
+    """What a finished research run produced: its findings with their sources, and its cost.
+
+    ``findings`` holds checked findings as JSON (``CheckedFinding`` dumps): each
+    names the pages it rests on and the quotes from them, so the report is the
+    record that outlives the pages (``research_page`` is expired). ``notes``
+    holds what the code dropped or worked around on the way.
+    """
+
+    __tablename__ = "research_report"
+    __table_args__ = (
+        # Lets a research run reference a report together with its project.
+        UniqueConstraint("id", "project_id"),
+        CheckConstraint("cost_usd >= 0", name="cost_usd"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    questions: Mapped[list[str]] = mapped_column(JSONB)
+    findings: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    notes: Mapped[list[str]] = mapped_column(JSONB)
+    cost_usd: Mapped[float] = mapped_column(Float)
+    model: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class ResearchPageRecord(Base):
+    """One public page a research run fetched, and where its stored text is.
+
+    The bytes live in object storage under ``storage_key``; the row names them
+    and keeps what the run knows of the page: its address (after redirects),
+    its title, type and size, the hash of what was stored, and the injection
+    signs the code found in its text. A run fetches one URL once: the unique
+    constraint is what a repeated fetch of the same page of the same run finds
+    instead of fetching and storing it again. Rows are removed when they
+    expire, and the objects with them.
+    """
+
+    __tablename__ = "research_page"
+    __table_args__ = (
+        UniqueConstraint("run_id", "url", name="uq_research_page_run_id_url"),
+        Index("ix_research_page_fetched_at", "fetched_at"),
+        CheckConstraint("size_bytes >= 0", name="size_bytes"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("research_run.id"))
+    url: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text, server_default="")
+    content_type: Mapped[str] = mapped_column(Text)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    storage_key: Mapped[str] = mapped_column(Text)
+    sha256: Mapped[str] = mapped_column(Text)
+    flags: Mapped[list[str]] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # -------------------------------------------------------------- proposals

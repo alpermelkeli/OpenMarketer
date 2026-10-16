@@ -3,12 +3,13 @@
 This module holds what belongs to the process and to no agent: its settings,
 the database sessions, how the installation's credentials are resolved for a
 run's workspace (``credentials.py``), the connection to Temporal, a ``Worker`` for each
-agent with its executor and concurrency, the signals that stop them, the schedule of
-checkpoint cleanups that runs while they serve, whether runs are traced to Langfuse
+agent with its executor and concurrency, the signals that stop them, the schedules that run
+while they serve (the checkpoint cleanups, and each agent's own periodic tasks, such as the
+researcher's page retention), whether runs are traced to Langfuse
 (``tracing.py`` in core: started first, so that everything the worker starts traces, and
 stopped last), and the wording of a start that cannot happen (``StartupError``). How an
-agent is set up (its settings, models, tokens, workflows, activities and the cleanup of its
-runs' checkpoints) is in the agent's ``wiring.py``, called here by name in ``agents``; this
+agent is set up (its settings, models, tokens, workflows, activities and the cleanups of its
+runs) is in the agent's ``wiring.py``, called here by name in ``agents``; this
 module reads no agent's settings or policy and holds no rule.
 
 Each agent is served by a ``Worker`` of its own, on its own task queue. The runtime's
@@ -42,7 +43,7 @@ from openmarketer_core.tracing import (
     TracingSettings,
     start_tracing,
 )
-from openmarketer_worker import AgentRegistration
+from openmarketer_worker import AgentRegistration, PeriodicTask
 from openmarketer_worker.checkpoint_cleanup import (
     CLEANUP_EVERY_SECONDS,
     CheckpointCleanup,
@@ -50,6 +51,7 @@ from openmarketer_worker.checkpoint_cleanup import (
 )
 from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.repository_analyzer.wiring import repository_analyzer
+from openmarketer_worker.researcher.wiring import researcher
 from openmarketer_worker.settings import Settings, SettingsError
 
 logger = logging.getLogger(__name__)
@@ -67,7 +69,10 @@ def agents(
     tracing: Tracing,
 ) -> list[AgentRegistration]:
     """Every agent this process serves, each set up by its own wiring."""
-    return [repository_analyzer(environ, sessions, database_url, credentials, tracing)]
+    return [
+        repository_analyzer(environ, sessions, database_url, credentials, tracing),
+        researcher(environ, sessions, database_url, credentials, tracing),
+    ]
 
 
 def build_workers(
@@ -162,7 +167,8 @@ async def _serve_traced(environ: Mapping[str, str], tracing: Tracing) -> None:
         settings.temporal_namespace,
     )
     cleanups = [cleanup for registration in served for cleanup in registration.checkpoint_cleanups]
-    await serve_until(stop, workers, sessions, cleanups)
+    periodic = [task for registration in served for task in registration.periodic_tasks]
+    await serve_until(stop, workers, sessions, cleanups, periodic)
 
 
 async def serve_until(
@@ -170,16 +176,20 @@ async def serve_until(
     workers: Sequence[Worker],
     sessions: sessionmaker[Session],
     checkpoint_cleanups: Sequence[CheckpointCleanup],
+    periodic_tasks: Sequence[PeriodicTask] = (),
 ) -> None:
-    """Serve every worker's queue, and run the checkpoint cleanups, until ``stop`` is set.
+    """Serve every worker's queue, and run the schedules, until ``stop`` is set.
 
-    The workers stop together, each once the work it has in progress returned.
+    The workers stop together, each once the work it has in progress returned;
+    the checkpoint cleanups and every periodic task the agents brought are
+    cancelled with them.
     """
     cleanup = asyncio.create_task(
         keep_removing_leftover_checkpoints(
             sessions, checkpoint_cleanups, every_seconds=CLEANUP_EVERY_SECONDS
         )
     )
+    periodic = [asyncio.create_task(task()) for task in periodic_tasks]
     try:
         async with AsyncExitStack() as serving:
             for worker in workers:
@@ -190,6 +200,9 @@ async def serve_until(
         cleanup.cancel()
         # Collected, so the task does not outlive the worker; its cancellation is the outcome.
         await asyncio.gather(cleanup, return_exceptions=True)
+        for task in periodic:
+            task.cancel()
+        await asyncio.gather(*periodic, return_exceptions=True)
 
 
 def main() -> None:
