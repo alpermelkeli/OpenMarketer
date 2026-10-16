@@ -29,9 +29,9 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
     submit_schema,
 )
 from openmarketer_core.orchestrator.chat_agent.tools import (
+    list_analysis_runs,
     list_pending_proposals,
     list_research_runs,
-    list_analysis_runs,
     read_profile,
     read_research_report,
     start_research,
@@ -357,7 +357,9 @@ def test_unknown_tool_is_reported_back(reads):
 
 
 def test_bad_tool_arguments_are_reported_back(reads):
-    model = ScriptedModel([call("get_run", run_id="not-an-id")], [call(SUBMIT, answer="ok")])
+    model = ScriptedModel(
+        [call("get_analysis_run", run_id="not-an-id")], [call(SUBMIT, answer="ok")]
+    )
     answer_message(reads, model, history())
     result = model.tool_results()[0]
     assert result.startswith("error:")
@@ -366,7 +368,11 @@ def test_bad_tool_arguments_are_reported_back(reads):
 
 
 def test_unparseable_arguments_are_reported_back(reads):
-    broken = {"id": "c1", "type": "function", "function": {"name": "get_run", "arguments": "{"}}
+    broken = {
+        "id": "c1",
+        "type": "function",
+        "function": {"name": "get_analysis_run", "arguments": "{"},
+    }
     model = ScriptedModel([broken], [call(SUBMIT, answer="ok")])
     answer_message(reads, model, history())
     assert model.tool_results()[0].startswith("error: could not parse the arguments")
@@ -420,8 +426,8 @@ def test_read_profile_passes_the_section_and_refuses_an_unknown_one(reads):
     assert all(section in second for section in PROFILE_SECTIONS)
 
 
-def test_list_runs_bounds_the_limit(reads):
-    model = ScriptedModel([call("list_runs", limit=100)], [call(SUBMIT, answer="ok")])
+def test_list_analysis_runs_bounds_the_limit(reads):
+    model = ScriptedModel([call("list_analysis_runs", limit=100)], [call(SUBMIT, answer="ok")])
     answer_message(reads, model, history())
     assert reads.run_limits == [MAX_LISTED_RECORDS]
 
@@ -579,8 +585,8 @@ def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
         "read_profile",
         "list_pending_proposals",
         "explain_proposal",
-        "get_run",
-        "list_runs",
+        "get_analysis_run",
+        "list_analysis_runs",
         "list_research_runs",
         "read_research_report",
         "start_research",

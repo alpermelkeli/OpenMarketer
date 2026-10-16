@@ -109,10 +109,10 @@ def explain_proposal(context: ChatTurnContext, proposal_id: str) -> str:
 @agent.tool
 def get_analysis_run(context: ChatTurnContext, run_id: str) -> str:
     """One analysis run: its status, its times, and the profile version it stored or why it
-    failed. run_id comes from list_runs or the operator's message."""
+    failed. run_id comes from list_analysis_runs or the operator's message."""
     wanted = _uuid_of(run_id)
     if wanted is None:
-        return "error: run_id must be a UUID; take one from list_runs"
+        return "error: run_id must be a UUID; take one from list_analysis_runs"
     found = context.reads.run(wanted)
     if found is None:
         return f"error: no run {wanted} in this project"
@@ -122,7 +122,7 @@ def get_analysis_run(context: ChatTurnContext, run_id: str) -> str:
 @agent.tool
 def list_analysis_runs(context: ChatTurnContext, limit: int = 10) -> str:
     """The project's recent analysis runs, newest first, at most limit of them. Each has an
-    id for get_run."""
+    id for get_analysis_run."""
     runs = context.reads.recent_runs(max(1, min(limit, MAX_LISTED_RECORDS)))
     if not runs:
         return "The project has no analysis runs."
