@@ -21,8 +21,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from openmarketer_core.agent_runtime.agent import Agent
+from openmarketer_core.agent_runtime.tools import InvalidToolArguments, UnknownTool
 from openmarketer_core.profile import Evidenced, FeatureStatus, ProductProfile
-from openmarketer_core.repository_analysis.analyzer_agent.tools import TOOL_SCHEMAS, RepoTools
+from openmarketer_core.repository_analysis.analyzer_agent.reading import RepoTools
 from openmarketer_core.repository_analysis.extraction import ExtractedFact, group_by_scope
 from openmarketer_core.repository_analysis.intake import RepoFiles
 
@@ -214,8 +216,9 @@ def initial_messages(files: RepoFiles, facts: Iterable[ExtractedFact]) -> list[d
     ]
 
 
-def tool_schemas() -> list[dict[str, Any]]:
-    return [*TOOL_SCHEMAS, submit_schema()]
+def tool_schemas(agent: Agent) -> list[dict[str, Any]]:
+    """What the model is told it may call: the agent's read tools and the submission."""
+    return [*agent.tool_schemas(), submit_schema()]
 
 
 def is_wrapping_up(step: int, cost_usd: float, limits: Limits) -> bool:
@@ -237,13 +240,18 @@ class ToolOutcome:
 
 def run_tool_calls(
     calls: list[dict[str, Any]],
-    tools: RepoTools,
+    agent: Agent,
+    context: Any,
     *,
     submissions_so_far: int,
     wrapping_up: bool,
     limits: Limits,
 ) -> ToolOutcome:
-    """Carry out the tool calls of one model turn, including a profile submission."""
+    """Carry out the tool calls of one model turn, including a profile submission.
+
+    A call the agent does not have, or whose arguments do not fit the tool, is answered with
+    what was wrong, for the model to correct, and never with what it sent.
+    """
     outcome = ToolOutcome()
     for call in calls:
         name = call.get("function", {}).get("name", "")
@@ -260,15 +268,22 @@ def run_tool_calls(
                 attempts = submissions_so_far + outcome.submissions
                 # Out of budget means no second round: accept what can be repaired in code.
                 last_attempt = attempts >= limits.max_submissions or wrapping_up
-                result = _submit(arguments, tools, outcome, last_attempt=last_attempt)
+                result = _submit(arguments, context, outcome, last_attempt=last_attempt)
                 if outcome.profile is not None:
                     return outcome
             else:
-                result = tools.call(name, arguments)
+                result = _tool_answer(agent, name, arguments, context)
         outcome.messages.append(
             {"role": "tool", "tool_call_id": call.get("id", ""), "content": result}
         )
     return outcome
+
+
+def _tool_answer(agent: Agent, name: str, arguments: dict[str, Any], context: Any) -> str:
+    try:
+        return agent.call_tool(name, arguments, context)
+    except (UnknownTool, InvalidToolArguments) as e:
+        return f"error: {e}"
 
 
 def _unwrap_json(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -286,7 +301,7 @@ def _unwrap_json(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _submit(
-    arguments: dict[str, Any], tools: RepoTools, outcome: ToolOutcome, *, last_attempt: bool
+    arguments: dict[str, Any], context: Any, outcome: ToolOutcome, *, last_attempt: bool
 ) -> str:
     """Check a submission. Sets ``outcome.profile`` if accepted, else returns the rejection."""
     try:
@@ -296,9 +311,9 @@ def _submit(
         if last_attempt:
             raise AnalysisError("profile does not match the schema: " + "; ".join(problems)) from e
     else:
-        problems = verify(profile, tools)
+        problems = verify(profile, context.reading)
         if problems and last_attempt:
-            profile, outcome.notes = repair(profile, tools)
+            profile, outcome.notes = repair(profile, context.reading)
             problems = []
         if not problems:
             outcome.profile = profile

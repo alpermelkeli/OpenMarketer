@@ -15,12 +15,13 @@ from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError, Limits
 from openmarketer_core.repository_analysis.analyzer_agent.definitions import agent
 from openmarketer_core.repository_analysis.analyzer_agent.graph import analyze
+from openmarketer_core.repository_analysis.analyzer_agent.reading import RepoTools
 from openmarketer_core.repository_analysis.analyzer_agent.rules import (
     SUBMIT,
     repository_map,
     submit_schema,
+    tool_schemas,
 )
-from openmarketer_core.repository_analysis.analyzer_agent.tools import RepoTools
 from openmarketer_core.repository_analysis.extraction import ExtractedFact
 from openmarketer_core.repository_analysis.intake import RepoFiles
 
@@ -300,10 +301,33 @@ def test_read_file_pages_through_long_files(files, tmp_path):
 
 def test_bad_tool_input_never_raises(files):
     tools = RepoTools(files)
-    assert tools.call("delete_everything", {}) == "error: unknown tool 'delete_everything'"
-    assert tools.call("read_file", {"nope": 1}).startswith("error: bad arguments for read_file")
     assert tools.search("(unclosed").startswith("error: invalid regular expression")
     assert tools.list_files("*.swift") == "no files match"
+
+
+def test_bad_tool_calls_come_back_as_text_the_model_can_correct(files):
+    model = ScriptedModel(
+        [call("delete_everything"), call("read_file", nope=1)],
+        [call(SUBMIT, **profile())],
+    )
+    analyze(files, model)
+    unknown, wrong_arguments = model.tool_results()
+    assert unknown == "error: tool 'delete_everything' is not one of the agent's tools"
+    assert wrong_arguments.startswith("error: arguments of tool 'read_file' do not fit")
+    assert "nope" not in wrong_arguments  # what the model sent is never repeated
+
+
+def test_tool_schemas_are_the_reads_plus_the_submission():
+    schemas = tool_schemas(agent)
+    assert [schema["function"]["name"] for schema in schemas] == [
+        "list_files",
+        "search",
+        "read_file",
+        SUBMIT,
+    ]
+    by_name = {schema["function"]["name"]: schema for schema in schemas}
+    assert by_name["search"]["function"]["parameters"]["required"] == ["pattern"]
+    assert "glob" in by_name["list_files"]["function"]["parameters"]["properties"]
 
 
 def test_repository_map_is_bounded(files):
@@ -344,9 +368,10 @@ def test_declarations_the_workflow_loads_do_not_depend_on_the_framework_or_the_d
 def test_rules_module_does_not_depend_on_the_framework():
     import inspect
 
+    import openmarketer_core.repository_analysis.analyzer_agent.reading as reading_module
     import openmarketer_core.repository_analysis.analyzer_agent.rules as rules
     import openmarketer_core.repository_analysis.analyzer_agent.tools as tools_module
 
-    for module in (rules, tools_module):
+    for module in (rules, reading_module, tools_module):
         assert "import langgraph" not in inspect.getsource(module)
         assert "from langgraph" not in inspect.getsource(module)
