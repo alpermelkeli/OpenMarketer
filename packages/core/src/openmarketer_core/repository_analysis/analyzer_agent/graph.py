@@ -1,8 +1,9 @@
 """The analyzer's graph: its nodes, what follows what, and the run that needs no workflow.
 
 This module is wiring only. The rules live in ``rules.py``, model access goes through
-``ChatModel`` (the model router), repository access through ``RepoTools``, and both reach a
-node in its ``AnalyzerContext``, so the state holds only plain data and can be checkpointed.
+``ChatModel`` (the model router), repository access through the attempt's reading
+(``RepoFiles``/``RepoTools``), and both reach a node in its ``AnalyzerContext``, so the state
+holds only plain data and can be checkpointed.
 
     clone -> prepare -> call_model -> run_tools -> call_model -> ... -> END
                             ^______________|  (until a submitted profile is accepted)
@@ -11,10 +12,11 @@ node in its ``AnalyzerContext``, so the state holds only plain data and can be c
 the commit that was cloned. Every later step reads that commit, so an attempt that continues
 a run never meets a repository that moved under its conversation.
 
-Importing this module is what puts the nodes on ``definitions.agent``. A run in a workflow
-takes them step by step with checkpoints (``agent_runtime.langgraph_agent.AgentSteps``, built
-by the worker with ``recursion_limit``); ``analyze`` runs them in memory from ``prepare`` for
-the command line and the benchmark, which have cloned the repository themselves.
+Importing this module is what puts the nodes and the read tools (``tools.py``) on
+``definitions.agent``. A run in a workflow takes them step by step with checkpoints
+(``agent_runtime.langgraph_agent.AgentSteps``, built by the worker with ``recursion_limit``);
+``analyze`` runs them in memory from ``prepare`` for the command line and the benchmark,
+which have cloned the repository themselves.
 
 This module opens no checkpoint store, clones nothing and stores no profile, and does not
 decide when a run's checkpoints are forgotten: whoever runs the graph does.
@@ -28,7 +30,10 @@ from openmarketer_core.agent_runtime.agent import END
 from openmarketer_core.agent_runtime.langgraph_agent import run_from
 from openmarketer_core.agent_runtime.langgraph_steps import request_action
 from openmarketer_core.llm import ChatModel
-from openmarketer_core.repository_analysis.analyzer_agent import rules
+from openmarketer_core.repository_analysis.analyzer_agent import (
+    rules,
+    tools,  # noqa: F401  (declares the read tools)
+)
 from openmarketer_core.repository_analysis.analyzer_agent.definitions import (
     AnalyzerContext,
     AnalyzerState,
@@ -67,7 +72,7 @@ def clone(state: AnalyzerState, context: AnalyzerContext) -> dict[str, Any]:
 @agent.node
 def prepare(state: AnalyzerState, context: AnalyzerContext) -> dict[str, Any]:
     """Start the conversation with the map of the repository at the run's commit."""
-    files = context.tools(state["commit_sha"]).files
+    files = context.reading_at(state["commit_sha"]).files
     return {"messages": rules.initial_messages(files, context.facts_of(files))}
 
 
@@ -93,7 +98,7 @@ def call_model(state: AnalyzerState, context: AnalyzerContext) -> dict[str, Any]
     reply = context.model.chat(
         rules.ROLE,
         state["messages"] + new_messages,
-        tools=rules.tool_schemas(),
+        tools=rules.tool_schemas(agent),
         tool_choice=FORCE_SUBMIT if wrapping_up else None,
     )
     new_messages.append(reply.message)
@@ -117,9 +122,12 @@ def call_model(state: AnalyzerState, context: AnalyzerContext) -> dict[str, Any]
 
 @agent.node
 def run_tools(state: AnalyzerState, context: AnalyzerContext) -> dict[str, Any]:
+    # The reading this step's tool calls reach: the commit the run pinned when it cloned.
+    context.read_from(state["commit_sha"])
     outcome = rules.run_tool_calls(
         state["pending_calls"],
-        context.tools(state["commit_sha"]),
+        agent,
+        context,
         submissions_so_far=state["submissions"],
         wrapping_up=state["wrapping_up"],
         limits=context.limits,

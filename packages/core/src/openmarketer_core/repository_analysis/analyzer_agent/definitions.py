@@ -1,14 +1,17 @@
 """The analyzer's declarations: the agent, its state, what its nodes are given, and its action.
 
 This is the module the worker's workflow loads, so it imports no graph framework and nothing
-that touches the database. The nodes are in ``graph.py``, which only the process that runs the
-graph imports; importing that module is what puts them on ``agent``.
+that touches the database. The nodes are in ``graph.py`` and the read tools in ``tools.py``,
+which only the process that runs the graph imports; importing ``graph.py`` is what puts both
+on ``agent``.
 
 - ``AnalyzerState`` is what the graph keeps between steps and what a checkpoint stores: plain
   data only. It names the run and the commit the run reads, so a later attempt reads the same
   commit whatever the repository's branch has become since.
 - ``AnalyzerContext`` is what a node needs that is not state: the model, the limits and the
-  repository. It is built for each attempt by whoever runs the graph and is never stored.
+  reading of the repository. It is built for each attempt by whoever runs the graph and is
+  never stored. A step says which commit the attempt reads (``read_from``), and the model's
+  tools reach that reading through it (``reading``), so no tool is told a commit.
 - ``CloneRepository`` is the one action the graph asks for. Cloning reaches a host on the
   network and writes a disk, so it is the workflow's to run, under limits of its own.
 
@@ -33,8 +36,8 @@ from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.llm import ChatModel
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.repository_analysis.analyzer_agent.reading import RepoTools
 from openmarketer_core.repository_analysis.analyzer_agent.rules import Analysis, Limits
-from openmarketer_core.repository_analysis.analyzer_agent.tools import RepoTools
 from openmarketer_core.repository_analysis.extraction import ExtractedFact
 from openmarketer_core.repository_analysis.intake import RepoFiles
 from openmarketer_core.repository_analysis.workflow_contract import (
@@ -94,13 +97,25 @@ class AnalyzerContext:
     limits: Limits
     files_at: Callable[[str], RepoFiles]
     facts_of: Callable[[RepoFiles], Iterable[ExtractedFact]]
-    _tools: dict[str, RepoTools] = field(default_factory=dict, init=False, repr=False)
+    _readings: dict[str, RepoTools] = field(default_factory=dict, init=False, repr=False)
+    _reading: RepoTools | None = field(default=None, init=False, repr=False)
 
-    def tools(self, commit_sha: str) -> RepoTools:
-        """The read-only tools over the files of ``commit_sha``, the same ones each time."""
-        if commit_sha not in self._tools:
-            self._tools[commit_sha] = RepoTools(self.files_at(commit_sha))
-        return self._tools[commit_sha]
+    def reading_at(self, commit_sha: str) -> RepoTools:
+        """The read tools over the files of ``commit_sha``, built once per commit."""
+        if commit_sha not in self._readings:
+            self._readings[commit_sha] = RepoTools(self.files_at(commit_sha))
+        return self._readings[commit_sha]
+
+    def read_from(self, commit_sha: str) -> None:
+        """Say which commit this attempt's tool calls read."""
+        self._reading = self.reading_at(commit_sha)
+
+    @property
+    def reading(self) -> RepoTools:
+        """What this attempt's tool calls read: whatever ``read_from`` named last."""
+        if self._reading is None:
+            raise RuntimeError("a tool was called before its step said which commit to read")
+        return self._reading
 
 
 agent = Agent(ANALYSIS_RUN_KIND, state=AnalyzerState, context=AnalyzerContext)
