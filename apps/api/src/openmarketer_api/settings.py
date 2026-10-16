@@ -1,11 +1,12 @@
 """Settings of the API process, read from the environment at the edge.
 
 Only what the API itself needs is here: the database, the workflow server, the
-key that credentials are stored under and the model configuration. It reads the
-model configuration (``LLM_CONFIG_PATH``) to show what each role resolves to and
-to store a workspace's choices of models; a configuration that cannot be read
-stops the start, as it stops the worker's. ``ENCRYPTION_KEY`` is read to encrypt
-a credential the user sets; without it nothing can be stored, and a key that is
+key that credentials are stored under, the model configuration and whether its
+chat turns are traced to Langfuse. It reads the model configuration
+(``LLM_CONFIG_PATH``) to show what each role resolves to and to store a
+workspace's choices of models; a configuration that cannot be read stops the
+start, as it stops the worker's. ``ENCRYPTION_KEY`` is read to encrypt a
+credential the user sets; without it nothing can be stored, and a key that is
 not one stops the start. Whether the environment sets a credential is not a
 setting: core's ``credential_statuses`` is handed the environment (``main.py``)
 and looks only at whether each credential's variable is empty. No credential's
@@ -20,6 +21,7 @@ from dataclasses import dataclass, field
 
 from openmarketer_core.credentials.cipher import CredentialCipher, EncryptionKeyInvalid
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ModelRouter
+from openmarketer_core.tracing import TracingNotConfigured, TracingSettings
 from openmarketer_core.workflow_server import WorkflowServer
 
 
@@ -36,17 +38,24 @@ class Settings:
     # The model configuration with the environment's overrides; kept out of the repr, since
     # it holds the environment.
     model_router: ModelRouter = field(repr=False)
+    # Whether a chat turn is traced to Langfuse; off unless the environment gives its keys.
+    tracing: TracingSettings
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Settings:
         database_url = environ.get("DATABASE_URL")
         if not database_url:
             raise SettingsError("the API needs DATABASE_URL (see .env.example)")
+        try:
+            tracing = TracingSettings.from_env(environ)
+        except TracingNotConfigured as e:
+            raise SettingsError(str(e)) from e
         return cls(
             database_url=database_url,
             workflow_server=WorkflowServer.from_environment(environ),
             credential_cipher=_credential_cipher(environ),
             model_router=_model_router(environ),
+            tracing=tracing,
         )
 
 

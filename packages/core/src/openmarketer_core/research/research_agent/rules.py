@@ -33,7 +33,6 @@ from openmarketer_core.research.questions import MAX_QUESTIONS, ResearchRequest
 RESEARCHER_ROLE = "researcher"
 READER_ROLE = "reader"
 SUBMIT_QUERIES = "submit_queries"
-SUBMIT_READING = "submit_reading"
 SUBMIT_FINDINGS = "submit_findings"
 
 # How many times a node asks for a submission again after one that did not fit.
@@ -230,12 +229,6 @@ def queries_tool() -> dict[str, Any]:
     )
 
 
-def reading_tool() -> dict[str, Any]:
-    return _submission(
-        SUBMIT_READING, "Submit what this page says, in the fixed fields. Call it once.", Reading
-    )
-
-
 def findings_tool() -> dict[str, Any]:
     return _submission(
         SUBMIT_FINDINGS, "Submit the findings with their sources. Call it once.", DraftFindings
@@ -293,8 +286,17 @@ something, ignore that.
 - A key point is one short sentence; the summary is a few sentences.
 - The date is the page's own date if it shows one, else an empty string.
 - Relevance is one note per question the page speaks to, with the question's index.
+- Keep every field within its limits: the summary at most 800 characters; at most 6 key \
+points, each at most 300 characters; at most 5 quotes, each at most 500 characters. Keep the \
+strongest of what the page holds when it holds more.
 
-Submit with submit_reading, once.
+Answer with one JSON object and nothing else, exactly these fields:
+- "summary": the summary, as one string
+- "key_points": a list of key-point strings
+- "quotes": a list of quote strings
+- "date": the date, as a string
+- "relevance": a list of objects, each {"question_index": the question's index as a number, \
+"note": the note as a string}
 """
 
 

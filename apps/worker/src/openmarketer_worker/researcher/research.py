@@ -68,6 +68,7 @@ from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.db.session import DatabaseError, transaction
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatModel, LLMError
+from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.research.failures import RESEARCH_FAILURES
 from openmarketer_core.research.page_fetch import FetchRefused, FetchUnavailable, PageFetcher
 from openmarketer_core.research.page_store import PageStore, PageStoreUnavailable, page_key
@@ -363,14 +364,21 @@ class WordedSteps:
     ) -> StepOutcome:
         """Take the step, as ``AgentGraph.advance`` says.
 
-        A submission that cannot be read, a request that no longer fits its schema or a
-        model whose key is not set ends the research (``RESEARCH_FAILED``); only the model
-        provider fails in ways that pass, an outage or a rate limit (``MODEL_UNAVAILABLE``,
-        tried again). The message is the error's own, which names no value.
+        A submission that cannot be read, a request that no longer fits its schema, a model
+        whose key is not set and a configuration that refuses the call (``ConfigError``, such
+        as a role that may not be sent tools) end the research (``RESEARCH_FAILED``); only
+        the model provider fails in ways that pass, an outage or a rate limit
+        (``MODEL_UNAVAILABLE``, tried again). The message is the error's own, which names no
+        value.
         """
         try:
             return self._graph.advance(run, checkpoints, resume)
-        except (*RESEARCH_FAILURES, StoredResearchRequestInvalid, *WORKSPACE_FAILURES) as e:
+        except (
+            *RESEARCH_FAILURES,
+            StoredResearchRequestInvalid,
+            *WORKSPACE_FAILURES,
+            ConfigError,
+        ) as e:
             logger.info("research run %s failed: %s", run.run_id, e)
             passing = isinstance(e, LLMError) and e.may_pass
             kind = steps.MODEL_UNAVAILABLE if passing else steps.RESEARCH_FAILED

@@ -35,8 +35,6 @@ from openmarketer_core.orchestrator.chat_agent.rules import ChatLimits, ChatTurn
 from openmarketer_core.orchestrator.reads import ChatReads
 from openmarketer_core.orchestrator.requests import ChatRequests
 
-FORCE_SUBMIT = {"type": "function", "function": {"name": rules.SUBMIT}}
-
 
 @agent.node(start=True)
 def call_model(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]:
@@ -47,32 +45,32 @@ def call_model(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]
     if state["step"] >= limits.max_model_calls:
         raise ChatTurnError(f"no answer after {limits.max_model_calls} model calls")
     step = state["step"] + 1
-    wrapping_up = rules.is_wrapping_up(step, cost, len(state["tool_calls"]), limits)
+    wrapping_up = rules.is_wrapping_up(step, cost, state["tool_calls"], limits)
 
     new_messages: list[dict[str, Any]] = []
     if wrapping_up and not state["wrap_up_sent"]:
         new_messages.append(
             {
                 "role": "user",
-                "content": "You are out of reading budget. Answer the operator now.",
+                "content": (
+                    "You are out of reading budget. Start any run the operator asked for, "
+                    "then answer."
+                ),
             }
         )
     reply = context.model.chat(
         rules.ROLE,
         state["messages"] + new_messages,
-        tools=rules.tool_schemas(agent),
-        tool_choice=FORCE_SUBMIT if wrapping_up else None,
+        tools=rules.wrap_up_tool_schemas(agent) if wrapping_up else rules.tool_schemas(agent),
     )
     new_messages.append(reply.message)
     if not reply.tool_calls:
-        new_messages.append(
-            {
-                "role": "user",
-                "content": (
-                    f"Continue with the tools, or call {rules.SUBMIT} when the answer is complete."
-                ),
-            }
+        nudge = (
+            f"Call {rules.SUBMIT} with the answer now."
+            if wrapping_up
+            else f"Continue with the tools, or call {rules.SUBMIT} when the answer is complete."
         )
+        new_messages.append({"role": "user", "content": nudge})
     return {
         "messages": new_messages,
         "pending_calls": reply.tool_calls,

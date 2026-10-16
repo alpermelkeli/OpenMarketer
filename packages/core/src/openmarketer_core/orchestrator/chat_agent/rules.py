@@ -1,7 +1,9 @@
 """Orchestrator chat: the rules of the agent that answers the operator about one project.
 
 The model decides what to read and what to say; this module decides what ends the turn:
-an answer submitted with ``submit_answer``, or a limit. A conversation that has grown past
+an answer submitted with ``submit_answer``, or a limit. A turn out of reading budget loses
+its read tools but keeps the request actions (``wrap_up_tool_schemas``): a run the operator
+asked for is still started before the answer. A conversation that has grown past
 ``MAX_HISTORY_CHARS`` is shortened before the turn runs: ``compact_history`` replaces its
 older messages with one summary. There are no evidence checks like
 the analyzer's: the tools read the product's own records, and the model is told to repeat
@@ -29,8 +31,11 @@ from openmarketer_core.llm import ChatModel
 
 ROLE = "orchestrator"
 SUBMIT = "submit_answer"
-WRAP_UP_CALLS = 2  # the last model calls are reserved for the answer
-WRAP_UP_TOOL_SHARE = 0.75  # of the tool budget; submitting costs no tool
+# The tools that ask the turn's caller for work instead of reading the project: the reading
+# budget ignores them, and a turn out of budget keeps them.
+REQUEST_ACTIONS = frozenset({"start_research"})
+WRAP_UP_CALLS = 2  # the last model calls are reserved for finishing the turn
+WRAP_UP_TOOL_SHARE = 0.75  # of the reading budget; submitting costs no read
 WRAP_UP_COST_SHARE = 0.7  # of the cost limit; the rest pays for the submission itself
 MAX_SHOWN_SCHEMA_PROBLEMS = 12
 MAX_HISTORY_CHARS = 24_000  # a longer conversation has its older messages summarised
@@ -82,7 +87,7 @@ as it can be while keeping those facts. Add nothing that was not said.\
 @dataclass(frozen=True)
 class ChatLimits:
     max_model_calls: int = 8
-    max_tool_calls: int = 8  # calls made so far; one batch of parallel calls may go past it
+    max_tool_calls: int = 8  # reads made so far; one batch of parallel calls may go past it
     max_cost_usd: float = 0.50
 
 
@@ -194,12 +199,27 @@ def tool_schemas(agent: Agent) -> list[dict[str, Any]]:
     return [*agent.tool_schemas(), submit_schema()]
 
 
-def is_wrapping_up(step: int, cost_usd: float, tool_calls: int, limits: ChatLimits) -> bool:
-    """Whether model call ``step`` must be spent on submitting instead of reading."""
+def wrap_up_tool_schemas(agent: Agent) -> list[dict[str, Any]]:
+    """The tools of a turn out of reading budget: the request actions and the submission."""
+    request_actions = [
+        schema for schema in agent.tool_schemas() if schema["function"]["name"] in REQUEST_ACTIONS
+    ]
+    return [*request_actions, submit_schema()]
+
+
+def is_wrapping_up(
+    step: int, cost_usd: float, tool_calls: Sequence[str], limits: ChatLimits
+) -> bool:
+    """Whether model call ``step`` is spent finishing the turn instead of reading.
+
+    The reading budget counts the calls that read; a request action is not one, and neither
+    is a submission, so a turn that started runs is not wrapped up for them.
+    """
     calls_left = limits.max_model_calls - step
+    reads = sum(1 for name in tool_calls if name not in REQUEST_ACTIONS and name != SUBMIT)
     return (
         calls_left < WRAP_UP_CALLS
-        or tool_calls >= WRAP_UP_TOOL_SHARE * limits.max_tool_calls
+        or reads >= WRAP_UP_TOOL_SHARE * limits.max_tool_calls
         or cost_usd >= WRAP_UP_COST_SHARE * limits.max_cost_usd
     )
 

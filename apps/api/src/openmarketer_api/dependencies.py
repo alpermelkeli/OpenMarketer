@@ -27,6 +27,7 @@ from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.session import transaction
 from openmarketer_core.llm_catalog import ModelCatalog
 from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.tracing import NOT_TRACING, Tracing
 from openmarketer_core.workflow_start import WorkflowStart
 
 
@@ -44,6 +45,8 @@ class Services:
     # The model configuration with the environment's overrides; it holds the environment too.
     model_router: ModelRouter = field(repr=False)
     model_catalog: ModelCatalog = field(repr=False)
+    # The process's tracing: off unless the environment gave Langfuse's keys (``main.py``).
+    tracing: Tracing = NOT_TRACING
 
 
 def _services(request: Request) -> Services:
@@ -104,6 +107,10 @@ def model_catalog(services: Annotated[Services, Depends(_services)]) -> ModelCat
     return services.model_catalog
 
 
+def process_tracing(services: Annotated[Services, Depends(_services)]) -> Tracing:
+    return services.tracing
+
+
 async def no_request_body(request: Request) -> None:
     """Refuse a body on a route that takes none, instead of ignoring what the client sent.
 
@@ -124,5 +131,6 @@ Environment = Annotated[Mapping[str, str], Depends(environment)]
 StoringCipher = Annotated[CredentialCipher | None, Depends(credential_cipher)]
 Models = Annotated[ModelRouter, Depends(model_router)]
 Catalog = Annotated[ModelCatalog, Depends(model_catalog)]
+ProcessTracing = Annotated[Tracing, Depends(process_tracing)]
 StartWorkflow = Annotated[Callable[[WorkflowStart], None], Depends(start_workflow)]
 TellRun = Annotated[Callable[[str, uuid.UUID], None], Depends(tell_run)]

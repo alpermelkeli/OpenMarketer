@@ -17,7 +17,10 @@ so this module resolves the turn's model itself: the workspace's choice for the
 (``credentials.resolution.model_key``). ``chat_model`` is a dependency, so a
 test can hand the route a scripted model instead. The turn's request action
 (reaching ``PostgresChatRequests``) is wired from the request's session factory
-and the same workflow starter the research route uses.
+and the same workflow starter the research route uses. The turn is traced like
+an agent's run when the process traced (``Tracing.traced``): a turn runs in a
+worker thread of this server, under the graph handler for the turn's own
+context, and its model is wrapped so each call is a generation.
 
 A turn that fails stores nothing (``orchestrator/ask.py``), so the same message
 may be sent again; this module words no failure of the agent's.
@@ -37,6 +40,7 @@ from openmarketer_api.dependencies import (
     DbSession,
     Environment,
     Models,
+    ProcessTracing,
     Sessions,
     StartWorkflow,
     StoringCipher,
@@ -153,17 +157,19 @@ def chat_model(
     models: Models,
     environ: Environment,
     cipher: StoringCipher,
+    tracing: ProcessTracing,
 ) -> ChatModel:
     """The model one chat turn calls: the workspace's choice of the role, with its key.
 
-    Raises ``StoredModelChoiceInvalid`` when the workspace's stored choice broke a
+    Wrapped for tracing when the process traces, so each call is a generation, as a worker's
+    attempts are. Raises ``StoredModelChoiceInvalid`` when the workspace's stored choice broke a
     rule, ``ModelKeyNotSet`` when the key of the provider's variable is neither in
     the environment nor stored, and ``CredentialUnreadable`` when a stored key
     cannot be opened.
     """
     chosen = model_choices(session, models, workspace_id=workspace_id).router_for(models)
     key = model_key(session, environ, workspace_id=workspace_id, router=chosen, cipher=cipher)
-    return RouterChatModel(router=chosen, api_key=key)
+    return tracing.model(RouterChatModel(router=chosen, api_key=key))
 
 
 def _thread(stored: ChatThread) -> ChatThreadResponse:
@@ -299,6 +305,7 @@ def send(
     workspace_id: CurrentWorkspaceId,
     model: Annotated[ChatModel, Depends(chat_model)],
     start_workflow: StartWorkflow,
+    tracing: ProcessTracing,
 ) -> ChatTurnResponse:
     """Answer one operator message in the chat, and store the exchange.
 
@@ -312,21 +319,22 @@ def send(
     a run whose workflow could not be started is recorded as failed and the
     answer says it could not be started.
     """
-    exchange = ask_project(
-        session,
-        PostgresChatReads(session, workspace_id, project_id),
-        requests=PostgresChatRequests(
-            sessions=sessions,
-            start_workflow=start_workflow,
+    with tracing.traced():
+        exchange = ask_project(
+            session,
+            PostgresChatReads(session, workspace_id, project_id),
+            requests=PostgresChatRequests(
+                sessions=sessions,
+                start_workflow=start_workflow,
+                workspace_id=workspace_id,
+                project_id=project_id,
+            ),
             workspace_id=workspace_id,
             project_id=project_id,
-        ),
-        workspace_id=workspace_id,
-        project_id=project_id,
-        chat_id=chat_id,
-        message=body.message,
-        model=model,
-    )
+            chat_id=chat_id,
+            message=body.message,
+            model=model,
+        )
     return ChatTurnResponse(
         question=_message(exchange.question),
         answer=_message(exchange.answer),

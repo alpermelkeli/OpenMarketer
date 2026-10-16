@@ -109,6 +109,48 @@ def _read_call[Model: BaseModel](
         return f"Rejected. Fix this and submit again: {e}"
 
 
+def _ask_in_text[Model: BaseModel](
+    context: ResearchContext,
+    role: str,
+    messages: list[dict[str, Any]],
+    *,
+    model_type: type[Model],
+    spent: _Submission,
+) -> Model:
+    """Ask a role that may not be sent tools for one submission, at most twice.
+
+    The reader reads untrusted text and is quarantined: its call carries no tools at all, so
+    the submission is the one JSON object the answer holds. An answer that is not that
+    object, or does not fit the fields, is told what was wrong and asked once more, inside
+    the same node; a second unusable answer ends the run.
+    """
+    for _ in range(rules.SUBMISSION_ATTEMPTS):
+        reply = context.model.chat(role, messages)
+        spent.cost_usd += reply.cost_usd
+        spent.model = reply.model or spent.model
+        submitted = _read_text(reply.text, model_type)
+        if not isinstance(submitted, str):
+            return submitted
+        messages = [*messages, reply.message, {"role": "user", "content": submitted}]
+    raise ResearchError(
+        f"the model did not answer a readable {model_type.__name__} after two attempts"
+    )
+
+
+def _read_text[Model: BaseModel](text: str, model_type: type[Model]) -> Model | str:
+    """The JSON object the answer holds, or the text to tell the model what was wrong."""
+    try:
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("the answer must be one JSON object")
+    except ValueError as e:
+        return f"error: could not parse the answer as JSON: {e}"
+    try:
+        return read_strict_json(model_type, parsed)
+    except DoesNotFit as e:
+        return f"Rejected. Fix this and answer again: {e}"
+
+
 def _request_of(state: ResearchState) -> ResearchRequest:
     """The run's request as the prompts take it, rebuilt from the state."""
     return ResearchRequest(
@@ -240,12 +282,10 @@ def read(state: ResearchState, context: ResearchContext) -> dict[str, Any]:
             "notes": [*state["notes"], "a stored page could not be read; it is left out"],
         }
     spent = _Submission()
-    reading = _ask_for(
+    reading = _ask_in_text(
         context,
         rules.READER_ROLE,
         rules.reader_messages(state["questions"], page_url=page["url"], page_text=text),
-        tool=rules.reading_tool(),
-        tool_name=rules.SUBMIT_READING,
         model_type=Reading,
         spent=spent,
     )

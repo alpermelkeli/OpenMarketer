@@ -14,6 +14,7 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -27,12 +28,19 @@ from openmarketer_core.db.chat import append_exchange, create_chat
 from openmarketer_core.db.credentials import store_credential
 from openmarketer_core.db.models import Project, ResearchRunRecord, Workspace
 from openmarketer_core.db.session import session_factory, transaction
-from openmarketer_core.llm import ChatReply, LLMError
+from openmarketer_core.llm import ChatReply, LLMError, RouterChatModel
 from openmarketer_core.orchestrator.chat_agent.rules import SUBMIT, ChatTurnError
 from openmarketer_core.research.workflow_contract import (
     RESEARCH_TASK_QUEUE,
     RESEARCH_WORKFLOW,
     ResearchRunInput,
+)
+from openmarketer_core.tracing import (
+    NOT_TRACING,
+    TracedChatModel,
+    Tracing,
+    TracingSettings,
+    start_tracing,
 )
 from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
 
@@ -578,3 +586,90 @@ def test_a_turn_that_does_not_ask_for_research_starts_nothing(client, services, 
 
     assert response.status_code == 201
     assert workflows.started == []
+
+
+# -------------------------------------------------------------------- tracing
+def started_tracing() -> tuple[Tracing, InMemorySpanExporter]:
+    """Tracing as a test starts it: on, with the spans kept instead of sent to a Langfuse.
+
+    A public key of its own, as Langfuse keeps one client per key.
+    """
+    exporter = InMemorySpanExporter()
+    traced = start_tracing(
+        TracingSettings(
+            public_key=f"pk-lf-{uuid.uuid4()}",
+            secret_key="sk-lf-made-up",
+            base_url="http://127.0.0.1:1",
+        ),
+        span_exporter=exporter,
+    )
+    return traced, exporter
+
+
+def stored_provider_key(sessions: sessionmaker[Session], scope: RunScope) -> CredentialCipher:
+    """A key stored for the test's workspace, and the cipher it can be opened with."""
+    cipher = CredentialCipher(base64.b64encode(os.urandom(32)).decode())
+    with transaction(sessions) as session:
+        sealed = cipher.seal(
+            "sk-or-v1-made-up",
+            workspace_id=scope.workspace_id,
+            credential_name=OPENROUTER_API_KEY.name,
+        )
+        store_credential(
+            session,
+            workspace_id=scope.workspace_id,
+            name=OPENROUTER_API_KEY.name,
+            sealed=sealed,
+            set_by=LOCAL_USER_ID,
+        )
+    return cipher
+
+
+def test_the_turns_model_is_wrapped_for_tracing_when_tracing_is_on(
+    sessions, scope, repository_models
+):
+    cipher = stored_provider_key(sessions, scope)
+    tracing, _ = started_tracing()
+    try:
+        with transaction(sessions) as session:
+            model = chat.chat_model(
+                session, scope.workspace_id, repository_models, {}, cipher, tracing
+            )
+    finally:
+        tracing.stop()
+
+    assert isinstance(model, TracedChatModel)
+    assert isinstance(model.inner, RouterChatModel)
+
+
+def test_the_turns_model_is_used_as_it_is_while_tracing_is_off(sessions, scope, repository_models):
+    cipher = stored_provider_key(sessions, scope)
+    with transaction(sessions) as session:
+        model = chat.chat_model(
+            session, scope.workspace_id, repository_models, {}, cipher, NOT_TRACING
+        )
+
+    assert isinstance(model, RouterChatModel)
+    assert not isinstance(model, TracedChatModel)
+
+
+def test_a_traced_turn_sends_its_run_its_nodes_and_its_generations(client, services, scope, app):
+    tracing, exporter = started_tracing()
+    app.state.services = dataclasses.replace(app.state.services, tracing=tracing)
+    model = tracing.model(ScriptedModel([call(SUBMIT, answer="hello there")]))
+    app.dependency_overrides[chat.chat_model] = lambda: model
+    opened = open_chat(client, scope)
+    try:
+        response = client.post(messages_url(scope, opened["id"]), json={"message": "hi"})
+        assert response.status_code == 201, response.text
+        tracing.flush()
+    finally:
+        tracing.stop()
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert set(spans) >= {"orchestrator-chat", "call_model", "orchestrator"}
+    by_id = {span.context.span_id: span.name for span in spans.values() if span.context}
+    assert spans["call_model"].parent is not None
+    assert spans["orchestrator"].parent is not None
+    assert by_id[spans["call_model"].parent.span_id] == "orchestrator-chat"
+    assert by_id[spans["orchestrator"].parent.span_id] == "call_model"

@@ -41,7 +41,7 @@ class ChatTurnState(TypedDict):
     pending_calls: list[dict[str, Any]]  # tool calls of the latest model turn
     step: int  # model calls made so far
     cost_usd: float
-    wrapping_up: bool  # the latest model call was told to submit
+    wrapping_up: bool  # the latest model call was told reading is over
     wrap_up_sent: bool
     model: str
     answer: str | None  # the accepted answer, once one is submitted

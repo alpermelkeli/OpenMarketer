@@ -21,12 +21,14 @@ from openmarketer_core.db.models import (
 )
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContext, agent
-from openmarketer_core.orchestrator.chat_agent.graph import FORCE_SUBMIT, answer_message
+from openmarketer_core.orchestrator.chat_agent.graph import answer_message
 from openmarketer_core.orchestrator.chat_agent.rules import (
     SUBMIT,
     ChatLimits,
     ChatTurnError,
+    is_wrapping_up,
     submit_schema,
+    wrap_up_tool_schemas,
 )
 from openmarketer_core.orchestrator.chat_agent.tools import (
     list_analysis_runs,
@@ -75,7 +77,12 @@ class ScriptedModel:
 
     def chat(self, role, messages, *, tools=None, tool_choice=None):
         self.requests.append(
-            {"role": role, "messages": [dict(m) for m in messages], "tool_choice": tool_choice}
+            {
+                "role": role,
+                "messages": [dict(m) for m in messages],
+                "tools": tools,
+                "tool_choice": tool_choice,
+            }
         )
         turn = self.turns.pop(0) if self.turns else [call("get_project_status")]
         if isinstance(turn, Exception):
@@ -392,16 +399,25 @@ def test_missing_answer_on_the_last_chance_fails(reads):
         answer_message(reads, model, history(), limits=ChatLimits(max_model_calls=2))
 
 
-def test_forced_to_answer_when_the_model_calls_run_out(reads):
+def test_the_turn_fails_when_the_model_never_answers(reads):
     model = ScriptedModel()  # only ever reads the status
     with pytest.raises(ChatTurnError, match="no answer after 4 model calls"):
         answer_message(reads, model, history(), limits=ChatLimits(max_model_calls=4))
-    choices = [r["tool_choice"] for r in model.requests]
-    assert choices == [None, None, FORCE_SUBMIT, FORCE_SUBMIT]
-    wrap_up = [
+    reading = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
+    wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
+    assert "read_profile" in reading
+    assert wrap_up == ["start_research", SUBMIT]
+    messages = [
         m for m in model.requests[-1]["messages"] if "You are out of reading budget" in str(m)
     ]
-    assert len(wrap_up) == 1
+    assert len(messages) == 1
+
+
+def test_request_actions_do_not_count_against_the_reading_budget():
+    limits = ChatLimits()
+    assert not is_wrapping_up(1, 0.0, ["start_research"] * limits.max_tool_calls, limits)
+    assert not is_wrapping_up(1, 0.0, ["get_project_status"] * 5, limits)
+    assert is_wrapping_up(1, 0.0, ["get_project_status"] * 6, limits)
 
 
 def test_cost_limit_stops_the_turn(reads):
@@ -409,7 +425,8 @@ def test_cost_limit_stops_the_turn(reads):
     with pytest.raises(ChatTurnError, match="cost limit reached"):
         answer_message(reads, model, history(), limits=ChatLimits(max_cost_usd=0.5))
     assert len(model.requests) == 3
-    assert model.requests[-1]["tool_choice"] is not None
+    wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
+    assert wrap_up == ["start_research", SUBMIT]
 
 
 # ------------------------------------------------------------------- tools
@@ -569,6 +586,23 @@ def test_a_turn_can_start_a_research_run_and_says_its_id(reads):
     assert json.loads(model.tool_results()[0])["run_id"] == str(RESEARCH_RUN_ID)
 
 
+def test_a_spent_reading_budget_still_lets_the_turn_start_research(reads):
+    requests = FakeRequests()
+    model = ScriptedModel(
+        [call("get_project_status") for _ in range(6)],
+        [call("start_research", questions=["Is it live?"])],
+        [call(SUBMIT, answer="Started it.")],
+    )
+
+    turn = answer_message(reads, model, history(), requests=requests)
+
+    assert [request.questions for request in requests.started] == [["Is it live?"]]
+    assert turn.answer == "Started it."
+    assert any("out of reading budget" in str(m) for m in model.requests[1]["messages"])
+    wrap_up = [schema["function"]["name"] for schema in model.requests[1]["tools"]]
+    assert wrap_up == ["start_research", SUBMIT]
+
+
 def test_empty_readings_are_plain_sentences():
     context = ChatTurnContext(
         model=ScriptedModel(), reads=FakeReads(empty=True), limits=ChatLimits()
@@ -606,6 +640,11 @@ def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
         "max_sources",
     ]
     assert started["required"] == ["questions"]
+
+
+def test_the_wrap_up_offers_the_request_action_and_the_submission_only():
+    names = [schema["function"]["name"] for schema in wrap_up_tool_schemas(agent)]
+    assert names == ["start_research", SUBMIT]
 
 
 # ------------------------------------------------------------------- graph
