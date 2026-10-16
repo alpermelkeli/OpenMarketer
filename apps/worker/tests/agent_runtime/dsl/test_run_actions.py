@@ -17,7 +17,7 @@ import asyncio
 import pytest
 from scripted_history import ChildStarted, children_started, exchanges, readable
 from scripted_rig import happened
-from temporalio.client import Client, WorkflowFailureError
+from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.exceptions import CancelledError
 from temporalio.service import RPCError
 from temporalio.worker import Replayer
@@ -63,7 +63,7 @@ async def the_running_child(client: Client, world: GreeterWorld, run, *, within:
                 # The run is prepared, but the parent may not have issued the start yet.
                 await asyncio.sleep(0.1)
                 continue
-            if description.status.name == "RUNNING":
+            if description.status is WorkflowExecutionStatus.RUNNING:
                 return child_id
             await asyncio.sleep(0.1)
 

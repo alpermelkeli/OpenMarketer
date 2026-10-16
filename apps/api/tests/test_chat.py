@@ -7,12 +7,14 @@ its own, committed, since a turn commits its own transaction.
 """
 
 import base64
+import dataclasses
 import json
 import os
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_api.dependencies import Services
@@ -23,10 +25,16 @@ from openmarketer_core.credentials.catalog import OPENROUTER_API_KEY
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.chat import append_exchange, create_chat
 from openmarketer_core.db.credentials import store_credential
-from openmarketer_core.db.models import Project, Workspace
+from openmarketer_core.db.models import Project, ResearchRunRecord, Workspace
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.llm import ChatReply, LLMError
 from openmarketer_core.orchestrator.chat_agent.rules import SUBMIT, ChatTurnError
+from openmarketer_core.research.workflow_contract import (
+    RESEARCH_TASK_QUEUE,
+    RESEARCH_WORKFLOW,
+    ResearchRunInput,
+)
+from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
 
 
 def call(name: str, **arguments) -> dict:
@@ -72,6 +80,26 @@ class NoWorkflows:
         raise AssertionError("a chat turn tells no run of a decision")
 
 
+class RecordingWorkflows:
+    """The workflow engine of one test: every workflow it was asked to start, and nothing else."""
+
+    def __init__(self) -> None:
+        self.started: list[WorkflowStart] = []
+
+    async def start(self, workflow: WorkflowStart) -> None:
+        self.started.append(workflow)
+
+    async def tell_decided(self, workflow_id: str, proposal_id: uuid.UUID) -> None:
+        raise AssertionError("a chat turn tells no run of a decision")
+
+
+class RefusingWorkflows(RecordingWorkflows):
+    """A workflow engine that cannot be reached: every start is refused."""
+
+    async def start(self, workflow: WorkflowStart) -> None:
+        raise WorkflowNotStarted("Temporal is not reachable")
+
+
 @pytest.fixture
 def sessions(engine) -> sessionmaker[Session]:
     return session_factory(engine.url.render_as_string(hide_password=False))
@@ -103,6 +131,11 @@ def services(app, sessions, scope, repository_models, no_catalog) -> None:
         model_catalog=no_catalog,
     )
     app.dependency_overrides[current_workspace_id] = lambda: scope.workspace_id
+
+
+def with_the_workflows(app, workflows) -> None:
+    """Give the running application another workflow engine, for the test at hand."""
+    app.state.services = dataclasses.replace(app.state.services, workflows=workflows)
 
 
 def wired(app, *turns: object) -> ScriptedModel:
@@ -472,3 +505,76 @@ def test_a_chat_of_another_project_is_not_found(client, services, app, scope, se
         client.post(read_url(scope, foreign.id)),
     ):
         assert (response.status_code, response.json()["code"]) == (404, "chat_not_found")
+
+
+# ------------------------------------------------------- the request action
+def test_the_turn_can_start_a_research_run_and_the_workflow_is_started(
+    client, services, scope, app, sessions
+):
+    workflows = RecordingWorkflows()
+    with_the_workflows(app, workflows)
+    model = wired(
+        app,
+        [call("start_research", questions=["What did competitors post last month?"])],
+        [call(SUBMIT, answer="Research is queued.")],
+    )
+    chat = open_chat(client, scope)
+
+    response = client.post(
+        messages_url(scope, chat["id"]), json={"message": "Research the competition."}
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["answer"]["content"] == "Research is queued."
+    [started] = workflows.started
+    assert (started.workflow, started.task_queue) == (RESEARCH_WORKFLOW, RESEARCH_TASK_QUEUE)
+    assert isinstance(started.input, ResearchRunInput)
+    with transaction(sessions) as session:
+        run = session.get(ResearchRunRecord, started.input.run_id)
+    assert run is not None
+    assert (run.requested_by, run.status.value) == ("orchestrator", "queued")
+    assert run.questions == ["What did competitors post last month?"]
+    # The model was told the new run's id and status, so the answer can name it.
+    told = json.loads(model.tool_results()[0])
+    assert told == {
+        "run_id": str(started.input.run_id),
+        "status": "queued",
+        "requested_by": "orchestrator",
+    }
+
+
+def test_a_research_run_whose_workflow_cannot_be_started_is_answered_in_words(
+    client, services, scope, app, sessions
+):
+    with_the_workflows(app, RefusingWorkflows())
+    wired(
+        app,
+        [call("start_research", questions=["What did competitors post last month?"])],
+        [call(SUBMIT, answer="I could not start it.")],
+    )
+    chat = open_chat(client, scope)
+
+    response = client.post(messages_url(scope, chat["id"]), json={"message": "Research it."})
+
+    assert response.status_code == 201, response.text
+    assert response.json()["answer"]["content"] == "I could not start it."
+    with transaction(sessions) as session:
+        stored = session.scalars(
+            select(ResearchRunRecord).where(ResearchRunRecord.project_id == scope.project_id)
+        ).all()
+    # The run was stored and then recorded as failed: it will never be executed.
+    assert len(stored) == 1
+    assert stored[0].status.value == "failed"
+    assert stored[0].error is not None
+
+
+def test_a_turn_that_does_not_ask_for_research_starts_nothing(client, services, scope, app):
+    workflows = RecordingWorkflows()
+    with_the_workflows(app, workflows)
+    answering(app, "Nothing to start.")
+    chat = open_chat(client, scope)
+
+    response = client.post(messages_url(scope, chat["id"]), json={"message": "How is it going?"})
+
+    assert response.status_code == 201
+    assert workflows.started == []

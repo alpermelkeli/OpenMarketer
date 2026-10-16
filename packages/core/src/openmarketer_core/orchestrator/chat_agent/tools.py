@@ -1,9 +1,16 @@
-"""The chat agent's read tools: what the model may read of its project.
+"""The chat agent's tools: what the model may read of its project, and the one request action.
 
-Every tool answers with bounded JSON text built from the records ``ChatReads`` returns,
+The read tools answer with bounded JSON text built from the records ``ChatReads`` returns,
 and never with what a model sent. Problems (a section that does not exist, an identifier
-that does not name anything) are text the model can correct from. No tool writes anything
-or asks for an action.
+that does not name anything) are text the model can correct from. No read tool writes
+anything or asks for an action.
+
+``start_research`` is the other kind: a *request action*. It asks the turn's caller
+(``ChatTurnContext.requests``) to create a research run for the project and start it, and
+answers with the run's id and status; it writes nothing itself and starts no workflow, and a
+caller that gave no port is told that starting runs is not available. What it sends is read
+strictly against ``ResearchRequest`` first, so a request that does not fit is refused with
+the fields at fault and never their values.
 
 The tools are declared on the agent here; importing this module is what puts them on it.
 """
@@ -15,13 +22,20 @@ import uuid
 from dataclasses import asdict
 from typing import Any
 
-from openmarketer_core.agent_runtime.model_input import shown
+from openmarketer_core.agent_runtime.model_input import (
+    DoesNotFit,
+    fields_phrase,
+    read_strict_json,
+    shown,
+)
 from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContext, agent
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
     PROFILE_SECTIONS,
     UnknownProfileSection,
 )
+from openmarketer_core.orchestrator.requests import ResearchNotStarted
+from openmarketer_core.research.questions import DEFAULT_MAX_SOURCES, ResearchRequest
 
 # The most a tool answer is; a profile with many features is the long one.
 MAX_ANSWER_CHARS = 6000
@@ -143,6 +157,41 @@ def read_research_report(context: ChatTurnContext, run_id: str = "") -> str:
             return "No research run of this project has a report yet."
         return f"error: research run {wanted} has no report"
     return _text(asdict(report))
+
+
+@agent.tool
+def start_research(
+    context: ChatTurnContext,
+    questions: list[str],
+    topics: list[str] | None = None,
+    competitors: list[str] | None = None,
+    time_window: str = "",
+    max_sources: int = DEFAULT_MAX_SOURCES,
+) -> str:
+    """Start a research run of this project: it answers the questions from public pages and
+    stores a report whose findings and sources read_research_report returns once it is done.
+    Use it only when the operator asks for research, and give the run's id in the answer. It
+    answers with the new run's id and status; the run itself is read later."""
+    if context.requests is None:
+        return "error: starting a research run is not available here"
+    try:
+        request = read_strict_json(
+            ResearchRequest,
+            {
+                "questions": questions,
+                "topics": topics or [],
+                "competitors": competitors or [],
+                "time_window": time_window,
+                "max_sources": max_sources,
+            },
+        )
+    except DoesNotFit as e:
+        return f"error: the research request does not fit{fields_phrase(e.fields)}"
+    try:
+        run = context.requests.start_research(request)
+    except ResearchNotStarted as e:
+        return f"error: {e}"
+    return _text({"run_id": str(run.id), "status": run.status, "requested_by": run.requested_by})
 
 
 def _uuid_of(value: str) -> uuid.UUID | None:
