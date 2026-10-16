@@ -78,6 +78,36 @@ class ActionProposal:
     decided_at: datetime | None
 
 
+@dataclass(frozen=True)
+class PendingProposalsSummary:
+    """The proposals of a project that wait for a person: how many, and the nearest deadline."""
+
+    count: int
+    next_expiry: datetime | None
+
+
+def pending_proposals_summary(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID
+) -> PendingProposalsSummary:
+    """How many of the project's proposals wait for a person, and when the next one expires.
+
+    Raises ``ProjectNotFound`` when the workspace has no such project. The nearest deadline is
+    ``None`` when none wait.
+    """
+    get_project(session, workspace_id=workspace_id, project_id=project_id)
+    count, next_expiry = session.execute(
+        select(func.count(), func.min(ProposalRecord.expires_at))
+        .select_from(ProposalRecord)
+        .join(Project, Project.id == ProposalRecord.project_id)
+        .where(
+            Project.workspace_id == workspace_id,
+            Project.id == project_id,
+            ProposalRecord.status == ProposalStatus.PENDING,
+        )
+    ).one()
+    return PendingProposalsSummary(count=count, next_expiry=next_expiry)
+
+
 def propose_action(
     session: Session,
     *,

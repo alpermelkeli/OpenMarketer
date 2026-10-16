@@ -215,6 +215,37 @@ describe("the routes of proposals", () => {
   });
 });
 
+describe("the routes of a project's chat", () => {
+  const CHAT = "0b0e6c6e-aaaa-4bbb-8ccc-ddddeeeeffff";
+  const CHATS = ["projects", PROJECT, "chats"];
+
+  it("forward the chats, one of them, its messages and its read mark", () => {
+    expect(allowedApiPath("GET", CHATS)).toBe(`/v1/projects/${PROJECT}/chats`);
+    expect(allowedApiPath("POST", CHATS)).toBe(`/v1/projects/${PROJECT}/chats`);
+    expect(allowedApiPath("GET", [...CHATS, CHAT])).toBe(`/v1/projects/${PROJECT}/chats/${CHAT}`);
+    expect(allowedApiPath("GET", [...CHATS, CHAT, "messages"])).toBe(
+      `/v1/projects/${PROJECT}/chats/${CHAT}/messages`,
+    );
+    expect(allowedApiPath("POST", [...CHATS, CHAT, "messages"])).toBe(
+      `/v1/projects/${PROJECT}/chats/${CHAT}/messages`,
+    );
+    expect(allowedApiPath("POST", [...CHATS, CHAT, "read"])).toBe(
+      `/v1/projects/${PROJECT}/chats/${CHAT}/read`,
+    );
+  });
+
+  it("do not include a wrong method, a chat that is not an id, or a path below one", () => {
+    expect(() => allowedApiPath("GET", [...CHATS, CHAT, "read"])).toThrow();
+    expect(() => allowedApiPath("POST", [...CHATS, CHAT])).toThrow();
+    expect(() => allowedApiPath("POST", [...CHATS, CHAT, "messages", RUN])).toThrow();
+    expect(() => allowedApiPath("GET", [...CHATS, "latest"])).toThrow();
+    expect(() => allowedApiPath("GET", ["projects", PROJECT, "chat"])).toThrow();
+    expect(() =>
+      allowedApiTarget("GET", [...CHATS, CHAT, "messages"], new URLSearchParams("role=user")),
+    ).toThrow();
+  });
+});
+
 describe("the route that deletes a project", () => {
   it("takes one project by its id", () => {
     expect(allowedApiPath("DELETE", ["projects", PROJECT])).toBe(`/v1/projects/${PROJECT}`);
@@ -260,6 +291,9 @@ describe("the query of a list", () => {
     );
     expect(list("cursor=abc", ["projects", PROJECT, "profile", "versions"])).toBe(
       `/v1/projects/${PROJECT}/profile/versions?cursor=abc`,
+    );
+    expect(list("limit=50", ["projects", PROJECT, "chats"])).toBe(
+      `/v1/projects/${PROJECT}/chats?limit=50`,
     );
   });
 

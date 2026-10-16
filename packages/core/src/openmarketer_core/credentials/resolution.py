@@ -12,6 +12,12 @@ or anything derived from it. ``source`` is the one in use; ``stored`` is filled
 whenever a value is stored, also when the environment overrides it, so a caller
 can say that a stored value is being ignored.
 
+``model_key`` resolves the key a model router's calls carry for a workspace: the
+value of the variable the router's configuration names for the key, and only
+when that variable is the catalog's own, the workspace's stored value. A
+configuration that names another variable is another provider's, so the key of
+one provider never reaches another.
+
 Every function receives what it needs: the session, the environment as a
 mapping, the workspace and the cipher (``None`` when the installation has no
 ``ENCRYPTION_KEY``). None of them reads the process environment, builds a
@@ -29,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from openmarketer_core.credentials.catalog import (
     CREDENTIALS,
+    OPENROUTER_API_KEY,
     Credential,
     acceptable_value,
     credential_named,
@@ -41,6 +48,7 @@ from openmarketer_core.db.credentials import (
     store_credential,
     stored_credentials,
 )
+from openmarketer_core.llm_config import ModelRouter
 
 
 class CredentialUnreadable(Exception):
@@ -73,6 +81,22 @@ class EncryptionKeyMissing(Exception):
             "ENCRYPTION_KEY is needed to store credentials: set it to 32 random bytes in"
             " base64 (generate one with: openssl rand -base64 32)"
         )
+
+
+class ModelKeyNotSet(Exception):
+    """The model provider's key is neither in the environment nor stored for the workspace."""
+
+    def __init__(self, environment_variable: str) -> None:
+        """``environment_variable`` is the one the model configuration names for the key."""
+        # Settings stores the catalog's credential only, so it is no place for another key.
+        if environment_variable == OPENROUTER_API_KEY.environment_variable:
+            where = (
+                "set it in the dashboard's Settings,"
+                f" or with the environment variable {environment_variable}"
+            )
+        else:
+            where = f"set the environment variable {environment_variable}"
+        super().__init__(f"the model provider's API key is not set: {where}")
 
 
 class CredentialSource(StrEnum):
@@ -123,6 +147,37 @@ def credential_value(
     except SealedValueDoesNotOpen:
         # Without the cause: the message already says all a caller may know.
         raise CredentialUnreadable(credential) from None
+
+
+def model_key(
+    session: Session,
+    environ: Mapping[str, str],
+    *,
+    workspace_id: uuid.UUID,
+    router: ModelRouter,
+    cipher: CredentialCipher | None,
+) -> str:
+    """The key the model calls ``router`` builds carry for a run of the workspace.
+
+    The value of the variable the router's configuration names for the key, otherwise
+    the workspace's stored value when that variable is the catalog's own. Raises
+    ``ModelKeyNotSet`` when there is none, ``CredentialUnreadable`` when a stored value
+    cannot be opened, and ``DatabaseError``.
+    """
+    variable = router.config.provider.api_key_env
+    key = router.api_key_in_environment()
+    # Only for the catalog's own variable: its key must not reach another provider.
+    if key is None and variable == OPENROUTER_API_KEY.environment_variable:
+        key = credential_value(
+            session,
+            environ,
+            workspace_id=workspace_id,
+            credential=OPENROUTER_API_KEY,
+            cipher=cipher,
+        )
+    if key is None:
+        raise ModelKeyNotSet(variable)
+    return key
 
 
 def credential_statuses(

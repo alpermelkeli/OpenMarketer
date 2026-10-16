@@ -10,6 +10,9 @@ rule is answered in the shape of a request validation error (422), beside the
 field it was sent in: it is a refusal of what the body holds, like a field of
 the wrong type.
 
+A chat turn the agent gave no answer for is answered with a fixed message: the
+agent's own wording of a failed turn may repeat what the model sent.
+
 An error body carries what a client needs to act on it as a field of its own,
 never inside the message: ``existing_project_id`` with ``project_already_exists``.
 """
@@ -31,9 +34,12 @@ from openmarketer_api.identity import NotLocalRequest
 from openmarketer_core.credentials.catalog import CredentialValueRefused, UnknownCredential
 from openmarketer_core.credentials.resolution import (
     CredentialSetByEnvironment,
+    CredentialUnreadable,
     EncryptionKeyMissing,
+    ModelKeyNotSet,
 )
 from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
+from openmarketer_core.db.chat import ChatNotFound
 from openmarketer_core.db.profile_versions import ProfileAlreadyApproved, ProfileVersionNotFound
 from openmarketer_core.db.project_removal import (
     ProjectHasPendingProposal,
@@ -42,6 +48,8 @@ from openmarketer_core.db.project_removal import (
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.proposals import ProposalNotFound, ProposalNotPending
 from openmarketer_core.db.session import DatabaseError
+from openmarketer_core.llm import LLMError
+from openmarketer_core.orchestrator.chat_agent.rules import ChatTurnError
 from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.request import AnalysisNotStarted
 from openmarketer_core.workspace_settings.analysis_limits import AnalysisLimitsRefused
@@ -61,6 +69,7 @@ class ErrorCode(StrEnum):
     NOT_LOCAL_REQUEST = "not_local_request"
     PROJECT_NOT_FOUND = "project_not_found"
     ANALYSIS_NOT_FOUND = "analysis_not_found"
+    CHAT_NOT_FOUND = "chat_not_found"
     PROFILE_NOT_FOUND = "profile_not_found"
     CREDENTIAL_NOT_FOUND = "credential_not_found"
     PROPOSAL_NOT_FOUND = "proposal_not_found"
@@ -72,11 +81,15 @@ class ErrorCode(StrEnum):
     PROPOSAL_NOT_PENDING = "proposal_not_pending"
     PROPOSAL_PENDING = "proposal_pending"
     CREDENTIAL_SET_BY_ENVIRONMENT = "credential_set_by_environment"
+    CREDENTIAL_UNREADABLE = "credential_unreadable"
     ENCRYPTION_KEY_MISSING = "encryption_key_missing"
     MODEL_SET_BY_ENVIRONMENT = "model_set_by_environment"
+    MODEL_KEY_NOT_SET = "model_key_not_set"
     STORED_SETTING_INVALID = "stored_setting_invalid"
     INTERNAL_ERROR = "internal_error"
     ANALYSIS_NOT_STARTED = "analysis_not_started"
+    MODEL_UNAVAILABLE = "model_unavailable"
+    CHAT_UNANSWERED = "chat_unanswered"
     DATABASE_UNAVAILABLE = "database_unavailable"
 
 
@@ -106,6 +119,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     NotLocalRequest: (403, ErrorCode.NOT_LOCAL_REQUEST),
     ProjectNotFound: (404, ErrorCode.PROJECT_NOT_FOUND),
     AnalysisRunNotFound: (404, ErrorCode.ANALYSIS_NOT_FOUND),
+    ChatNotFound: (404, ErrorCode.CHAT_NOT_FOUND),
     ProfileVersionNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
     ProfileNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
     UnknownCredential: (404, ErrorCode.CREDENTIAL_NOT_FOUND),
@@ -118,10 +132,13 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ProposalNotPending: (409, ErrorCode.PROPOSAL_NOT_PENDING),
     ProjectHasPendingProposal: (409, ErrorCode.PROPOSAL_PENDING),
     CredentialSetByEnvironment: (409, ErrorCode.CREDENTIAL_SET_BY_ENVIRONMENT),
+    CredentialUnreadable: (409, ErrorCode.CREDENTIAL_UNREADABLE),
     EncryptionKeyMissing: (409, ErrorCode.ENCRYPTION_KEY_MISSING),
     ModelSetByEnvironment: (409, ErrorCode.MODEL_SET_BY_ENVIRONMENT),
+    ModelKeyNotSet: (409, ErrorCode.MODEL_KEY_NOT_SET),
     StoredModelChoiceInvalid: (409, ErrorCode.STORED_SETTING_INVALID),
     AnalysisNotStarted: (503, ErrorCode.ANALYSIS_NOT_STARTED),
+    LLMError: (503, ErrorCode.MODEL_UNAVAILABLE),
 }
 
 
@@ -137,6 +154,7 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(CredentialValueRefused, _credential_value_refused)
     app.add_exception_handler(ModelChoiceRefused, _setting_refused)
     app.add_exception_handler(AnalysisLimitsRefused, _setting_refused)
+    app.add_exception_handler(ChatTurnError, _chat_unanswered)
     app.add_exception_handler(DatabaseError, _database_error)
     app.add_exception_handler(Exception, _unexpected_error)
 
@@ -173,6 +191,15 @@ def _setting_refused(_: Request, error: Exception) -> JSONResponse:
     field = getattr(error, "field", "")
     refusal = {"type": "value_error", "loc": ["body", field], "msg": str(error)}
     return JSONResponse({"detail": [refusal]}, 422)
+
+
+def _chat_unanswered(_: Request, __: Exception) -> JSONResponse:
+    # The agent's own wording of a failed turn may repeat what the model sent.
+    return _problem(
+        503,
+        ErrorCode.CHAT_UNANSWERED,
+        "the chat agent gave no answer; sending the message again may answer it",
+    )
 
 
 def _database_error(_: Request, error: Exception) -> JSONResponse:
