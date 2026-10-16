@@ -32,10 +32,13 @@ from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import ResearchRunInput, research_workflow
 from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
 
-# Who asked for a run: a person through the API, the orchestrator's chat, or another run.
-# Only a person can start one today; the values exist because the run's record keeps one.
+# Who asked for a run: a person through the API, the orchestrator's chat, or the action of
+# another run. The run's record keeps one of them; every one of them is here, so a caller
+# names it instead of spelling it.
 REQUESTED_BY_A_PERSON = "person"
-REQUESTED_BY = (REQUESTED_BY_A_PERSON, "orchestrator", "run")
+REQUESTED_BY_THE_CHAT = "orchestrator"
+REQUESTED_BY_A_RUN = "run"
+REQUESTED_BY = (REQUESTED_BY_A_PERSON, REQUESTED_BY_THE_CHAT, REQUESTED_BY_A_RUN)
 WORKFLOW_NOT_STARTED = "the research could not be handed to a worker"
 
 
@@ -66,7 +69,15 @@ def request_research(
     """
     scope = {"workspace_id": workspace_id, "project_id": project_id}
     with transaction(sessions) as session:
-        run = request_research_run(session, **scope, request=request, requested_by=requested_by)
+        # Named, not unpacked: a reason to start a run adds a parameter that is not an id, and
+        # a mapping of ids unpacked into them would then be read as one.
+        run = request_research_run(
+            session,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            request=request,
+            requested_by=requested_by,
+        )
     try:
         start_workflow(research_workflow(ResearchRunInput(run_id=run.id, **scope)))
     except WorkflowNotStarted as e:

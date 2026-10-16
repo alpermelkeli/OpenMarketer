@@ -3621,7 +3621,7 @@
         ]
       },
       "post": {
-        "description": "Answer one operator message in the chat, and store the exchange.\n\n201 with the stored question and answer. 409 `model_key_not_set`,\n`credential_unreadable` or `stored_setting_invalid` when the turn's model\ncannot be resolved. 503 `chat_unanswered` when the agent gave no answer\nwithin its limits and `model_unavailable` when the provider could not\nanswer; nothing is stored then, and sending the message again starts the\nturn again.",
+        "description": "Answer one operator message in the chat, and store the exchange.\n\n201 with the stored question and answer. 409 `model_key_not_set`,\n`credential_unreadable` or `stored_setting_invalid` when the turn's model\ncannot be resolved. 503 `chat_unanswered` when the agent gave no answer\nwithin its limits and `model_unavailable` when the provider could not\nanswer; nothing is stored then, and sending the message again starts the\nturn again. A turn may start a research run when the operator asks for\nresearch (the request action `start_research`), and says so in the answer;\na run whose workflow could not be started is recorded as failed and the\nanswer says it could not be started.",
         "operationId": "sendChatMessage",
         "parameters": [
           {

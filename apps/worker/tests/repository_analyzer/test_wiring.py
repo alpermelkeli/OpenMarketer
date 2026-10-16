@@ -28,7 +28,12 @@ from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TAS
 from openmarketer_core.tracing import NOT_TRACING
 from openmarketer_worker import checkpoint_cleanup
 from openmarketer_worker.agent_runtime.activity_support import checkpoints_in
-from openmarketer_worker.agent_runtime.vocabulary import FORGET_RUN, RUN_ACTION, RUN_GRAPH_STEP
+from openmarketer_worker.agent_runtime.vocabulary import (
+    FORGET_RUN,
+    PREPARE_RUN,
+    RUN_ACTION,
+    RUN_GRAPH_STEP,
+)
 from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.repository_analyzer import steps, wiring
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy, longest_analysis_seconds
@@ -166,6 +171,7 @@ def test_worker_is_handed_the_workflow_and_its_activities_on_the_analysis_queue(
     assert [getattr(activity, "__name__", "") for activity in agent.activities] == [
         RUN_GRAPH_STEP,
         RUN_ACTION,
+        PREPARE_RUN,
         FORGET_RUN,
         steps.START_RUN,
         steps.RECORD_FAILURE,

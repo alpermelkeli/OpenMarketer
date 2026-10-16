@@ -24,6 +24,7 @@ from dsl.definitions import (
     Note,
     agent,
     run_of_the_request,
+    the_greeters_project,
 )
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_worker.agent_runtime.vocabulary import (
@@ -50,7 +51,7 @@ async def note(step: str, detail: str) -> None:
     )
 
 
-@agent_workflow(agent, name="Greeter", graph=GRAPH)
+@agent_workflow(agent, name="Greeter", graph=GRAPH, scope_of=the_greeters_project)
 class Greeter:
     async def before(self, run: GraphRunRef) -> None:
         await note("before", run.kind)
@@ -62,7 +63,7 @@ class Greeter:
         await note("failed", reason)
 
 
-@agent_workflow(agent, name="GreeterWithLimitsOfItsOwn", graph=GRAPH)
+@agent_workflow(agent, name="GreeterWithLimitsOfItsOwn", graph=GRAPH, scope_of=the_greeters_project)
 class GreeterWithLimitsOfItsOwn:
     """Takes the limits of its steps from an activity, as workflow code cannot read settings."""
 
@@ -79,7 +80,12 @@ class GreeterWithLimitsOfItsOwn:
 
 
 @agent_workflow(
-    agent, name="GreeterOfARequest", graph=GRAPH, input=GreetRequest, run_of=run_of_the_request
+    agent,
+    name="GreeterOfARequest",
+    graph=GRAPH,
+    scope_of=the_greeters_project,
+    input=GreetRequest,
+    run_of=run_of_the_request,
 )
 class GreeterOfARequest:
     """Started with a request, as the API starts a workflow; every hook is given the request."""
@@ -104,6 +110,7 @@ class GreeterOfARequest:
     agent,
     name="GreeterInItsOwnWords",
     graph=GRAPH,
+    scope_of=the_greeters_project,
     texts=GREETER_TEXTS,
     worded_types=(*WORDED_BY_THE_RUNTIME, NOTE_REFUSED),
 )

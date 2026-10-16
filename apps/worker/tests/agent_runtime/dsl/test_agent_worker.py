@@ -17,11 +17,23 @@ from temporalio.testing import ActivityEnvironment
 from dsl.definitions import GREETER_TEXTS, Unlisted, elsewhere
 from dsl.wiring import LONGEST_RUN, TASK_QUEUE, GreeterWorld, wire
 from dsl.workflow import GRAPH, Greeter
-from openmarketer_core.agent_runtime.actions import ActionEffect
+from openmarketer_core.agent_runtime.actions import (
+    ActionEffect,
+    ActionRequest,
+    RunKind,
+    RunTarget,
+)
 from openmarketer_core.agent_runtime.agent import Agent
+from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_worker.agent_runtime.agent_worker import AgentWorker, InvalidAgentWorker
-from openmarketer_worker.agent_runtime.vocabulary import STEP_REFUSED, StepInput
+from openmarketer_worker.agent_runtime.vocabulary import (
+    INVALID_ACTION_PAYLOAD,
+    STEP_REFUSED,
+    UNKNOWN_ACTION,
+    PrepareRunInput,
+    StepInput,
+)
 from openmarketer_worker.agent_runtime.workflow_dsl import agent_workflow
 from openmarketer_worker.checkpoint_cleanup import CheckpointCleanup
 
@@ -110,6 +122,180 @@ def test_handler_that_is_async_is_refused_because_a_handler_blocks_in_a_thread()
             return {}
 
 
+# ------------------------------------------------- actions that start another run
+def an_agent_with_a_run_action(
+    *, waits: bool = True, longest_seconds: float = 10 * 60
+) -> tuple[Agent, type[BaseModel]]:
+    agent = Agent("dsl-runner", state=dict)
+
+    @agent.action(
+        "research",
+        run=RunTarget(
+            workflow="Research",
+            task_queue="openmarketer-research",
+            kind=RunKind.WAIT if waits else RunKind.START,
+            longest_seconds=longest_seconds,
+            input_of=lambda child: {"run_id": str(child.run_id)},
+        ),
+    )
+    class Research(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        question: str
+
+    return agent, Research
+
+
+def test_prepare_callable_is_returned_as_it_is_so_that_it_is_tested_as_a_plain_function():
+    agent, research = an_agent_with_a_run_action()
+
+    def prepare(payload, context):
+        return uuid.uuid4()
+
+    assert AgentWorker(agent, task_queue="q").prepare_run(research)(prepare) is prepare
+
+
+def test_handler_for_an_action_that_starts_a_run_is_refused_naming_the_action():
+    agent, research = an_agent_with_a_run_action()
+    with pytest.raises(InvalidAgentWorker, match="'research' .*starts another run.*prepare_run"):
+        AgentWorker(agent, task_queue="q").handler(research)
+
+
+def test_prepare_for_an_ordinary_action_is_refused_naming_the_action():
+    agent, send = an_agent_with_the_action_send()
+    with pytest.raises(InvalidAgentWorker, match="'send' .*runs as an activity.*handler"):
+        AgentWorker(agent, task_queue="q").prepare_run(send)
+
+
+def test_second_prepare_callable_for_one_action_is_refused_naming_both():
+    agent, research = an_agent_with_a_run_action()
+    worker = AgentWorker(agent, task_queue="q")
+
+    @worker.prepare_run(research)
+    def first(payload, context):
+        return uuid.uuid4()
+
+    with pytest.raises(InvalidAgentWorker, match="'research'.*two prepare.*first.*second"):
+
+        @worker.prepare_run(research)
+        def second(payload, context):
+            return uuid.uuid4()
+
+
+def test_prepare_callable_that_is_async_is_refused_because_it_blocks_in_a_thread():
+    agent, research = an_agent_with_a_run_action()
+    with pytest.raises(InvalidAgentWorker, match="'research' is an async def"):
+
+        @AgentWorker(agent, task_queue="q").prepare_run(  # pyright: ignore[reportArgumentType]
+            research
+        )
+        async def prepare(payload, context):
+            return uuid.uuid4()
+
+
+def test_run_action_with_no_prepare_callable_is_refused_when_the_worker_starts(checkpoints):
+    agent, _ = an_agent_with_a_run_action()
+    worker = AgentWorker(agent, task_queue="q")
+    with pytest.raises(InvalidAgentWorker, match="'research'.*no prepare callable"):
+        worker.registration(
+            checkpoints=checkpoints,
+            longest_run=LONGEST_RUN,
+            graph=ScriptedGraph([]),
+            workflows=[],
+        )
+
+
+def test_longest_run_shorter_than_a_run_that_is_waited_for_is_refused(checkpoints):
+    agent, research = an_agent_with_a_run_action(longest_seconds=2 * 60 * 60)
+    worker = AgentWorker(agent, task_queue="q")
+    worker.prepare_run(research)(lambda payload, context: uuid.uuid4())
+    with pytest.raises(InvalidAgentWorker, match="'research'.*checkpoints would be removed"):
+        worker.registration(
+            checkpoints=checkpoints,
+            longest_run=timedelta(hours=1),
+            graph=ScriptedGraph([]),
+            workflows=[],
+        )
+
+
+def test_longest_run_need_not_cover_a_run_that_is_only_started(checkpoints):
+    agent, research = an_agent_with_a_run_action(waits=False, longest_seconds=2 * 60 * 60)
+    worker = AgentWorker(agent, task_queue="q")
+    worker.prepare_run(research)(lambda payload, context: uuid.uuid4())
+    registration = worker.registration(
+        checkpoints=checkpoints,
+        longest_run=timedelta(hours=1),
+        graph=ScriptedGraph([]),
+        workflows=[],
+    )
+    assert registration.task_queue == "q"
+
+
+def test_registration_holds_the_prepare_activity_of_an_agent_that_starts_runs(checkpoints):
+    agent, research = an_agent_with_a_run_action()
+    worker = AgentWorker(agent, task_queue="q")
+    worker.prepare_run(research)(lambda payload, context: uuid.uuid4())
+    registration = worker.registration(
+        checkpoints=checkpoints,
+        longest_run=LONGEST_RUN,
+        graph=ScriptedGraph([]),
+        workflows=[],
+    )
+    assert [activity.__name__ for activity in registration.activities] == [
+        "run_graph_step",
+        "run_action",
+        "prepare_run",
+        "forget_run",
+    ]
+
+
+async def test_prepare_activity_refuses_an_action_that_is_not_one_of_its_run_routes(checkpoints):
+    agent, research = an_agent_with_a_run_action()
+    worker = AgentWorker(agent, task_queue="q")
+    worker.prepare_run(research)(lambda payload, context: uuid.uuid4())
+    registration = worker.registration(
+        checkpoints=checkpoints,
+        longest_run=LONGEST_RUN,
+        graph=ScriptedGraph([]),
+        workflows=[],
+    )
+    prepared = PrepareRunInput(
+        scope=RunScope(workspace_id=uuid.uuid4(), project_id=uuid.uuid4()),
+        request=ActionRequest(
+            action_id="dsl-runner:1:2", name="greet", payload={"question": "why?"}
+        ),
+    )
+    with pytest.raises(ApplicationError) as refused:
+        await ActivityEnvironment().run(registration.activities[2], prepared)
+    assert (refused.value.type, refused.value.non_retryable) == (UNKNOWN_ACTION, True)
+
+
+async def test_prepare_activity_validates_the_payload_before_it_creates_anything(checkpoints):
+    made: list[str] = []
+    agent, research = an_agent_with_a_run_action()
+    worker = AgentWorker(agent, task_queue="q")
+
+    def prepare(payload, context) -> uuid.UUID:
+        made.append(context.action_id)
+        return uuid.uuid4()
+
+    worker.prepare_run(research)(prepare)
+    registration = worker.registration(
+        checkpoints=checkpoints,
+        longest_run=LONGEST_RUN,
+        graph=ScriptedGraph([]),
+        workflows=[],
+    )
+    prepared = PrepareRunInput(
+        scope=RunScope(workspace_id=uuid.uuid4(), project_id=uuid.uuid4()),
+        request=ActionRequest(action_id="dsl-runner:1:2", name="research", payload={"question": 7}),
+    )
+    with pytest.raises(ApplicationError) as refused:
+        await ActivityEnvironment().run(registration.activities[2], prepared)
+    assert refused.value.type == INVALID_ACTION_PAYLOAD
+    assert made == []
+
+
 # --------------------------------------------------------------- the end of a run
 def test_function_that_releases_what_a_run_left_is_returned_as_it_is():
     agent, _ = an_agent_with_the_action_send()
@@ -191,6 +377,7 @@ def test_registration_holds_the_queue_the_workflows_and_every_activity_the_run_n
     assert [activity.__name__ for activity in registration.activities] == [
         "run_graph_step",
         "run_action",
+        "prepare_run",
         "forget_run",
         "note",
         "limits_of_the_run",
@@ -250,7 +437,7 @@ async def test_activities_registered_serve_the_runs_of_the_agent_and_no_other_ki
     registration = a_worker_with_a_handler().registration(
         checkpoints=checkpoints, longest_run=LONGEST_RUN, graph=ScriptedGraph([]), workflows=[]
     )
-    run_graph_step, _, forget_run = registration.activities[:3]
+    run_graph_step, _, _, forget_run = registration.activities[:4]
     stranger = GraphRunRef(kind="dsl-elsewhere", run_id=uuid.uuid4())
     for refused in (
         ActivityEnvironment().run(run_graph_step, StepInput(stranger, None)),
@@ -284,5 +471,5 @@ async def test_activities_registered_tell_the_function_for_the_end_of_a_run_of_e
         checkpoints=checkpoints, longest_run=LONGEST_RUN, graph=ScriptedGraph([]), workflows=[]
     )
     run = GraphRunRef(kind="dsl-fresh", run_id=uuid.uuid4())
-    await ActivityEnvironment().run(registration.activities[2], run)
+    await ActivityEnvironment().run(registration.activities[3], run)
     assert released == [run]

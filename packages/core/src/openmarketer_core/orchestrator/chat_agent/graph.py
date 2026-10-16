@@ -33,6 +33,7 @@ from openmarketer_core.orchestrator.chat_agent.definitions import (
 )
 from openmarketer_core.orchestrator.chat_agent.rules import ChatLimits, ChatTurn, ChatTurnError
 from openmarketer_core.orchestrator.reads import ChatReads
+from openmarketer_core.orchestrator.requests import ChatRequests
 
 FORCE_SUBMIT = {"type": "function", "function": {"name": rules.SUBMIT}}
 
@@ -117,21 +118,24 @@ def answer_message(
     history: Sequence[Mapping[str, Any]],
     *,
     limits: ChatLimits | None = None,
+    requests: ChatRequests | None = None,
 ) -> ChatTurn:
     """Run one turn in memory and return the operator's answer.
 
     A long history is summarised first (``rules.compact_history``): one more model call
     replaces everything but its newest messages, and its cost counts against the turn. The
     turn is then handed the conversation up to the operator's latest message and reads the
-    project through ``reads``. Nothing is stored: a turn that fails is lost, and sending the
-    message again starts it again. Raises ``ChatTurnError`` when no answer is given within
-    the limits and ``LLMError`` when the model cannot be used.
+    project through ``reads``. ``requests`` is what a request action may ask of the caller
+    (``chat_agent.tools.start_research``); without it such a tool answers that starting runs
+    is not available. Nothing is stored: a turn that fails is lost, and sending the message
+    again starts it again. Raises ``ChatTurnError`` when no answer is given within the limits
+    and ``LLMError`` when the model cannot be used.
     """
     limits = limits or ChatLimits()
     prepared = rules.compact_history(history, model)
     state = initial_state(prepared.messages)
     state["cost_usd"] = prepared.cost_usd
-    context = ChatTurnContext(model=model, reads=reads, limits=limits)
+    context = ChatTurnContext(model=model, reads=reads, limits=limits, requests=requests)
     final = run_from(
         agent,
         call_model.__name__,

@@ -188,7 +188,10 @@ export interface paths {
          *     cannot be resolved. 503 `chat_unanswered` when the agent gave no answer
          *     within its limits and `model_unavailable` when the provider could not
          *     answer; nothing is stored then, and sending the message again starts the
-         *     turn again.
+         *     turn again. A turn may start a research run when the operator asks for
+         *     research (the request action `start_research`), and says so in the answer;
+         *     a run whose workflow could not be started is recorded as failed and the
+         *     answer says it could not be started.
          */
         post: operations["sendChatMessage"];
         delete?: never;

@@ -5,6 +5,7 @@ They need PostgreSQL (see the root ``conftest.py``).
 
 import uuid
 from datetime import timedelta
+from typing import TypedDict
 
 import pytest
 from sqlalchemy import func, update
@@ -48,6 +49,15 @@ from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import CheckedFinding, Report
 
 PERSON = uuid.uuid4()
+
+
+class _Scope(TypedDict):
+    """The two ids the scoped functions take, so unpacking them names ids and nothing else."""
+
+    workspace_id: uuid.UUID
+    project_id: uuid.UUID
+
+
 DAY = 24 * 60 * 60
 PROFILE = ProductProfile.model_validate({"product": {"name": "Memoria", "type": "consumer_app"}})
 REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
@@ -354,5 +364,5 @@ def backdate_research(session: Session, run_id: uuid.UUID, *, hours: int) -> Non
     )
 
 
-def _ids(scope: RunScope) -> dict[str, uuid.UUID]:
+def _ids(scope: RunScope) -> _Scope:
     return {"workspace_id": scope.workspace_id, "project_id": scope.project_id}

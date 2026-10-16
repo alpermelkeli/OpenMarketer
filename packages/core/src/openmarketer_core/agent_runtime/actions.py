@@ -7,6 +7,18 @@ workflow engine's default converter carries them between the activity that
 runs the graph and the one that runs the action, and they are all its history
 keeps of the work.
 
+An action is one of two things. An ordinary one runs as an activity of the
+worker that serves the run (the clone of a repository, a page fetched). One
+that names a ``RunTarget`` starts another agent's run instead: the workflow
+creates its record through an activity, then starts or waits for the target's
+workflow as a *child workflow*. ``RunKind.START`` returns the run's id without
+waiting; ``RunKind.WAIT`` waits with no graph running and gives the child's
+small result back as the outcome. Both are internal (``ActionEffect.INTERNAL``),
+so the gate holds neither, and the child keeps its own actions and its own
+approvals. The target says how the payload becomes the child's workflow input
+(``RunTarget.input_of`` over the ``ChildRun`` the runtime made), with a plain
+function a contract module holds, because the workflow sandbox calls it.
+
 The name and the payload are text the model may have shaped, so they are data,
 never a decision: ``ActionCatalog`` is the allowlist. An action that is not in
 it does not run, and a payload that does not fit the action's model does not
@@ -43,7 +55,8 @@ annotations`` here or in ``steps.py``.
 import hashlib
 import json
 import math
-from collections.abc import Iterable, Mapping
+import uuid
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -165,6 +178,86 @@ class ActionEffect(StrEnum):
     SPENDS = "spends"
 
 
+class RunKind(StrEnum):
+    """Which of the two run actions an action is: it starts a run, or starts one and waits.
+
+    ``START`` creates the record of another agent's run and starts its workflow, keyed by the
+    action's id, and gives the run's id back without waiting: someone else, or a later run,
+    uses the result (the design report's "start a run"). ``WAIT`` starts it as a child workflow
+    and waits for it with no graph running, and the child's small result is the outcome (the
+    report's "run and wait"): the graph's next step needs it.
+    """
+
+    START = "start"
+    WAIT = "wait"
+
+
+@dataclass(frozen=True)
+class ChildRun:
+    """The run a target makes, as the function building the child's input is given it.
+
+    ``run_id`` is the id of the child's run record, made by the activity the runtime calls
+    before the child is started; ``action_id`` is the idempotency key of the action that
+    starts it, from which the child workflow's id is derived; ``payload`` is the request's
+    payload, the same JSON the workflow's history already holds as the action's request.
+    ``input_of`` decides what the child's input is; the project's convention is that a
+    workflow input names identifiers only, so a target whose run stores the request with its
+    record (as a research run does) builds the input from the ids and ignores the payload.
+    """
+
+    workspace_id: uuid.UUID
+    project_id: uuid.UUID
+    run_id: uuid.UUID
+    action_id: str
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RunTarget:
+    """Another agent's run an action starts, as its contract describes it.
+
+    ``workflow`` is the name the child's worker registers the workflow under and
+    ``task_queue`` the queue that worker serves. ``kind`` says whether the action waits for
+    the run. ``longest_seconds`` is the most a run of the target can take: the waiting parent
+    counts it in its own longest run, and a registration whose ``longest_run`` does not cover
+    it is refused when the worker starts. ``input_of`` builds the child workflow's input from
+    the ``ChildRun`` the runtime made.
+
+    The child is started by name, and by the workflow itself (not by an activity): the
+    engine records the start in the parent's history, so a retried attempt of the same step
+    starts no second execution.
+    """
+
+    workflow: str
+    task_queue: str
+    kind: RunKind
+    longest_seconds: float
+    input_of: Callable[[ChildRun], object]
+
+    def __post_init__(self) -> None:
+        # No value here can come from a request or a model: the target is declared with the
+        # action, in code. A mistake is raised on the line of the declaration.
+        if not self.workflow:
+            raise InvalidActionDefinition("a run target's workflow name must not be empty")
+        if not self.task_queue:
+            raise InvalidActionDefinition(
+                f"the task queue of workflow {self.workflow!r} must not be empty"
+            )
+        if not isinstance(self.kind, RunKind):
+            raise InvalidActionDefinition(
+                f"the kind of a run target must be a RunKind, not {self.kind!r}"
+            )
+        try:
+            require_positive(longest_seconds=self.longest_seconds)
+        except ValueError as e:
+            raise InvalidActionDefinition(str(e)) from None
+        if not callable(self.input_of):
+            raise InvalidActionDefinition(
+                f"input_of of workflow {self.workflow!r} is a function building the child's "
+                f"input from the ChildRun, not {self.input_of!r}"
+            )
+
+
 @dataclass(frozen=True)
 class ActionPolicy:
     """Limits of one action. An action is tried again only when it fails in a way that may pass.
@@ -224,10 +317,15 @@ class ActionPolicy:
 
 @dataclass(frozen=True)
 class ActionDefinition:
-    """An allowed action: its name and the model its payload must fit."""
+    """An allowed action: its name, the model its payload must fit, and the run it starts.
+
+    ``run`` is the target of an action that starts another agent's run, or ``None`` for an
+    ordinary action that runs as an activity of the worker.
+    """
 
     name: str
     payload: type[BaseModel]
+    run: RunTarget | None = None
 
     def __post_init__(self) -> None:
         # Without this a payload with a misspelled or invented field would pass unnoticed, and

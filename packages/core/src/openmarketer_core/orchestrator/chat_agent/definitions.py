@@ -30,6 +30,7 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
     conversation_messages,
 )
 from openmarketer_core.orchestrator.reads import ChatReads
+from openmarketer_core.orchestrator.requests import ChatRequests
 
 CHAT_TURN_KIND = "orchestrator-chat"
 
@@ -51,12 +52,17 @@ class ChatTurnContext:
     """What the nodes of one turn are given besides the state.
 
     ``reads`` is the project the turn is about (``orchestrator/reads.py``), scoped to it, so
-    the graph cannot read beyond the project. A context serves one turn, in one thread.
+    the graph cannot read beyond the project. ``requests`` is what a request action may ask
+    of the process that runs the turn (``orchestrator/requests.py``): a caller that holds a
+    database and a workflow server gives one; without it (the CLI, a test that only reads)
+    the tool that would ask answers that starting runs is not available. A context serves one
+    turn, in one thread.
     """
 
     model: ChatModel
     reads: ChatReads
     limits: ChatLimits
+    requests: ChatRequests | None = None
 
 
 agent = Agent(CHAT_TURN_KIND, state=ChatTurnState, context=ChatTurnContext)

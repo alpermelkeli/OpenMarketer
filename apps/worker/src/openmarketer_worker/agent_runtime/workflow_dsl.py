@@ -67,9 +67,10 @@ Nothing here records anything on a run, holds an agent's words or reads an agent
 that is the hooks' and the agent's.
 
 An agent with an action the policy gate holds for a person (``ActionEffect.PUBLISHES`` or
-``SPENDS``) gives ``scope_of``, which says from the input which workspace and project a run
-works for: its proposals belong there. The decorator refuses such an agent's workflow without
-it. Every workflow it makes hears the signal ``PROPOSAL_DECIDED_SIGNAL`` (the method
+``SPENDS``), or with an action that starts another agent's run (``Agent.action(run=...)``),
+gives ``scope_of``, which says from the input which workspace and project a run works for: its
+proposals and its child runs belong there. The decorator refuses such an agent's workflow
+without it. Every workflow it makes hears the signal ``PROPOSAL_DECIDED_SIGNAL`` (the method
 ``proposal_decided``, which it writes as it writes ``run``), so that the API can wake a run that
 waits for a person (``approval_wait.py``); the signal carries an id, never the decision.
 
@@ -190,7 +191,7 @@ def agent_workflow[Workflow](
             f"worded_types of workflow {name!r} is a collection of failure types, not one text"
         )
     derive_run = _way_to_get_the_run(name, input, run_of)
-    _require_a_scope_for_held_actions(name, agent, scope_of)
+    _require_a_scope_for_actions_that_need_one(name, agent, scope_of)
     worded = frozenset(worded_types)
 
     def decorate(cls: type[Workflow]) -> type[Workflow]:
@@ -253,18 +254,28 @@ def _the_run_itself(run: GraphRunRef) -> GraphRunRef:
     return run
 
 
-def _require_a_scope_for_held_actions(
+def _require_a_scope_for_actions_that_need_one(
     name: str, agent: Agent, scope_of: Callable[[Any], RunScope] | None
 ) -> None:
+    """Refuse a workflow whose agent has an action that needs the run's workspace and project."""
+    if scope_of is not None:
+        return
     held = [
         action
         for action, policy in agent.policies.items()
         if verdict_for(policy) == GateVerdict.ASK_A_PERSON
     ]
-    if held and scope_of is None:
+    if held:
         raise InvalidAgentWorkflow(
             f"workflow {name!r} runs agent {agent.kind!r}, whose action {held[0]!r} waits for a "
             "person's approval: give scope_of, which says which project a run proposes it in"
+        )
+    starting = list(agent.run_targets)
+    if starting:
+        raise InvalidAgentWorkflow(
+            f"workflow {name!r} runs agent {agent.kind!r}, whose action {starting[0]!r} starts "
+            "another run, which belongs to the run's project: give scope_of, which says which "
+            "workspace and project a run works for"
         )
 
 
@@ -338,6 +349,7 @@ async def _run_agent(
             worded_types=worded_types,
             scope=scope,
             decided=_decided_proposals_of(instance),
+            run_targets=agent.run_targets,
         )
         await _call_hook(instance, "after", run_input, output)
     except _RUN_FAILURES as failure:

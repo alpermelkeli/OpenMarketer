@@ -34,6 +34,7 @@ from openmarketer_core.orchestrator.chat_agent.tools import (
     list_runs,
     read_profile,
     read_research_report,
+    start_research,
 )
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
@@ -47,6 +48,8 @@ from openmarketer_core.orchestrator.reads import (
     RunReading,
     UnknownProfileSection,
 )
+from openmarketer_core.orchestrator.requests import ResearchNotStarted
+from openmarketer_core.research.questions import ResearchRequest
 
 PROJECT_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
@@ -247,6 +250,41 @@ def reads() -> FakeReads:
     return FakeReads()
 
 
+class FakeRequests:
+    """The turn's caller, recorded: what it was asked to start, and what it answers.
+
+    ``fails`` makes it refuse the way the port may (``ResearchNotStarted``); the request is
+    recorded either way, so a test can tell a refusal that reached the caller from one that
+    never did.
+    """
+
+    def __init__(self, *, fails: Exception | None = None) -> None:
+        self.fails = fails
+        self.started: list[ResearchRequest] = []
+
+    def start_research(self, request: ResearchRequest) -> ResearchRunReading:
+        self.started.append(request)
+        if self.fails is not None:
+            raise self.fails
+        now = datetime.now(UTC)
+        return ResearchRunReading(
+            id=RESEARCH_RUN_ID,
+            status=ResearchRunStatus.QUEUED,
+            requested_by="orchestrator",
+            error=None,
+            report_id=None,
+            created_at=now,
+            started_at=None,
+            finished_at=None,
+        )
+
+
+def a_context(reads: FakeReads, requests: FakeRequests | None) -> ChatTurnContext:
+    return ChatTurnContext(
+        model=ScriptedModel(), reads=reads, limits=ChatLimits(), requests=requests
+    )
+
+
 def history() -> list[dict]:
     return [{"role": "user", "content": "How is it going?"}]
 
@@ -421,10 +459,108 @@ def test_read_research_report_without_a_report_says_so():
         model=ScriptedModel(), reads=FakeReads(empty=True), limits=ChatLimits()
     )
     assert read_research_report(context) == "No research run of this project has a report yet."
-    assert (
-        list_research_runs(context) == "The project has no research runs."
-    )
+    assert list_research_runs(context) == "The project has no research runs."
     assert read_research_report(context, run_id=str(RESEARCH_RUN_ID)).startswith("error:")
+
+
+# ---------------------------------------------------------- the request action
+def test_start_research_asks_the_caller_for_the_exact_request():
+    requests = FakeRequests()
+    context = a_context(FakeReads(), requests)
+
+    answer = start_research(
+        context,
+        questions=["What did competitors post last month?"],
+        topics=["social"],
+        competitors=["Acme"],
+        time_window="last month",
+        max_sources=4,
+    )
+
+    [request] = requests.started
+    assert request == ResearchRequest(
+        questions=["What did competitors post last month?"],
+        topics=["social"],
+        competitors=["Acme"],
+        time_window="last month",
+        max_sources=4,
+    )
+    body = json.loads(answer)
+    assert body["run_id"] == str(RESEARCH_RUN_ID)
+    assert body["status"] == "queued"
+
+
+def test_start_research_reads_only_the_questions_the_rest_have_defaults():
+    requests = FakeRequests()
+    context = a_context(FakeReads(), requests)
+
+    start_research(context, questions=["Is it live?"])
+
+    [request] = requests.started
+    assert (request.topics, request.competitors, request.time_window) == ([], [], "")
+    assert request.max_sources == 8
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"questions": []},
+        {"questions": ["x" * 400]},
+        {"questions": ["ok"], "topics": ["t"] * 6},
+        {"questions": ["ok"], "time_window": "w" * 41},
+        {"questions": ["ok"], "max_sources": 0},
+        {"questions": ["ok"], "max_sources": 13},
+    ],
+    ids=["no-questions", "question-too-long", "too-many-topics", "window-too-long", "none", "many"],
+)
+def test_start_research_refuses_what_does_not_fit_without_reaching_the_caller(arguments):
+    requests = FakeRequests()
+    context = a_context(FakeReads(), requests)
+
+    answer = start_research(context, **arguments)
+
+    assert answer.startswith("error:")
+    assert requests.started == []
+    # The refusal names the fields at fault and never a value the model wrote.
+    assert "x" * 10 not in answer
+    assert "w" * 10 not in answer
+
+
+def test_start_research_without_a_caller_says_starting_runs_is_not_available():
+    context = a_context(FakeReads(), None)
+
+    assert start_research(context, questions=["Is it live?"]) == (
+        "error: starting a research run is not available here"
+    )
+
+
+def test_a_run_that_could_not_be_started_is_an_error_the_turn_reads_not_a_failed_turn():
+    refused = ResearchNotStarted("the research could not be handed to a worker")
+    context = a_context(FakeReads(), FakeRequests(fails=refused))
+    model = ScriptedModel(
+        [call("start_research", questions=["Is it live?"])],
+        [call(SUBMIT, answer="I could not start it.")],
+    )
+
+    turn = answer_message(FakeReads(), model, history(), requests=context.requests)
+
+    assert turn.answer == "I could not start it."
+    assert model.tool_results()[0] == ("error: the research could not be handed to a worker")
+
+
+def test_a_turn_can_start_a_research_run_and_says_its_id(reads):
+    requests = FakeRequests()
+    model = ScriptedModel(
+        [call("start_research", questions=["Is it live?"])],
+        [call(SUBMIT, answer=f"Started run {RESEARCH_RUN_ID}.")],
+    )
+
+    turn = answer_message(reads, model, history(), requests=requests)
+
+    [request] = requests.started
+    assert request.questions == ["Is it live?"]
+    assert turn.answer == f"Started run {RESEARCH_RUN_ID}."
+    assert json.loads(model.tool_results()[0])["run_id"] == str(RESEARCH_RUN_ID)
 
 
 def test_empty_readings_are_plain_sentences():
@@ -436,7 +572,7 @@ def test_empty_readings_are_plain_sentences():
     assert read_profile(context) == "The project has no Product Profile yet."
 
 
-def test_tool_schemas_are_the_reads_plus_the_submission():
+def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
     schemas = agent.tool_schemas()
     assert [schema["function"]["name"] for schema in schemas] == [
         "get_project_status",
@@ -447,6 +583,7 @@ def test_tool_schemas_are_the_reads_plus_the_submission():
         "list_runs",
         "list_research_runs",
         "read_research_report",
+        "start_research",
     ]
     assert submit_schema()["function"]["name"] == SUBMIT
     by_name = {schema["function"]["name"]: schema for schema in schemas}
@@ -454,6 +591,15 @@ def test_tool_schemas_are_the_reads_plus_the_submission():
     assert "section" in parameters["properties"]
     assert not parameters.get("required")
     assert not by_name["get_project_status"]["function"]["parameters"].get("properties")
+    started = by_name["start_research"]["function"]["parameters"]
+    assert list(started["properties"]) == [
+        "questions",
+        "topics",
+        "competitors",
+        "time_window",
+        "max_sources",
+    ]
+    assert started["required"] == ["questions"]
 
 
 # ------------------------------------------------------------------- graph
