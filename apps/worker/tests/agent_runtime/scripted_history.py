@@ -3,7 +3,8 @@
 Payloads in history are stored encoded; the tests ask two things of it: whether a text is in it
 anywhere (``readable``), and what each activity was given and returned (``exchanges``). Both read
 the history as the server stores it, so no secret can hide in a field this module does not decode.
-``scheduled_with`` reads the limits an activity was scheduled with.
+``scheduled_with`` reads the limits an activity was scheduled with, and ``children_started``
+the child workflows a workflow started.
 """
 
 import json
@@ -87,6 +88,34 @@ def completed(history: WorkflowHistory) -> list[str]:
                 scheduled[event.activity_task_completed_event_attributes.scheduled_event_id]
             )
     return names
+
+
+@dataclass(frozen=True)
+class ChildStarted:
+    """One child workflow a workflow started: its name, id, task queue and input, decoded."""
+
+    workflow: str
+    workflow_id: str
+    task_queue: str
+    given: Any
+
+
+def children_started(history: WorkflowHistory) -> list[ChildStarted]:
+    """Every child workflow the history started, in the order it was started."""
+    started: list[ChildStarted] = []
+    for event in history.events:
+        if event.HasField("start_child_workflow_execution_initiated_event_attributes"):
+            attributes = event.start_child_workflow_execution_initiated_event_attributes
+            (given,) = attributes.input.payloads
+            started.append(
+                ChildStarted(
+                    workflow=attributes.workflow_type.name,
+                    workflow_id=attributes.workflow_id,
+                    task_queue=attributes.task_queue.name,
+                    given=json.loads(given.data),
+                )
+            )
+    return started
 
 
 @dataclass(frozen=True)

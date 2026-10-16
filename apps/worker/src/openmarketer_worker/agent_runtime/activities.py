@@ -1,11 +1,14 @@
-"""The three activities every agent that runs a graph with actions registers.
+"""The activities every agent that runs a graph with actions registers.
 
 ``run_graph_step`` takes one step of the agent's graph on the run's thread:
 from where it stands until it finishes or asks for an action. ``run_action``
 runs one action the graph asked for, through the handler of its route.
-``forget_run`` removes the checkpoints of a run that is over and tells the agent that the run
-ended. They are the generic half of the agent runtime (``driver.py`` is the workflow's); the
-agent hands in its graph, its routes, its kind and its words when the worker starts.
+``prepare_run`` creates the record of the run an action starts, through the
+prepare callable of its run route, and the child workflow is started and
+awaited by the workflow itself. ``forget_run`` removes the checkpoints of a run that is over
+and tells the agent that the run ended. They are the generic half of the agent runtime
+(``driver.py`` is the workflow's); the agent hands in its graph, its routes, its kind and its
+words when the worker starts.
 
 They serve the runs of one agent: a step and a forgetting are refused for a run of another
 kind, for good and before anything is taken or removed (``STEP_REFUSED``), because the checkpoint
@@ -62,6 +65,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Callable, Collection, Mapping
 from typing import Any, Protocol
 
@@ -70,6 +74,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from openmarketer_core.agent_runtime.actions import (
+    ActionCatalog,
     ActionOutcome,
     ActionRequest,
     InvalidActionPayload,
@@ -95,7 +100,13 @@ from openmarketer_worker.agent_runtime.activity_support import (
     stored_size,
     worded_failures,
 )
-from openmarketer_worker.agent_runtime.routes import ActionContext, ActionRoute, ActionRoutes
+from openmarketer_worker.agent_runtime.routes import (
+    ActionContext,
+    ActionRoute,
+    ActionRoutes,
+    RunContext,
+    RunRoutes,
+)
 from openmarketer_worker.agent_runtime.vocabulary import (
     ACTION_NOT_APPROVED,
     ACTION_RESULT_TOO_LARGE,
@@ -107,11 +118,14 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     INVALID_ACTION_RESULT,
     MAX_RESULT_BYTES,
     MAX_STEP_BYTES,
+    PREPARE_RUN,
     RUN_ACTION,
     RUN_GRAPH_STEP,
     STEP_REFUSED,
     UNKNOWN_ACTION,
     FailureTexts,
+    PreparedRun,
+    PrepareRunInput,
     StepInput,
 )
 
@@ -152,6 +166,7 @@ class RuntimeActivities:
         on_run_end: Callable[[GraphRunRef], None] | None = None,
         held_actions: Collection[str] = (),
         is_approved: Callable[[str], bool] | None = None,
+        run_routes: RunRoutes | None = None,
     ) -> None:
         """The activities of the agent whose runs are of ``kind``, in its ``texts``.
 
@@ -159,6 +174,8 @@ class RuntimeActivities:
         errors say what its own texts say. ``on_run_end`` is called with each run that is
         forgotten. ``held_actions`` are the names of the actions the gate holds for a person,
         and ``is_approved`` says, blocking, whether a person approved an action by its id.
+        ``run_routes`` are the actions that start another agent's run, with the callable that
+        creates each child run's record; without them a request for such an action is refused.
         Raises ``ValueError`` for a ``kind`` that cannot name a thread, and for held actions
         with no way to check an approval.
         """
@@ -175,6 +192,7 @@ class RuntimeActivities:
         self._on_run_end = on_run_end
         self._held_actions = frozenset(held_actions)
         self._is_approved = is_approved
+        self._run_routes = run_routes if run_routes is not None else RunRoutes(())
 
     @activity.defn(name=RUN_GRAPH_STEP)
     async def run_graph_step(self, step: StepInput) -> StepOutcome:
@@ -202,7 +220,7 @@ class RuntimeActivities:
         """
         subject = f"action {request.action_id}"
         with worded_failures(ACTION_TEXTS, subject=subject):
-            payload = self._validated(request, subject)
+            payload = self._validated(self._routes.catalog, request, subject)
             if request.name in self._held_actions:
                 await self._require_approval(request, subject)
             route = self._routes.route(request.name)
@@ -210,6 +228,26 @@ class RuntimeActivities:
                 route, payload, ActionContext(request.action_id), subject
             )
             return _outcome_within_bounds(request, result)
+
+    @activity.defn(name=PREPARE_RUN)
+    async def prepare_run(self, prepared: PrepareRunInput) -> PreparedRun:
+        """Create the record of the run the action starts, and answer with its id.
+
+        The request is checked against the run routes' catalog first; one that is not such an
+        action or does not fit its model fails for good and creates nothing. The callable is
+        given the action's id as the key of its work, so an attempt that is tried again finds
+        the run it made instead of a second one.
+        """
+        subject = f"action {prepared.request.action_id}"
+        with worded_failures(ACTION_TEXTS, subject=subject):
+            payload = self._validated(self._run_routes.catalog, prepared.request, subject)
+            route = self._run_routes.route(prepared.request.name)
+            context = RunContext(action_id=prepared.request.action_id, scope=prepared.scope)
+
+            def work() -> uuid.UUID:
+                return route.prepare(payload, context)
+
+            return PreparedRun(run_id=await run_in_thread(work, subject=subject))
 
     @activity.defn(name=FORGET_RUN)
     async def forget_run(self, run: GraphRunRef) -> None:
@@ -247,9 +285,9 @@ class RuntimeActivities:
             logger.warning("%s: its graph cannot take the step: %s", subject, e)
             raise ApplicationError(str(e), type=STEP_REFUSED, non_retryable=True) from None
 
-    def _validated(self, request: ActionRequest, subject: str) -> BaseModel:
+    def _validated(self, catalog: ActionCatalog, request: ActionRequest, subject: str) -> BaseModel:
         try:
-            return self._routes.catalog.validate(request)
+            return catalog.validate(request)
         except UnknownAction as e:
             logger.warning("%s was refused: %s", subject, e)
             raise ApplicationError(str(e), type=UNKNOWN_ACTION, non_retryable=True) from None

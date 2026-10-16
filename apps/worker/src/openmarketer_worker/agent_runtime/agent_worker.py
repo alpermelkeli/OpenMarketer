@@ -8,6 +8,9 @@ and the limits it runs under). ``AgentWorker`` is where it says what runs each o
     @worker.handler(SendEmail)
     def send_email(payload: SendEmail, context: ActionContext) -> Mapping[str, Any]: ...
 
+    @worker.prepare_run(Research)
+    def prepare_research(payload: Research, context: RunContext) -> uuid.UUID: ...
+
     @worker.run_ended
     def release(run: GraphRunRef) -> None: ...
 
@@ -15,12 +18,16 @@ A handler is blocking and runs in a thread, with the payload as the model it was
 (already read as strict JSON) and ``ActionContext.action_id``, the idempotency key of its side
 effect; ``routes.py`` and ``activities.py`` say the rest. It is not a Temporal activity, which
 the agent's hooks call by name and which sits beside it in a registration. The decorator returns
-the handler as it is, so it is tested as a plain function. ``run_ended`` is the one function
+the handler as it is, so it is tested as a plain function. An action with a ``RunTarget``
+(``Agent.action(run=...)``) runs no handler: ``prepare_run`` registers the callable that
+creates the child run's record, keyed by the action's id, and answers with its id; the
+workflow starts and awaits the child workflow itself. ``run_ended`` is the one function
 that releases what a run left outside the checkpoints (a folder on disk) once the run is over,
 called by ``forget_run`` and blocking too.
 
 ``registration`` turns the handlers into what the process serves: the runtime's activities
-(``run_graph_step``, ``run_action`` and ``forget_run``) with the agent's routes, graph, kind and
+(``run_graph_step``, ``run_action``, ``prepare_run`` and ``forget_run``) with the agent's
+routes, graph, kind and
 words, the agent's own activities (the ones its workflow's hooks call) and its workflows.
 An agent with an action the policy gate holds for a person also gives ``registration`` the
 worker's database sessions: it registers the gate's activities (``propose_action`` and
@@ -31,10 +38,11 @@ worker's database sessions: it registers the gate's activities (``propose_action
 remove.
 
 Whatever can be wrong is wrong when the worker starts, not at the first run: an action with no
-handler, an action that waits for a person with no sessions to store its proposal in, a handler
-for a model the agent did not declare or for an action that has one already,
-a workflow class that is not one this agent's ``agent_workflow`` made. The errors name the
-action, the model or the class, never a payload.
+handler, a run action with no prepare callable, an action that waits for a person with no
+sessions to store its proposal in, a handler or prepare for a model the agent did not declare
+or for an action that has one already, a ``longest_run`` that does not cover what an action
+can wait for, a workflow class that is not one this agent's ``agent_workflow`` made. The
+errors name the action, the model or the class, never a payload.
 
 This module is for the worker process: it imports the activities and the database, and the
 workflow sandbox never loads it. It runs no action and builds no graph: the agent's wiring hands
@@ -49,6 +57,7 @@ from typing import Any, cast
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
+from openmarketer_core.agent_runtime.actions import ActionDefinition, RunKind
 from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.agent_runtime.gate import GateVerdict, verdict_for
 from openmarketer_core.agent_runtime.steps import GraphRunRef
@@ -61,6 +70,9 @@ from openmarketer_worker.agent_runtime.routes import (
     ActionHandler,
     ActionRoute,
     ActionRoutes,
+    PrepareRun,
+    RunRoute,
+    RunRoutes,
 )
 from openmarketer_worker.agent_runtime.vocabulary import RUN_TEXTS, FailureTexts
 from openmarketer_worker.agent_runtime.workflow_dsl import agent_of
@@ -82,6 +94,7 @@ class AgentWorker:
         self._agent = agent
         self._task_queue = task_queue
         self._handlers: dict[str, ActionHandler] = {}
+        self._prepares: dict[str, PrepareRun] = {}
         self._run_ended: RunEnded | None = None
 
     def handler[Payload: BaseModel](
@@ -90,10 +103,18 @@ class AgentWorker:
         """Make the function it decorates the handler of the action ``payload`` was declared for.
 
         Raises ``InvalidAgentWorker`` for a model the agent did not declare as an action, here
-        and not when the function is decorated, and for an action that has a handler already
-        or a handler that is an ``async def`` (it runs in a thread and returns its result).
+        and not when the function is decorated, for an action that has a handler already, for a
+        handler that is an ``async def`` (it runs in a thread and returns its result), and for
+        an action that starts another agent's run: such an action has no handler of this
+        worker, and ``prepare_run`` registers the callable that creates the child run instead.
         """
-        action = self._action_declared_for(payload)
+        definition = self._definition_of(payload)
+        action = definition.name
+        if definition.run is not None:
+            raise InvalidAgentWorker(
+                f"action {action!r} of agent {self._agent.kind!r} starts another run and runs "
+                "no handler: register what creates the child run's record with @worker.prepare_run"
+            )
 
         def register(handler: Handler[Payload]) -> Handler[Payload]:
             if inspect.iscoroutinefunction(handler):
@@ -112,6 +133,43 @@ class AgentWorker:
             # the pair is the one place the handler's parameter may be widened to the base.
             self._handlers[action] = cast(ActionHandler, handler)
             return handler
+
+        return register
+
+    def prepare_run[Payload: BaseModel](
+        self, payload: type[Payload]
+    ) -> Callable[[PrepareRun[Payload]], PrepareRun[Payload]]:
+        """Make the function it decorates the one that creates the run ``payload`` starts.
+
+        It is given the validated payload and a ``RunContext`` whose ``action_id`` is the
+        idempotency key of its work (a retried attempt passes the same one, and an
+        implementation keyed by it finds the run it made), and answers with the child run's
+        id. It blocks and runs in a thread. Raises ``InvalidAgentWorker`` for a model the
+        agent did not declare, an action that is not a run action, a second prepare for one
+        action, and an ``async def``.
+        """
+        definition = self._definition_of(payload)
+        action = definition.name
+        if definition.run is None:
+            raise InvalidAgentWorker(
+                f"action {action!r} of agent {self._agent.kind!r} runs as an activity of this "
+                "worker: register what runs it with @worker.handler, not a prepare callable"
+            )
+
+        def register(prepare: PrepareRun[Payload]) -> PrepareRun[Payload]:
+            if inspect.iscoroutinefunction(prepare):
+                raise InvalidAgentWorker(
+                    f"prepare callable of action {action!r} is an async def: it blocks and "
+                    "runs in a thread, and returns the child run's id"
+                )
+            taken = self._prepares.get(action)
+            if taken is not None:
+                raise InvalidAgentWorker(
+                    f"action {action!r} of agent {self._agent.kind!r} has two prepare "
+                    f"callables: {_named(taken)} and {_named(prepare)}"
+                )
+            self._prepares[action] = cast(PrepareRun, prepare)
+            return prepare
 
         return register
 
@@ -156,16 +214,19 @@ class AgentWorker:
         failures that nobody worded, the same its workflows were given: the runtime's by
         default. ``longest_run`` is the most a run can take from its first step to its end, all
         retries and waits for a person included: a thread of the agent's kind that nothing wrote
-        for longer is removed. ``checkpoint_cleanups`` are rules of the agent's own, beside that
-        one. ``periodic_tasks`` are schedules of the agent's own, which the process runs while
-        it serves (the researcher's page retention). ``sessions`` are the database's, for an
+        for longer is removed, and a bound that does not cover a wait for a person a run may
+        make, or a run a waiting action may wait for, is refused. ``checkpoint_cleanups`` are
+        rules of the agent's own, beside that one. ``periodic_tasks`` are schedules of the
+        agent's own, which the process runs while it serves (the researcher's page
+        retention). ``sessions`` are the database's, for an
         agent with an action that waits for a person. Raises ``InvalidAgentWorker`` for an
-        action with no handler, for an action that waits for a person without ``sessions``, for
-        a ``longest_run`` shorter than such a wait, and for a class that is not a workflow of
-        this agent.
+        action with no handler or a run action with no prepare callable, for an action that
+        waits for a person without ``sessions``, for the bounds above, and for a class that is
+        not a workflow of this agent.
         """
         self._require_a_run_that_outlasts_its_waits(longest_run)
         routes = self._routes()
+        run_routes = self._run_routes()
         for workflow_class in workflows:
             self._require_a_workflow_of_this_agent(workflow_class)
         held = self._held_actions()
@@ -179,6 +240,7 @@ class AgentWorker:
             on_run_end=self._run_ended,
             held_actions=held,
             is_approved=None if gate is None else gate.is_approved,
+            run_routes=run_routes,
         )
         gate_activities = [] if gate is None else [gate.propose_action, gate.settle_proposal]
         return AgentRegistration(
@@ -187,6 +249,7 @@ class AgentWorker:
             activities=[
                 runtime.run_graph_step,
                 runtime.run_action,
+                runtime.prepare_run,
                 runtime.forget_run,
                 *gate_activities,
                 *activities,
@@ -211,6 +274,18 @@ class AgentWorker:
                     f"on action {action!r}, longer than its longest run of {longest_run}: "
                     "its checkpoints would be removed while it waits"
                 )
+        for action, target in self._agent.run_targets.items():
+            # A run the action waits for is a child workflow, and the parent's workflow stays
+            # open for it as long as it runs; the target declares how long that can be.
+            if target.kind != RunKind.WAIT:
+                continue
+            wait = timedelta(seconds=target.longest_seconds)
+            if longest_run < wait:
+                raise InvalidAgentWorker(
+                    f"a run of agent {self._agent.kind!r} can wait {wait} for the run of action "
+                    f"{action!r}, longer than its longest run of {longest_run}: "
+                    "its checkpoints would be removed while it waits"
+                )
 
     def _held_actions(self) -> list[str]:
         return [
@@ -231,10 +306,10 @@ class AgentWorker:
             )
         return ProposalActivities(sessions)
 
-    def _action_declared_for(self, payload: type[BaseModel]) -> str:
+    def _definition_of(self, payload: type[BaseModel]) -> ActionDefinition:
         for definition in self._agent.definitions:
             if definition.payload is payload:
-                return definition.name
+                return definition
         raise InvalidAgentWorker(
             f"model {payload.__name__} is not the payload of an action of agent "
             f"{self._agent.kind!r}: declare it with @agent.action"
@@ -244,7 +319,7 @@ class AgentWorker:
         without_handler = [
             definition.name
             for definition in self._agent.definitions
-            if definition.name not in self._handlers
+            if definition.run is None and definition.name not in self._handlers
         ]
         if without_handler:
             raise InvalidAgentWorker(
@@ -255,6 +330,25 @@ class AgentWorker:
         return ActionRoutes(
             ActionRoute(definition, self._handlers[definition.name])
             for definition in self._agent.definitions
+            if definition.run is None
+        )
+
+    def _run_routes(self) -> RunRoutes:
+        without_prepare = [
+            definition.name
+            for definition in self._agent.definitions
+            if definition.run is not None and definition.name not in self._prepares
+        ]
+        if without_prepare:
+            raise InvalidAgentWorker(
+                f"agent {self._agent.kind!r} declares "
+                f"{', '.join(repr(name) for name in without_prepare)} that start another run "
+                "with no prepare callable: register one with @worker.prepare_run"
+            )
+        return RunRoutes(
+            RunRoute(definition, definition.run, self._prepares[definition.name])
+            for definition in self._agent.definitions
+            if definition.run is not None
         )
 
     def _require_a_workflow_of_this_agent(self, candidate: type) -> None:

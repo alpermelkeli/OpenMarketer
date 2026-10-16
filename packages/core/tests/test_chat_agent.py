@@ -421,9 +421,7 @@ def test_read_research_report_without_a_report_says_so():
         model=ScriptedModel(), reads=FakeReads(empty=True), limits=ChatLimits()
     )
     assert read_research_report(context) == "No research run of this project has a report yet."
-    assert (
-        list_research_runs(context) == "The project has no research runs."
-    )
+    assert list_research_runs(context) == "The project has no research runs."
     assert read_research_report(context, run_id=str(RESEARCH_RUN_ID)).startswith("error:")
 
 

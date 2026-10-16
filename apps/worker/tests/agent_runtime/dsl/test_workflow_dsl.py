@@ -9,7 +9,7 @@ from typing import Any, get_type_hints
 import pytest
 from temporalio import workflow
 
-from dsl.definitions import GreetRequest, agent, run_of_the_request
+from dsl.definitions import GreetRequest, agent, run_of_the_request, the_greeters_project
 from dsl.workflow import Greeter, GreeterOfARequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_worker.agent_runtime.vocabulary import GraphRunPolicy
@@ -85,7 +85,7 @@ class FailedTakesNoReason:
 )
 def test_class_that_cannot_be_the_workflow_is_refused_by_name_and_said_why(refused, why):
     with pytest.raises(InvalidAgentWorkflow, match=why) as error:
-        agent_workflow(agent, name="Refused", graph=GRAPH)(refused)
+        agent_workflow(agent, name="Refused", graph=GRAPH, scope_of=the_greeters_project)(refused)
     assert f"workflow class {refused.__name__}" in str(error.value)
 
 
@@ -94,7 +94,7 @@ def test_class_defined_inside_a_function_is_refused_because_temporal_cannot_reac
         pass
 
     with pytest.raises(InvalidAgentWorkflow, match="at the top of a module") as error:
-        agent_workflow(agent, name="Refused", graph=GRAPH)(Local)
+        agent_workflow(agent, name="Refused", graph=GRAPH, scope_of=the_greeters_project)(Local)
     assert "Local" in str(error.value)
 
 
@@ -103,14 +103,31 @@ def test_workflow_without_a_name_is_refused_because_that_is_how_it_is_started():
         agent_workflow(agent, name="", graph=GRAPH)
 
 
+def test_workflow_of_an_agent_whose_action_starts_a_run_without_a_scope_is_refused():
+    # The greeter has an action that starts another run, and such a run belongs to the
+    # parent's project: a workflow of the agent must say which one that is.
+    with pytest.raises(
+        InvalidAgentWorkflow, match="'Refused'.*'wait_for_a_greeting' starts another run.*scope_of"
+    ):
+        agent_workflow(agent, name="Refused", graph=GRAPH)
+
+
 def test_input_without_a_way_to_get_the_run_out_of_it_is_refused():
     with pytest.raises(InvalidAgentWorkflow, match="'Refused'.*GreetRequest.*give run_of"):
-        agent_workflow(agent, name="Refused", graph=GRAPH, input=GreetRequest)
+        agent_workflow(
+            agent, name="Refused", graph=GRAPH, input=GreetRequest, scope_of=the_greeters_project
+        )
 
 
 def test_way_to_get_the_run_out_of_an_input_the_workflow_does_not_take_is_refused():
     with pytest.raises(InvalidAgentWorkflow, match="'Refused'.*needs no run_of"):
-        agent_workflow(agent, name="Refused", graph=GRAPH, run_of=run_of_the_request)
+        agent_workflow(
+            agent,
+            name="Refused",
+            graph=GRAPH,
+            run_of=run_of_the_request,
+            scope_of=the_greeters_project,
+        )
 
 
 def test_input_given_as_the_name_of_its_class_is_refused_because_temporal_decodes_from_the_class():
@@ -121,12 +138,19 @@ def test_input_given_as_the_name_of_its_class_is_refused_because_temporal_decode
             graph=GRAPH,
             input="GreetRequest",  # pyright: ignore[reportArgumentType]
             run_of=run_of_the_request,
+            scope_of=the_greeters_project,
         )
 
 
 def test_failure_types_given_as_one_text_are_refused_because_a_text_holds_every_part_of_itself():
     with pytest.raises(InvalidAgentWorkflow, match="'Refused'.*collection of failure types"):
-        agent_workflow(agent, name="Refused", graph=GRAPH, worded_types="NoteRefused")
+        agent_workflow(
+            agent,
+            name="Refused",
+            graph=GRAPH,
+            scope_of=the_greeters_project,
+            worded_types="NoteRefused",
+        )
 
 
 # ------------------------------------------------------- what the decorator makes of a class

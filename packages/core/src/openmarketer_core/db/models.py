@@ -321,6 +321,10 @@ class ResearchRunRecord(Base):
     error: Mapped[str | None] = mapped_column(Text)
     report_id: Mapped[uuid.UUID | None]
     requested_by: Mapped[str] = mapped_column(Text, server_default="person")
+    # The action id (its idempotency key) of the run that asked for this one through an action
+    # that starts a run; null for a run a person or the orchestrator's chat asked for. Unique,
+    # so an attempt that is tried again finds the run it made instead of creating a second.
+    origin_action_id: Mapped[str | None] = mapped_column(Text, unique=True)
     questions: Mapped[list[str]] = mapped_column(JSONB)
     scope: Mapped[dict[str, Any]] = mapped_column(JSONB)
     max_sources: Mapped[int] = mapped_column(Integer)

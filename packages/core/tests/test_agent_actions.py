@@ -34,8 +34,11 @@ from openmarketer_core.agent_runtime.actions import (
     ActionOutcome,
     ActionPolicy,
     ActionRequest,
+    ChildRun,
     InvalidActionDefinition,
     InvalidActionPayload,
+    RunKind,
+    RunTarget,
     UnknownAction,
     request_digest,
     require_positive,
@@ -580,6 +583,43 @@ def test_outcome_that_succeeded_has_no_error():
 def test_outcome_that_failed_says_what_went_wrong():
     with pytest.raises(ValueError, match="what went wrong"):
         ActionOutcome(action_id="t:i", succeeded=False, result={}, error="")
+
+
+# ----------------------------------------------------- actions that start a run
+def a_run_target(**changes) -> RunTarget:
+    target = {
+        "workflow": "WriteContent",
+        "task_queue": "openmarketer-writing",
+        "kind": RunKind.WAIT,
+        "longest_seconds": 600,
+        "input_of": lambda child: {"run_id": str(child.run_id)},
+    }
+    return RunTarget(**(target | changes))
+
+
+def test_run_target_of_a_waited_for_run_is_made():
+    target = a_run_target()
+    child = ChildRun(uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), "t:1:2", {"name": "Ada"})
+    assert target.kind is RunKind.WAIT
+    assert target.input_of(child) == {"run_id": str(child.run_id)}
+    assert target.workflow == "WriteContent"
+
+
+@pytest.mark.parametrize(
+    ("changed", "why"),
+    [
+        ({"workflow": ""}, "workflow name must not be empty"),
+        ({"task_queue": ""}, "task queue of workflow 'WriteContent' must not be empty"),
+        ({"kind": "wait"}, "must be a RunKind"),
+        ({"longest_seconds": 0}, "longest_seconds"),
+        ({"longest_seconds": float("nan")}, "longest_seconds"),
+        ({"input_of": "not-a-function"}, "input_of of workflow 'WriteContent'"),
+    ],
+    ids=lambda case: str(case)[:40],
+)
+def test_run_target_that_cannot_be_one_is_refused(changed, why):
+    with pytest.raises(InvalidActionDefinition, match=why):
+        a_run_target(**changed)
 
 
 # ------------------------------------------------------------------- the steps

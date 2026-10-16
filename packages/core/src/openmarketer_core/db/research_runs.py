@@ -138,17 +138,31 @@ def request_research_run(
     project_id: uuid.UUID,
     request: ResearchRequest,
     requested_by: str,
+    origin_action_id: str | None = None,
 ) -> ResearchRun:
     """Add a queued research run for the project, with the request it answers.
 
     A project may have several research runs at once, so nothing refuses a
-    second one. Raises ``ProjectNotFound`` when the workspace has no such
-    project.
+    second one. With ``origin_action_id`` -- the idempotency key of the action
+    of another run that asked for this one -- a run already asked for under that
+    key is found and given back instead: an attempt of that action which is
+    tried again starts no second run. Raises ``ProjectNotFound`` when the
+    workspace has no such project.
     """
     project = get_project(session, workspace_id=workspace_id, project_id=project_id)
+    if origin_action_id is not None:
+        asked_before = session.scalar(
+            select(ResearchRunRecord).where(
+                ResearchRunRecord.project_id == project.id,
+                ResearchRunRecord.origin_action_id == origin_action_id,
+            )
+        )
+        if asked_before is not None:
+            return _research_run(asked_before)
     record = ResearchRunRecord(
         project_id=project.id,
         requested_by=requested_by,
+        origin_action_id=origin_action_id,
         questions=list(request.questions),
         scope={
             "topics": list(request.topics),

@@ -28,13 +28,17 @@ from openmarketer_core.agent_runtime.steps import GraphRunRef
 RUN_GRAPH_STEP = "run_graph_step"
 RUN_ACTION = "run_action"
 FORGET_RUN = "forget_run"
+# The activity that creates the record of a run an action starts, before the workflow starts
+# or waits for the child workflow itself.
+PREPARE_RUN = "prepare_run"
 # The activities of the policy gate, for an agent that has an action a person must approve.
 PROPOSE_ACTION = "propose_action"
 SETTLE_PROPOSAL = "settle_proposal"
 
 # The action's own input is core's ``ActionRequest`` and its result an ``ActionOutcome``;
 # the step's result is a ``StepOutcome``. ``forget_run`` is given the run's ``GraphRunRef``
-# and returns nothing.
+# and returns nothing. ``prepare_run`` is given the action and the parent's scope and answers
+# with the id of the child's run record.
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,27 @@ class StepInput:
 
     run: GraphRunRef
     resume: ActionOutcome | None  # None for the first step of a run
+
+
+@dataclass(frozen=True)
+class PrepareRunInput:
+    """What ``prepare_run`` is given: the action that starts another run, and its scope.
+
+    ``scope`` is the parent run's workspace and project, which the child run's record belongs
+    to as well. ``request`` carries the action's id, name and payload; the id is the
+    idempotency key: the activity creates the child's record under it, so an attempt that is
+    tried again finds the same run instead of a second one.
+    """
+
+    scope: RunScope
+    request: ActionRequest
+
+
+@dataclass(frozen=True)
+class PreparedRun:
+    """What ``prepare_run`` answers: the id of the child run the record-creating call made."""
+
+    run_id: uuid.UUID
 
 
 @dataclass(frozen=True)
@@ -91,6 +116,7 @@ TOO_MANY_ACTIONS = "TooManyActions"  # the run asked for more actions than its p
 RUN_OF_ANOTHER_KIND = "RunOfAnotherKind"  # a workflow was started with another agent's run
 PROPOSAL_REFUSED = "ProposalRefused"  # a proposal cannot be stored or found for the run's project
 ACTION_NOT_APPROVED = "ActionNotApproved"  # an action the gate holds was asked to run unapproved
+RUN_REFUSED = "RunRefused"  # an action that starts another run has no project to put it in
 
 # A failure of these types ends the run instead of being told to the graph: the fault is in the
 # agent's graph, routes or handlers and not in the world, so the graph would only ask again.
@@ -122,6 +148,7 @@ WORDED_BY_THE_RUNTIME = (
     UNEXPECTED,
     PROPOSAL_REFUSED,
     ACTION_NOT_APPROVED,
+    RUN_REFUSED,
 )
 
 # What the runtime lets into the workflow history, which is stored for as long as the namespace
@@ -145,6 +172,14 @@ NOT_APPROVED_TEXTS = {
     ProposalStatus.REJECTED: "a person rejected the action",
     ProposalStatus.EXPIRED: "nobody approved the action before its deadline",
 }
+
+# What the graph is told of a run action whose child did not succeed, whose child workflow id
+# was used already, or whose child reported something other than the small result its agent
+# reports. The child's own failure stays in its own run's record, in its own words; the parent
+# is told one of these fixed sentences and decides what to do, as it does for any failed action.
+CHILD_RUN_DID_NOT_FINISH = "the run this action started did not finish"
+CHILD_RUN_ALREADY_STARTED = "the run of this action was started already"
+CHILD_RUN_UNREADABLE = "the run this action started reported no small outcome"
 
 # While a run waits for a person, it reads the proposal again this often even if no signal came:
 # a signal the API could not send, or that reached a worker that stopped, delays a decision by
@@ -244,6 +279,18 @@ FORGET_RUN_LIMITS = DatabaseWritePolicy(
 # Storing and settling a proposal: single short writes, with the waits of recording a run's
 # failure. An hour bounds how long a run keeps trying while the database is down.
 PROPOSAL_WRITE_LIMITS = DatabaseWritePolicy(
+    attempt_timeout_seconds=30,
+    retry_after_seconds=1,
+    max_retry_wait_seconds=60,
+    give_up_after_seconds=60 * 60,
+)
+
+
+# Creating the record of a run an action starts: one short transaction, tried like recording a
+# run's failure, with an hour before it is given up on. A record that cannot be made keeps the
+# child from being started; once the attempts are used up, the graph is told so as a failed
+# outcome and decides what to do, so the writing has an end.
+PREPARE_RUN_LIMITS = DatabaseWritePolicy(
     attempt_timeout_seconds=30,
     retry_after_seconds=1,
     max_retry_wait_seconds=60,

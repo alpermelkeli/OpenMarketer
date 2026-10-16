@@ -14,6 +14,7 @@ import pytest
 from temporalio.converter import DataConverter
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
+from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
 from openmarketer_worker.agent_runtime.vocabulary import (
     RUN_ENDING_ACTION_FAILURES,
@@ -21,6 +22,8 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     DatabaseWritePolicy,
     FailureTexts,
     GraphRunPolicy,
+    PrepareRunInput,
+    PreparedRun,
     StepInput,
 )
 
@@ -130,9 +133,22 @@ def test_outcome_of_a_failed_action_survives_the_converter():
     assert converted(failed) == failed
 
 
+def test_prepare_input_survives_the_converter():
+    prepared = PrepareRunInput(
+        scope=RunScope(workspace_id=uuid.uuid4(), project_id=uuid.uuid4()),
+        request=ActionRequest("scripted-agent:1:2", "research", {"question": "why?"}),
+    )
+    assert converted(prepared) == prepared
+
+
+def test_prepared_run_survives_the_converter():
+    made = PreparedRun(run_id=uuid.uuid4())
+    assert converted(made) == made
+
+
 @pytest.mark.parametrize(
     "decoded",
-    [StepInput, GraphRunPolicy, DatabaseWritePolicy, FailureTexts],
+    [StepInput, PrepareRunInput, PreparedRun, GraphRunPolicy, DatabaseWritePolicy, FailureTexts],
     ids=lambda c: c.__name__,
 )
 def test_type_the_workflow_carries_has_annotations_that_are_types_not_text(decoded):

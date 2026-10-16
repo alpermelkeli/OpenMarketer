@@ -66,7 +66,15 @@ def request_research(
     """
     scope = {"workspace_id": workspace_id, "project_id": project_id}
     with transaction(sessions) as session:
-        run = request_research_run(session, **scope, request=request, requested_by=requested_by)
+        # Named, not unpacked: a reason to start a run adds a parameter that is not an id, and
+        # a mapping of ids unpacked into them would then be read as one.
+        run = request_research_run(
+            session,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            request=request,
+            requested_by=requested_by,
+        )
     try:
         start_workflow(research_workflow(ResearchRunInput(run_id=run.id, **scope)))
     except WorkflowNotStarted as e:
