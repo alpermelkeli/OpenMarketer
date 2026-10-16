@@ -140,7 +140,7 @@ async def test_database_that_fails_while_the_key_is_resolved_is_worth_another_at
     worker_with, started, sessions
 ):
     class Unreachable(WorkspaceCredentials):
-        def values(self, workspace_id, credentials):
+        def model_key(self, workspace_id, router):
             raise DatabaseError("connection is closed")
 
     worker = worker_with({}, credentials=Unreachable(sessions, {}, None))

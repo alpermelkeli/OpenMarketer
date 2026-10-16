@@ -1,10 +1,10 @@
 """Deleting a project, and everything stored about it, for good.
 
 A project is deleted with its analysis runs, its snapshots, the evidence found
-in them, every Product Profile version, approved ones included, and the
-proposals of its runs, decided or expired. Nothing is
-kept to restore it from: deleting is final, and a project made again for the
-same repository starts with no history.
+in them, every Product Profile version, approved ones included, the proposals
+of its runs, decided or expired, and its chat threads with their messages.
+Nothing is kept to restore it from: deleting is final, and a project made again
+for the same repository starts with no history.
 
 A project with an unfinished run is not deleted (``ProjectHasUnfinishedRun``):
 the worker that runs it would store a profile for a project that is gone, and
@@ -38,6 +38,8 @@ from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.db.analysis_runs import FINISHED
 from openmarketer_core.db.models import (
     AnalysisRunRecord,
+    ChatMessageRecord,
+    ChatThreadRecord,
     Evidence,
     ProductProfileRecord,
     Project,
@@ -94,6 +96,8 @@ def delete_project(session: Session, *, workspace_id: uuid.UUID, project_id: uui
         raise ProjectHasPendingProposal(project_id)
 
     session.execute(delete(ProposalRecord).where(ProposalRecord.project_id == project_id))
+    session.execute(delete(ChatMessageRecord).where(ChatMessageRecord.project_id == project_id))
+    session.execute(delete(ChatThreadRecord).where(ChatThreadRecord.project_id == project_id))
     session.execute(delete(AnalysisRunRecord).where(AnalysisRunRecord.project_id == project_id))
     session.execute(delete(Evidence).where(Evidence.project_id == project_id))
     _delete_profile_versions(session, project_id)

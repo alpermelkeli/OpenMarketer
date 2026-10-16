@@ -1,0 +1,474 @@
+"""Tests for the chat routes: a real database and store, a scripted model instead of a provider.
+
+They need PostgreSQL (see the root ``conftest.py``) and reach no network: the model the route
+would resolve is replaced by a scripted one (``chat.chat_model``), while the store, the
+project's reads and the key resolution stay the real ones. Each test works in a workspace of
+its own, committed, since a turn commits its own transaction.
+"""
+
+import base64
+import json
+import os
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session, sessionmaker
+
+from openmarketer_api.dependencies import Services
+from openmarketer_api.identity import LOCAL_USER_ID, current_workspace_id
+from openmarketer_api.routes import chat
+from openmarketer_core.agent_runtime.gate import RunScope
+from openmarketer_core.credentials.catalog import OPENROUTER_API_KEY
+from openmarketer_core.credentials.cipher import CredentialCipher
+from openmarketer_core.db.chat import append_exchange, create_chat
+from openmarketer_core.db.credentials import store_credential
+from openmarketer_core.db.models import Project, Workspace
+from openmarketer_core.db.session import session_factory, transaction
+from openmarketer_core.llm import ChatReply, LLMError
+from openmarketer_core.orchestrator.chat_agent.rules import SUBMIT, ChatTurnError
+
+
+def call(name: str, **arguments) -> dict:
+    return {"id": f"c{id(arguments)}", "type": "function",
+            "function": {"name": name, "arguments": json.dumps(arguments)}}  # fmt: skip
+
+
+class ScriptedModel:
+    """Replays prepared assistant turns and records what it was sent.
+
+    A turn that is an exception is raised instead of answered.
+    """
+
+    def __init__(self, *turns, cost: float = 0.01):
+        self.turns = list(turns)
+        self.cost = cost
+        self.requests: list[dict] = []
+
+    def chat(self, role, messages, *, tools=None, tool_choice=None):
+        self.requests.append(
+            {"role": role, "messages": [dict(m) for m in messages], "tool_choice": tool_choice}
+        )
+        turn = self.turns.pop(0) if self.turns else [call("get_project_status")]
+        if isinstance(turn, Exception):
+            raise turn
+        if isinstance(turn, str):
+            message = {"role": "assistant", "content": turn}
+        else:
+            message = {"role": "assistant", "content": None, "tool_calls": turn}
+        return ChatReply(message=message, model="fake/model", cost_usd=self.cost)
+
+    def tool_results(self) -> list[str]:
+        return [m["content"] for m in self.requests[-1]["messages"] if m["role"] == "tool"]
+
+
+class NoWorkflows:
+    """The workflow engine of these tests: a chat turn starts nothing and tells no run."""
+
+    async def start(self, workflow) -> None:
+        raise AssertionError("a chat turn starts no workflow")
+
+    async def tell_decided(self, workflow_id: str, proposal_id: uuid.UUID) -> None:
+        raise AssertionError("a chat turn tells no run of a decision")
+
+
+@pytest.fixture
+def sessions(engine) -> sessionmaker[Session]:
+    return session_factory(engine.url.render_as_string(hide_password=False))
+
+
+@pytest.fixture
+def scope(sessions) -> RunScope:
+    with transaction(sessions) as session:
+        workspace = Workspace(name="Acme")
+        session.add(workspace)
+        session.flush()
+        project = Project(
+            workspace_id=workspace.id, name="App", source_repo_url="https://example.com/a.git"
+        )
+        session.add(project)
+        session.flush()
+        return RunScope(workspace_id=workspace.id, project_id=project.id)
+
+
+@pytest.fixture
+def services(app, sessions, scope, repository_models, no_catalog) -> None:
+    """The application wired to the test database, this test's workspace, no stored key."""
+    app.state.services = Services(
+        sessions=sessions,
+        workflows=NoWorkflows(),
+        environment={},
+        credential_cipher=None,
+        model_router=repository_models,
+        model_catalog=no_catalog,
+    )
+    app.dependency_overrides[current_workspace_id] = lambda: scope.workspace_id
+
+
+def wired(app, *turns: object) -> ScriptedModel:
+    """Replaces the route's own model resolution with a scripted model, and returns it.
+
+    A turn is one prepared assistant turn: a list of tool calls, a text, or an
+    exception to raise.
+    """
+    model = ScriptedModel(*turns)
+    app.dependency_overrides[chat.chat_model] = lambda: model
+    return model
+
+
+def answering(app, answer: str) -> ScriptedModel:
+    """A scripted model whose one turn submits ``answer``."""
+    return wired(app, [call(SUBMIT, answer=answer)])
+
+
+def chats_url(scope: RunScope) -> str:
+    return f"/v1/projects/{scope.project_id}/chats"
+
+
+def chat_url(scope: RunScope, chat_id: object) -> str:
+    return f"{chats_url(scope)}/{chat_id}"
+
+
+def messages_url(scope: RunScope, chat_id: object) -> str:
+    return chat_url(scope, chat_id) + "/messages"
+
+
+def read_url(scope: RunScope, chat_id: object) -> str:
+    return chat_url(scope, chat_id) + "/read"
+
+
+def open_chat(client: TestClient, scope: RunScope, title: str | None = None) -> dict:
+    response = client.post(chats_url(scope), json=None if title is None else {"title": title})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def store(
+    sessions: sessionmaker[Session],
+    scope: RunScope,
+    chat_id: uuid.UUID,
+    question: str,
+    answer: str,
+) -> None:
+    with transaction(sessions) as session:
+        append_exchange(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            question=question,
+            answer=answer,
+        )
+
+
+def test_a_chat_is_created_empty_with_the_default_name(client, services, scope):
+    response = client.post(chats_url(scope), json={})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["title"] == "New chat"
+    assert body["project_id"] == str(scope.project_id)
+    assert (body["last_read_at"], body["unread"]) == (None, False)
+    listed = client.get(chats_url(scope)).json()
+    assert [chat["id"] for chat in listed["chats"]] == [body["id"]]
+    assert listed["next_cursor"] is None
+
+
+def test_a_chat_is_created_with_the_title_it_was_given(client, services, scope):
+    response = client.post(chats_url(scope), json={"title": "Q4 plan"})
+
+    assert response.status_code == 201
+    assert response.json()["title"] == "Q4 plan"
+
+
+def test_a_blank_or_too_long_title_is_refused(client, services, scope):
+    for title in ("", "   ", "x" * 201, 7):
+        response = client.post(chats_url(scope), json={"title": title})
+        assert response.status_code == 422, title
+    extra = client.post(chats_url(scope), json={"title": "ok", "name": "x"})
+    assert extra.status_code == 422
+    assert client.get(chats_url(scope)).json()["chats"] == []
+
+
+def test_the_chats_page_most_recently_active_first(client, services, scope):
+    open_chat(client, scope, title="first")
+    open_chat(client, scope, title="second")
+
+    page = client.get(chats_url(scope), params={"limit": 1}).json()
+
+    assert [chat["title"] for chat in page["chats"]] == ["second"]
+    assert page["next_cursor"] is not None
+    rest = client.get(chats_url(scope), params={"limit": 1, "cursor": page["next_cursor"]}).json()
+    assert [chat["title"] for chat in rest["chats"]] == ["first"]
+    assert rest["next_cursor"] is None
+
+
+def test_a_cursor_this_list_did_not_write_is_refused(client, services, scope):
+    chat = open_chat(client, scope)
+
+    assert client.get(chats_url(scope), params={"cursor": "not-a-cursor"}).status_code == 422
+    response = client.get(messages_url(scope, chat["id"]), params={"cursor": "not-a-cursor"})
+    assert response.status_code == 422
+
+
+def test_a_sent_message_is_answered_and_the_exchange_is_stored(client, services, scope, app):
+    model = answering(app, "It is ready to analyse.")
+    chat = open_chat(client, scope)
+
+    response = client.post(messages_url(scope, chat["id"]), json={"message": "Can I analyse it?"})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert (body["question"]["role"], body["question"]["content"]) == (
+        "user",
+        "Can I analyse it?",
+    )
+    assert (body["question"]["chat_id"], body["answer"]["chat_id"]) == (
+        chat["id"],
+        chat["id"],
+    )
+    assert (body["answer"]["role"], body["answer"]["content"]) == (
+        "assistant",
+        "It is ready to analyse.",
+    )
+    assert (body["model"], body["cost_usd"]) == ("fake/model", 0.01)
+    assert model.requests[0]["role"] == "orchestrator"
+    listed = client.get(messages_url(scope, chat["id"])).json()
+    assert [message["content"] for message in listed["messages"]] == [
+        "It is ready to analyse.",
+        "Can I analyse it?",
+    ]
+    assert listed["next_cursor"] is None
+    reloaded = client.get(chat_url(scope, chat["id"])).json()
+    assert reloaded["title"] == "Can I analyse it?"
+    assert reloaded["unread"] is True
+    assert reloaded["last_activity_at"] > reloaded["created_at"]
+
+
+def test_the_turn_reads_the_project_of_the_request_through_the_database(
+    client, services, scope, app
+):
+    model = wired(app, [call("get_project_status")], [call(SUBMIT, answer="ok")])
+    chat = open_chat(client, scope)
+
+    client.post(messages_url(scope, chat["id"]), json={"message": "How does it stand?"})
+
+    [read] = model.tool_results()
+    assert '"App"' in read
+
+
+def test_the_turn_is_given_the_stored_conversation(client, services, scope, app, sessions):
+    chat = open_chat(client, scope)
+    store(sessions, scope, uuid.UUID(chat["id"]), "first question", "first answer")
+    model = answering(app, "second answer")
+
+    client.post(messages_url(scope, chat["id"]), json={"message": "and now?"})
+
+    sent = model.requests[0]["messages"]
+    conversation = [m for m in sent if m["role"] != "system"]
+    assert [(m["role"], m["content"]) for m in conversation] == [
+        ("user", "first question"),
+        ("assistant", "first answer"),
+        ("user", "and now?"),
+    ]
+
+
+def test_the_stored_question_has_no_whitespace_around_it(client, services, scope, app):
+    answering(app, "ok")
+    chat = open_chat(client, scope)
+
+    client.post(messages_url(scope, chat["id"]), json={"message": "  What is it?  "})
+
+    listed = client.get(messages_url(scope, chat["id"])).json()
+    assert listed["messages"][-1]["content"] == "What is it?"
+
+
+def test_messages_page_newest_first_beside_a_next_cursor(client, services, scope, sessions):
+    chat = open_chat(client, scope)
+    chat_id = uuid.UUID(chat["id"])
+    store(sessions, scope, chat_id, "first question", "first answer")
+    store(sessions, scope, chat_id, "second question", "second answer")
+
+    first = client.get(messages_url(scope, chat_id), params={"limit": 2}).json()
+
+    assert [message["content"] for message in first["messages"]] == [
+        "second answer",
+        "second question",
+    ]
+    assert first["next_cursor"] is not None
+    rest = client.get(
+        messages_url(scope, chat_id), params={"limit": 2, "cursor": first["next_cursor"]}
+    ).json()
+    assert [message["content"] for message in rest["messages"]] == [
+        "first answer",
+        "first question",
+    ]
+    assert rest["next_cursor"] is None
+
+
+def test_messages_of_one_chat_do_not_read_into_another(client, services, scope, sessions):
+    first = open_chat(client, scope, title="first")
+    second = open_chat(client, scope, title="second")
+    store(sessions, scope, uuid.UUID(first["id"]), "first question", "first answer")
+
+    listed = client.get(messages_url(scope, second["id"])).json()
+
+    assert listed["messages"] == []
+
+
+def test_a_message_that_is_blank_or_too_long_is_refused(client, services, scope, app):
+    answering(app, "unreached")
+    chat = open_chat(client, scope)
+
+    for body in ("", "   ", "x" * 10_001, None):
+        response = client.post(messages_url(scope, chat["id"]), json={"message": body})
+        assert response.status_code == 422, body
+    extra = client.post(messages_url(scope, chat["id"]), json={"message": "hello", "role": "user"})
+    assert extra.status_code == 422
+
+
+def test_reading_a_chat_marks_it_read(client, services, scope, app):
+    wired(app, [call(SUBMIT, answer="ok")], [call(SUBMIT, answer="again")])
+    chat = open_chat(client, scope)
+    client.post(messages_url(scope, chat["id"]), json={"message": "hello"})
+    assert client.get(chat_url(scope, chat["id"])).json()["unread"] is True
+
+    response = client.post(read_url(scope, chat["id"]))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["unread"] is False
+    assert body["last_read_at"] is not None
+    assert client.get(chat_url(scope, chat["id"])).json()["unread"] is False
+    client.post(messages_url(scope, chat["id"]), json={"message": "again"})
+    assert client.get(chat_url(scope, chat["id"])).json()["unread"] is True
+
+
+def test_marking_a_chat_read_takes_no_body(client, services, scope):
+    chat = open_chat(client, scope)
+
+    response = client.post(read_url(scope, chat["id"]), json={"read": True})
+
+    assert response.status_code == 422
+
+
+def test_answering_needs_the_models_key(client, services, scope):
+    chat = open_chat(client, scope)
+
+    response = client.post(messages_url(scope, chat["id"]), json={"message": "hello"})
+
+    assert (response.status_code, response.json()["code"]) == (409, "model_key_not_set")
+    assert "Settings" in response.json()["message"]
+    assert client.get(messages_url(scope, chat["id"])).json()["messages"] == []
+
+
+def test_a_stored_key_that_cannot_be_opened_is_reported(client, services, scope, sessions):
+    chat = open_chat(client, scope)
+    cipher = CredentialCipher(base64.b64encode(os.urandom(32)).decode())
+    with transaction(sessions) as session:
+        sealed = cipher.seal(
+            "sk-or-v1-something",
+            workspace_id=scope.workspace_id,
+            credential_name=OPENROUTER_API_KEY.name,
+        )
+        store_credential(
+            session,
+            workspace_id=scope.workspace_id,
+            name=OPENROUTER_API_KEY.name,
+            sealed=sealed,
+            set_by=LOCAL_USER_ID,
+        )
+
+    response = client.post(messages_url(scope, chat["id"]), json={"message": "hello"})
+
+    assert (response.status_code, response.json()["code"]) == (409, "credential_unreadable")
+
+
+def test_a_provider_that_cannot_answer_is_reported_without_its_words(client, services, scope, app):
+    chat = open_chat(client, scope)
+    wired(app, LLMError("the model provider answered HTTP 429", status=429))
+
+    response = client.post(messages_url(scope, chat["id"]), json={"message": "hello"})
+
+    assert (response.status_code, response.json()) == (
+        503,
+        {"code": "model_unavailable", "message": "the model provider answered HTTP 429"},
+    )
+    assert client.get(messages_url(scope, chat["id"])).json()["messages"] == []
+
+
+def test_a_failed_turn_is_answered_with_a_fixed_message_and_stores_nothing(
+    client, services, scope, app
+):
+    chat = open_chat(client, scope)
+    wired(app, ChatTurnError("no answer after 8 model calls"), [call(SUBMIT, answer="second try")])
+
+    first = client.post(messages_url(scope, chat["id"]), json={"message": "hello"})
+
+    assert (
+        first.status_code,
+        first.json(),
+    ) == (
+        503,
+        {
+            "code": "chat_unanswered",
+            "message": "the chat agent gave no answer; sending the message again may answer it",
+        },
+    )
+    assert client.get(messages_url(scope, chat["id"])).json()["messages"] == []
+    second = client.post(messages_url(scope, chat["id"]), json={"message": "hello"})
+    assert second.status_code == 201
+
+
+def test_the_chat_of_a_project_the_workspace_does_not_have_is_not_found(
+    client, services, scope, app
+):
+    wired(app, [call(SUBMIT, answer="unreached")])
+    unknown = uuid.uuid4()
+    url = f"/v1/projects/{unknown}/chats"
+
+    assert client.get(url).status_code == 404
+    assert client.post(url).status_code == 404
+    assert client.get(f"{url}/{uuid.uuid4()}").status_code == 404
+    assert client.get(f"{url}/{uuid.uuid4()}/messages").status_code == 404
+    assert (
+        client.post(f"{url}/{uuid.uuid4()}/messages", json={"message": "hello"}).status_code == 404
+    )
+    assert client.post(f"{url}/{uuid.uuid4()}/read").status_code == 404
+
+
+def test_a_chat_the_project_does_not_have_is_not_found(client, services, app, scope):
+    open_chat(client, scope)
+    wired(app, [call(SUBMIT, answer="unreached")])
+    unknown = uuid.uuid4()
+
+    responses = [
+        client.get(chat_url(scope, unknown)),
+        client.get(messages_url(scope, unknown)),
+        client.post(messages_url(scope, unknown), json={"message": "hello"}),
+        client.post(read_url(scope, unknown)),
+    ]
+
+    assert all(response.status_code == 404 for response in responses)
+    assert all(response.json()["code"] == "chat_not_found" for response in responses)
+
+
+def test_a_chat_of_another_project_is_not_found(client, services, app, scope, sessions):
+    wired(app, [call(SUBMIT, answer="unreached")])
+    with transaction(sessions) as session:
+        other = Project(
+            workspace_id=scope.workspace_id,
+            name="Other",
+            source_repo_url="https://example.com/other.git",
+        )
+        session.add(other)
+        session.flush()
+        foreign = create_chat(session, workspace_id=scope.workspace_id, project_id=other.id)
+
+    for response in (
+        client.get(chat_url(scope, foreign.id)),
+        client.get(messages_url(scope, foreign.id)),
+        client.post(messages_url(scope, foreign.id), json={"message": "hello"}),
+        client.post(read_url(scope, foreign.id)),
+    ):
+        assert (response.status_code, response.json()["code"]) == (404, "chat_not_found")

@@ -17,6 +17,12 @@ OPERATIONS = {
     "startAnalysis": ("post", "/v1/projects/{project_id}/analyses"),
     "listAnalyses": ("get", "/v1/projects/{project_id}/analyses"),
     "getAnalysis": ("get", "/v1/projects/{project_id}/analyses/{run_id}"),
+    "createChat": ("post", "/v1/projects/{project_id}/chats"),
+    "listChats": ("get", "/v1/projects/{project_id}/chats"),
+    "getChat": ("get", "/v1/projects/{project_id}/chats/{chat_id}"),
+    "listChatMessages": ("get", "/v1/projects/{project_id}/chats/{chat_id}/messages"),
+    "sendChatMessage": ("post", "/v1/projects/{project_id}/chats/{chat_id}/messages"),
+    "markChatRead": ("post", "/v1/projects/{project_id}/chats/{chat_id}/read"),
     "getDraftProfile": ("get", "/v1/projects/{project_id}/profile/draft"),
     "getApprovedProfile": ("get", "/v1/projects/{project_id}/profile/approved"),
     "listProfileVersions": ("get", "/v1/projects/{project_id}/profile/versions"),
@@ -95,6 +101,11 @@ LISTS = {
     "/v1/projects": ("ProjectListResponse", "projects"),
     "/v1/projects/{project_id}/analyses": ("AnalysisRunListResponse", "runs"),
     "/v1/projects/{project_id}/profile/versions": ("ProfileVersionListResponse", "versions"),
+    "/v1/projects/{project_id}/chats": ("ChatThreadListResponse", "chats"),
+    "/v1/projects/{project_id}/chats/{chat_id}/messages": (
+        "ChatMessageListResponse",
+        "messages",
+    ),
 }
 
 

@@ -24,6 +24,7 @@ from temporalio.exceptions import CancelledError
 from temporalio.worker import Worker
 
 from openmarketer_core.credentials.catalog import GITHUB_TOKEN, OPENROUTER_API_KEY
+from openmarketer_core.credentials.resolution import ModelKeyNotSet
 from openmarketer_core.db.analysis_runs import run_thread_id
 from openmarketer_core.db.models import AnalysisRunStatus
 from openmarketer_core.llm import LLMError
@@ -37,7 +38,7 @@ from openmarketer_core.repository_analysis.workflow_contract import (
 )
 from openmarketer_core.tracing import TracingSettings, start_tracing
 from openmarketer_worker import main
-from openmarketer_worker.credentials import ModelKeyNotSet, WorkspaceCredentials
+from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.repository_analyzer import wiring
 from openmarketer_worker.repository_analyzer.policy import AnalysisPolicy
 from openmarketer_worker.repository_analyzer.repository_tokens import WorkspaceRepositoryTokens

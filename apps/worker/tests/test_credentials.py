@@ -11,10 +11,10 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 
 from openmarketer_core.credentials.catalog import GITHUB_TOKEN, GITLAB_TOKEN, OPENROUTER_API_KEY
-from openmarketer_core.credentials.resolution import CredentialUnreadable
+from openmarketer_core.credentials.resolution import CredentialUnreadable, ModelKeyNotSet
 from openmarketer_core.db.session import DatabaseError, session_factory
 from openmarketer_core.llm_config import ModelRouter
-from openmarketer_worker.credentials import ModelKeyNotSet, WorkspaceCredentials
+from openmarketer_worker.credentials import WorkspaceCredentials
 
 MODELS = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
 STORED_KEY = "sk-stored-0123456789"
