@@ -40,13 +40,13 @@ Most tools automate one slice: scheduling, ad rules or copy generation. Strategy
 
 | Area | Status |
 |---|---|
-| Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 55 pages) |
+| Design report: architecture, safety model, data model, security, roadmap | Done ([PDF](docs/design-report/report.pdf), 71 pages) |
 | Per-role LLM model configuration through OpenRouter | Built and used by the analyzer (`config/models.yaml`) |
 | Repository analyzer and Product Profile | **Built, quality not measured**: intake, extractors and the analyzer agent run from the CLI, which can store a run as a draft; the API registers projects, starts analyses, and reads, edits and approves profiles; the worker runs each analysis as a durable workflow; the dashboard reviews the profiles and, in Settings, stores the model provider's key and the repository tokens encrypted, chooses the models of each role and tier, and sets the step and cost limits of an analysis. The golden-repository benchmark (`make evaluate`) runs, with one case so far, whose label no person has reviewed |
 | Agent runtime: LangGraph graphs inside Temporal workflows, declared with decorators | Built and used by the analyzer, with a first policy gate: an action that publishes or spends waits for a person's approval through the API. Budgets, the content filter and risk levels are not built |
 | Content engine and approved publishing (X, Instagram) | Planned |
 | Creative studio (compose with code, generate, verify, edit) | Designed |
-| Orchestrator console and proactive mode | Designed |
+| Orchestrator console and proactive mode | **Partly built**: the console's chat turn answers one message about one project through read tools over the project's stored records, read-only and in memory, and a project's named chats are stored and served by the API; no dashboard chat screen, request actions or task half yet. Proactive mode is designed |
 | Ad connectors (recommend-only first) | Planned |
 | Plugin SDK and playbook packs | Planned |
 
