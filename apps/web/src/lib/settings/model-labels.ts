@@ -88,6 +88,14 @@ const ROLES = new Map<string, RoleLabel>([
       inUse: false,
     },
   ],
+  [
+    "image_generator",
+    {
+      label: "Image generator",
+      purpose: "Makes and edits the studio's images, the text in them included. It takes a model only, one that answers with images.",
+      inUse: false,
+    },
+  ],
   ["embeddings", { label: "Embeddings", purpose: "Turns text into vectors for the memory. It takes a model only.", inUse: false }],
 ]);
 
@@ -139,6 +147,7 @@ const PROBLEMS: Record<CapabilityProblem, string> = {
   no_tools: "cannot call tools, which this role needs.",
   no_structured_output: "cannot answer in a set structure, which this role needs.",
   no_image_input: "does not accept images, which this role needs.",
+  no_image_output: "does not answer with images, which this role makes.",
   rejects_temperature:
     "does not accept a temperature, which this role's requests carry. Mark it below as rejecting the temperature.",
   fallback_rejects_temperature:

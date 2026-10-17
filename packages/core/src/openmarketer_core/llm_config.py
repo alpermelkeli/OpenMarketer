@@ -12,11 +12,15 @@ order (first match wins):
                               (dashboard settings), then models.yaml tiers.<tier>
     6. models.yaml            defaults.model
 
-A role is of one of three kinds: ``chat`` (a conversation, the most of them),
-``embeddings``, or ``decisions``: yes-or-no questions about a list of texts,
+A role is of one of four kinds: ``chat`` (a conversation, the most of them),
+``embeddings``, ``decisions``: yes-or-no questions about a list of texts,
 answered with a probability each by OpenRouter's decisions endpoint
-(``provider.decisions_url``). A decisions role names its model and takes
-nothing else: none of a chat request's parameters applies to it.
+(``provider.decisions_url``), or ``images``: a request to the chat endpoint
+that asks for an image back (``build_image_request``). A decisions role names
+its model and takes nothing else: none of a chat request's parameters applies
+to it. An images role names its model, requires image output and may give
+``estimate_usd_per_image``, what one image is reckoned to cost when the
+catalogue gives no price per image.
 
 It also builds OpenRouter chat-completion requests and decision requests.
 OpenRouter exposes an OpenAI-compatible chat API, so the same chat payload also
@@ -54,9 +58,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 DEFAULT_CONFIG_PATH = "config/models.yaml"  # relative to the repository root
 
-Capability = Literal["tools", "structured_output", "vision"]
+Capability = Literal["tools", "structured_output", "vision", "image_output"]
 Tier = Literal["fast", "balanced", "strong"]
-RoleKind = Literal["chat", "embeddings", "decisions"]
+RoleKind = Literal["chat", "embeddings", "decisions", "images"]
 # The request parameters a model can be marked as rejecting. Only one so far.
 RejectableParameter = Literal["temperature"]
 REJECTABLE_PARAMETERS: tuple[RejectableParameter, ...] = ("temperature",)
@@ -141,6 +145,16 @@ DECISIONS_ROLE_REFUSES = (
     "reasoning_effort",
     "dimensions",
 )
+# What an images role may not set: the parts of a chat request it does not send. A model of its
+# own is required too, since the tiers are chat models.
+IMAGES_ROLE_REFUSES = (
+    "tier",
+    "temperature",
+    "max_tokens",
+    "fallbacks",
+    "reasoning_effort",
+    "dimensions",
+)
 
 
 class RoleConfig(BaseModel):
@@ -154,6 +168,7 @@ class RoleConfig(BaseModel):
     requires: list[Capability] = Field(default_factory=list)
     reasoning_effort: Literal["low", "medium", "high"] | None = None
     dimensions: int | None = None
+    estimate_usd_per_image: float | None = Field(default=None, ge=0)
 
     @field_validator("model")
     @classmethod
@@ -175,6 +190,22 @@ class RoleConfig(BaseModel):
         others = [part for part in DECISIONS_ROLE_REFUSES if getattr(self, part) not in (None, [])]
         if others:
             raise ValueError(f"a decisions role takes a model only, not {', '.join(others)}")
+        return self
+
+    @model_validator(mode="after")
+    def _images_name_a_model_that_draws(self) -> RoleConfig:
+        """An images request carries a model, messages and the shape, nothing of a chat's."""
+        if self.kind != "images":
+            if self.estimate_usd_per_image is not None or "image_output" in self.requires:
+                raise ValueError("only an images role makes images")
+            return self
+        if self.model is None:
+            raise ValueError("an images role names its model")
+        if "image_output" not in self.requires:
+            raise ValueError("an images role requires image_output")
+        others = [part for part in IMAGES_ROLE_REFUSES if getattr(self, part) not in (None, [])]
+        if others:
+            raise ValueError(f"an images role does not take {', '.join(others)}")
         return self
 
 
@@ -218,6 +249,7 @@ class Resolved(BaseModel):
     requires: list[str]
     reasoning_effort: str | None = None
     dimensions: int | None = None
+    estimate_usd_per_image: float | None = None
 
     @property
     def tools_allowed(self) -> bool:
@@ -239,6 +271,9 @@ class CatalogModel:
     completion_price: float | None
     supported_parameters: frozenset[str]
     input_modalities: frozenset[str]
+    output_modalities: frozenset[str] = frozenset()
+    # US dollars per million output tokens of an image; how many tokens an image is, is the model's.
+    image_output_price: float | None = None
 
 
 class CapabilityProblem(StrEnum):
@@ -248,6 +283,7 @@ class CapabilityProblem(StrEnum):
     NO_TOOLS = "no_tools"
     NO_STRUCTURED_OUTPUT = "no_structured_output"
     NO_IMAGE_INPUT = "no_image_input"
+    NO_IMAGE_OUTPUT = "no_image_output"
     REJECTS_TEMPERATURE = "rejects_temperature"
     # A fallback is sent the request made for the first model, temperature included.
     FALLBACK_REJECTS_TEMPERATURE = "fallback_rejects_temperature"
@@ -382,10 +418,11 @@ class ModelRouter:
             value = getattr(rc, key, None)
             return default if value is None else value
 
-        # A decisions request has no fallbacks: the endpoint takes one model.
+        # A decisions request has no fallbacks: the endpoint takes one model. An images role
+        # names one model, whose output the adapter checks and fits to the size asked for.
         fallbacks = (
             []
-            if rc.kind == "decisions"
+            if rc.kind in ("decisions", "images")
             else [m for m in pick("fallbacks", d.fallbacks) if m != model]
         )
         return Resolved(
@@ -400,6 +437,7 @@ class ModelRouter:
             requires=list(rc.requires),
             reasoning_effort=pick("reasoning_effort", None),
             dimensions=rc.dimensions,
+            estimate_usd_per_image=rc.estimate_usd_per_image,
         )
 
     def resolve_all(self) -> dict[str, Resolved]:
@@ -441,6 +479,8 @@ class ModelRouter:
                 problems.append(ModelProblem(slug, CapabilityProblem.NO_STRUCTURED_OUTPUT))
             if "vision" in resolved.requires and "image" not in entry.input_modalities:
                 problems.append(ModelProblem(slug, CapabilityProblem.NO_IMAGE_INPUT))
+            if "image_output" in resolved.requires and "image" not in entry.output_modalities:
+                problems.append(ModelProblem(slug, CapabilityProblem.NO_IMAGE_OUTPUT))
             if sends_temperature and "temperature" not in params:
                 problem = (
                     CapabilityProblem.REJECTS_TEMPERATURE
@@ -512,6 +552,34 @@ class ModelRouter:
             payload["response_format"] = response_format
         if extra:
             payload.update(extra)
+        return payload
+
+    def build_image_request(
+        self,
+        role: str,
+        messages: list[dict[str, Any]],
+        *,
+        image_config: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """The body of a chat-completions request for ``role`` that asks for an image back.
+
+        ``image_config`` is OpenRouter's description of the image (its ``aspect_ratio``); a
+        model that does not read it ignores it, and the caller fits what comes back. The
+        provider routing is the chat requests', and so is the cost the reply reports
+        (``usage``). Raises ``ConfigError`` for a role that is not of kind ``images``.
+        """
+        r = self.resolve(role)
+        if r.kind != "images":
+            raise ConfigError(f"role '{role}' is of kind '{r.kind}', not 'images'")
+        payload: dict[str, Any] = {
+            "model": r.model,
+            "messages": messages,
+            "modalities": ["image", "text"],
+            "provider": self.config.provider.routing.model_dump(),
+            "usage": {"include": True},
+        }
+        if image_config:
+            payload["image_config"] = dict(image_config)
         return payload
 
     def build_decision_request(

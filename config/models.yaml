@@ -148,6 +148,18 @@ roles:
     kind: decisions              # reads untrusted text and answers probabilities only: it cannot call a tool or write text
     model: respan/span-02
 
+  # --- drawing (chat endpoint, image output) ----------------------------
+  # An images role names its model (the tiers are chat models) and takes no temperature, length
+  # limit, reasoning effort or fallbacks. Its model must answer with images (the catalogue's
+  # output_modalities). estimate_usd_per_image is what one image is reckoned to cost before it is
+  # made, for a budget to hold; the catalogue prices image output per token only, and how many
+  # tokens an image is depends on the model. The cost the provider reports is what is kept.
+  image_generator:               # makes and edits the studio's images, the text in them included
+    kind: images
+    model: google/gemini-3.1-flash-image
+    requires: [image_output, vision]   # vision: an image to edit and references are sent as images
+    estimate_usd_per_image: 0.08
+
   # --- retrieval (separate endpoint kind) -------------------------------
   embeddings:                    # memory embeddings; switch provider if your OpenRouter plan lacks this endpoint
     kind: embeddings

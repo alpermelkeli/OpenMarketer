@@ -111,7 +111,8 @@ def catalog_model(entry: Any) -> CatalogModel | None:
     if not isinstance(pricing, dict):
         pricing = {}
     architecture = entry.get("architecture")
-    modalities = architecture.get("input_modalities") if isinstance(architecture, dict) else None
+    if not isinstance(architecture, dict):
+        architecture = {}
     return CatalogModel(
         id=model_id,
         name=name if _is_text(name) else model_id,
@@ -119,7 +120,9 @@ def catalog_model(entry: Any) -> CatalogModel | None:
         prompt_price=_price(pricing.get("prompt")),
         completion_price=_price(pricing.get("completion")),
         supported_parameters=_words(entry.get("supported_parameters")),
-        input_modalities=_words(modalities),
+        input_modalities=_words(architecture.get("input_modalities")),
+        output_modalities=_words(architecture.get("output_modalities")),
+        image_output_price=_price(pricing.get("image_output")),
     )
 
 

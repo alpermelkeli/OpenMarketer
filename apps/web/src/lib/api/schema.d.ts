@@ -792,8 +792,10 @@ export interface components {
          * @description What an action does to the world beyond the run, as its declaration says.
          *
          *     ``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it
-         *     runs when the graph asks. ``PUBLISHES`` puts something in front of other people and
-         *     ``SPENDS`` costs money; the gate holds both for a person's approval.
+         *     runs when the graph asks. ``PUBLISHES`` puts something in front of other people, and the
+         *     gate holds it for a person's approval. ``SPENDS`` costs money: the gate reserves its
+         *     estimate under the creative budget, which lets it run, holds it for a person or refuses it
+         *     (``gate.py``); its worker declares how its cost is estimated.
          * @enum {string}
          */
         ActionEffect: "internal" | "publishes" | "spends";
@@ -951,7 +953,7 @@ export interface components {
          * @description Why a model may not serve a role.
          * @enum {string}
          */
-        CapabilityProblem: "not_in_catalog" | "no_tools" | "no_structured_output" | "no_image_input" | "rejects_temperature" | "fallback_rejects_temperature";
+        CapabilityProblem: "not_in_catalog" | "no_tools" | "no_structured_output" | "no_image_input" | "no_image_output" | "rejects_temperature" | "fallback_rejects_temperature";
         /** CatalogModelResponse */
         CatalogModelResponse: {
             /**
@@ -963,10 +965,20 @@ export interface components {
             context_length: number | null;
             /** Id */
             id: string;
+            /**
+             * Image Output Price
+             * @description US dollars per million tokens of image output.
+             */
+            image_output_price: number | null;
             /** Input Modalities */
             input_modalities: string[];
             /** Name */
             name: string;
+            /**
+             * Output Modalities
+             * @description What the model answers with: `image` too.
+             */
+            output_modalities: string[];
             /**
              * Prompt Price
              * @description US dollars per million input tokens.
@@ -1764,7 +1776,7 @@ export interface components {
             inherited: components["schemas"]["ResolvedModelResponse"];
             /**
              * Kind
-             * @description `chat`, or `embeddings` or `decisions` for a role that takes a model only.
+             * @description `chat`, or `embeddings`, `decisions` or `images` for a role that takes a model only.
              */
             kind: string;
             model_source: components["schemas"]["RoleModelSource"];

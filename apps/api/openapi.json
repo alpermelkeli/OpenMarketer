@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "ActionEffect": {
-        "description": "What an action does to the world beyond the run, as its declaration says.\n\n``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it\nruns when the graph asks. ``PUBLISHES`` puts something in front of other people and\n``SPENDS`` costs money; the gate holds both for a person's approval.",
+        "description": "What an action does to the world beyond the run, as its declaration says.\n\n``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it\nruns when the graph asks. ``PUBLISHES`` puts something in front of other people, and the\ngate holds it for a person's approval. ``SPENDS`` costs money: the gate reserves its\nestimate under the creative budget, which lets it run, holds it for a person or refuses it\n(``gate.py``); its worker declares how its cost is estimated.",
         "enum": [
           "internal",
           "publishes",
@@ -421,6 +421,7 @@
           "no_tools",
           "no_structured_output",
           "no_image_input",
+          "no_image_output",
           "rejects_temperature",
           "fallback_rejects_temperature"
         ],
@@ -457,6 +458,18 @@
             "title": "Id",
             "type": "string"
           },
+          "image_output_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "US dollars per million tokens of image output.",
+            "title": "Image Output Price"
+          },
           "input_modalities": {
             "items": {
               "type": "string"
@@ -467,6 +480,14 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "output_modalities": {
+            "description": "What the model answers with: `image` too.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Modalities",
+            "type": "array"
           },
           "prompt_price": {
             "anyOf": [
@@ -495,7 +516,9 @@
           "prompt_price",
           "completion_price",
           "supported_parameters",
-          "input_modalities"
+          "input_modalities",
+          "output_modalities",
+          "image_output_price"
         ],
         "title": "CatalogModelResponse",
         "type": "object"
@@ -2464,7 +2487,7 @@
             "description": "What the role resolves to without the workspace's choice for it."
           },
           "kind": {
-            "description": "`chat`, or `embeddings` or `decisions` for a role that takes a model only.",
+            "description": "`chat`, or `embeddings`, `decisions` or `images` for a role that takes a model only.",
             "title": "Kind",
             "type": "string"
           },

@@ -281,6 +281,8 @@ def test_catalogue_lists_the_providers_models(client):
                 "completion_price": 2.0,
                 "supported_parameters": ["temperature", "tools"],
                 "input_modalities": ["text"],
+                "output_modalities": [],
+                "image_output_price": None,
             }
         ],
     }

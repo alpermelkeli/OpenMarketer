@@ -1,12 +1,19 @@
 """Tests for the router-backed chat client, against a fake HTTP transport."""
 
+import base64
 import json
 from pathlib import Path
 
 import httpx
 import pytest
 
-from openmarketer_core.llm import LLMError, RouterChatModel
+from openmarketer_core.llm import (
+    MAX_IMAGE_PART_BYTES,
+    ImagePartRefused,
+    LLMError,
+    RouterChatModel,
+    image_part,
+)
 from openmarketer_core.llm_config import ConfigError, ModelRouter
 
 MODELS_YAML = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
@@ -261,3 +268,42 @@ def test_failure_of_a_request_does_not_repeat_the_key_handed_in():
     with pytest.raises(LLMError) as failure:
         model.chat("writer", [{"role": "user", "content": "x"}])
     assert HANDED_IN not in str(failure.value)
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+
+def test_image_part_shows_a_model_the_bytes_as_a_data_url():
+    part = image_part(PNG, "image/png")
+    assert part == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64," + base64.b64encode(PNG).decode()},
+    }
+
+
+@pytest.mark.parametrize(
+    ("data", "mime", "reason"),
+    [
+        (PNG, "image/gif", "PNG, JPEG or WebP"),
+        (b"", "image/png", "empty"),
+        (PNG, "image/jpeg", "not a image/jpeg image"),
+        (b"\x89PNG\r\n\x1a\n" + b"\x00" * MAX_IMAGE_PART_BYTES, "image/png", "at most"),
+    ],
+    ids=["other-type", "empty", "bytes-of-another-type", "too-large"],
+)
+def test_image_part_is_refused_for_what_is_not_an_accepted_image(data, mime, reason):
+    with pytest.raises(ImagePartRefused, match=reason):
+        image_part(data, mime)
+
+
+def test_vision_role_is_sent_the_image_part_in_its_messages():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "a cat"}}]})
+
+    content = [{"type": "text", "text": "what is this?"}, image_part(PNG, "image/png")]
+    client(handler).chat("asset_verifier", [{"role": "user", "content": content}])
+
+    assert seen["body"]["messages"][0]["content"][1]["type"] == "image_url"

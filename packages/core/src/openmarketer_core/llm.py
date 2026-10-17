@@ -7,10 +7,16 @@ configured OpenAI-compatible endpoint (OpenRouter by default).
 What a provider answers when it refuses a request is not repeated in the error:
 an error page can echo request headers or prompt text. The error says the HTTP
 status and the response goes to the log.
+
+A role that requires ``vision`` is shown an image as a part of a message's
+content (``image_part``), in the OpenAI form OpenRouter reads: the bytes in a
+data URL. Only PNG, JPEG and WebP within a size are made into one, and only
+when the bytes are what the type says.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -24,6 +30,20 @@ logger = logging.getLogger(__name__)
 MAX_MODEL_NAME_LENGTH = 200
 
 _PASSING_STATUSES = (408, 429)
+
+# Larger images cost more to send than they tell a model; the studio's canvases are well under it.
+MAX_IMAGE_PART_BYTES = 10 * 1024 * 1024
+
+# The first bytes of each image type a model is shown.
+_IMAGE_SIGNATURES = {
+    "image/png": lambda data: data.startswith(b"\x89PNG\r\n\x1a\n"),
+    "image/jpeg": lambda data: data.startswith(b"\xff\xd8\xff"),
+    "image/webp": lambda data: len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP",
+}
+
+
+class ImagePartRefused(ValueError):
+    """The bytes cannot be shown to a model as an image; the message says why, never the bytes."""
 
 
 class LLMError(Exception):
@@ -176,3 +196,22 @@ def reported_status(error: Any) -> int | None:
     """The status a provider puts in the error of a reply it sent with HTTP 200."""
     code = error.get("code") if isinstance(error, dict) else None
     return code if isinstance(code, int) and not isinstance(code, bool) else None
+
+
+def image_part(data: bytes, mime: str) -> dict[str, Any]:
+    """``data`` as a part of a message's content that shows a model the image.
+
+    Raises ``ImagePartRefused`` for a type other than PNG, JPEG or WebP, for bytes that do not
+    start as that type does, and for an empty image or one over ``MAX_IMAGE_PART_BYTES``.
+    """
+    matches = _IMAGE_SIGNATURES.get(mime)
+    if matches is None:
+        raise ImagePartRefused("an image is shown as PNG, JPEG or WebP")
+    if not data:
+        raise ImagePartRefused("the image is empty")
+    if len(data) > MAX_IMAGE_PART_BYTES:
+        raise ImagePartRefused(f"an image shown to a model is at most {MAX_IMAGE_PART_BYTES} bytes")
+    if not matches(data):
+        raise ImagePartRefused(f"the bytes are not a {mime} image")
+    encoded = base64.b64encode(data).decode("ascii")
+    return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}}

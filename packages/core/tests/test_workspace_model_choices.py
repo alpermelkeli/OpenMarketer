@@ -17,6 +17,7 @@ from openmarketer_core.workspace_settings.model_choices import (
 CHAT = RoleConfig(tier="fast")
 EMBEDDINGS = RoleConfig(kind="embeddings", model="openai/embed")
 DECISIONS = RoleConfig(kind="decisions", model="vendor/decide")
+IMAGES = RoleConfig(kind="images", model="vendor/draw", requires=["image_output"])
 
 
 def refused_field(call) -> str:
@@ -122,3 +123,10 @@ def test_choices_are_laid_over_the_router_and_the_environment_still_wins():
     assert chosen.resolve("reader").temperature == 0.9
     assert "temperature" not in chosen.build_chat_request("writer", [])
     assert choices.without_role("reader").router_for(router).resolve("reader").temperature == 0.4
+
+
+def test_images_role_takes_a_model_only():
+    assert acceptable_role_choice(RoleChoice(model="vendor/d2"), IMAGES).model == "vendor/d2"
+    with pytest.raises(ModelChoiceRefused, match="this role takes a model only") as refusal:
+        acceptable_role_choice(RoleChoice(temperature=0.5), IMAGES)
+    assert refusal.value.field == "temperature"
