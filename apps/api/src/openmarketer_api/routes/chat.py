@@ -5,11 +5,11 @@ this process - it reads the project's stored records and returns one answer, and
 it may start a research run when the operator asks for research - and the
 exchange is stored under the chat. One route opens a chat, one lists the
 project's chats, most recently active first, one reads a chat, one pages a
-chat's messages, newest first, one sends a message and one records that the
-operator has read a chat. Nothing else changes the project, and no route
-presents a chat as approved by anyone: the agent reads and answers and starts
-research runs, and approvals, settings and every other kind of run stay on their
-own routes.
+chat's messages, newest first, one sends a message, one records that the
+operator has read a chat and one deletes a chat with its messages. Nothing else
+changes the project, and no route presents a chat as approved by anyone: the
+agent reads and answers and starts research runs, and approvals, settings and
+every other kind of run stay on their own routes.
 
 Unlike an analysis, which a worker runs, a chat turn runs in the API's process,
 so this module resolves the turn's model itself: the workspace's choice for the
@@ -54,6 +54,7 @@ from openmarketer_core.db.chat import (
     ChatMessage,
     ChatThread,
     create_chat,
+    delete_chat,
     get_chat,
     list_chat_messages,
     list_chats,
@@ -363,3 +364,23 @@ def mark_read(
     return _thread(
         mark_chat_read(session, workspace_id=workspace_id, project_id=project_id, chat_id=chat_id)
     )
+
+
+@router.delete(
+    "/{chat_id}",
+    operation_id="deleteChat",
+    status_code=204,
+    responses=problems(404),
+    dependencies=[Depends(no_request_body)],
+)
+def delete(
+    project_id: uuid.UUID,
+    chat_id: uuid.UUID,
+    session: DbSession,
+    workspace_id: CurrentWorkspaceId,
+) -> None:
+    """Delete the chat with its messages, for good. Nothing is kept to restore it from.
+
+    The request takes no body; one is a 422.
+    """
+    delete_chat(session, workspace_id=workspace_id, project_id=project_id, chat_id=chat_id)

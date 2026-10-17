@@ -930,6 +930,7 @@
           "role_not_found",
           "project_already_exists",
           "analysis_already_running",
+          "research_unfinished",
           "profile_already_approved",
           "proposal_not_pending",
           "proposal_pending",
@@ -944,7 +945,8 @@
           "research_not_started",
           "model_unavailable",
           "chat_unanswered",
-          "database_unavailable"
+          "database_unavailable",
+          "storage_unavailable"
         ],
         "title": "ErrorCode",
         "type": "string"
@@ -2815,7 +2817,7 @@
     },
     "/v1/projects/{project_id}": {
       "delete": {
-        "description": "Delete the project with its analyses, evidence, profile versions and proposals, for good.\n\nRefused while an analysis of the project is queued or running, or a proposal of it waits\nfor a decision. The repository is not touched.",
+        "description": "Delete the project with everything stored about it, for good.\n\nThat is its analyses, the evidence they found, every profile version, its\nproposals, its chats and its research runs with their reports and the pages\nthey fetched. Refused while an analysis or a research run of the project is\nqueued or running, or a proposal of it waits for a decision. 503\n`storage_unavailable` when the research pages' objects could not be removed\nfrom object storage; the project stays then. The repository is not touched.",
         "operationId": "deleteProject",
         "parameters": [
           {
@@ -3428,6 +3430,81 @@
       }
     },
     "/v1/projects/{project_id}/chats/{chat_id}": {
+      "delete": {
+        "description": "Delete the chat with its messages, for good. Nothing is kept to restore it from.\n\nThe request takes no body; one is a 422.",
+        "operationId": "deleteChat",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Chat Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Delete",
+        "tags": [
+          "chat"
+        ]
+      },
       "get": {
         "description": "One chat as it is now, with whether it has messages the operator has not read.",
         "operationId": "getChat",
@@ -4895,6 +4972,91 @@
       }
     },
     "/v1/projects/{project_id}/researches/{run_id}": {
+      "delete": {
+        "description": "Delete a finished run with its report and the pages it fetched, for good.\n\n409 `research_unfinished` while the run is queued or running: the worker\nwould store pages or a report for a run that is gone. 503\n`storage_unavailable` when the pages' objects could not be removed from\nobject storage; the run stays then, and can be deleted again. The request\ntakes no body; one is a 422.",
+        "operationId": "deleteResearch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Delete",
+        "tags": [
+          "research"
+        ]
+      },
       "get": {
         "description": "The run as it is now: queued, running, succeeded (with the report) or failed.",
         "operationId": "getResearch",

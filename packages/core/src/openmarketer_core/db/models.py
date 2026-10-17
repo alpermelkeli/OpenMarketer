@@ -368,7 +368,7 @@ class ResearchPageRecord(Base):
     signs the code found in its text. A run fetches one URL once: the unique
     constraint is what a repeated fetch of the same page of the same run finds
     instead of fetching and storing it again. Rows are removed when they
-    expire, and the objects with them.
+    expire, or with their run when it is deleted, and the objects with them.
     """
 
     __tablename__ = "research_page"
@@ -466,9 +466,10 @@ class ChatThreadRecord(Base):
 class ChatMessageRecord(Base):
     """One message of a project's chat thread, as it was written.
 
-    A message is never changed or deleted once stored; the thread is the record
-    of what was asked and answered. Which model answered, and what the turn
-    cost, are not stored with it: the row is what a person reads.
+    A message is never changed once stored, and it is deleted only with its
+    whole thread; the thread is the record of what was asked and answered.
+    Which model answered, and what the turn cost, are not stored with it: the
+    row is what a person reads.
     """
 
     __tablename__ = "chat_message"

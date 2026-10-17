@@ -2,6 +2,7 @@
 
 import { ArrowLeftIcon } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { Notice } from "@/components/common/notice";
 import { RequestProblem } from "@/components/common/request-problem";
@@ -18,6 +19,7 @@ type ResearchRunScreenProps = { projectId: string; runId: string };
 
 /** One research run: how it is going, and its report once it has one. */
 export function ResearchRunScreen({ projectId, runId }: ResearchRunScreenProps) {
+  const router = useRouter();
   const run = useResearchRun(projectId, runId);
   const finished = run.data !== undefined && isRunFinished(run.data);
   const now = useNow(!finished);
@@ -56,6 +58,7 @@ export function ResearchRunScreen({ projectId, runId }: ResearchRunScreenProps) 
         run={found}
         elapsedMs={runElapsedMs(found, now)}
         waitingForWorker={isWaitingForWorker(found, now)}
+        onDeleted={() => router.replace(projectPageHref(projectId, "research"))}
       />
       {found.status === "succeeded" && (
         <>

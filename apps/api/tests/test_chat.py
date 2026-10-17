@@ -128,7 +128,7 @@ def scope(sessions) -> RunScope:
 
 
 @pytest.fixture
-def services(app, sessions, scope, repository_models, no_catalog) -> None:
+def services(app, sessions, scope, repository_models, no_catalog, page_store) -> None:
     """The application wired to the test database, this test's workspace, no stored key."""
     app.state.services = Services(
         sessions=sessions,
@@ -137,6 +137,7 @@ def services(app, sessions, scope, repository_models, no_catalog) -> None:
         credential_cipher=None,
         model_router=repository_models,
         model_catalog=no_catalog,
+        page_store=page_store,
     )
     app.dependency_overrides[current_workspace_id] = lambda: scope.workspace_id
 
@@ -476,6 +477,7 @@ def test_the_chat_of_a_project_the_workspace_does_not_have_is_not_found(
         client.post(f"{url}/{uuid.uuid4()}/messages", json={"message": "hello"}).status_code == 404
     )
     assert client.post(f"{url}/{uuid.uuid4()}/read").status_code == 404
+    assert client.delete(f"{url}/{uuid.uuid4()}").status_code == 404
 
 
 def test_a_chat_the_project_does_not_have_is_not_found(client, services, app, scope):
@@ -488,6 +490,7 @@ def test_a_chat_the_project_does_not_have_is_not_found(client, services, app, sc
         client.get(messages_url(scope, unknown)),
         client.post(messages_url(scope, unknown), json={"message": "hello"}),
         client.post(read_url(scope, unknown)),
+        client.delete(chat_url(scope, unknown)),
     ]
 
     assert all(response.status_code == 404 for response in responses)
@@ -511,8 +514,39 @@ def test_a_chat_of_another_project_is_not_found(client, services, app, scope, se
         client.get(messages_url(scope, foreign.id)),
         client.post(messages_url(scope, foreign.id), json={"message": "hello"}),
         client.post(read_url(scope, foreign.id)),
+        client.delete(chat_url(scope, foreign.id)),
     ):
         assert (response.status_code, response.json()["code"]) == (404, "chat_not_found")
+
+
+# ----------------------------------------------------------------- delete
+def test_a_deleted_chat_is_gone_with_its_messages(client, services, scope, sessions):
+    chat = open_chat(client, scope)
+    store(sessions, scope, uuid.UUID(chat["id"]), "Is it ready?", "Yes.")
+
+    response = client.delete(chat_url(scope, chat["id"]))
+
+    assert (response.status_code, response.content) == (204, b"")
+    assert client.get(chat_url(scope, chat["id"])).status_code == 404
+    assert client.get(messages_url(scope, chat["id"])).status_code == 404
+    assert client.get(chats_url(scope)).json()["chats"] == []
+
+
+def test_deleting_one_chat_keeps_the_project_s_other_chats(client, services, scope):
+    deleted = open_chat(client, scope, title="Gone")
+    kept = open_chat(client, scope, title="Kept")
+
+    client.delete(chat_url(scope, deleted["id"]))
+
+    assert [chat["title"] for chat in client.get(chats_url(scope)).json()["chats"]] == ["Kept"]
+    assert client.get(chat_url(scope, kept["id"])).status_code == 200
+
+
+def test_deleting_a_chat_takes_no_body(client, services, scope):
+    chat = open_chat(client, scope)
+    response = client.request("DELETE", chat_url(scope, chat["id"]), json={"force": True})
+    assert response.status_code == 422
+    assert client.get(chat_url(scope, chat["id"])).status_code == 200
 
 
 # ------------------------------------------------------- the request action

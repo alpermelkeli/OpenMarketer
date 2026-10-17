@@ -17,6 +17,7 @@ from openmarketer_core.db.chat import (
     append_exchange,
     chat_history,
     create_chat,
+    delete_chat,
     get_chat,
     list_chat_messages,
     list_chats,
@@ -351,3 +352,83 @@ def test_appending_to_an_unknown_project_writes_nothing(session, scope):
               uuid.uuid4(), "question", "answer")  # fmt: skip
     count = session.scalar(select(func.count()).select_from(ChatMessageRecord))
     assert count == 0
+
+
+def test_a_deleted_chat_is_gone_with_its_messages(session, scope):
+    chat = open_chat(session, scope)
+    store(session, scope, chat.id, "Is it ready?", "Yes.")
+
+    delete_chat(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, chat_id=chat.id
+    )
+
+    assert session.scalar(select(func.count()).select_from(ChatMessageRecord)) == 0
+    with pytest.raises(ChatNotFound):
+        stored_thread(session, scope, chat.id)
+
+
+def test_deleting_one_chat_keeps_the_others(session, scope):
+    deleted = open_chat(session, scope, title="Gone")
+    kept = open_chat(session, scope, title="Kept")
+    store(session, scope, kept.id, "question", "answer")
+
+    delete_chat(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, chat_id=deleted.id
+    )
+
+    page = list_chats(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, limit=10
+    )
+    assert [chat.title for chat in page.items] == ["Kept"]
+    assert listed(session, scope, kept.id, limit=10) == ["answer", "question"]
+
+
+def test_deleting_an_unknown_chat_is_not_found(session, scope):
+    with pytest.raises(ChatNotFound):
+        delete_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=uuid.uuid4(),
+        )
+
+
+def test_deleting_a_chat_of_an_unknown_project_is_not_found(session, scope):
+    with pytest.raises(ProjectNotFound):
+        delete_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=uuid.uuid4(),
+            chat_id=uuid.uuid4(),
+        )
+
+
+def test_deleting_a_chat_of_another_project_is_not_found_and_keeps_it(session, scope):
+    other = new_scope(session)
+    foreign = open_chat(session, other)
+    store(session, other, foreign.id, "question", "answer")
+
+    with pytest.raises(ChatNotFound):
+        delete_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=foreign.id,
+        )
+
+    assert listed(session, other, foreign.id, limit=10) == ["answer", "question"]
+
+
+def test_deleting_a_chat_of_another_workspace_is_not_found(session, scope):
+    chat = open_chat(session, scope)
+    other = new_scope(session)
+
+    with pytest.raises(ProjectNotFound):
+        delete_chat(
+            session,
+            workspace_id=other.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat.id,
+        )
+
+    assert stored_thread(session, scope, chat.id).id == chat.id
