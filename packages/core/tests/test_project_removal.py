@@ -17,9 +17,12 @@ from openmarketer_core.db.analysis_runs import (
     mark_run_succeeded,
     request_analysis_run,
 )
+from openmarketer_core.db.chat import append_exchange, create_chat
 from openmarketer_core.db.evidence_store import save_analysis_of_project
 from openmarketer_core.db.models import (
     AnalysisRunRecord,
+    ChatMessageRecord,
+    ChatThreadRecord,
     Evidence,
     ProductProfileRecord,
     Project,
@@ -104,6 +107,8 @@ def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
         "product_profile": ProductProfileRecord.project_id,
         "repo_snapshot": RepoSnapshot.project_id,
         "proposal": ProposalRecord.project_id,
+        "chat_thread": ChatThreadRecord.project_id,
+        "chat_message": ChatMessageRecord.project_id,
     }
     return {
         name: session.scalar(select(func.count()).where(column == project_id)) or 0
@@ -118,6 +123,8 @@ NOTHING = {
     "product_profile": 0,
     "repo_snapshot": 0,
     "proposal": 0,
+    "chat_thread": 0,
+    "chat_message": 0,
 }
 
 
@@ -131,8 +138,27 @@ def test_project_is_deleted_with_its_runs_evidence_snapshots_and_versions(sessio
     project_id = new_project(session, workspace_id)
     analysed(session, workspace_id, project_id)
     assert all(
-        count > 0 for name, count in rows_of(session, project_id).items() if name != "proposal"
+        count > 0
+        for name, count in rows_of(session, project_id).items()
+        if name not in ("proposal", "chat_thread", "chat_message")
     )
+    delete_project(session, workspace_id=workspace_id, project_id=project_id)
+    assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_is_deleted_with_its_chats_and_messages(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    chat = create_chat(session, workspace_id=workspace_id, project_id=project_id)
+    append_exchange(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        chat_id=chat.id,
+        question="Is it ready?",
+        answer="Yes.",
+    )
+    assert rows_of(session, project_id)["chat_thread"] == 1
+    assert rows_of(session, project_id)["chat_message"] == 2
     delete_project(session, workspace_id=workspace_id, project_id=project_id)
     assert rows_of(session, project_id) == NOTHING
 

@@ -1,16 +1,16 @@
 """Settings of the API process, read from the environment at the edge.
 
 Only what the API itself needs is here: the database, the workflow server, the
-key that credentials are stored under and the model configuration. The API never
-reads the value of a credential, from the environment or from the database:
-analyses run in the worker. It reads the model configuration (``LLM_CONFIG_PATH``)
-to show what each role resolves to and to store a workspace's choices of models;
-a configuration that cannot be read stops the start, as it stops the worker's.
-``ENCRYPTION_KEY`` is read to encrypt a credential the user sets; without it
-nothing can be stored, and a key that is not one stops the start. Whether the
-environment sets a credential is not a setting: core's ``credential_statuses``
-is handed the environment (``main.py``) and looks only at whether each
-credential's variable is empty.
+key that credentials are stored under and the model configuration. It reads the
+model configuration (``LLM_CONFIG_PATH``) to show what each role resolves to and
+to store a workspace's choices of models; a configuration that cannot be read
+stops the start, as it stops the worker's. ``ENCRYPTION_KEY`` is read to encrypt
+a credential the user sets; without it nothing can be stored, and a key that is
+not one stops the start. Whether the environment sets a credential is not a
+setting: core's ``credential_statuses`` is handed the environment (``main.py``)
+and looks only at whether each credential's variable is empty. No credential's
+value is kept here: the model provider's key is resolved where it is used, by
+the worker for analyses and by ``routes/chat.py`` for a chat turn.
 """
 
 from __future__ import annotations

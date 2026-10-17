@@ -274,7 +274,7 @@
             <h4>call_model ⇄ run_tools</h4>
             <ul class="where">
               <li>· <span class="f">core/llm.py</span> <b>RouterChatModel.chat()</b></li>
-              <li>· <span class="f">rules.py</span> <b>run_tool_calls()</b> → <span class="f">tools.py</span> <b>RepoTools</b></li>
+              <li>· <span class="f">rules.py</span> <b>run_tool_calls()</b> → <span class="f">tools.py</span> (the agent's tools) → <span class="f">reading.py</span> <b>RepoTools</b></li>
               <li>· submit → <b>verify()</b> / <b>repair()</b></li>
             </ul>
             <p>A checkpoint is stored after every node, so a retried attempt continues after the last one that finished.</p>

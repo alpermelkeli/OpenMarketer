@@ -19,8 +19,9 @@ Nodes and actions
 - A tool may not ask for an action. A tool is what the model chose to call and answers with text; an action is asked for by a node, from what the model submitted.
 - A payload names identifiers only and its model forbids extra fields; every payload is kept in the workflow history. No field may read text as a file path or an import name.
 
-State and checkpoints
-- `AnalyzerState` is plain data (dicts, lists, strings, numbers, booleans, `None`); the store's strict serializer rebuilds nothing else. What is not plain data (the model client, the repository) goes in `AnalyzerContext`, built per attempt and never stored.
+State, context and checkpoints
+- The state/context split is the runtime's, the same for every agent: the state is what a retry must find again — plain data (dicts, lists, strings, numbers, booleans, `None`), and all the store's strict serializer rebuilds; the context is everything else a step needs (the model client, the attempt's repository, a session), built by the wiring for each attempt and never stored with the state, so it may hold anything. A node, a route's chooser or a tool that needs one takes it as a second parameter. `AnalyzerState` and `AnalyzerContext` are the analyzer's two.
+- The model is told nothing of the context itself: the messages it reads are built by code from the state and the rules, and a tool's `context` parameter is not in the schema the model reads. What a step reaches through the context goes to the model only where the code writes it into a message.
 - A change to `AnalyzerState`, to a node's name or to the order of nodes must consider threads stored by the previous version: a run can have one attempt before a deploy and the next after it, and nothing is compared before a thread is continued. A missing key raises; changed limits or prompts apply silently to the old conversation. Make the new code read an old thread or decide how old threads are discarded, and add a test.
 - A node must be safe to run twice: the one that was running when an attempt died runs again. `run_tools` only reads; `call_model` costs one model call.
 - The limits (steps, cost, submissions) are in the state, so they count every attempt of a run. Keep it that way.

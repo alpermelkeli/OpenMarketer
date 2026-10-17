@@ -18,6 +18,7 @@ const API_ERROR_CODES: Record<ErrorCode, true> = {
   not_local_request: true,
   project_not_found: true,
   analysis_not_found: true,
+  chat_not_found: true,
   profile_not_found: true,
   credential_not_found: true,
   proposal_not_found: true,
@@ -29,11 +30,15 @@ const API_ERROR_CODES: Record<ErrorCode, true> = {
   proposal_not_pending: true,
   proposal_pending: true,
   credential_set_by_environment: true,
+  credential_unreadable: true,
   encryption_key_missing: true,
   model_set_by_environment: true,
+  model_key_not_set: true,
   stored_setting_invalid: true,
   internal_error: true,
   analysis_not_started: true,
+  model_unavailable: true,
+  chat_unanswered: true,
   database_unavailable: true,
 };
 

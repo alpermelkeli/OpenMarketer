@@ -15,7 +15,7 @@ another variable is another provider's: its key comes from that variable alone, 
 one provider is never sent to another.
 
 What cannot be resolved is said in an error whose message may be shown and never holds a
-value: core's ``CredentialUnreadable`` for a stored value that does not open, and
+value: core's ``CredentialUnreadable`` for a stored value that does not open, and core's
 ``ModelKeyNotSet`` when the provider's key is set nowhere. Neither passes by itself, so
 another attempt is not worth its cost. A failure of the database is not caught. This module
 words no agent's failure and imports no agent: each agent turns these errors into the
@@ -34,27 +34,12 @@ from collections.abc import Mapping, Sequence
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from openmarketer_core.credentials.catalog import OPENROUTER_API_KEY, Credential
+from openmarketer_core.credentials.catalog import Credential
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.credentials.resolution import credential_value
+from openmarketer_core.credentials.resolution import model_key as resolve_model_key
 from openmarketer_core.db.session import transaction
 from openmarketer_core.llm_config import ModelRouter
-
-
-class ModelKeyNotSet(Exception):
-    """The model provider's key is neither in the environment nor stored for the workspace."""
-
-    def __init__(self, environment_variable: str) -> None:
-        """``environment_variable`` is the one the model configuration names for the key."""
-        # Settings stores the catalog's credential only, so it is no place for another key.
-        if environment_variable == OPENROUTER_API_KEY.environment_variable:
-            where = (
-                "set it in the dashboard's Settings,"
-                f" or with the environment variable {environment_variable}"
-            )
-        else:
-            where = f"set the environment variable {environment_variable}"
-        super().__init__(f"the model provider's API key is not set: {where}")
 
 
 class WorkspaceCredentials:
@@ -94,18 +79,17 @@ class WorkspaceCredentials:
     def model_key(self, workspace_id: uuid.UUID, router: ModelRouter) -> str:
         """The key for the calls ``router`` builds for a run of the workspace.
 
-        The one in the router's environment, otherwise the workspace's when the router's
-        variable is the catalog's. Raises ``ModelKeyNotSet`` when there is none,
-        ``CredentialUnreadable`` and ``DatabaseError``.
+        Core's rule (``credentials/resolution.py``), read in one transaction. Raises
+        ``ModelKeyNotSet`` when there is none, ``CredentialUnreadable`` and ``DatabaseError``.
         """
-        variable = router.config.provider.api_key_env
-        key = router.api_key_in_environment()
-        # Only for the catalog's own variable: its key must not reach another provider.
-        if key is None and variable == OPENROUTER_API_KEY.environment_variable:
-            key = self.values(workspace_id, [OPENROUTER_API_KEY])[OPENROUTER_API_KEY]
-        if key is None:
-            raise ModelKeyNotSet(variable)
-        return key
+        with transaction(self._sessions) as session:
+            return resolve_model_key(
+                session,
+                self._environ,
+                workspace_id=workspace_id,
+                router=router,
+                cipher=self._cipher,
+            )
 
     def __repr__(self) -> str:
         # Never the environment: a repr ends up in logs and tracebacks.

@@ -1,6 +1,6 @@
 """Tables for projects, repository evidence, Product Profile versions, analysis runs, stored
-credentials, the settings a workspace chose from the dashboard, and the proposals of actions
-that wait for a person.
+credentials, the settings a workspace chose from the dashboard, the proposals of actions
+that wait for a person, and the operator's chat threads about a project.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project; ``credential`` and
@@ -304,3 +304,59 @@ class ProposalRecord(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     decided_by: Mapped[uuid.UUID | None]
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ------------------------------------------------------------------- chat
+class ChatRole(StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class ChatThreadRecord(Base):
+    """One named conversation of the operator's chat about a project.
+
+    A thread is opened empty and gathers the exchanges of one conversation.
+    ``last_activity_at`` orders the project's threads, newest first;
+    ``last_read_at`` is how far the operator has read, so a message after it
+    leaves the thread unread.
+    """
+
+    __tablename__ = "chat_thread"
+    __table_args__ = (
+        # The list of a project's threads reads most active first in this order.
+        Index(
+            "ix_chat_thread_project_id_last_activity_at",
+            "project_id",
+            "last_activity_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    title: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ChatMessageRecord(Base):
+    """One message of a project's chat thread, as it was written.
+
+    A message is never changed or deleted once stored; the thread is the record
+    of what was asked and answered. Which model answered, and what the turn
+    cost, are not stored with it: the row is what a person reads.
+    """
+
+    __tablename__ = "chat_message"
+    __table_args__ = (
+        # The list of a thread's messages reads newest first in this order.
+        Index("ix_chat_message_thread_id_created_at", "thread_id", "created_at", "id"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_thread.id"))
+    role: Mapped[ChatRole] = mapped_column(_enum(ChatRole, "role"))
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()

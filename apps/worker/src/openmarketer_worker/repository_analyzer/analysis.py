@@ -45,7 +45,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
-from openmarketer_core.credentials.resolution import CredentialUnreadable
+from openmarketer_core.credentials.resolution import CredentialUnreadable, ModelKeyNotSet
 from openmarketer_core.db.analysis_runs import (
     AnalysisRunFinished,
     AnalysisRunNotFound,
@@ -86,7 +86,6 @@ from openmarketer_core.workspace_settings.model_settings import StoredModelChoic
 from openmarketer_worker.agent_runtime.activities import AgentGraph
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, forget_quietly
 from openmarketer_worker.agent_runtime.vocabulary import DATABASE_UNAVAILABLE
-from openmarketer_worker.credentials import ModelKeyNotSet
 from openmarketer_worker.repository_analyzer import steps
 from openmarketer_worker.repository_analyzer.activities import failure, scope_of, subject_of
 from openmarketer_worker.repository_analyzer.clones import LocalClones, TokensOfTheRun

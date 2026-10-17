@@ -25,6 +25,7 @@ from openmarketer_core.db.models import (
     ProductProfileRecord,
     ProfileStatus,
     Project,
+    ProjectStatus,
 )
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.workspace_lock import wait_for_other_writes
@@ -49,6 +50,9 @@ class StoredProject:
     workspace_id: uuid.UUID
     name: str
     source_repo_url: str
+    status: ProjectStatus
+    autonomy_level: int
+    product_url: str | None
     created_at: datetime
 
 
@@ -196,5 +200,8 @@ def _stored(project: Project) -> StoredProject:
         workspace_id=project.workspace_id,
         name=project.name,
         source_repo_url=project.source_repo_url,
+        status=project.status,
+        autonomy_level=project.autonomy_level,
+        product_url=project.product_url,
         created_at=project.created_at,
     )

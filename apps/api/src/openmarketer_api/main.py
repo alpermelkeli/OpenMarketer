@@ -21,6 +21,7 @@ from openmarketer_api.identity import current_user_id
 from openmarketer_api.routes import (
     analyses,
     analysis_settings,
+    chat,
     credentials,
     health,
     model_settings,
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
         analyses,
         profiles,
         proposals,
+        chat,
         credentials,
         model_settings,
         analysis_settings,

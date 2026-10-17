@@ -122,6 +122,103 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List All
+         * @description The project's chats as they are now, most recently active first, one page at a time.
+         */
+        get: operations["listChats"];
+        put?: never;
+        /**
+         * Create
+         * @description Open an empty chat about the project, named by the body or after its first message.
+         */
+        post: operations["createChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/chats/{chat_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get
+         * @description One chat as it is now, with whether it has messages the operator has not read.
+         */
+        get: operations["getChat"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/chats/{chat_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Messages
+         * @description The chat's messages as they are now, newest first, one page at a time.
+         */
+        get: operations["listChatMessages"];
+        put?: never;
+        /**
+         * Send
+         * @description Answer one operator message in the chat, and store the exchange.
+         *
+         *     201 with the stored question and answer. 409 `model_key_not_set`,
+         *     `credential_unreadable` or `stored_setting_invalid` when the turn's model
+         *     cannot be resolved. 503 `chat_unanswered` when the agent gave no answer
+         *     within its limits and `model_unavailable` when the provider could not
+         *     answer; nothing is stored then, and sending the message again starts the
+         *     turn again.
+         */
+        post: operations["sendChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/chats/{chat_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark Read
+         * @description Record that the operator has read the chat up to now; it is no longer unread.
+         *
+         *     The request takes no body; one is a 422.
+         */
+        post: operations["markChatRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{project_id}/profile/approved": {
         parameters: {
             query?: never;
@@ -731,6 +828,115 @@ export interface components {
             /** Supported Parameters */
             supported_parameters: string[];
         };
+        /** ChatMessageListResponse */
+        ChatMessageListResponse: {
+            /** Messages */
+            messages: components["schemas"]["ChatMessageResponse"][];
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+        };
+        /** ChatMessageRequest */
+        ChatMessageRequest: {
+            /** Message */
+            message: string;
+        };
+        /** ChatMessageResponse */
+        ChatMessageResponse: {
+            /**
+             * Chat Id
+             * Format: uuid
+             */
+            chat_id: string;
+            /** Content */
+            content: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** @description Who wrote it: `user` for the operator, `assistant` for the chat agent. */
+            role: components["schemas"]["ChatRole"];
+        };
+        /**
+         * ChatRole
+         * @enum {string}
+         */
+        ChatRole: "user" | "assistant";
+        /** ChatThreadListResponse */
+        ChatThreadListResponse: {
+            /** Chats */
+            chats: components["schemas"]["ChatThreadResponse"][];
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+        };
+        /** ChatThreadResponse */
+        ChatThreadResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Last Activity At
+             * Format: date-time
+             * @description When the chat last gained a message; the list orders by it.
+             */
+            last_activity_at: string;
+            /**
+             * Last Read At
+             * @description When the operator last read the chat; null when it was never read.
+             */
+            last_read_at: string | null;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Title */
+            title: string;
+            /**
+             * Unread
+             * @description Whether a message was written after `last_read_at`.
+             */
+            unread: boolean;
+        };
+        /** ChatTurnResponse */
+        ChatTurnResponse: {
+            /** @description The answer the agent submitted. */
+            answer: components["schemas"]["ChatMessageResponse"];
+            /**
+             * Cost Usd
+             * @description What the whole turn cost, a summarised history included.
+             */
+            cost_usd: number;
+            /**
+             * Model
+             * @description The model that answered, as the provider named it.
+             */
+            model: string;
+            question: components["schemas"]["ChatMessageResponse"];
+        };
         /**
          * ChoiceBoundsResponse
          * @description What a role's choice may hold.
@@ -760,6 +966,14 @@ export interface components {
             max_cost_usd: number | null;
             /** Max Steps */
             max_steps: number | null;
+        };
+        /** CreateChatRequest */
+        CreateChatRequest: {
+            /**
+             * Title
+             * @description What the chat is called. Left out, it is named after the first message.
+             */
+            title?: string | null;
         };
         /** CreateProjectRequest */
         CreateProjectRequest: {
@@ -801,7 +1015,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "credential_set_by_environment" | "encryption_key_missing" | "model_set_by_environment" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "database_unavailable";
+        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable";
         /**
          * Evidence
          * @description A location in the analysed repository that supports a claim.
@@ -1804,6 +2018,385 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalysisRunResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listChats: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatThreadListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CreateChatRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatThreadResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatThreadResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listChatMessages: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatMessageListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sendChatMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatTurnResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    markChatRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatThreadResponse"];
                 };
             };
             /** @description Forbidden */
