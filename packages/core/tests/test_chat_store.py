@@ -573,13 +573,21 @@ def test_deleting_a_chat_of_another_workspace_is_not_found(session, scope):
 
 def test_deleting_a_chat_takes_its_turns_and_their_events(session, scope):
     chat = open_chat(session, scope)
-    question, _ = store(session, scope, chat.id, "Is it ready?", "Yes.")
+    turn_id = new_turn(session, scope, chat.id)
+    store(session, scope, chat.id, "Is it ready?", "Yes.", turn_id=turn_id)
+    finish_turn(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        chat_id=chat.id,
+        turn_id=turn_id,
+    )
     append_events(
         session,
         workspace_id=scope.workspace_id,
         project_id=scope.project_id,
         run_kind=CHAT_TURN_KIND,
-        run_id=question.turn_id,
+        run_id=turn_id,
         events=[RunEvent(TURN_STARTED)],
     )
     kept_chat = open_chat(session, scope)
