@@ -6,7 +6,7 @@
 
 import { isProjectId } from "./project-id";
 
-export type ProjectPage = "chat" | "profile" | "analyses" | "research" | "approvals";
+export type ProjectPage = "chat" | "profile" | "analyses" | "research" | "studio" | "approvals";
 
 /** The project's pages, in the order the sidebar lists them under the project. */
 export const PROJECT_PAGES: readonly {
@@ -16,6 +16,7 @@ export const PROJECT_PAGES: readonly {
   { page: "profile", label: "Profile" },
   { page: "analyses", label: "Analyses" },
   { page: "research", label: "Research" },
+  { page: "studio", label: "Studio" },
   { page: "approvals", label: "Approvals" },
 ];
 
@@ -44,6 +45,11 @@ export function chatHref(projectId: string, chatId: string): string {
 /** The address of one of the project's research runs. */
 export function researchHref(projectId: string, runId: string): string {
   return `${projectPageHref(projectId, "research")}/${runId}`;
+}
+
+/** The address of one of the project's studio runs. */
+export function studioHref(projectId: string, runId: string): string {
+  return `${projectPageHref(projectId, "studio")}/${runId}`;
 }
 
 /** The address of one of a project's pages. */

@@ -4,9 +4,11 @@ import { ApiError } from "@/lib/api/api-error";
 import type { Proposal } from "@/lib/api/types";
 
 import {
+  actionLabel,
   decideProblem,
   effectLabel,
   effectNote,
+  estimateText,
   payloadText,
   proposalStatusDisplay,
   splitByDecision,
@@ -98,5 +100,20 @@ describe("a refused decision", () => {
 
   it("says the proposal is gone", () => {
     expect(decideProblem(new ApiError(404, "proposal_not_found", "x"))).toMatch(/no longer has/);
+  });
+});
+
+describe("what an action that spends shows", () => {
+  it("is its estimate, when it has one", () => {
+    expect(estimateText(0.12)).toBe("Estimated cost $0.12");
+    expect(estimateText(0.0375)).toBe("Estimated cost $0.0375");
+    expect(estimateText(null)).toBeNull();
+  });
+
+  it("names the studio's actions in words, and no other", () => {
+    expect(actionLabel("generate_image")).toBe("Generate an image");
+    expect(actionLabel("edit_image")).toBe("Edit an image");
+    expect(actionLabel("publish_post")).toBeNull();
+    expect(actionLabel("constructor")).toBeNull();
   });
 });

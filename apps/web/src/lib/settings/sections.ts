@@ -10,6 +10,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { href: "/settings/credentials", label: "Credentials" },
   { href: "/settings/models", label: "Models" },
   { href: "/settings/analysis", label: "Analysis" },
+  { href: "/settings/creative-budget", label: "Creative budget" },
 ];
 
 /** The section `/settings` itself opens. */

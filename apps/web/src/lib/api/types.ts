@@ -20,6 +20,18 @@ export type ResearchRunList = Schemas["ResearchRunListResponse"];
 export type ResearchRunStatus = Schemas["ResearchRunStatus"];
 export type ResearchReport = Schemas["ResearchReportResponse"];
 
+export type StudioRun = Schemas["StudioRunResponse"];
+export type StudioRunList = Schemas["StudioRunListResponse"];
+export type StudioRunStatus = Schemas["StudioRunStatus"];
+export type AssetRequest = Schemas["AssetRequest"];
+export type Platform = Schemas["Platform"];
+export type AssetTechnique = Schemas["AssetTechnique"];
+export type MediaAsset = Schemas["MediaAssetResponse"];
+export type MediaAssetList = Schemas["MediaAssetListResponse"];
+export type MediaAssetStatus = Schemas["MediaAssetStatus"];
+export type MediaAssetDetail = Schemas["MediaAssetDetailResponse"];
+export type MediaAssetVersion = Schemas["MediaAssetVersionResponse"];
+
 export type ProfileVersion = Schemas["ProfileVersionResponse"];
 export type ProfileVersionSummary = Schemas["ProfileVersionSummaryResponse"];
 export type ProfileVersionList = Schemas["ProfileVersionListResponse"];
@@ -71,6 +83,12 @@ export type CapabilityProblem = Schemas["CapabilityProblem"];
 
 export type AnalysisSettings = Schemas["AnalysisSettingsResponse"];
 export type AnalysisLimitsRequest = Schemas["AnalysisLimitsRequest"];
+
+export type CreativeBudget = Schemas["CreativeBudgetResponse"];
+export type CreativeBudgetRequest = Schemas["CreativeBudgetRequest"];
+export type CreativeBudgetCap = Schemas["CapResponse"];
+export type CapSource = Schemas["CapSource"];
+export type MonthlySpend = Schemas["MonthlySpendResponse"];
 
 export type Problem = Schemas["Problem"];
 export type ErrorCode = Schemas["ErrorCode"];

@@ -99,8 +99,9 @@ export function ModelsScreen() {
               Roles
             </h3>
             <p className="max-w-prose text-sm text-pretty text-muted-foreground">
-              Only the repository analyzer runs today; the other roles belong to agents still to be built, and what is
-              chosen for them waits until then.
+              The roles listed first are those of what runs today: the analyzer, the chat, the researcher and the
+              creative studio. The others belong to agents still to be built, and what is chosen for them waits until
+              then.
             </p>
             <ul className="divide-y border-y">{inUse.map(rowOf)}</ul>
             {waiting.length > 0 && (

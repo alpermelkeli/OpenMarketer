@@ -11,6 +11,7 @@ export const PROXY_ERROR_CODES = [
   "proxy_query_rejected",
   "proxy_header_rejected",
   "proxy_body_rejected",
+  "proxy_upstream_rejected",
   "api_unreachable",
   "proxy_misconfigured",
 ] as const;
