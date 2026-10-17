@@ -8,6 +8,11 @@ describe("the words for a role", () => {
     expect(roleLabel("writer").inUse).toBe(false);
   });
 
+  it("say that the screener runs today and takes a model only", () => {
+    expect(roleLabel("screener")).toMatchObject({ label: "Screener", inUse: true });
+    expect(roleLabel("screener").purpose).toContain("takes a model only");
+  });
+
   it("call a role the dashboard does not know by its name", () => {
     expect(roleLabel("poet")).toMatchObject({ label: "poet", inUse: false });
     expect(roleLabel("constructor").label).toBe("constructor");

@@ -22,6 +22,7 @@ CONFIG = Config(
     roles={
         "repo_analyzer": RoleConfig(tier="fast", temperature=0.1, requires=["tools"]),
         "embeddings": RoleConfig(kind="embeddings", model="file/embed"),
+        "screener": RoleConfig(kind="decisions", model="file/decide"),
     },
     unsupported_parameters={"file/strong": ["temperature"]},
 )
@@ -80,7 +81,7 @@ def tier_of(body: dict, name: str) -> dict:
 def test_settings_list_every_tier_and_role_of_the_configuration(client):
     body = client.get(URL).json()
     assert [tier["tier"] for tier in body["tiers"]] == ["fast", "balanced", "strong"]
-    assert [role["role"] for role in body["roles"]] == ["repo_analyzer", "embeddings"]
+    assert [role["role"] for role in body["roles"]] == ["repo_analyzer", "embeddings", "screener"]
     assert tier_of(body, "fast") == {
         "tier": "fast",
         "model": "file/fast",
@@ -202,6 +203,16 @@ def test_embeddings_role_takes_a_model_only(client):
     response = client.put(f"{URL}/roles/embeddings", json={"temperature": 0.2})
     assert response.status_code == 422
     assert client.put(f"{URL}/roles/embeddings", json={"model": "a/b"}).status_code == 200
+
+
+def test_decisions_role_is_listed_with_its_kind(client):
+    assert role_of(client.get(URL).json(), "screener")["kind"] == "decisions"
+
+
+def test_decisions_role_takes_a_model_only(client):
+    response = client.put(f"{URL}/roles/screener", json={"temperature": 0.2})
+    assert response.status_code == 422
+    assert client.put(f"{URL}/roles/screener", json={"model": "a/b"}).status_code == 200
 
 
 def test_role_choice_takes_no_unknown_part(client):

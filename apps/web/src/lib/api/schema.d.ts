@@ -1630,7 +1630,7 @@ export interface components {
             inherited: components["schemas"]["ResolvedModelResponse"];
             /**
              * Kind
-             * @description `chat`, or `embeddings` for a role that takes a model only.
+             * @description `chat`, or `embeddings` or `decisions` for a role that takes a model only.
              */
             kind: string;
             model_source: components["schemas"]["RoleModelSource"];

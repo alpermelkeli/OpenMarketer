@@ -1,26 +1,33 @@
 """The researcher's graph: its nodes, what follows what, and how one attempt asks the model.
 
 This module is wiring only. The rules live in ``rules.py``, model access goes through
-``ChatModel`` (the model router), and the two actions (``search_web``, ``fetch_page``) reach
-the network only through the workflow that runs them; the text of a page is read through the
-attempt's context. The state holds plain data only and can be checkpointed.
+``ChatModel`` and ``DecisionModel`` (the model router), and the two actions (``search_web``,
+``fetch_page``) reach the network only through the workflow that runs them; the text of a page
+is read through the attempt's context. The state holds plain data only and can be checkpointed.
 
-    plan -> search -> ... -> search -> fetch -> ... -> fetch -> read -> ... -> read
-      ^                                                                        |
-      |                                        synthesize -> check <----------+
-      |                                                          |
-      +-------------------------- one more round --------------->| (unanswered questions)
-                                                                 v
-                                                              report -> END
+    plan -> search -> ... -> search -> screen -> fetch -> ... -> fetch -> read -> ... -> read
+      ^                                                                                  |
+      |                                                  synthesize -> check <----------+
+      |                                                                    |
+      +-------------------------- one more round ------------------------->| (unanswered)
+                                                                           v
+                                                                        report -> END
 
 ``plan`` turns the request into search queries (again, with the gaps, for one more round),
-``search`` and ``fetch`` ask for an action each, ``read`` has the reader make fixed fields of
-one stored page, ``synthesize`` turns the readings into findings with their sources, ``check``
-verifies them against the pages this run fetched, and ``report`` finishes the run; whoever
-runs the graph stores the report when it ends.
+``search`` and ``fetch`` ask for an action each, ``screen`` drops the search results whose
+title and snippet do not bear on the request before anything is fetched (when nothing is left
+to fetch, the graph goes on to ``read``, or to ``synthesize`` when no page waits to be read),
+``read`` has the reader make fixed fields of one stored page, ``synthesize`` turns the
+readings into findings with their sources, ``check`` verifies them against the pages this run
+fetched, and ``report`` finishes the run; whoever runs the graph stores the report when it
+ends.
 
 Every node is safe to run twice: a step that died before its checkpoint is taken again from
 the same state, and the model calls are made for this attempt only.
+
+A thread stored before ``screen`` existed continues with this graph: one that waits in a
+search goes on to ``screen``, which screens results stored without the query that found them
+all the same; one that was past its searches fetches what it had, unscreened.
 """
 
 import json
@@ -33,6 +40,7 @@ from pydantic import BaseModel
 from openmarketer_core.agent_runtime.agent import END
 from openmarketer_core.agent_runtime.langgraph_steps import request_action
 from openmarketer_core.agent_runtime.model_input import DoesNotFit, read_strict_json
+from openmarketer_core.decisions import DecisionError
 from openmarketer_core.research.page_text import PageTextUnavailable
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent import rules
@@ -236,7 +244,50 @@ def search(state: ResearchState, context: ResearchContext) -> dict[str, Any]:
         for result in outcome.result.get("results", [])
         if isinstance(result, dict) and isinstance(result.get("url"), str)
     ]
-    return {"results": [*state["results"], *results], "next_query": next_query}
+    found = [{**result, "query": query} for result in results]
+    return {"results": [*state["results"], *found], "next_query": next_query}
+
+
+@agent.node
+def screen(state: ResearchState, context: ResearchContext) -> dict[str, Any]:
+    """Drop the search results whose title and snippet do not bear on the request.
+
+    Only the results not fetched yet are screened (``results[next_result:]``): those of
+    earlier rounds that were fetched are behind ``next_result``. They are judged in batches of
+    ``SCREEN_BATCH``, each with a state of its own, and every batch's cost counts towards the
+    run's. Screening only saves fetches, so unlike the other nodes a failed call does not end
+    the run: the batch it was for is kept whole, with a note, and the run goes on.
+    """
+    candidates = state["results"][state["next_result"] :]
+    if not candidates:
+        return {}
+    _cost_left(state, context)
+    request = _request_of(state)
+    kept: list[dict[str, Any]] = []
+    notes: list[str] = []
+    cost_usd = 0.0
+    for start in range(0, len(candidates), rules.SCREEN_BATCH):
+        batch = candidates[start : start + rules.SCREEN_BATCH]
+        try:
+            reply = context.decisions.decide(
+                rules.SCREENER_ROLE,
+                rules.screen_state(request, batch),
+                rules.screen_questions(len(batch)),
+            )
+        except DecisionError as e:
+            notes.append(f"{len(batch)} search results were kept unscreened: {e}")
+            kept += batch
+            continue
+        cost_usd += reply.cost_usd
+        kept += rules.kept(batch, reply.answers)
+    dropped = len(candidates) - len(kept)
+    if dropped:
+        notes.append(f"{dropped} search results were dropped as unrelated to the request")
+    return {
+        "results": [*state["results"][: state["next_result"]], *kept],
+        "notes": [*state["notes"], *notes],
+        "cost_usd": state["cost_usd"] + cost_usd,
+    }
 
 
 @agent.node
@@ -362,16 +413,31 @@ agent.edge(synthesize, check)
 agent.edge(report, END)
 
 
-@agent.route(after=search, to=[search, fetch])
+@agent.route(after=search, to=[search, screen])
 def after_search(state: ResearchState) -> str:
-    return search.__name__ if state["next_query"] < len(state["queries"]) else fetch.__name__
+    return search.__name__ if state["next_query"] < len(state["queries"]) else screen.__name__
 
 
-@agent.route(after=fetch, to=[fetch, read])
+@agent.route(after=screen, to=[fetch, read, synthesize])
+def after_screen(state: ResearchState, context: ResearchContext) -> str:
+    return _after_results(state, context)
+
+
+@agent.route(after=fetch, to=[fetch, read, synthesize])
 def after_fetch(state: ResearchState, context: ResearchContext) -> str:
+    return _after_results(state, context)
+
+
+def _after_results(state: ResearchState, context: ResearchContext) -> str:
+    """Fetch what is left; with nothing to fetch, read what waits, or go on without reading.
+
+    ``fetch`` and ``read`` each take one item, and may have none to take: the screening may
+    have dropped every result, a search may have found none, and every fetch may have failed.
+    """
     pages_left = len(state["pages"]) < _page_cap(state, context)
-    more_results = state["next_result"] < len(state["results"])
-    return fetch.__name__ if pages_left and more_results else read.__name__
+    if pages_left and state["next_result"] < len(state["results"]):
+        return fetch.__name__
+    return read.__name__ if state["next_page"] < len(state["pages"]) else synthesize.__name__
 
 
 @agent.route(after=read, to=[read, synthesize])
@@ -388,5 +454,6 @@ def after_check(state: ResearchState, context: ResearchContext) -> str:
 
 def recursion_limit(limits: rules.Limits) -> int:
     """How many graph steps a run under ``limits`` may take before it is stopped as a defect."""
-    per_round = 1 + limits.max_queries_per_round + 2 * limits.max_pages
+    # plan, the searches, screen, and a fetch and a reading per page
+    per_round = 1 + limits.max_queries_per_round + 1 + 2 * limits.max_pages
     return 2 * per_round * limits.max_rounds + 10

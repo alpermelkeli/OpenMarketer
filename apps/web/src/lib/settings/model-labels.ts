@@ -29,6 +29,15 @@ const ROLES = new Map<string, RoleLabel>([
   ["orchestrator", { label: "Orchestrator", purpose: "Answers questions and takes requests in the dashboard's chat.", inUse: false }],
   ["researcher", { label: "Researcher", purpose: "Summarises market, competitor and trend research.", inUse: false }],
   [
+    "screener",
+    {
+      label: "Screener",
+      purpose:
+        "Drops search results that do not bear on a research request before any page is fetched. It answers with probabilities only and takes a model only.",
+      inUse: true,
+    },
+  ],
+  [
     "reader",
     {
       label: "Reader",

@@ -8,7 +8,8 @@ the graph imports; importing it is what puts them on ``agent``.
   plain data only, and never the text of a page. A node that needs a page's text reads it
   from the run's stored pages through its context, and the graph carries only the page's id.
 - ``ResearchContext`` is what a node needs that is not state: the model of the attempt, the
-  limits, and the stored text of a page the run fetched.
+  decision model that screens search results, the limits, and the stored text of a page the
+  run fetched.
 - ``SearchWeb`` and ``FetchPage`` are the two actions the graph asks for. Both reach the
   network, so both are the workflow's to run, under limits of their own. A query and a URL
   are small values a model wrote from the run's request; a handler checks a URL before
@@ -27,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.agent import Agent
+from openmarketer_core.decisions import DecisionModel
 from openmarketer_core.llm import ChatModel
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent import rules
@@ -76,7 +78,10 @@ class ResearchState(TypedDict):
     next_query: int  # the query the next search asks for
     categories: list[str]  # the kinds of source of the latest round
     gaps: list[str]  # the questions the latest check left unanswered
-    results: list[dict[str, Any]]  # {"url", "title", "snippet"}, as searches returned them
+    # {"url", "title", "snippet", "query"}: as searches returned them, with the query that found
+    # each, and without those the screening dropped. A thread stored before queries were kept
+    # has results without "query".
+    results: list[dict[str, Any]]
     next_result: int  # the result the next fetch takes
     pages: list[dict[str, Any]]  # {"page_id", "url", "title", "flags"}, fetched pages
     next_page: int  # the page the next reading takes
@@ -93,11 +98,13 @@ class ResearchContext:
     """What the nodes of one attempt are given besides the state.
 
     ``page_text_of`` gives the extracted text of a page the run fetched, from object storage.
-    A context serves one attempt, in one thread. The model keeps what it served, so it is
-    made for each attempt with the run's workspace in mind.
+    ``decisions`` answers the screening of search results (the role ``screener``). A context
+    serves one attempt, in one thread. The models keep what they served, so they are made for
+    each attempt with the run's workspace in mind.
     """
 
     model: ChatModel
+    decisions: DecisionModel
     limits: Limits
     page_text_of: Callable[[str], str]
 

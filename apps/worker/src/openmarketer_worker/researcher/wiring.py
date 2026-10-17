@@ -11,7 +11,7 @@ installation's credentials (``WorkspaceCredentials``).
 
 No credential is read here. The model provider's key can be stored from the
 dashboard after the worker started, so it is resolved for the run's workspace
-when an attempt needs it (``new_model``): the worker starts without a model
+when an attempt needs it (``new_model``, ``new_decisions``): the worker starts without a model
 key, and a run that finds none is told so. The same holds for what a workspace
 chose in the dashboard's settings, its models: the configuration file is read
 now, and the workspace's choices are laid over it at each attempt.
@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.agent_runtime.langgraph_agent import AgentSteps
 from openmarketer_core.db.checkpoint_cleanup import remove_checkpoints_of_research_runs
+from openmarketer_core.decisions import DecisionModel, RouterDecisionModel
 from openmarketer_core.llm import ChatModel, RouterChatModel
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ModelRouter
 from openmarketer_core.research.page_fetch import PageFetcher, PublicPageFetcher
@@ -84,6 +85,9 @@ class ResearcherParts:
     # The chat model of one attempt, made for the workspace of the run when it is needed, so
     # no credential or choice of the workspace is held between attempts.
     new_model: Callable[[uuid.UUID], ChatModel]
+    # The decision model of one attempt, which screens search results: made the same way,
+    # for the workspace of the run when it is needed.
+    new_decisions: Callable[[uuid.UUID], DecisionModel]
     search: SearchEngine
     fetcher: PageFetcher
     pages: PageStore
@@ -124,6 +128,11 @@ def researcher(
                     workspace_settings.router_for(workspace_id, router), workspace_id, credentials
                 )
             ),
+            # The same key and the same workspace router: a stored choice for the screener's
+            # role applies as it does for the chat model's roles.
+            new_decisions=lambda workspace_id: _decisions_of_workspace(
+                workspace_settings.router_for(workspace_id, router), workspace_id, credentials
+            ),
             search=SearxngSearch(settings.searxng_url),
             fetcher=PublicPageFetcher(renderer=CdpPageRenderer(settings.lightpanda_url)),
             pages=S3PageStore.from_env(environ),
@@ -140,12 +149,20 @@ def _model_of_workspace(
     return RouterChatModel(router=router, api_key=credentials.model_key(workspace_id, router))
 
 
+def _decisions_of_workspace(
+    router: ModelRouter, workspace_id: uuid.UUID, credentials: WorkspaceCredentials
+) -> DecisionModel:
+    """The decision model of one attempt: ``router``, with the key its workspace has now."""
+    return RouterDecisionModel(router=router, api_key=credentials.model_key(workspace_id, router))
+
+
 def registration(parts: ResearcherParts) -> AgentRegistration:
     """What the worker registers to run research with ``parts``."""
     work = ResearchWork(
         parts.sessions,
         parts.checkpoints,
         new_model=parts.new_model,
+        new_decisions=parts.new_decisions,
         limits=parts.limits,
         search=parts.search,
         fetcher=parts.fetcher,

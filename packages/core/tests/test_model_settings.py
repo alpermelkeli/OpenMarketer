@@ -302,3 +302,24 @@ def test_problems_are_reported_for_the_models_the_workspace_resolves_to(session,
     problems = model_problems(session, router(), catalog, workspace_id=workspace_id)
     assert problems["repo_analyzer"] == [ModelProblem("ws/fast", CapabilityProblem.NO_TOOLS)]
     assert problems["writer"] == [ModelProblem("file/writer", CapabilityProblem.NOT_IN_CATALOG)]
+
+
+def test_decisions_role_sends_no_temperature_and_has_no_catalogue_problem(session, workspace_id):
+    config = CONFIG.model_copy(
+        update={
+            "roles": {
+                **CONFIG.roles,
+                "screener": RoleConfig(kind="decisions", model="file/decide"),
+            }
+        }
+    )
+    with_decisions = ModelRouter(config, env={})
+
+    screener = role_of(
+        model_settings(session, with_decisions, workspace_id=workspace_id), "screener"
+    )
+    problems = model_problems(session, with_decisions, {}, workspace_id=workspace_id)
+
+    assert screener.kind == "decisions" and not screener.temperature_sent
+    assert screener.effective.fallbacks == []
+    assert "screener" not in problems

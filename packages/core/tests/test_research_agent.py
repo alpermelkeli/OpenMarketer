@@ -87,8 +87,18 @@ def a_state() -> ResearchState:
 
 def a_context(model: ScriptedModel) -> ResearchContext:
     return ResearchContext(
-        model=model, limits=Limits(), page_text_of=lambda page_id: "the page, as data"
+        model=model,
+        decisions=NoDecisions(),
+        limits=Limits(),
+        page_text_of=lambda page_id: "the page, as data",
     )
+
+
+class NoDecisions:
+    """A screener the read node never asks."""
+
+    def decide(self, role, state, questions):
+        raise AssertionError("the read node screens nothing")
 
 
 def test_the_reader_is_asked_without_tools_and_its_json_answer_is_read():

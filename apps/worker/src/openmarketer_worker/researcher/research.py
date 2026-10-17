@@ -5,8 +5,8 @@ and this worker's database, object storage, search and rendering, one method for
 the agent runtime asks an agent for:
 
 - ``initial_state``: what a run starts from, which is the run's own request;
-- ``context``: what the nodes of one attempt are given: a chat model of the attempt's own
-  and the stored text of the pages the run fetched;
+- ``context``: what the nodes of one attempt are given: a chat model and a decision model of
+  the attempt's own and the stored text of the pages the run fetched;
 - ``search``: the handler of the action ``search_web``;
 - ``fetch``: the handler of the action ``fetch_page``: it refuses what may not be fetched
   (``page_fetch.py``), has the headless browser render a script shell, stores the page in
@@ -23,11 +23,11 @@ carries a message written for a log. Everything can run twice without doing its 
 a search reads and changes nothing, a page of the same URL of the same run is stored once,
 and a report is stored once.
 
-No credential is kept here or put in the graph's state: the model of an attempt is asked for
-with the run's workspace (``new_model``) each time one is needed, so a key or a model set
-from the dashboard is the one the next attempt uses. A key that is set nowhere, or a
-credential that is stored and cannot be read (``WORKSPACE_FAILURES``), ends the research in
-the words of its error, which name what to set and hold no value.
+No credential is kept here or put in the graph's state: the models of an attempt are asked
+for with the run's workspace (``new_model``, ``new_decisions``) each time one is needed, so a
+key or a model set from the dashboard is the one the next attempt uses. A key that is set
+nowhere, or a credential that is stored and cannot be read (``WORKSPACE_FAILURES``), ends the
+research in the words of its error, which name what to set and hold no value.
 
 A page's text is never in the graph's state or the workflow history: it is read from object
 storage while a node runs, and what the graph carries is the page's id.
@@ -66,6 +66,7 @@ from openmarketer_core.db.research_runs import (
 )
 from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.db.session import DatabaseError, transaction
+from openmarketer_core.decisions import DecisionModel
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.llm_config import ConfigError
@@ -107,6 +108,7 @@ class ResearchWork:
         checkpoints: CheckpointAccess,
         *,
         new_model: Callable[[uuid.UUID], ChatModel],
+        new_decisions: Callable[[uuid.UUID], DecisionModel],
         limits: rules.Limits,
         search: SearchEngine,
         fetcher: PageFetcher,
@@ -115,12 +117,15 @@ class ResearchWork:
         """``new_model`` makes the chat model of one attempt: a model keeps what it served.
 
         It is given the workspace of the run and may raise one of ``WORKSPACE_FAILURES``,
-        which ends the research. ``search`` and ``fetcher`` reach the installation's own
-        services; ``pages`` keeps what was fetched until it expires.
+        which ends the research. ``new_decisions`` makes the decision model that screens
+        search results, in the same way and with the same failures. ``search`` and
+        ``fetcher`` reach the installation's own services; ``pages`` keeps what was fetched
+        until it expires.
         """
         self._sessions = sessions
         self._checkpoints = checkpoints
         self._new_model = new_model
+        self._new_decisions = new_decisions
         self._limits = limits
         self._search = search
         self._fetcher = fetcher
@@ -147,6 +152,7 @@ class ResearchWork:
 
         return ResearchContext(
             model=self._new_model(found.workspace_id),
+            decisions=self._new_decisions(found.workspace_id),
             limits=self._limits,
             page_text_of=page_text_of,
         )

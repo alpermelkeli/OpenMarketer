@@ -2,9 +2,10 @@
 
 One place for the numbers, so the workflow holds none. A run is, in order: the
 write that marks it started, the steps of the researcher's graph (planning,
-searches, fetches, readings, one synthesis and its check, and the report), the
-searches and fetches the graph asks for as actions, and, if any of that did not
-work, the write that records why. Then its checkpoints are forgotten.
+searches, the screening of their results, fetches, readings, one synthesis and
+its check, and the report), the searches and fetches the graph asks for as
+actions, and, if any of that did not work, the write that records why. Then
+its checkpoints are forgotten.
 
 ``ResearchPolicy`` limits the steps of the graph and is configuration
 (``settings.py`` next to this module reads what an operator changed; the
@@ -90,11 +91,13 @@ WORKER_OUTAGE_ALLOWANCE_SECONDS: float = 24 * 60 * 60
 def graph_steps(limits: rules.Limits | None = None) -> int:
     """The most steps of the graph one run can take: every step at its limit.
 
-    Per round: the plan, its queries, its fetches and its readings, one
-    synthesis and its check; plus the report at the end.
+    Per round: the plan, its queries, the screening of their results, its
+    fetches and its readings, one synthesis and its check; plus the report at
+    the end. The screening is one step whatever its number of decision calls
+    (one per batch of results): the step's time limit bounds them all.
     """
     limits = limits or rules.Limits()
-    per_round = 2 + limits.max_queries_per_round + 2 * limits.max_pages
+    per_round = 3 + limits.max_queries_per_round + 2 * limits.max_pages
     return per_round * limits.max_rounds + 1
 
 
