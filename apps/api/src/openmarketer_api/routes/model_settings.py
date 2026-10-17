@@ -144,7 +144,9 @@ class RoleSettingResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: str
-    kind: str = Field(description="`chat`, or `embeddings` for a role that takes a model only.")
+    kind: str = Field(
+        description="`chat`, or `embeddings` or `decisions` for a role that takes a model only."
+    )
     tier: str | None
     requires: list[str] = Field(description="What the role's model must support.")
     effective: ResolvedModelResponse = Field(description="What the role resolves to now.")

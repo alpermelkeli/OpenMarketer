@@ -5,7 +5,14 @@ import { problemText, roleLabel, roleSourceDisplay, tierSourceDisplay } from "./
 describe("the words for a role", () => {
   it("say which role runs today", () => {
     expect(roleLabel("repo_analyzer")).toMatchObject({ label: "Repository analyzer", inUse: true });
+    expect(roleLabel("researcher").inUse).toBe(true);
+    expect(roleLabel("reader").inUse).toBe(true);
     expect(roleLabel("writer").inUse).toBe(false);
+  });
+
+  it("say that the screener runs today and takes a model only", () => {
+    expect(roleLabel("screener")).toMatchObject({ label: "Screener", inUse: true });
+    expect(roleLabel("screener").purpose).toContain("takes a model only");
   });
 
   it("call a role the dashboard does not know by its name", () => {

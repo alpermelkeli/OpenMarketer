@@ -28,11 +28,14 @@ version: 1
 provider:
   name: openrouter
   base_url: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+  # Yes-or-no questions answered with a probability each (alpha); used by roles of kind decisions
+  decisions_url: ${OPENROUTER_DECISIONS_URL:-https://openrouter.ai/api/alpha/decisions}
   api_key_env: OPENROUTER_API_KEY
   # Optional attribution headers (HTTP-Referer, X-Title)
   app_url: ${OPENROUTER_APP_URL:-}
   app_name: ${OPENROUTER_APP_NAME:-OpenMarketer}
-  # Sent to OpenRouter as provider-routing preferences on every request
+  # Sent to OpenRouter as provider-routing preferences on every chat request (not on a
+  # decisions request: see ModelRouter.build_decision_request)
   routing:
     allow_fallbacks: true
     require_parameters: true     # only use upstream providers that support the requested features (tools, structured output)
@@ -87,7 +90,7 @@ roles:
   reader:                        # quarantined reader: classifies untrusted comments, DMs, web text
     tier: fast
     temperature: 0.0
-    max_tokens: 1024
+    max_tokens: 3072               # room for a reading at the schema's own bounds plus a thinking model's reasoning
     requires: [structured_output]   # NO tools by design
 
   # --- planning and creating ------------------------------------------
@@ -135,6 +138,13 @@ roles:
     tier: strong
     temperature: 0.0
     requires: [structured_output]
+
+  # --- deciding (separate endpoint kind) --------------------------------
+  # A decisions role names its model and takes nothing else. Its models are not in the chat
+  # catalogue (https://openrouter.ai/models), so the dashboard does not check them against it.
+  screener:                      # drops search results whose title and snippet do not bear on the research request
+    kind: decisions              # reads untrusted text and answers probabilities only: it cannot call a tool or write text
+    model: respan/span-02
 
   # --- retrieval (separate endpoint kind) -------------------------------
   embeddings:                    # memory embeddings; switch provider if your OpenRouter plan lacks this endpoint

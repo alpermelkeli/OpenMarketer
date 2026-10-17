@@ -7,6 +7,7 @@ has a public key of its own, as Langfuse keeps one client per key.
 
 import ast
 import json
+import threading
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -259,6 +260,29 @@ def test_graphs_are_not_traced_once_tracing_stopped(traced):
     run_from(an_agent(), "read", {"draft": ""}, recursion_limit=5, context=context)
 
     assert traced.exporter.get_finished_spans() == ()
+
+
+def test_a_turn_in_a_thread_that_did_not_inherit_the_context_is_traced_under_traced(traced):
+    context = Context(model=traced.tracing.model(ScriptedModel()))
+
+    def run() -> None:
+        # A new thread has a context of its own: nothing the process set reaches it.
+        run_from(an_agent(), "read", {"draft": ""}, recursion_limit=5, context=context)
+
+    def run_traced() -> None:
+        with traced.tracing.traced():
+            run()
+
+    bare = threading.Thread(target=run)
+    bare.start()
+    bare.join()
+    covering = threading.Thread(target=run_traced)
+    covering.start()
+    covering.join()
+
+    # Only the thread that ran its turn under ``traced`` sent a graph run.
+    assert [span.name for span in traced.spans()].count(KIND) == 1
+    assert traced.parent_of(traced.named("read")) == KIND
 
 
 def test_only_the_tracing_module_imports_langfuse():

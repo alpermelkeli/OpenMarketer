@@ -24,7 +24,12 @@ from typing import Any, Protocol
 from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.agent_runtime.model_input import shown
-from openmarketer_core.db.models import AnalysisRunStatus, ProfileStatus, ProjectStatus
+from openmarketer_core.db.models import (
+    AnalysisRunStatus,
+    ProfileStatus,
+    ProjectStatus,
+    ResearchRunStatus,
+)
 
 # The sections of a Product Profile (the fields of ``profile.ProductProfile``), in order.
 PROFILE_SECTIONS: tuple[str, ...] = (
@@ -106,6 +111,34 @@ class RunReading:
 
 
 @dataclass(frozen=True)
+class ResearchRunReading:
+    """One research run of the project and how far it got."""
+
+    id: uuid.UUID
+    status: ResearchRunStatus
+    requested_by: str
+    error: str | None
+    report_id: uuid.UUID | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+@dataclass(frozen=True)
+class ResearchReportReading:
+    """A finished research run's report: its questions and the findings they got."""
+
+    run_id: uuid.UUID
+    requested_by: str
+    questions: list[str]
+    findings: list[dict[str, Any]]
+    notes: list[str]
+    cost_usd: float
+    model: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class ProjectStatusReading:
     """Where the project stands: what it is, its review state, and its latest work."""
 
@@ -153,5 +186,20 @@ class ChatReads(Protocol):
         """The project's analysis runs, newest first, at most ``limit`` records.
 
         ``MAX_LISTED_RECORDS`` bounds it further.
+        """
+        ...
+
+    def recent_research(self, limit: int) -> Sequence[ResearchRunReading]:
+        """The project's research runs, newest first, at most ``limit`` records.
+
+        ``MAX_LISTED_RECORDS`` bounds it further.
+        """
+        ...
+
+    def research_report(self, run_id: uuid.UUID | None = None) -> ResearchReportReading | None:
+        """One research run's report, or the latest run's that has one, or ``None``.
+
+        With ``run_id``, that run's report and nothing else: ``None`` when the run has
+        none or the project has no such run.
         """
         ...

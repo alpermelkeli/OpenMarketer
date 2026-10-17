@@ -12,11 +12,17 @@ order (first match wins):
                               (dashboard settings), then models.yaml tiers.<tier>
     6. models.yaml            defaults.model
 
-It also builds OpenRouter chat-completion requests. OpenRouter exposes an
-OpenAI-compatible API, so the same payload also works with other compatible
-endpoints by changing ``base_url``. A parameter a model's providers reject is
-left out of its requests: those listed in models.yaml and those a workspace
-marked from the dashboard.
+A role is of one of three kinds: ``chat`` (a conversation, the most of them),
+``embeddings``, or ``decisions``: yes-or-no questions about a list of texts,
+answered with a probability each by OpenRouter's decisions endpoint
+(``provider.decisions_url``). A decisions role names its model and takes
+nothing else: none of a chat request's parameters applies to it.
+
+It also builds OpenRouter chat-completion requests and decision requests.
+OpenRouter exposes an OpenAI-compatible chat API, so the same chat payload also
+works with other compatible endpoints by changing ``base_url``. A parameter a
+model's providers reject is left out of its requests: those listed in models.yaml
+and those a workspace marked from the dashboard.
 
 What the router knows of the dashboard's settings is handed to it as plain
 mappings (``with_workspace``); it reads no database. Whether a model has what a
@@ -37,19 +43,20 @@ import json
 import os
 import re
 import urllib.request
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DEFAULT_CONFIG_PATH = "config/models.yaml"  # relative to the repository root
 
 Capability = Literal["tools", "structured_output", "vision"]
 Tier = Literal["fast", "balanced", "strong"]
+RoleKind = Literal["chat", "embeddings", "decisions"]
 # The request parameters a model can be marked as rejecting. Only one so far.
 RejectableParameter = Literal["temperature"]
 REJECTABLE_PARAMETERS: tuple[RejectableParameter, ...] = ("temperature",)
@@ -92,6 +99,8 @@ class Provider(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = "openrouter"
     base_url: str = "https://openrouter.ai/api/v1"
+    # OpenRouter's decisions endpoint, in alpha: yes-or-no questions answered with probabilities.
+    decisions_url: str = "https://openrouter.ai/api/alpha/decisions"
     api_key_env: str = "OPENROUTER_API_KEY"
     app_url: str = ""
     app_name: str = "OpenMarketer"
@@ -122,9 +131,21 @@ class Limits(BaseModel):
     max_cost_per_call_usd: float = 1.5
 
 
+# What a decisions role may not set: each is a part of a chat request (or of an embeddings one).
+DECISIONS_ROLE_REFUSES = (
+    "tier",
+    "temperature",
+    "max_tokens",
+    "fallbacks",
+    "requires",
+    "reasoning_effort",
+    "dimensions",
+)
+
+
 class RoleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["chat", "embeddings"] = "chat"
+    kind: RoleKind = "chat"
     model: str | None = None
     tier: Tier | None = None
     temperature: float | None = None
@@ -143,6 +164,18 @@ class RoleConfig(BaseModel):
     @classmethod
     def _slugs(cls, v: list[str] | None) -> list[str] | None:
         return v if v is None else [_check_slug(x, "role.fallbacks") for x in v]
+
+    @model_validator(mode="after")
+    def _decisions_take_a_model_only(self) -> RoleConfig:
+        """A decisions request carries a model, a state and questions; nothing else applies."""
+        if self.kind != "decisions":
+            return self
+        if self.model is None:
+            raise ValueError("a decisions role names its model")
+        others = [part for part in DECISIONS_ROLE_REFUSES if getattr(self, part) not in (None, [])]
+        if others:
+            raise ValueError(f"a decisions role takes a model only, not {', '.join(others)}")
+        return self
 
 
 class Config(BaseModel):
@@ -349,7 +382,12 @@ class ModelRouter:
             value = getattr(rc, key, None)
             return default if value is None else value
 
-        fallbacks = [m for m in pick("fallbacks", d.fallbacks) if m != model]
+        # A decisions request has no fallbacks: the endpoint takes one model.
+        fallbacks = (
+            []
+            if rc.kind == "decisions"
+            else [m for m in pick("fallbacks", d.fallbacks) if m != model]
+        )
         return Resolved(
             role=role,
             kind=rc.kind,
@@ -377,7 +415,14 @@ class ModelRouter:
         request. A model the catalogue does not list is reported, not guessed. Temperature
         is a problem only when the request carries it, which the first model decides; a
         fallback that rejects it is reported as such, since marking it would not help.
+
+        A decisions role is not checked: the catalogue lists chat models only, and the
+        decisions endpoint's models are not in it, so every one would be reported as unknown.
+        Nothing a decisions role requires could be read from the catalogue either; the
+        endpoint refuses a model it does not serve, and the call says so.
         """
+        if resolved.kind == "decisions":
+            return []
         rejected = self.rejected_parameters(resolved.model)
         sends_temperature = resolved.kind == "chat" and "temperature" not in rejected
         problems: list[ModelProblem] = []
@@ -468,6 +513,29 @@ class ModelRouter:
         if extra:
             payload.update(extra)
         return payload
+
+    def build_decision_request(
+        self,
+        role: str,
+        state: Sequence[str],
+        questions: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """The body of a request to the decisions endpoint for ``role``.
+
+        ``state`` is the texts the questions are about, and ``questions`` maps a key of the
+        caller's to a question in the endpoint's own form (``decisions.py`` writes them). The
+        model is resolved as any role's is. No provider routing is sent: the endpoint accepts
+        the field without saying whether it honours it, so it would promise what may not hold.
+        Raises ``ConfigError`` for a role that is not of kind ``decisions``.
+        """
+        r = self.resolve(role)
+        if r.kind != "decisions":
+            raise ConfigError(f"role '{role}' is of kind '{r.kind}', not 'decisions'")
+        return {
+            "model": r.model,
+            "state": list(state),
+            "questions": {key: dict(question) for key, question in questions.items()},
+        }
 
     def complete(self, role: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         """POST a chat completion.

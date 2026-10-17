@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from llm_config import ConfigError, ModelRouter
+from llm_config import Config, ConfigError, ModelRouter
 from openmarketer_core.llm_config import CapabilityProblem, CatalogModel, ModelProblem
 
 YAML = Path(__file__).with_name("models.yaml")
@@ -200,3 +200,57 @@ def test_with_workspace_keeps_the_environment_and_replaces_the_workspace_layers(
     assert r.resolve("reader").model == "openai/env-reader"
     assert r.resolve("writer").model == "google/ws-role"
     assert base.resolve("writer").source == "tier:balanced"
+
+
+def test_decisions_request_carries_the_model_the_state_and_the_questions_only():
+    question = {
+        "type": "noul",
+        "instructions": "Is it?",
+        "criteria": {"true": "yes", "false": "no"},
+    }
+    payload = router().build_decision_request("screener", ["a text"], {"r0": question})
+    assert payload == {
+        "model": router().resolve("screener").model,
+        "state": ["a text"],
+        "questions": {"r0": question},
+    }
+
+
+def test_decisions_role_model_is_resolved_like_any_role():
+    r = router({"LLM_MODEL__SCREENER": "vendor/other-decider"})
+    assert r.build_decision_request("screener", [], {})["model"] == "vendor/other-decider"
+    assert r.resolve("screener").fallbacks == []
+
+
+def test_decisions_and_chat_roles_do_not_build_each_others_requests():
+    with pytest.raises(ConfigError, match="not 'chat'"):
+        router().build_chat_request("screener", [])
+    with pytest.raises(ConfigError, match="not 'decisions'"):
+        router().build_decision_request("writer", [], {})
+
+
+def test_decisions_role_is_not_checked_against_the_chat_catalogue():
+    r = router()
+    assert r.check_capabilities(r.resolve("screener"), CATALOG) == []
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        {"kind": "decisions"},
+        {"kind": "decisions", "model": "vendor/decide", "temperature": 0.0},
+        {"kind": "decisions", "model": "vendor/decide", "tier": "fast"},
+        {"kind": "decisions", "model": "vendor/decide", "fallbacks": ["vendor/other"]},
+        {"kind": "decisions", "model": "vendor/decide", "requires": ["tools"]},
+    ],
+    ids=["no-model", "temperature", "tier", "fallbacks", "requires"],
+)
+def test_decisions_role_names_a_model_and_takes_nothing_else(role):
+    with pytest.raises(ValueError, match="roles.screener"):
+        Config.model_validate(
+            {
+                "tiers": {"fast": "a/f", "balanced": "a/b", "strong": "a/s"},
+                "defaults": {"model": "a/d"},
+                "roles": {"screener": role},
+            }
+        )

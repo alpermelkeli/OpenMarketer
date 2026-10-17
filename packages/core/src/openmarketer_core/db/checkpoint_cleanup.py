@@ -61,7 +61,9 @@ from sqlalchemy.sql import Select
 from openmarketer_core.agent_runtime.threads import validate_kind
 from openmarketer_core.db.analysis_runs import ANALYSIS_RUN_THREADS, FINISHED
 from openmarketer_core.db.checkpoint_schema import CHECKPOINT_TABLES_OF_THREADS
-from openmarketer_core.db.models import AnalysisRunRecord
+from openmarketer_core.db.models import AnalysisRunRecord, ResearchRunRecord
+from openmarketer_core.db.research_runs import FINISHED as RESEARCH_FINISHED
+from openmarketer_core.db.research_runs import RESEARCH_RUN_THREADS
 
 
 def remove_checkpoints_of_analysis_runs(session: Session, *, longest_run: timedelta) -> int:
@@ -103,6 +105,54 @@ def remove_checkpoints_of_analysis_runs(session: Session, *, longest_run: timede
             or_(
                 AnalysisRunRecord.started_at.is_(None),
                 AnalysisRunRecord.started_at > func.now() - longest_run,
+            )
+        )
+        .exists()
+    )
+    return _remove_threads(session, select(threads.c.thread_id).where(~run_in_progress))
+
+
+def remove_checkpoints_of_research_runs(session: Session, *, longest_run: timedelta) -> int:
+    """Remove the checkpoints research runs no longer need; say how many threads.
+
+    The research runs' rule, built like the analysis runs': among the threads
+    named for a research run (``research_runs.run_thread_id``, names that start
+    with ``RESEARCH_RUN_THREADS``), a thread is kept only while its run is
+    unfinished (``queued`` or ``running``) and was started no longer ago than a
+    run can take. Threads of any other name, an analysis run's included, are
+    not looked at.
+
+    ``longest_run`` is how long after its start a run can still be in
+    progress; the caller derives it from how it executes runs. An unfinished
+    run started longer ago keeps its status and loses its checkpoints. Like
+    the analysis runs' rule, this is maintenance of the whole database, one
+    statement, and it does not commit.
+    """
+    # The library's tables have no model (see ``checkpoint_schema.py``); only this column is used.
+    tables = [
+        table(name, column("thread_id", Text)) for name in sorted(CHECKPOINT_TABLES_OF_THREADS)
+    ]
+    threads = union(
+        *(
+            select(t.c.thread_id).where(
+                t.c.thread_id.startswith(RESEARCH_RUN_THREADS, autoescape=True)
+            )
+            for t in tables
+        )
+    ).subquery("thread")
+    run_in_progress = (
+        select(ResearchRunRecord.id)
+        # The name is compared as text, the way ``run_thread_id`` builds it. A name whose
+        # rest is not a run id therefore never fails; it only finds no run.
+        .where(
+            func.concat(RESEARCH_RUN_THREADS, cast(ResearchRunRecord.id, Text))
+            == threads.c.thread_id
+        )
+        .where(ResearchRunRecord.status.not_in(RESEARCH_FINISHED))
+        .where(
+            or_(
+                ResearchRunRecord.started_at.is_(None),
+                ResearchRunRecord.started_at > func.now() - longest_run,
             )
         )
         .exists()

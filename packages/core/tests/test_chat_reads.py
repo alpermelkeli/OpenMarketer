@@ -5,6 +5,7 @@ They need PostgreSQL (see the root ``conftest.py``).
 
 import uuid
 from datetime import timedelta
+from typing import TypedDict
 
 import pytest
 from sqlalchemy import func, update
@@ -26,17 +27,40 @@ from openmarketer_core.db.models import (
     ProfileStatus,
     Project,
     ProjectStatus,
+    ResearchRunRecord,
+    ResearchRunStatus,
     Workspace,
 )
 from openmarketer_core.db.profile_versions import approve_profile_version
 from openmarketer_core.db.proposals import ActionProposal, decide_proposal, propose_action
+from openmarketer_core.db.research_runs import (
+    ResearchRun,
+    mark_run_succeeded,
+    request_research_run,
+)
+from openmarketer_core.db.research_runs import (
+    mark_run_started as mark_research_started,
+)
+from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.orchestrator.reads import ChatReads, UnknownProfileSection
 from openmarketer_core.orchestrator.reads_postgres import PostgresChatReads
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.research.questions import ResearchRequest
+from openmarketer_core.research.research_agent.rules import CheckedFinding, Report
 
 PERSON = uuid.uuid4()
+
+
+class _Scope(TypedDict):
+    """The two ids the scoped functions take, so unpacking them names ids and nothing else."""
+
+    workspace_id: uuid.UUID
+    project_id: uuid.UUID
+
+
 DAY = 24 * 60 * 60
 PROFILE = ProductProfile.model_validate({"product": {"name": "Memoria", "type": "consumer_app"}})
+REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
 
 
 def new_scope(session: Session) -> RunScope:
@@ -245,11 +269,100 @@ def test_reads_of_one_project_do_not_reach_another(session, scope):
     other = new_scope(session)
     other_proposal = propose(session, other)
     other_run = request_analysis_run(session, **_ids(other))
+    other_research = request_research_run(
+        session, **_ids(other), request=REQUEST, requested_by="person"
+    )
     reads = reads_of(session, scope)
 
     assert reads.proposal(other_proposal.id) is None
     assert reads.run(other_run.id) is None
+    assert reads.research_report(other_research.id) is None
 
 
-def _ids(scope: RunScope) -> dict[str, uuid.UUID]:
+def test_research_runs_are_read_newest_first_and_bounded(session, scope):
+    older = research_run_with_report(session, scope)
+    backdate_research(session, older.id, hours=1)
+    newer = request_research_run(session, **_ids(scope), request=REQUEST, requested_by="person")
+    reads = reads_of(session, scope)
+
+    runs = reads.recent_research(10)
+    assert [run.id for run in runs] == [newer.id, older.id]
+    assert [run.id for run in reads.recent_research(1)] == [newer.id]
+    assert runs[1].status is ResearchRunStatus.SUCCEEDED
+    assert runs[1].report_id is not None
+    assert runs[1].requested_by == "person"
+
+
+def test_research_report_reads_the_latest_run_with_one(session, scope):
+    first = research_run_with_report(session, scope, statement="first finding")
+    backdate_research(session, first.id, hours=2)
+    second = research_run_with_report(session, scope, statement="second finding")
+    request_research_run(session, **_ids(scope), request=REQUEST, requested_by="person")
+    reads = reads_of(session, scope)
+
+    latest = reads.research_report()
+    assert latest is not None
+    assert latest.run_id == second.id
+    assert latest.findings[0]["statement"] == "second finding"
+    assert latest.questions == list(REQUEST.questions)
+    by_id = reads.research_report(first.id)
+    assert by_id is not None
+    assert by_id.findings[0]["statement"] == "first finding"
+
+
+def test_a_run_without_a_report_reads_as_none(session, scope):
+    run = request_research_run(session, **_ids(scope), request=REQUEST, requested_by="person")
+    reads = reads_of(session, scope)
+
+    assert reads.research_report(run.id) is None
+    assert reads.research_report() is None
+    assert reads.research_report(uuid.uuid4()) is None
+
+
+def research_run_with_report(
+    session: Session, scope: RunScope, *, statement: str = "a finding"
+) -> ResearchRun:
+    """A research run that stored a report, as a finished run is read."""
+    run = request_research_run(session, **_ids(scope), request=REQUEST, requested_by="person")
+    mark_research_started(session, **_ids(scope), run_id=run.id)
+    saved = save_research_report(
+        session,
+        **_ids(scope),
+        run_id=run.id,
+        report=Report(
+            questions=list(REQUEST.questions),
+            findings=[
+                CheckedFinding(
+                    question_index=0,
+                    statement=statement,
+                    confidence=0.7,
+                    flagged=False,
+                    sources=[
+                        {
+                            "page_id": str(uuid.uuid4()),
+                            "url": "https://example.com/a",
+                            "quotes": [],
+                        }
+                    ],
+                )
+            ],
+            notes=[],
+            cost_usd=0.03,
+            model="fake/model",
+        ),
+    )
+    mark_run_succeeded(session, **_ids(scope), run_id=run.id, report_id=saved.id)
+    return run
+
+
+def backdate_research(session: Session, run_id: uuid.UUID, *, hours: int) -> None:
+    """Move a research run's request time into the past: one transaction shares its clock."""
+    session.execute(
+        update(ResearchRunRecord)
+        .where(ResearchRunRecord.id == run_id)
+        .values(created_at=func.now() - timedelta(hours=hours))
+    )
+
+
+def _ids(scope: RunScope) -> _Scope:
     return {"workspace_id": scope.workspace_id, "project_id": scope.project_id}

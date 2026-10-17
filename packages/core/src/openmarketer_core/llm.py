@@ -132,7 +132,7 @@ class RouterChatModel:
         if "error" in body or not body.get("choices"):
             error = body.get("error", body)
             logger.warning("model provider reported an error: %r", str(error)[:300])
-            raise LLMError("the model provider reported an error", status=_reported_status(error))
+            raise LLMError("the model provider reported an error", status=reported_status(error))
 
         message = body["choices"][0]["message"]
         usage = body.get("usage") or {}
@@ -142,7 +142,7 @@ class RouterChatModel:
                 for key in ("role", "content", "tool_calls")
                 if message.get(key) is not None
             },
-            model=_model_name(body.get("model"), asked_for=payload["model"]),
+            model=model_name_to_keep(body.get("model"), asked_for=payload["model"]),
             cost_usd=float(usage.get("cost") or 0.0),
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
@@ -151,7 +151,7 @@ class RouterChatModel:
         return reply
 
 
-def _model_name(reported: Any, *, asked_for: str) -> str:
+def model_name_to_keep(reported: Any, *, asked_for: str) -> str:
     """The model the provider says answered, or the one asked for when that cannot be kept.
 
     The provider writes the name, and it is stored with the run: in its
@@ -165,7 +165,7 @@ def _model_name(reported: Any, *, asked_for: str) -> str:
     return asked_for
 
 
-def _reported_status(error: Any) -> int | None:
+def reported_status(error: Any) -> int | None:
     """The status a provider puts in the error of a reply it sent with HTTP 200."""
     code = error.get("code") if isinstance(error, dict) else None
     return code if isinstance(code, int) and not isinstance(code, bool) else None

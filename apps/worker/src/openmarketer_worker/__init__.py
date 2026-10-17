@@ -13,13 +13,17 @@ imports nothing but the standard library.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     # For the type checker only: the module imports the database code.
     from openmarketer_worker.checkpoint_cleanup import CheckpointCleanup
+
+# A task an agent brings that the process runs while it serves: a coroutine that
+# repeats until it is cancelled (the researcher's page retention).
+PeriodicTask = Callable[[], Coroutine[Any, Any, None]]
 
 
 @dataclass(frozen=True)
@@ -31,3 +35,5 @@ class AgentRegistration:
     activities: Sequence[Callable[..., Any]]
     # One for each kind of run of the agent that keeps graph checkpoints; none if none does.
     checkpoint_cleanups: Sequence[CheckpointCleanup]
+    # The agent's own schedules, which ``main.py`` starts beside the checkpoint cleanups.
+    periodic_tasks: Sequence[PeriodicTask] = ()

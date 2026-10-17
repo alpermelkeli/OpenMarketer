@@ -9,8 +9,10 @@ was lost (a process that died) is started again by sending it again.
 
 The reads the agent makes go through ``ChatReads``, built by the caller; the
 conversation is read from and written to ``db/chat.py``, and the model is the
-``ChatModel`` the caller resolved. This module words no failure and starts no
-workflow.
+``ChatModel`` the caller resolved. A request action (starting a research run)
+reaches the caller through ``ChatRequests``, given in by whoever holds a
+database and a workflow server; without one the turn can only read. This
+module words no failure, starts no workflow and reaches no workflow engine.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from openmarketer_core.llm import ChatModel
 from openmarketer_core.orchestrator.chat_agent.graph import answer_message
 from openmarketer_core.orchestrator.chat_agent.rules import ChatLimits
 from openmarketer_core.orchestrator.reads import ChatReads
+from openmarketer_core.orchestrator.requests import ChatRequests
 
 
 @dataclass(frozen=True)
@@ -51,10 +54,12 @@ def ask_project(
     message: str,
     model: ChatModel,
     limits: ChatLimits | None = None,
+    requests: ChatRequests | None = None,
 ) -> ChatExchange:
     """Answer ``message`` in one chat of the project, and store the exchange there.
 
-    The turn is given the chat's stored conversation up to ``message``. Raises
+    The turn is given the chat's stored conversation up to ``message``, and ``requests``, when
+    one is given, for the request action that starts a research run. Raises
     ``ProjectNotFound`` when the workspace has no such project, ``ChatNotFound``
     when the project has no such chat, ``ChatTurnError`` when no answer was given
     within the limits and ``LLMError`` when the model cannot be used; nothing is
@@ -67,7 +72,7 @@ def ask_project(
         {"role": stored.role.value, "content": stored.content} for stored in history
     ]
     conversation.append({"role": "user", "content": message})
-    turn = answer_message(reads, model, conversation, limits=limits)
+    turn = answer_message(reads, model, conversation, limits=limits, requests=requests)
     question, answer = append_exchange(
         session,
         workspace_id=workspace_id,

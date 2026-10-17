@@ -132,7 +132,7 @@ OpenMarketer is designed for authentic marketing of your own product. It deliber
 ## Things to verify before building on this
 
 - The analyzer has completed full runs against one repository with one free model. Nobody has measured whether its profiles are correct; see [docs/status.md](docs/status.md).
-- Model slugs in `config/models.yaml` change as models are released and retired. Only the slugs the analyzer uses have been run against the live API; the embeddings slug has not been checked.
+- Model slugs in `config/models.yaml` change as models are released and retired. Only the slugs the analyzer uses have been run against the live API, and the screener's (`respan/span-02`, on OpenRouter's decisions endpoint, which is in alpha) in one probe, as reported; the embeddings slug has not been checked. See [docs/status.md](docs/status.md#decision-calls-and-the-screening-of-search-results).
 - Statements about platform APIs and about Higgsfield access come from general knowledge. Check current official documentation.
 - "OpenMarketer" is a working name.
 

@@ -46,6 +46,7 @@ from openmarketer_core.agent_runtime.actions import (
     ActionEffect,
     ActionPolicy,
     InvalidActionDefinition,
+    RunTarget,
     mark_as_action,
 )
 from openmarketer_core.agent_runtime.steps import InvalidNodeResult
@@ -203,6 +204,23 @@ class Agent:
         """How each action is tried, by action name."""
         return MappingProxyType(self._policies)
 
+    @property
+    def run_targets(self) -> Mapping[str, RunTarget]:
+        """The actions that start another agent's run, by action name, in the order declared.
+
+        A target's action runs no activity of this worker: the workflow creates the child
+        run's record through an activity the wiring prepares and starts the child workflow
+        itself (``actions.RunTarget``). The mapping is what the driver reads to tell such an
+        action from an ordinary one.
+        """
+        return MappingProxyType(
+            {
+                name: definition.run
+                for name, definition in self._definitions.items()
+                if definition.run is not None
+            }
+        )
+
     def action[Payload: BaseModel](
         self,
         name: str,
@@ -213,6 +231,7 @@ class Agent:
         heartbeat: float | None = None,
         effect: ActionEffect = ActionEffect.INTERNAL,
         approval_wait: float = DEFAULT_APPROVAL_WAIT_SECONDS,
+        run: RunTarget | None = None,
     ) -> Callable[[type[Payload]], type[Payload]]:
         """Declare the model it decorates as the payload of the action ``name``.
 
@@ -226,12 +245,23 @@ class Agent:
         that is not finite and positive, or goes beyond what ``ActionPolicy`` allows,
         raises ``ValueError`` here, on the line of the decorator.
 
+        ``run`` makes the action one that starts another agent's run (``RunTarget``): the
+        workflow creates the child run's record through an activity the wiring prepares, then
+        starts or waits for the child workflow. Such an action runs no activity of this
+        worker, so ``timeout``, ``attempts``, ``retry_after`` and ``heartbeat`` do not apply
+        and giving any of them raises ``InvalidActionDefinition``; so does an effect other
+        than ``INTERNAL``, because starting a run neither publishes nor spends.
+
         The model is returned as it is, carrying the name, so that a node asks
         with ``request_action(Model(...))``. Raises ``InvalidActionDefinition``
         for a name this agent has, a model that is already an action's, a model (or one
         it holds) that allows extra fields, and a field that reads text as a file or an
         import.
         """
+        if run is not None:
+            _require_limits_that_do_not_apply_to_a_run_action(
+                name, timeout, attempts, retry_after, heartbeat, effect
+            )
         policy = ActionPolicy(
             attempt_timeout_seconds=timeout,
             max_attempts=attempts,
@@ -242,7 +272,7 @@ class Agent:
         )
 
         def declare(model: type[Payload]) -> type[Payload]:
-            definition = ActionDefinition(name, model)
+            definition = ActionDefinition(name, model, run)
             if name in self._definitions:
                 raise InvalidActionDefinition(f"agent {self.kind!r} defines action {name!r} twice")
             mark_as_action(model, name)
@@ -434,6 +464,39 @@ class Agent:
         if isinstance(end, str):
             return end
         return self._node_named(end, where)
+
+
+def _require_limits_that_do_not_apply_to_a_run_action(
+    name: str,
+    timeout: float,
+    attempts: int,
+    retry_after: float,
+    heartbeat: float | None,
+    effect: ActionEffect,
+) -> None:
+    """Refuse a run action declared with limits or an effect of an action that runs as an activity.
+
+    An action with a ``RunTarget`` starts another agent's run as a child workflow; no activity
+    of this worker runs for it, so its attempt limits mean nothing there, and the runtime
+    would ignore them silently. Starting a run is work for the run itself: an effect that
+    publishes or spends is refused, since the gate would hold the wrong thing.
+    """
+    if effect != ActionEffect.INTERNAL:
+        raise InvalidActionDefinition(
+            f"action {name!r} starts another run, which neither publishes nor spends by "
+            "itself: its effect is INTERNAL, and the gate never holds it"
+        )
+    wrote_limits = (
+        timeout != DEFAULT_TIMEOUT_SECONDS
+        or attempts != DEFAULT_ATTEMPTS
+        or retry_after != DEFAULT_RETRY_AFTER_SECONDS
+        or heartbeat is not None
+    )
+    if wrote_limits:
+        raise InvalidActionDefinition(
+            f"action {name!r} starts another run and runs no activity of this worker, so its "
+            "timeout, attempts, retry_after and heartbeat do not apply: take them out"
+        )
 
 
 def _name_of(function: NodeFunction) -> str:

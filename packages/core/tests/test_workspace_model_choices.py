@@ -16,6 +16,7 @@ from openmarketer_core.workspace_settings.model_choices import (
 
 CHAT = RoleConfig(tier="fast")
 EMBEDDINGS = RoleConfig(kind="embeddings", model="openai/embed")
+DECISIONS = RoleConfig(kind="decisions", model="vendor/decide")
 
 
 def refused_field(call) -> str:
@@ -66,6 +67,22 @@ def test_embeddings_role_takes_a_model_only():
     assert acceptable_role_choice(RoleChoice(model="openai/e2"), EMBEDDINGS).model == "openai/e2"
     choice = RoleChoice(temperature=0.2)
     assert refused_field(lambda: acceptable_role_choice(choice, EMBEDDINGS)) == "temperature"
+
+
+@pytest.mark.parametrize(
+    ("choice", "field"),
+    [
+        (RoleChoice(fallbacks=("vendor/other",)), "fallbacks"),
+        (RoleChoice(temperature=0.2), "temperature"),
+        (RoleChoice(max_tokens=10), "max_tokens"),
+        (RoleChoice(reasoning_effort="low"), "reasoning_effort"),
+    ],
+)
+def test_decisions_role_takes_a_model_only(choice, field):
+    assert acceptable_role_choice(RoleChoice(model="vendor/d2"), DECISIONS).model == "vendor/d2"
+    with pytest.raises(ModelChoiceRefused, match="this role takes a model only") as refusal:
+        acceptable_role_choice(choice, DECISIONS)
+    assert refusal.value.field == field
 
 
 def test_empty_choice_has_no_override():
