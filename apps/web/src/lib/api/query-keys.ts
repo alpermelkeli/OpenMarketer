@@ -12,6 +12,22 @@ export const queryKeys = {
   profileVersion: (projectId: string, version: number) =>
     ["projects", "one", projectId, "versions", "one", version] as const,
   proposals: (projectId: string) => ["projects", "one", projectId, "proposals", "list"] as const,
+  /** Everything held about a project's chats: the list, each chat and its messages. */
+  chatScope: (projectId: string) => ["projects", "one", projectId, "chats"] as const,
+  chats: (projectId: string) => ["projects", "one", projectId, "chats", "list"] as const,
+  chat: (projectId: string, chatId: string) => ["projects", "one", projectId, "chats", "one", chatId] as const,
+  chatMessages: (projectId: string, chatId: string) =>
+    ["projects", "one", projectId, "chats", "one", chatId, "messages"] as const,
+  /**
+   * The copies that the parts around a screen read: the sidebar and the project's frame. They hydrate
+   * before the screen inside them, so if they shared a screen's key, the screen would hydrate from data
+   * already fetched and not match the server's HTML. Under the keys of what they show, they are
+   * refreshed whenever the project or its proposals are.
+   */
+  shellProject: (projectId: string) => ["projects", "one", projectId, "project", "shell"] as const,
+  shellWaitingProposals: (projectId: string) =>
+    ["projects", "one", projectId, "proposals", "list", "shell"] as const,
+  shellChats: (projectId: string) => ["projects", "one", projectId, "chats", "list", "shell"] as const,
   /** Where each credential's value comes from. Never a value: no response holds one. */
   credentials: () => ["settings", "credentials"] as const,
   /** Everything about the models: the settings, and the check that depends on them. */

@@ -35,6 +35,12 @@ export type ProposalList = Schemas["ProposalListResponse"];
 export type ProposalStatus = Schemas["ProposalStatus"];
 export type ActionEffect = Schemas["ActionEffect"];
 
+export type Chat = Schemas["ChatThreadResponse"];
+export type ChatList = Schemas["ChatThreadListResponse"];
+export type ChatMessage = Schemas["ChatMessageResponse"];
+export type ChatMessageList = Schemas["ChatMessageListResponse"];
+export type ChatTurn = Schemas["ChatTurnResponse"];
+
 export type CredentialStatus = Schemas["CredentialStatusResponse"];
 export type CredentialList = Schemas["CredentialListResponse"];
 export type CredentialSource = Schemas["CredentialSource"];

@@ -35,6 +35,16 @@ export function useProject(projectId: string) {
   });
 }
 
+/** The project as the sidebar shows it, under a key of its own (see `queryKeys.shellProject`). */
+export function useShellProject(projectId: string) {
+  return useQuery<Project, ApiError>({
+    queryKey: queryKeys.shellProject(projectId),
+    queryFn: async () =>
+      dataOf(await api.GET("/v1/projects/{project_id}", { params: { path: { project_id: projectId } } })),
+    retry: false,
+  });
+}
+
 export function useCreateProject() {
   const queryClient = useQueryClient();
   return useMutation<Project, ApiError, CreateProjectRequest>({

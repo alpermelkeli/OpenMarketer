@@ -3,16 +3,16 @@ import { Suspense, type ReactNode } from "react";
 
 type Props = PageProps<"/projects/[projectId]">;
 
-/** A project opens on its profile: reviewing it is what the dashboard is for. */
+/** A project opens on a new chat: asking for something is where the work on a project starts. */
 export default function ProjectPage({ params }: Props) {
   return (
     <Suspense>
-      <ToProfile params={params} />
+      <ToChat params={params} />
     </Suspense>
   );
 }
 
-async function ToProfile({ params }: Pick<Props, "params">): Promise<ReactNode> {
+async function ToChat({ params }: Pick<Props, "params">): Promise<ReactNode> {
   const { projectId } = await params;
-  redirect(`/projects/${encodeURIComponent(projectId)}/profile`);
+  redirect(`/projects/${encodeURIComponent(projectId)}/chat`);
 }

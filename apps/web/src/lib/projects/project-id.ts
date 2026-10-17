@@ -5,3 +5,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function isProjectId(value: string): boolean {
   return UUID.test(value);
 }
+
+/** A chat's identifier is a UUID too, so it is checked the same way. */
+export function isChatId(value: string): boolean {
+  return UUID.test(value);
+}

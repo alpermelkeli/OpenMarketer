@@ -16,6 +16,9 @@ const ADVICE: Partial<Record<ApiErrorCode, string>> = {
     "The API refused the request: without a login it only serves requests made on the machine it runs on.",
   internal_error: "The API ran into an error it did not expect. Its log has the details.",
   project_not_found: "The API has no project with this ID.",
+  chat_not_found: "The project has no chat with this ID.",
+  model_key_not_set:
+    "No key of the model provider is set, so the orchestrator cannot answer. Store one in Settings, under Credentials.",
 };
 
 export function errorMessage(error: ApiError): string {

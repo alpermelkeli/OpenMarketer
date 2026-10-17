@@ -645,6 +645,28 @@ The orchestrator has two halves. The \emph{chat turn} answers one message, quick
   \item \textbf{It is not a hub everything must pass through.} Scheduled work runs without it (the planner's week, the analyst's digests, the repository watcher), and a button in the dashboard starts an agent directly. Because an agent does not know who started it (Section~\ref{sec:terms}), the orchestrator is the front door for people and the coordinator of work that needs several agents, not a step every action must take.
 \end{itemize}
 
+\subsection{Chat threads}\label{sec:threads}
+\textbf{Where the chat is.} Inside a project, the dashboard's sidebar is the project's menu (Figure~\ref{fig:chat}): the way back to all projects, where another project is chosen; the project's name and repository; a new chat; the project's threads, the most recently active first; and its profile, analyses and approvals. A project opens on a new chat. A project has as many threads as people start, usually one per subject (``launch week'', ``competitor analysis''); a thread can be renamed and archived. An approval card in a thread and the same proposal in the Approvals tab are one record, so a decision in either place is the same decision. Two places come later: a side panel that opens a thread from any screen with that screen's record as its context, and a workspace thread that reads across projects and starts nothing, since it has no project to act for.
+
+\fig{fig_chat}{A project's chat. The sidebar is the project's menu, with its threads and the ones that wait for the person marked; a thread holds the conversation and everything its task did: the plan and its card, the steps, the proposals with their cards, the follow-ups and questions, and the report.}{fig:chat}
+
+\textbf{Everything a task does is in its thread.} A task belongs to the thread it was started from and writes into it as it goes: its plan and the plan's card, each step as it starts and finishes, each proposal of its runs with its card, what the person decided, its follow-ups (a reminder about a proposal that has waited, a question with its options) and its report. A notification sent through another channel links to that message (Section~\ref{sec:proactive}), so a person who opens a reminder lands where it belongs, with the history above it. A thread whose task waits for its person is marked in the list. A question is answered in the thread, with one of its options or in words; the answer reaches the task as a signal and is input, not an approval: a plan that can spend is still approved on its card. Runs started without a chat, by a button in the dashboard or a schedule, have no thread: their proposals are in the Approvals tab, their reminders arrive as notifications, and any thread can ask about them.
+
+\textbf{What is stored.}
+\begin{longtable}{@{}p{3.0cm}p{12.3cm}@{}}
+\toprule
+\textbf{Table} & \textbf{What it holds}\\
+\midrule
+\endhead
+\texttt{chat\_thread} & The project, the title (suggested from the first message, changed by people), who started it, when it was started and last active, whether it is archived, and the summary of its older messages.\\
+\texttt{chat\_message} & The thread, the kind (a person's message, the orchestrator's answer, or an event of a task or a run), the text, the author, the time, and links to the records it started, created or read: runs, tasks, proposals, directives, questions. A card is a message that links to its proposal or question and shows its current state, never a copy that could go stale.\\
+\bottomrule
+\end{longtable}
+
+\textbf{What a turn sees.} The latest messages of the thread, the stored summary of the older ones, which is brought up to date as the thread grows, and what the turn reads with its tools. A thread's history is not the project's memory: an instruction that must last becomes a directive or a memory entry that a person confirms, so the orchestrator never has to infer the project's rules from old conversations. The other threads of the project are data it can search with a read tool, for questions such as ``what did we decide about the poster last week?''.
+
+\textbf{Keeping and protecting it.} A thread is kept until it is deleted, and is deleted with its project. Before a message is stored, it is scanned for secrets with the scanner that intake uses (Section~\ref{sec:profile}); a value that looks like a credential is not stored, and the person is told to set it under Settings instead. Threads are shared by the people of the project, and every message keeps its author; once the dashboard has sign-in, project roles decide who reads and who writes.
+
 \subsection{Proactive mode}\label{sec:proactive}
 The scheduled workflows run whether or not anyone opens the dashboard, so the system must also be able to reach the operator. In proactive mode the console speaks first, through the dashboard thread, chat apps and e-mail (Figure~\ref{fig:proactive}).
 
@@ -698,7 +720,7 @@ WATCHDOG_AUTO_BRAKE=true
 \end{enumerate}
 
 \subsection{Implementation notes}
-The chat uses streaming responses from the API. A thread belongs to a project; a workspace-level thread gives an overview across projects. The orchestrator is an agent graph like the others (Section~\ref{sec:graphs}), with the \texttt{orchestrator} role of Section~\ref{sec:llm}. Chat turns run inside the API process; runs and tasks are Temporal workflows, whose progress events are pushed back into the thread. Context is assembled on demand from the Product Profile, the current plan, the approval queue, recent metrics, project memory and the audit log, with older conversation turns summarised to stay within the model's context window.
+The chat uses streaming responses from the API. A thread belongs to a project (Section~\ref{sec:threads}). The orchestrator is an agent graph like the others (Section~\ref{sec:graphs}), with the \texttt{orchestrator} role of Section~\ref{sec:llm}. Chat turns run inside the API process; runs and tasks are Temporal workflows, whose events are stored as messages of the thread that started them and pushed to an open chat as they arrive. Context is assembled on demand from the Product Profile, the current plan, the approval queue, recent metrics, project memory and the audit log, with older conversation turns summarised to stay within the model's context window.
 
 A later phase can expose the same orchestrator through Telegram or Slack bots. Approval in those channels would still use signed, expiring links that open the dashboard, so that a chat message alone can never approve anything.
 
@@ -1064,7 +1086,7 @@ Notable choices:
   \item \texttt{audit\_log} is hash-chained: each entry stores the hash of the previous one.
   \item \texttt{memory\_entry} combines structured experiment results with embedded notes (pgvector) for retrieval.
   \item \texttt{media\_asset} records provider, model, prompt, parameters and cost for reproducibility and cost control. Every produce-verify-edit round creates a new version (\texttt{version}, \texttt{parent\_id}) that keeps its code, prompts, parameters and the verifier's report (\texttt{verification}), so any final asset can be explained and reproduced.
-  \item Not shown in the figure: \texttt{llm\_setting} (workspace or project override of model and parameters per role, with author and timestamp), \texttt{llm\_call} (role, model, tokens, cost, latency, trace identifier), \texttt{chat\_thread} and \texttt{chat\_message} for the orchestrator console, and \texttt{directive} (one-off instructions and draft standing rules, each linked to the message that created it), \texttt{notification} (type, severity, channel, delivery status, deduplication key) and \texttt{question} (blocking questions with options, default and deadline).
+  \item Not shown in the figure: \texttt{llm\_setting} (workspace or project override of model and parameters per role, with author and timestamp), \texttt{llm\_call} (role, model, tokens, cost, latency, trace identifier), \texttt{chat\_thread} and \texttt{chat\_message} for the orchestrator console (Section~\ref{sec:threads}), and \texttt{directive} (one-off instructions and draft standing rules, each linked to the message that created it), \texttt{notification} (type, severity, channel, delivery status, deduplication key) and \texttt{question} (blocking questions with options, default and deadline).
 \end{itemize}
 
 % ---------------------------------------------------------------- 10
