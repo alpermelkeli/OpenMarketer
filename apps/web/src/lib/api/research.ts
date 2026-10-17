@@ -43,9 +43,16 @@ export function useResearches(projectId: string) {
 
 /**
  * One run, polled until it has finished. `listed` is the run as a list gave it, so a screen
- * that already has it shows it at once; a run's own screen reads it by its id.
+ * that already has it shows it at once; a run's own screen reads it by its id. A screen that
+ * follows the run's events instead (a chat) reads it once, without `poll`: an event that ends
+ * the run refreshes it.
  */
-export function useResearchRun(projectId: string, runId: string, listed?: ResearchRun) {
+export function useResearchRun(
+  projectId: string,
+  runId: string,
+  listed?: ResearchRun,
+  { poll = true }: { poll?: boolean } = {},
+) {
   return useQuery<ResearchRun, ApiError>({
     queryKey: queryKeys.researchRun(projectId, runId),
     queryFn: async () =>
@@ -57,6 +64,7 @@ export function useResearchRun(projectId: string, runId: string, listed?: Resear
     initialData: listed,
     enabled: listed === undefined || !isRunFinished(listed),
     refetchInterval: (query) => {
+      if (!poll) return false;
       const run = query.state.data;
       return run !== undefined && isRunFinished(run) ? false : POLL_INTERVAL_MS;
     },

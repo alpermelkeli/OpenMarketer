@@ -32,6 +32,7 @@ from openmarketer_core.orchestrator.chat_agent.definitions import (
     initial_state,
 )
 from openmarketer_core.orchestrator.chat_agent.rules import ChatLimits, ChatTurn, ChatTurnError
+from openmarketer_core.orchestrator.events import NoTurnEvents, TurnEvents
 from openmarketer_core.orchestrator.reads import ChatReads
 from openmarketer_core.orchestrator.requests import ChatRequests
 
@@ -46,6 +47,7 @@ def call_model(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]
         raise ChatTurnError(f"no answer after {limits.max_model_calls} model calls")
     step = state["step"] + 1
     wrapping_up = rules.is_wrapping_up(step, cost, state["tool_calls"], limits)
+    offer_requests = context.requests is not None
 
     new_messages: list[dict[str, Any]] = []
     if wrapping_up and not state["wrap_up_sent"]:
@@ -61,7 +63,11 @@ def call_model(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]
     reply = context.model.chat(
         rules.ROLE,
         state["messages"] + new_messages,
-        tools=rules.wrap_up_tool_schemas(agent) if wrapping_up else rules.tool_schemas(agent),
+        tools=(
+            rules.wrap_up_tool_schemas(agent, offer_requests=offer_requests)
+            if wrapping_up
+            else rules.tool_schemas(agent, offer_requests=offer_requests)
+        ),
     )
     new_messages.append(reply.message)
     if not reply.tool_calls:
@@ -85,7 +91,9 @@ def call_model(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]
 @agent.node
 def run_tools(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]:
     last_chance = state["wrapping_up"] or state["step"] >= context.limits.max_model_calls
-    outcome = rules.run_tool_calls(state["pending_calls"], agent, context, last_chance=last_chance)
+    outcome = rules.run_tool_calls(
+        state["pending_calls"], agent, context, last_chance=last_chance, events=context.events
+    )
     return {
         "messages": outcome.messages,
         "tool_calls": outcome.names,
@@ -117,6 +125,7 @@ def answer_message(
     *,
     limits: ChatLimits | None = None,
     requests: ChatRequests | None = None,
+    events: TurnEvents | None = None,
 ) -> ChatTurn:
     """Run one turn in memory and return the operator's answer.
 
@@ -124,16 +133,23 @@ def answer_message(
     replaces everything but its newest messages, and its cost counts against the turn. The
     turn is then handed the conversation up to the operator's latest message and reads the
     project through ``reads``. ``requests`` is what a request action may ask of the caller
-    (``chat_agent.tools.start_research``); without it such a tool answers that starting runs
-    is not available. Nothing is stored: a turn that fails is lost, and sending the message
-    again starts it again. Raises ``ChatTurnError`` when no answer is given within the limits
-    and ``LLMError`` when the model cannot be used.
+    (``chat_agent.tools.start_research``); without it the model is not offered such a tool.
+    ``events`` is where the turn records what it does for the person watching it; without
+    one nothing is recorded. Nothing else is stored: the caller stores the answer, and a turn
+    that fails leaves nothing to store. Raises ``ChatTurnError`` when no answer is given
+    within the limits and ``LLMError`` when the model cannot be used.
     """
     limits = limits or ChatLimits()
     prepared = rules.compact_history(history, model)
     state = initial_state(prepared.messages)
     state["cost_usd"] = prepared.cost_usd
-    context = ChatTurnContext(model=model, reads=reads, limits=limits, requests=requests)
+    context = ChatTurnContext(
+        model=model,
+        reads=reads,
+        limits=limits,
+        requests=requests,
+        events=events or NoTurnEvents(),
+    )
     final = run_from(
         agent,
         call_model.__name__,

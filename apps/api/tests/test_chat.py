@@ -10,6 +10,7 @@ import base64
 import dataclasses
 import json
 import os
+import threading
 import uuid
 
 import pytest
@@ -18,23 +19,28 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from openmarketer_api.dependencies import Services
+from openmarketer_api.dependencies import Services, event_stream_timing, open_event_streams
+from openmarketer_api.event_stream import OpenStreams, StreamTiming
 from openmarketer_api.identity import LOCAL_USER_ID, current_workspace_id
 from openmarketer_api.routes import chat
 from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.credentials.catalog import OPENROUTER_API_KEY
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.chat import append_exchange, create_chat
+from openmarketer_core.db.chat_turns import finish_turn, start_turn
 from openmarketer_core.db.credentials import store_credential
-from openmarketer_core.db.models import Project, ResearchRunRecord, Workspace
+from openmarketer_core.db.models import ChatTurnTrigger, Project, ResearchRunRecord, Workspace
+from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.llm import ChatReply, LLMError, RouterChatModel
+from openmarketer_core.orchestrator.chat_agent.definitions import CHAT_TURN_KIND
 from openmarketer_core.orchestrator.chat_agent.rules import SUBMIT, ChatTurnError
 from openmarketer_core.research.workflow_contract import (
     RESEARCH_TASK_QUEUE,
     RESEARCH_WORKFLOW,
     ResearchRunInput,
 )
+from openmarketer_core.run_events import RunEvent
 from openmarketer_core.tracing import (
     NOT_TRACING,
     TracedChatModel,
@@ -178,6 +184,14 @@ def read_url(scope: RunScope, chat_id: object) -> str:
     return chat_url(scope, chat_id) + "/read"
 
 
+def events_url(scope: RunScope, chat_id: object) -> str:
+    return chat_url(scope, chat_id) + "/events"
+
+
+def stream_url(scope: RunScope, chat_id: object) -> str:
+    return events_url(scope, chat_id) + "/stream"
+
+
 def open_chat(client: TestClient, scope: RunScope, title: str | None = None) -> dict:
     response = client.post(chats_url(scope), json=None if title is None else {"title": title})
     assert response.status_code == 201, response.text
@@ -191,15 +205,15 @@ def store(
     question: str,
     answer: str,
 ) -> None:
+    in_chat = {
+        "workspace_id": scope.workspace_id,
+        "project_id": scope.project_id,
+        "chat_id": chat_id,
+    }
     with transaction(sessions) as session:
-        append_exchange(
-            session,
-            workspace_id=scope.workspace_id,
-            project_id=scope.project_id,
-            chat_id=chat_id,
-            question=question,
-            answer=answer,
-        )
+        turn = start_turn(session, trigger=ChatTurnTrigger.MESSAGE, **in_chat)
+        finish_turn(session, turn_id=turn.id, **in_chat)
+        append_exchange(session, turn_id=turn.id, question=question, answer=answer, **in_chat)
 
 
 def test_a_chat_is_created_empty_with_the_default_name(client, services, scope):
@@ -209,7 +223,7 @@ def test_a_chat_is_created_empty_with_the_default_name(client, services, scope):
     body = response.json()
     assert body["title"] == "New chat"
     assert body["project_id"] == str(scope.project_id)
-    assert (body["last_read_at"], body["unread"]) == (None, False)
+    assert (body["last_read_at"], body["unread"], body["busy"]) == (None, False, False)
     listed = client.get(chats_url(scope)).json()
     assert [chat["id"] for chat in listed["chats"]] == [body["id"]]
     assert listed["next_cursor"] is None
@@ -273,6 +287,8 @@ def test_a_sent_message_is_answered_and_the_exchange_is_stored(client, services,
         "It is ready to analyse.",
     )
     assert (body["model"], body["cost_usd"]) == ("fake/model", 0.01)
+    assert body["question"]["turn_id"] is not None
+    assert body["answer"]["turn_id"] == body["question"]["turn_id"]
     assert model.requests[0]["role"] == "orchestrator"
     listed = client.get(messages_url(scope, chat["id"])).json()
     assert [message["content"] for message in listed["messages"]] == [
@@ -280,9 +296,10 @@ def test_a_sent_message_is_answered_and_the_exchange_is_stored(client, services,
         "Can I analyse it?",
     ]
     assert listed["next_cursor"] is None
+    assert {message["turn_id"] for message in listed["messages"]} == {body["answer"]["turn_id"]}
     reloaded = client.get(chat_url(scope, chat["id"])).json()
     assert reloaded["title"] == "Can I analyse it?"
-    assert reloaded["unread"] is True
+    assert (reloaded["unread"], reloaded["busy"]) == (True, False)
     assert reloaded["last_activity_at"] > reloaded["created_at"]
 
 
@@ -461,6 +478,26 @@ def test_a_failed_turn_is_answered_with_a_fixed_message_and_stores_nothing(
     assert second.status_code == 201
 
 
+def test_a_message_to_a_chat_that_is_answering_another_turn_is_a_conflict(
+    client, services, scope, app, sessions
+):
+    chat = open_chat(client, scope)
+    with transaction(sessions) as session:
+        start_turn(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=uuid.UUID(chat["id"]),
+            trigger=ChatTurnTrigger.MESSAGE,
+        )
+    model = wired(app, [call(SUBMIT, answer="unreached")])
+
+    response = client.post(messages_url(scope, chat["id"]), json={"message": "hello"})
+
+    assert (response.status_code, response.json()["code"]) == (409, "chat_busy")
+    assert model.requests == []
+
+
 def test_the_chat_of_a_project_the_workspace_does_not_have_is_not_found(
     client, services, scope, app
 ):
@@ -472,6 +509,8 @@ def test_the_chat_of_a_project_the_workspace_does_not_have_is_not_found(
     assert client.post(url).status_code == 404
     assert client.get(f"{url}/{uuid.uuid4()}").status_code == 404
     assert client.get(f"{url}/{uuid.uuid4()}/messages").status_code == 404
+    assert client.get(f"{url}/{uuid.uuid4()}/events").status_code == 404
+    assert client.get(f"{url}/{uuid.uuid4()}/events/stream").status_code == 404
     assert (
         client.post(f"{url}/{uuid.uuid4()}/messages", json={"message": "hello"}).status_code == 404
     )
@@ -488,6 +527,8 @@ def test_a_chat_the_project_does_not_have_is_not_found(client, services, app, sc
         client.get(messages_url(scope, unknown)),
         client.post(messages_url(scope, unknown), json={"message": "hello"}),
         client.post(read_url(scope, unknown)),
+        client.get(events_url(scope, unknown)),
+        client.get(stream_url(scope, unknown)),
     ]
 
     assert all(response.status_code == 404 for response in responses)
@@ -511,8 +552,219 @@ def test_a_chat_of_another_project_is_not_found(client, services, app, scope, se
         client.get(messages_url(scope, foreign.id)),
         client.post(messages_url(scope, foreign.id), json={"message": "hello"}),
         client.post(read_url(scope, foreign.id)),
+        client.get(events_url(scope, foreign.id)),
+        client.get(stream_url(scope, foreign.id)),
     ):
         assert (response.status_code, response.json()["code"]) == (404, "chat_not_found")
+
+
+# ------------------------------------------------------------- the events
+def running_turn_of(sessions: sessionmaker[Session], scope: RunScope, chat_id: object) -> uuid.UUID:
+    with transaction(sessions) as session:
+        turn = start_turn(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=uuid.UUID(str(chat_id)),
+            trigger=ChatTurnTrigger.MESSAGE,
+        )
+        return turn.id
+
+
+def record(
+    sessions: sessionmaker[Session], scope: RunScope, turn_id: uuid.UUID, *tools: str
+) -> list[int]:
+    """Store a `tool_called` event of the turn for each tool, and return their identifiers."""
+    with transaction(sessions) as session:
+        stored = append_events(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            run_kind=CHAT_TURN_KIND,
+            run_id=turn_id,
+            events=[
+                RunEvent("tool_called", {"tool": tool, "label": f"Reading {tool}"})
+                for tool in tools
+            ],
+        )
+        return [event.id for event in stored]
+
+
+def quick_streams(app, *, keep_alive_every: float = 60, close_after: float = 0.2) -> None:
+    app.dependency_overrides[event_stream_timing] = lambda: StreamTiming(
+        poll_every=0.01,
+        keep_alive_every=keep_alive_every,
+        close_after=close_after,
+        reconnect_after=0.5,
+    )
+
+
+def blocks(body: str) -> list[str]:
+    return [block for block in body.split("\n\n") if block]
+
+
+def streamed_events(body: str) -> list[dict]:
+    """The events of a stream's body: each one's fields, with its data read as JSON."""
+    found = []
+    for block in blocks(body):
+        fields = dict(line.split(": ", 1) for line in block.split("\n") if not line.startswith(":"))
+        if "data" in fields:
+            found.append({**fields, "data": json.loads(fields["data"])})
+    return found
+
+
+def test_a_chat_with_a_running_turn_is_busy(client, services, scope, sessions):
+    chat = open_chat(client, scope)
+    running_turn_of(sessions, scope, chat["id"])
+
+    assert client.get(chat_url(scope, chat["id"])).json()["busy"] is True
+    assert [listed["busy"] for listed in client.get(chats_url(scope)).json()["chats"]] == [True]
+
+
+def test_a_sent_message_is_followed_by_its_turns_events(client, services, scope, app):
+    answering(app, "ok")
+    chat = open_chat(client, scope)
+
+    turn = client.post(messages_url(scope, chat["id"]), json={"message": "hello"}).json()
+
+    listed = client.get(events_url(scope, chat["id"])).json()["events"]
+    assert listed
+    assert {(event["run_kind"], event["run_id"]) for event in listed} == {
+        (CHAT_TURN_KIND, turn["answer"]["turn_id"])
+    }
+    assert listed[0]["kind"] == "turn_answered"
+    assert listed[0]["detail"] == {"message_id": turn["answer"]["id"]}
+
+
+def test_events_page_newest_first_beside_a_next_cursor(client, services, scope, sessions):
+    chat = open_chat(client, scope)
+    turn_id = running_turn_of(sessions, scope, chat["id"])
+    first, second, third = record(sessions, scope, turn_id, "status", "profile", "runs")
+
+    page = client.get(events_url(scope, chat["id"]), params={"limit": 2}).json()
+
+    assert [event["id"] for event in page["events"]] == [third, second]
+    assert page["events"][0] == {
+        "id": third,
+        "run_kind": CHAT_TURN_KIND,
+        "run_id": str(turn_id),
+        "kind": "tool_called",
+        "detail": {"tool": "runs", "label": "Reading runs"},
+        "created_at": page["events"][0]["created_at"],
+    }
+    rest = client.get(
+        events_url(scope, chat["id"]), params={"limit": 2, "cursor": page["next_cursor"]}
+    ).json()
+    assert ([event["id"] for event in rest["events"]], rest["next_cursor"]) == ([first], None)
+
+
+def test_an_event_cursor_this_list_did_not_write_is_refused(client, services, scope):
+    chat = open_chat(client, scope)
+
+    for cursor in ("not-a-cursor", "0", "-1", "1.5", "9" * 30):
+        response = client.get(events_url(scope, chat["id"]), params={"cursor": cursor})
+        assert response.status_code == 422, cursor
+
+
+def test_events_of_one_chat_do_not_read_into_another(client, services, scope, sessions, app):
+    quick_streams(app)
+    first = open_chat(client, scope, title="first")
+    second = open_chat(client, scope, title="second")
+    record(sessions, scope, running_turn_of(sessions, scope, first["id"]), "status")
+
+    assert client.get(events_url(scope, second["id"])).json()["events"] == []
+    assert streamed_events(client.get(stream_url(scope, second["id"])).text) == []
+
+
+def test_the_stream_sends_the_chats_events_as_server_sent_events(
+    client, services, scope, sessions, app
+):
+    quick_streams(app)
+    chat = open_chat(client, scope)
+    turn_id = running_turn_of(sessions, scope, chat["id"])
+    first, second = record(sessions, scope, turn_id, "status", "profile")
+
+    response = client.get(stream_url(scope, chat["id"]))
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert blocks(response.text)[0] == "retry: 500"
+    listed = client.get(events_url(scope, chat["id"])).json()["events"]
+    assert streamed_events(response.text) == [
+        {"id": str(event["id"]), "event": "tool_called", "data": event}
+        for event in reversed(listed)
+    ]
+    assert [int(event["id"]) for event in streamed_events(response.text)] == [first, second]
+
+
+def test_the_stream_starts_after_the_cursor_it_is_given(client, services, scope, sessions, app):
+    quick_streams(app)
+    chat = open_chat(client, scope)
+    first, second, third = record(
+        sessions, scope, running_turn_of(sessions, scope, chat["id"]), "a", "b", "c"
+    )
+
+    response = client.get(stream_url(scope, chat["id"]), params={"after": first})
+
+    assert [int(event["id"]) for event in streamed_events(response.text)] == [second, third]
+
+
+def test_a_reconnecting_streams_last_event_id_wins_over_its_after(
+    client, services, scope, sessions, app
+):
+    quick_streams(app)
+    chat = open_chat(client, scope)
+    first, second, third = record(
+        sessions, scope, running_turn_of(sessions, scope, chat["id"]), "a", "b", "c"
+    )
+
+    response = client.get(
+        stream_url(scope, chat["id"]),
+        params={"after": first},
+        headers={"Last-Event-ID": str(second)},
+    )
+
+    assert [int(event["id"]) for event in streamed_events(response.text)] == [third]
+
+
+def test_a_cursor_of_the_stream_that_is_not_an_event_id_is_refused(client, services, scope, app):
+    quick_streams(app)
+    chat = open_chat(client, scope)
+
+    assert client.get(stream_url(scope, chat["id"]), params={"after": "x"}).status_code == 422
+    assert client.get(stream_url(scope, chat["id"]), params={"after": -1}).status_code == 422
+    response = client.get(stream_url(scope, chat["id"]), headers={"Last-Event-ID": "seven"})
+    assert response.status_code == 422
+
+
+def test_an_idle_stream_sends_keep_alive_comments_until_its_time_is_up(
+    client, services, scope, app
+):
+    quick_streams(app, keep_alive_every=0.03, close_after=0.3)
+    chat = open_chat(client, scope)
+
+    response = client.get(stream_url(scope, chat["id"]))
+
+    assert response.status_code == 200
+    assert blocks(response.text)[0] == "retry: 500"
+    assert blocks(response.text)[1:]
+    assert set(blocks(response.text)[1:]) == {": keep-alive"}
+
+
+def test_events_stored_while_the_stream_is_open_are_sent(client, services, scope, sessions, app):
+    quick_streams(app, close_after=1.5)
+    chat = open_chat(client, scope)
+    turn_id = running_turn_of(sessions, scope, chat["id"])
+    [before] = record(sessions, scope, turn_id, "status")
+    stored_later: list[int] = []
+    later = threading.Timer(0.3, lambda: stored_later.extend(record(sessions, scope, turn_id, "x")))
+
+    later.start()
+    response = client.get(stream_url(scope, chat["id"]))
+    later.join()
+
+    assert [int(event["id"]) for event in streamed_events(response.text)] == [before, *stored_later]
 
 
 # ------------------------------------------------------- the request action
@@ -541,6 +793,8 @@ def test_the_turn_can_start_a_research_run_and_the_workflow_is_started(
         run = session.get(ResearchRunRecord, started.input.run_id)
     assert run is not None
     assert (run.requested_by, run.status.value) == ("orchestrator", "queued")
+    # The run is the chat's, which hears back from it when it ends.
+    assert str(run.chat_thread_id) == chat["id"]
     assert run.questions == ["What did competitors post last month?"]
     # The model was told the new run's id and status, so the answer can name it.
     told = json.loads(model.tool_results()[0])
@@ -673,3 +927,42 @@ def test_a_traced_turn_sends_its_run_its_nodes_and_its_generations(client, servi
     assert spans["orchestrator"].parent is not None
     assert by_id[spans["call_model"].parent.span_id] == "orchestrator-chat"
     assert by_id[spans["orchestrator"].parent.span_id] == "call_model"
+
+
+def test_a_stream_beyond_the_servers_limit_is_refused_until_one_ends(client, services, scope, app):
+    quick_streams(app)
+    streams = OpenStreams(limit=1)
+    app.dependency_overrides[open_event_streams] = lambda: streams
+    chat = open_chat(client, scope)
+    held = streams.take()
+
+    refused = client.get(stream_url(scope, chat["id"]))
+    held.give_back()
+    served = client.get(stream_url(scope, chat["id"]))
+
+    assert (refused.status_code, refused.json()["code"]) == (503, "too_many_streams")
+    assert served.status_code == 200
+    # The stream that ended gave its place back.
+    assert streams.count == 0
+
+
+def test_a_title_with_a_line_separator_reaches_the_stream_whole(
+    client, services, scope, sessions, app
+):
+    quick_streams(app)
+    chat = open_chat(client, scope)
+    turn_id = running_turn_of(sessions, scope, chat["id"])
+    title = "Pricing\u2028page\u0085of a competitor"
+    with transaction(sessions) as session:
+        append_events(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            run_kind=CHAT_TURN_KIND,
+            run_id=turn_id,
+            events=[RunEvent("fetched", {"url": "https://a.example", "title": title})],
+        )
+
+    [event] = streamed_events(client.get(stream_url(scope, chat["id"])).text)
+
+    assert event["data"]["detail"]["title"] == title

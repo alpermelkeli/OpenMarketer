@@ -13,9 +13,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from openmarketer_core.db.chat import ChatNotFound, create_chat
 from openmarketer_core.db.models import Project, ResearchRunRecord, Workspace
 from openmarketer_core.db.projects import ProjectNotFound
-from openmarketer_core.db.research_runs import request_research_run
+from openmarketer_core.db.research_runs import request_research_run, research_run
 from openmarketer_core.research.questions import ResearchRequest
 
 REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
@@ -148,3 +149,50 @@ def test_a_run_of_a_project_the_workspace_does_not_have_is_refused(session, proj
             request=REQUEST,
             requested_by="person",
         )
+
+
+def test_a_run_a_chat_asked_for_names_the_chat(session, project):
+    chat = create_chat(session, workspace_id=project.workspace_id, project_id=project.project_id)
+
+    run = request_research_run(
+        session,
+        workspace_id=project.workspace_id,
+        project_id=project.project_id,
+        request=REQUEST,
+        requested_by="orchestrator",
+        chat_thread_id=chat.id,
+    )
+
+    assert run.chat_thread_id == chat.id
+    read_back = research_run(
+        session, workspace_id=project.workspace_id, project_id=project.project_id, run_id=run.id
+    )
+    assert read_back.chat_thread_id == chat.id
+
+
+def test_a_run_asked_for_elsewhere_names_no_chat(session, project):
+    run = request_research_run(
+        session,
+        workspace_id=project.workspace_id,
+        project_id=project.project_id,
+        request=REQUEST,
+        requested_by="person",
+    )
+
+    assert run.chat_thread_id is None
+
+
+def test_a_run_cannot_name_a_chat_of_another_project(session, project):
+    other = new_project(session)
+    foreign = create_chat(session, workspace_id=other.workspace_id, project_id=other.project_id)
+
+    with pytest.raises(ChatNotFound):
+        request_research_run(
+            session,
+            workspace_id=project.workspace_id,
+            project_id=project.project_id,
+            request=REQUEST,
+            requested_by="orchestrator",
+            chat_thread_id=foreign.id,
+        )
+    assert stored_origins(session, project) == []

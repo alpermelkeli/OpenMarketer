@@ -7,6 +7,8 @@ the agent runtime asks an agent for:
 - ``initial_state``: what a run starts from, which is the run's own request;
 - ``context``: what the nodes of one attempt are given: a chat model and a decision model of
   the attempt's own and the stored text of the pages the run fetched;
+- ``record_progress``: storing the events of each node as it ends, for the chat that asked
+  for the run (``progress.py`` in core says which);
 - ``search``: the handler of the action ``search_web``;
 - ``fetch``: the handler of the action ``fetch_page``: it refuses what may not be fetched
   (``page_fetch.py``), has the headless browser render a script shell, stores the page in
@@ -38,7 +40,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -65,6 +67,7 @@ from openmarketer_core.db.research_runs import (
     run_to_execute,
 )
 from openmarketer_core.db.research_store import save_research_report
+from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.session import DatabaseError, transaction
 from openmarketer_core.decisions import DecisionModel
 from openmarketer_core.graph_checkpoints import RunCheckpoints
@@ -85,7 +88,8 @@ from openmarketer_core.research.research_agent.definitions import (
     report_of,
 )
 from openmarketer_core.research.web_search import MAX_RESULTS, SearchEngine, SearchUnavailable
-from openmarketer_core.research.workflow_contract import ResearchRunInput
+from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND, ResearchRunInput
+from openmarketer_core.run_events import RunEvent
 from openmarketer_core.workspace_settings.model_settings import StoredModelChoiceInvalid
 from openmarketer_worker.agent_runtime.activities import AgentGraph
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, forget_quietly
@@ -156,6 +160,30 @@ class ResearchWork:
             limits=self._limits,
             page_text_of=page_text_of,
         )
+
+    def record_progress(self, run: GraphRunRef, events: Sequence[RunEvent]) -> None:
+        """Store the events of one node of ``run``, for the chat that watches it.
+
+        Its own short transaction, committed as the node ends, so a screen reading the chat
+        sees the step before the next one starts. The run is handed by its id alone, so its
+        workspace and project are read from its row in the same transaction
+        (``run_to_execute``, as ``initial_state`` and ``context`` find them). A run that is
+        not there records nothing. Whatever this raises is logged by the step and never fails
+        it (``AgentSteps``): a node that runs again records its events again.
+        """
+        with transaction(self._sessions) as session:
+            found = run_to_execute(session, run.run_id)
+            if found is None:
+                logger.info("progress of research run %s not recorded: no such run", run.run_id)
+                return
+            append_events(
+                session,
+                workspace_id=found.workspace_id,
+                project_id=found.project_id,
+                run_kind=RESEARCH_RUN_KIND,
+                run_id=run.run_id,
+                events=events,
+            )
 
     def search(self, payload: SearchWeb) -> Mapping[str, Any]:
         """Search the installation's own instance for the query; the results, bounded.
@@ -242,7 +270,8 @@ class ResearchWork:
         return _page_answer(stored)
 
     def finish(self, run: GraphRunRef, final_state: Mapping[str, Any]) -> dict[str, Any]:
-        """Store the report the graph finished with as the run's result; its id.
+        """Store the report the graph finished with as the run's result; its id and how many
+        findings it holds, which the run's chat is shown when the run ends.
 
         Safe to repeat: a run that has its result is given no second one.
         """
@@ -254,7 +283,7 @@ class ResearchWork:
         stored = self._result_of(finished)
         if stored is None:
             stored = self._store(finished, final_state)
-        return {"report_id": str(stored)}
+        return {"report_id": str(stored), "findings": len(final_state["findings"])}
 
     def _run_to_execute(self, run: GraphRunRef):
         with transaction(self._sessions) as session:

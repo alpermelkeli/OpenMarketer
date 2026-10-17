@@ -8,7 +8,7 @@ keep their checkpoints in memory; the last ones use the PostgreSQL store (fixtur
 
 import operator
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, TypedDict
 
@@ -42,6 +42,7 @@ from openmarketer_core.agent_runtime.steps import (
 from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.graph_checkpoints.postgres import run_checkpoints
+from openmarketer_core.run_events import RunEvent
 
 KIND = "newsletter"
 SECRET = "sk-live-4242-do-not-repeat"
@@ -920,3 +921,70 @@ def test_node_that_died_after_it_was_answered_is_given_the_same_answer_on_the_st
         checkpoints.forget()
 
     assert step == StepOutcome.finished({"log": ["drafted", "sent"], "delivered": True})
+
+
+# ------------------------------------------------------------ a step's progress
+def node_names(node: str, state: Mapping[str, Any], update: Mapping[str, Any]) -> list[RunEvent]:
+    return [RunEvent("step", {"node": node, "logged": list(update.get("log", []))})]
+
+
+def progress_steps(agent: Agent, recorded: list[tuple[GraphRunRef, tuple[RunEvent, ...]]]):
+    def record(run: GraphRunRef, events: Sequence[RunEvent]) -> None:
+        recorded.append((run, tuple(events)))
+
+    return AgentSteps(
+        agent,
+        initial_state=initial_state,
+        finish=projection,
+        recursion_limit=RECURSION_LIMIT,
+        record_progress=record,
+    )
+
+
+def test_progress_of_an_agent_that_declared_none_is_no_events(runs):
+    assert newsletter(runs).progress_of("draft", {}, {"log": ["drafted"]}) == ()
+
+
+def test_an_agent_declares_its_progress_once(runs):
+    agent = newsletter(runs)
+    agent.progress(node_names)
+
+    with pytest.raises(InvalidAgent, match="twice"):
+        agent.progress(node_names)
+
+
+def test_each_node_of_a_step_is_recorded_with_its_changes_as_it_ends(store, runs, run):
+    agent = newsletter(runs)
+    agent.progress(node_names)
+    recorded: list[tuple[GraphRunRef, tuple[RunEvent, ...]]] = []
+    steps = progress_steps(agent, recorded)
+    checkpoints = checkpoints_for(store, run)
+
+    action = waiting_action(steps.advance(run, checkpoints, None))
+    steps.advance(run, checkpoints, success(action))
+
+    # ``send`` paused the first step: it shows nothing until it ends, with the outcome.
+    assert recorded == [
+        (run, (RunEvent("step", {"node": "draft", "logged": ["drafted"]}),)),
+        (run, (RunEvent("step", {"node": "send", "logged": ["sent"]}),)),
+    ]
+
+
+def test_a_recorder_that_fails_does_not_fail_the_step(store, runs, run):
+    agent = newsletter(runs)
+    agent.progress(node_names)
+
+    def broken(run: GraphRunRef, events: Sequence[RunEvent]) -> None:
+        raise RuntimeError("the database is down")
+
+    steps = AgentSteps(
+        agent,
+        initial_state=initial_state,
+        finish=projection,
+        recursion_limit=RECURSION_LIMIT,
+        record_progress=broken,
+    )
+
+    step = steps.advance(run, checkpoints_for(store, run), None)
+
+    assert waiting_action(step).name == "send_email"

@@ -9,6 +9,13 @@ older messages with one summary. There are no evidence checks like
 the analyzer's: the tools read the product's own records, and the model is told to repeat
 what they say and nothing else.
 
+While the tools of a model turn run, ``run_tool_calls`` records what the turn does for the
+person watching it (``tool_called`` with a short label of ``TOOL_LABELS``, then
+``tool_answered``) through the ``TurnEvents`` port; the model never reads those events. A
+turn whose caller gave no ``ChatRequests`` is not offered the request actions at all. The
+sentences a failed turn is recorded with (``failure_reason``) and the instruction a
+follow-up turn is given (``follow_up_instruction``) are worded here, by code.
+
 Nothing here depends on the graph framework (``graph.py`` wires these functions into a
 graph) or on a database (reads reach the model through the ``ChatReads`` port, given to a
 tool at call time).
@@ -27,7 +34,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.agent_runtime.tools import InvalidToolArguments, UnknownTool
-from openmarketer_core.llm import ChatModel
+from openmarketer_core.llm import ChatModel, LLMError
+from openmarketer_core.orchestrator.events import TurnEvents
+from openmarketer_core.run_events import TOOL_ANSWERED, TOOL_CALLED, RunEvent
 
 ROLE = "orchestrator"
 SUBMIT = "submit_answer"
@@ -40,6 +49,29 @@ WRAP_UP_COST_SHARE = 0.7  # of the cost limit; the rest pays for the submission 
 MAX_SHOWN_SCHEMA_PROBLEMS = 12
 MAX_HISTORY_CHARS = 24_000  # a longer conversation has its older messages summarised
 KEEP_RECENT_MESSAGES = 12  # the newest messages, kept word for word when they are
+TOOL_ERROR_PREFIX = "error:"  # how a tool answers that it could not do what was asked
+
+# What the person watching a turn reads while a tool runs: one short line per tool.
+TOOL_LABELS: Mapping[str, str] = {
+    "get_project_status": "Checking the project's status",
+    "read_profile": "Reading the Product Profile",
+    "list_pending_proposals": "Listing the proposals that wait for a decision",
+    "explain_proposal": "Reading a proposal",
+    "get_analysis_run": "Reading an analysis run",
+    "list_analysis_runs": "Listing the analysis runs",
+    "list_research_runs": "Listing the research runs",
+    "read_research_report": "Reading the research report",
+    "start_research": "Starting a research run",
+}
+UNKNOWN_TOOL_LABEL = "Calling a tool"
+# What an event names a tool the agent does not have by: the name is what the model wrote.
+UNKNOWN_TOOL = "unknown"
+
+# The sentences a failed turn is recorded with, for the operator: fixed, so that nothing a
+# model or a provider wrote reaches the screen.
+UNANSWERED_REASON = "The orchestrator gave no answer within its limits."
+MODEL_UNAVAILABLE_REASON = "The model could not answer just now."
+UNEXPECTED_FAILURE_REASON = "The turn stopped because of an unexpected error."
 
 SYSTEM_PROMPT = """\
 You are the orchestrator of OpenMarketer. You answer the operator's message about one \
@@ -204,14 +236,24 @@ def submit_schema() -> dict[str, Any]:
     }
 
 
-def tool_schemas(agent: Agent) -> list[dict[str, Any]]:
-    return [*agent.tool_schemas(), submit_schema()]
+def tool_schemas(agent: Agent, *, offer_requests: bool = True) -> list[dict[str, Any]]:
+    """The tools of a turn: the read tools, the request actions when offered, the submission.
+
+    ``offer_requests`` is false for a turn whose caller cannot answer a request action (it
+    gave no ``ChatRequests``), such as a follow-up turn: the model is not told of them.
+    """
+    schemas = agent.tool_schemas()
+    if not offer_requests:
+        schemas = [s for s in schemas if s["function"]["name"] not in REQUEST_ACTIONS]
+    return [*schemas, submit_schema()]
 
 
-def wrap_up_tool_schemas(agent: Agent) -> list[dict[str, Any]]:
+def wrap_up_tool_schemas(agent: Agent, *, offer_requests: bool = True) -> list[dict[str, Any]]:
     """The tools of a turn out of reading budget: the request actions and the submission."""
     request_actions = [
-        schema for schema in agent.tool_schemas() if schema["function"]["name"] in REQUEST_ACTIONS
+        schema
+        for schema in agent.tool_schemas()
+        if offer_requests and schema["function"]["name"] in REQUEST_ACTIONS
     ]
     return [*request_actions, submit_schema()]
 
@@ -243,24 +285,36 @@ class ToolOutcome:
 
 
 def run_tool_calls(
-    calls: list[dict[str, Any]], agent: Agent, context: Any, *, last_chance: bool
+    calls: list[dict[str, Any]],
+    agent: Agent,
+    context: Any,
+    *,
+    last_chance: bool,
+    events: TurnEvents,
 ) -> ToolOutcome:
     """Carry out the tool calls of one model turn, including an answer submission.
 
     A call that does not fit its tool is answered with what was wrong, for the model to
     correct, and never with what it sent. ``last_chance`` makes a submission that does not
-    fit ``ChatTurnError`` instead of a rejection: no further model call could fix it.
+    fit ``ChatTurnError`` instead of a rejection: no further model call could fix it. Each
+    call other than the submission is recorded in ``events``: ``tool_called`` before it runs
+    and ``tool_answered``, with whether it did what was asked, after. An event names a tool
+    the agent does not have as ``UNKNOWN_TOOL``, so nothing the model wrote reaches it.
     """
     outcome = ToolOutcome()
+    declared = {schema["function"]["name"] for schema in agent.tool_schemas()}
     for call in calls:
         name = call.get("function", {}).get("name", "")
         outcome.names.append(name)
+        shown = name if name in declared else UNKNOWN_TOOL
+        if name != SUBMIT:
+            events.record(RunEvent(TOOL_CALLED, {"tool": shown, "label": tool_label(shown)}))
         try:
             arguments = json.loads(call["function"].get("arguments") or "{}")
             if not isinstance(arguments, dict):
                 raise ValueError("arguments must be an object")
         except (ValueError, KeyError) as e:
-            result = f"error: could not parse the arguments: {e}"
+            result = f"{TOOL_ERROR_PREFIX} could not parse the arguments: {e}"
         else:
             if name == SUBMIT:
                 answer, result = _answer(arguments, last_chance=last_chance)
@@ -269,10 +323,48 @@ def run_tool_calls(
                     return outcome
             else:
                 result = _tool_answer(agent, name, arguments, context)
+        if name != SUBMIT:
+            answered = not result.startswith(TOOL_ERROR_PREFIX)
+            events.record(RunEvent(TOOL_ANSWERED, {"tool": shown, "ok": answered}))
         outcome.messages.append(
             {"role": "tool", "tool_call_id": call.get("id", ""), "content": result}
         )
     return outcome
+
+
+def tool_label(name: str) -> str:
+    """The line the person watching the turn reads while the tool ``name`` runs."""
+    return TOOL_LABELS.get(name, UNKNOWN_TOOL_LABEL)
+
+
+def failure_reason(error: Exception) -> str:
+    """The sentence a turn that failed with ``error`` is recorded with, for the operator.
+
+    It is one of three fixed sentences and never the error's own text, which may repeat what
+    a model or a provider wrote.
+    """
+    if isinstance(error, ChatTurnError):
+        return UNANSWERED_REASON
+    if isinstance(error, LLMError):
+        return MODEL_UNAVAILABLE_REASON
+    return UNEXPECTED_FAILURE_REASON
+
+
+def follow_up_instruction(run_id: str, status: str) -> str:
+    """What a follow-up turn is told when a research run the chat started has ended.
+
+    It is given to the model in the operator's place and never stored as a message of the
+    chat. ``run_id`` and ``status`` are the run's, read from its record by code.
+    """
+    return (
+        f"[Written by OpenMarketer, not by the operator.] The research run {run_id} that you "
+        f"started in this chat has ended with status {status}. Read it with "
+        "list_research_runs and, if it has a report, read the report with read_research_report "
+        f"and run_id {run_id}. Then tell the operator what it found: each finding with its "
+        "confidence and its sources. If the run failed or has no report, say why, as the run's "
+        "record says, and what they can do next, such as asking for the research again. You "
+        "cannot start another run in this turn."
+    )
 
 
 def _tool_answer(agent: Agent, name: str, arguments: dict[str, Any], context: Any) -> str:

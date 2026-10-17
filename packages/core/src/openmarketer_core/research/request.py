@@ -61,10 +61,13 @@ def request_research(
     request: ResearchRequest,
     start_workflow: Callable[[WorkflowStart], None],
     requested_by: str = REQUESTED_BY_A_PERSON,
+    chat_thread_id: uuid.UUID | None = None,
 ) -> ResearchRun:
     """Queue a research run for the project and start its workflow.
 
-    Raises ``ProjectNotFound`` when the workspace has no such project, and
+    ``chat_thread_id`` is the chat whose turn asks for the run, which hears back
+    when it ends. Raises ``ProjectNotFound`` when the workspace has no such
+    project, ``ChatNotFound`` when the project has no such chat, and
     ``ResearchNotStarted`` when the workflow could not be started.
     """
     scope = {"workspace_id": workspace_id, "project_id": project_id}
@@ -77,6 +80,7 @@ def request_research(
             project_id=project_id,
             request=request,
             requested_by=requested_by,
+            chat_thread_id=chat_thread_id,
         )
     try:
         start_workflow(research_workflow(ResearchRunInput(run_id=run.id, **scope)))

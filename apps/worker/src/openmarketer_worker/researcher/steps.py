@@ -4,10 +4,10 @@ The workflow calls activities by name and the activities register under the
 same names, so the workflow module never imports the code that talks to the
 database (the workflow sandbox could not load it). The steps of the graph and
 the two actions it asks for (a search, a fetch) are the agent runtime's
-activities, named there (``agent_runtime.vocabulary``); the two here are what
+activities, named there (``agent_runtime.vocabulary``); the three here are what
 the workflow's hooks call. Everything here is stored in the workflow history:
-identifiers and short messages only. (Temporal adds the stack trace of a failed
-activity on its own.)
+identifiers, counts and short messages only. (Temporal adds the stack trace of a
+failed activity on its own.)
 
 A run is told why it failed in the researcher's words. The runtime has
 sentences of its own for what happens to an action and for an attempt that is
@@ -18,6 +18,7 @@ always been told.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, fields
 
 from openmarketer_core.research.workflow_contract import ResearchRunInput
@@ -30,6 +31,8 @@ from openmarketer_worker.agent_runtime.vocabulary import (
 
 START_RUN = "start_run"
 RECORD_FAILURE = "record_failure"
+# Once a run is over, either way: its last event, for the chat that asked for it, if one did.
+RECORD_END = "record_end"
 
 # Failure types of the researcher's activities, of its actions and of a step of its graph.
 # Those in NOT_RETRIED end the run at once. The ones every agent's activities share (the
@@ -88,3 +91,25 @@ class RunFailure:
 
     run: ResearchRunInput
     error: str
+
+
+@dataclass(frozen=True)
+class RunEnd:
+    """How a run ended, as the chat that asked for it is shown it.
+
+    ``findings`` is how many findings the report it stored holds (``None`` for a run whose
+    output does not say: one that finished before the count was reported); ``reason`` is why
+    it ended without a report, in the words recorded on the run. A run that stored its report
+    has no reason, and one that failed has no findings.
+    """
+
+    run: ResearchRunInput
+    findings: int | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RunEndRecorded:
+    """What ``record_end`` answers: the chat that asked for the run, or ``None`` if none did."""
+
+    chat_id: uuid.UUID | None

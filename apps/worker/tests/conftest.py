@@ -48,8 +48,10 @@ from openmarketer_core.db.analysis_runs import (
     request_analysis_run,
     run_thread_id,
 )
+from openmarketer_core.db.chat import create_chat
 from openmarketer_core.db.checkpoint_schema import CHECKPOINT_TABLES_OF_THREADS
 from openmarketer_core.db.models import ProductProfileRecord, Project, RepoSnapshot, Workspace
+from openmarketer_core.db.research_runs import request_research_run
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatModel, ChatReply
@@ -66,6 +68,9 @@ from openmarketer_core.repository_analysis.workflow_contract import (
     ANALYSIS_RUN_KIND,
     AnalyzeRepositoryInput,
 )
+from openmarketer_core.research.questions import ResearchRequest
+from openmarketer_core.research.request import REQUESTED_BY_THE_CHAT
+from openmarketer_core.research.workflow_contract import ResearchRunInput
 from openmarketer_worker import AgentRegistration
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, checkpoints_in
 from openmarketer_worker.agent_runtime.vocabulary import (
@@ -367,6 +372,14 @@ def checkpoints(engine) -> CheckpointAccess:
 
 
 @dataclass(frozen=True)
+class RequestedResearch:
+    """A research run the tests set up, and the chat that asked for it, if one did."""
+
+    run: ResearchRunInput
+    chat_id: uuid.UUID | None
+
+
+@dataclass(frozen=True)
 class Database:
     """What a test reads back from the database, and the rows it sets up."""
 
@@ -393,6 +406,38 @@ class Database:
             run = request_analysis_run(session, workspace_id=workspace_id, project_id=project.id)
             return AnalyzeRepositoryInput(
                 workspace_id=workspace_id, project_id=project.id, run_id=run.id
+            )
+
+    def requested_research(self, *, from_a_chat: bool = True) -> RequestedResearch:
+        """A queued research run of a new project in a new workspace, asked for by a chat of
+        the project unless ``from_a_chat`` is false."""
+        workspace_id = self.new_workspace()
+        with transaction(self.sessions) as session:
+            project = Project(
+                workspace_id=workspace_id,
+                name="Example App",
+                source_repo_url="https://example.com/acme/app.git",
+            )
+            session.add(project)
+            session.flush()
+            chat_id = (
+                create_chat(session, workspace_id=workspace_id, project_id=project.id).id
+                if from_a_chat
+                else None
+            )
+            run = request_research_run(
+                session,
+                workspace_id=workspace_id,
+                project_id=project.id,
+                request=ResearchRequest(questions=["Who are the competitors?"]),
+                requested_by=REQUESTED_BY_THE_CHAT,
+                chat_thread_id=chat_id,
+            )
+            return RequestedResearch(
+                run=ResearchRunInput(
+                    workspace_id=workspace_id, project_id=project.id, run_id=run.id
+                ),
+                chat_id=chat_id,
             )
 
     def store_credential(

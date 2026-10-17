@@ -27,6 +27,8 @@ from openmarketer_core.db.pages import MAX_PAGE_SIZE, CreatedPosition
 
 DEFAULT_PAGE_SIZE = 50
 HIGHEST_VERSION = 2_147_483_647
+# Run events are numbered by a BIGINT identity.
+HIGHEST_EVENT_ID = 9_223_372_036_854_775_807
 
 PageLimit = Annotated[
     int, Query(ge=1, le=MAX_PAGE_SIZE, description="The most items one response may hold.")
@@ -51,6 +53,10 @@ def version_cursor(version: int | None) -> str | None:
     return None if version is None else str(version)
 
 
+def event_cursor(event_id: int | None) -> str | None:
+    return None if event_id is None else str(event_id)
+
+
 def created_before(cursor: _Cursor = None) -> CreatedPosition | None:
     """The position a ``created_cursor`` was written from."""
     if cursor is None:
@@ -68,9 +74,18 @@ def created_before(cursor: _Cursor = None) -> CreatedPosition | None:
 
 def version_before(cursor: _Cursor = None) -> int | None:
     """The version number a ``version_cursor`` was written from."""
+    return _number_before(cursor, HIGHEST_VERSION)
+
+
+def event_before(cursor: _Cursor = None) -> int | None:
+    """The event identifier an ``event_cursor`` was written from."""
+    return _number_before(cursor, HIGHEST_EVENT_ID)
+
+
+def _number_before(cursor: str | None, highest: int) -> int | None:
     if cursor is None:
         return None
-    if not (cursor.isascii() and cursor.isdigit() and 1 <= int(cursor) <= HIGHEST_VERSION):
+    if not (cursor.isascii() and cursor.isdigit() and 1 <= int(cursor) <= highest):
         raise _not_a_cursor()
     return int(cursor)
 
@@ -89,3 +104,4 @@ def _not_a_cursor() -> RequestValidationError:
 
 CreatedBefore = Annotated[CreatedPosition | None, Depends(created_before)]
 VersionBefore = Annotated[int | None, Depends(version_before)]
+EventBefore = Annotated[int | None, Depends(event_before)]

@@ -45,6 +45,8 @@ export type ChatList = Schemas["ChatThreadListResponse"];
 export type ChatMessage = Schemas["ChatMessageResponse"];
 export type ChatMessageList = Schemas["ChatMessageListResponse"];
 export type ChatTurn = Schemas["ChatTurnResponse"];
+export type ChatEvent = Schemas["ChatEventResponse"];
+export type ChatEventList = Schemas["ChatEventListResponse"];
 
 export type CredentialStatus = Schemas["CredentialStatusResponse"];
 export type CredentialList = Schemas["CredentialListResponse"];

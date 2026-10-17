@@ -2,7 +2,8 @@
 
 A project is deleted with its analysis runs, its snapshots, the evidence found
 in them, every Product Profile version, approved ones included, the proposals
-of its runs, decided or expired, and its chat threads with their messages.
+of its runs, decided or expired, its chat threads with their turns and
+messages, and the events its runs recorded.
 Nothing is kept to restore it from: deleting is final, and a project made again
 for the same repository starts with no history.
 
@@ -40,11 +41,13 @@ from openmarketer_core.db.models import (
     AnalysisRunRecord,
     ChatMessageRecord,
     ChatThreadRecord,
+    ChatTurnRecord,
     Evidence,
     ProductProfileRecord,
     Project,
     ProposalRecord,
     RepoSnapshot,
+    RunEventRecord,
 )
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.workspace_lock import wait_for_other_writes
@@ -96,7 +99,9 @@ def delete_project(session: Session, *, workspace_id: uuid.UUID, project_id: uui
         raise ProjectHasPendingProposal(project_id)
 
     session.execute(delete(ProposalRecord).where(ProposalRecord.project_id == project_id))
+    session.execute(delete(RunEventRecord).where(RunEventRecord.project_id == project_id))
     session.execute(delete(ChatMessageRecord).where(ChatMessageRecord.project_id == project_id))
+    session.execute(delete(ChatTurnRecord).where(ChatTurnRecord.project_id == project_id))
     session.execute(delete(ChatThreadRecord).where(ChatThreadRecord.project_id == project_id))
     session.execute(delete(AnalysisRunRecord).where(AnalysisRunRecord.project_id == project_id))
     session.execute(delete(Evidence).where(Evidence.project_id == project_id))

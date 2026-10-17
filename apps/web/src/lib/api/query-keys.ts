@@ -1,5 +1,7 @@
 /** Query keys of the server state the dashboard holds, in one place so invalidation cannot drift. */
 
+import type { ChatEvent } from "./types";
+
 export const queryKeys = {
   projects: () => ["projects", "list"] as const,
   /** Everything held about one project: the project itself, its runs, its profile versions and its proposals. */
@@ -23,6 +25,9 @@ export const queryKeys = {
   chat: (projectId: string, chatId: string) => ["projects", "one", projectId, "chats", "one", chatId] as const,
   chatMessages: (projectId: string, chatId: string) =>
     ["projects", "one", projectId, "chats", "one", chatId, "messages"] as const,
+  /** The chat's events: the pages of its history, with what its stream has added since. */
+  chatEvents: (projectId: string, chatId: string) =>
+    ["projects", "one", projectId, "chats", "one", chatId, "events"] as const,
   /**
    * The copies that the parts around a screen read: the sidebar and the project's frame. They hydrate
    * before the screen inside them, so if they shared a screen's key, the screen would hydrate from data
@@ -43,3 +48,31 @@ export const queryKeys = {
   modelCatalog: () => ["settings", "model-catalog"] as const,
   analysisSettings: () => ["settings", "analysis"] as const,
 };
+
+type Refresh = { queryKey: readonly unknown[]; exact?: boolean };
+
+/**
+ * What a chat's event makes out of date. A turn that starts or ends changes whether the chat is
+ * busy, and one that ends has stored its messages; a research run that starts is in the project's
+ * list, and one that ends has its final state and perhaps a report. The chat's own key is refreshed
+ * alone (`exact`), so its events, which the stream keeps current, are not read again.
+ */
+export function refreshedByChatEvent(projectId: string, chatId: string, event: ChatEvent): Refresh[] {
+  const chat = { queryKey: queryKeys.chat(projectId, chatId), exact: true };
+  if (event.run_kind === "orchestrator-chat") {
+    if (event.kind === "turn_started") return [chat];
+    if (event.kind === "turn_answered" || event.kind === "turn_failed") {
+      return [chat, { queryKey: queryKeys.chatMessages(projectId, chatId) }, { queryKey: queryKeys.chats(projectId) }];
+    }
+    if (event.kind === "run_started") return [{ queryKey: queryKeys.researches(projectId) }];
+    return [];
+  }
+  if (event.run_kind === "research-run" && (event.kind === "finished" || event.kind === "failed")) {
+    return [
+      { queryKey: queryKeys.researchRun(projectId, event.run_id) },
+      { queryKey: queryKeys.researches(projectId) },
+      chat,
+    ];
+  }
+  return [];
+}

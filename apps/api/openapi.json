@@ -500,6 +500,86 @@
         "title": "CatalogModelResponse",
         "type": "object"
       },
+      "ChatEventListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "description": "Newest first.",
+            "items": {
+              "$ref": "#/components/schemas/ChatEventResponse"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the last page; otherwise the `cursor` of the next request.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "events",
+          "next_cursor"
+        ],
+        "title": "ChatEventListResponse",
+        "type": "object"
+      },
+      "ChatEventResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EventDetailValue"
+            },
+            "description": "What the screen shows of it: names, counts, identifiers, short texts; one flat level of values and lists of values.",
+            "title": "Detail",
+            "type": "object"
+          },
+          "id": {
+            "description": "The event's place in the order events were stored: larger for a later event. It is the cursor a stream continues from (`after`, `Last-Event-ID`).",
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "description": "What happened, such as `tool_called` or `fetched`.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "The turn or the research run that recorded it.",
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "run_kind": {
+            "description": "The kind of run that recorded it: `orchestrator-chat` for a turn of the chat, `research-run` for a research run the chat started.",
+            "title": "Run Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_kind",
+          "run_id",
+          "kind",
+          "detail",
+          "created_at"
+        ],
+        "title": "ChatEventResponse",
+        "type": "object"
+      },
       "ChatMessageListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -576,12 +656,26 @@
           "role": {
             "$ref": "#/components/schemas/ChatRole",
             "description": "Who wrote it: `user` for the operator, `assistant` for the chat agent."
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The turn that wrote it, whose events have it as `run_id` with `run_kind` `orchestrator-chat`; null for a message stored before turns were.",
+            "title": "Turn Id"
           }
         },
         "required": [
           "id",
           "project_id",
           "chat_id",
+          "turn_id",
           "role",
           "content",
           "created_at"
@@ -630,6 +724,11 @@
       "ChatThreadResponse": {
         "additionalProperties": false,
         "properties": {
+          "busy": {
+            "description": "Whether a turn of the chat is running now; a message sent meanwhile is a 409 `chat_busy`.",
+            "title": "Busy",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -681,7 +780,8 @@
           "created_at",
           "last_activity_at",
           "last_read_at",
-          "unread"
+          "unread",
+          "busy"
         ],
         "title": "ChatThreadResponse",
         "type": "object"
@@ -933,6 +1033,7 @@
           "profile_already_approved",
           "proposal_not_pending",
           "proposal_pending",
+          "chat_busy",
           "credential_set_by_environment",
           "credential_unreadable",
           "encryption_key_missing",
@@ -944,10 +1045,43 @@
           "research_not_started",
           "model_unavailable",
           "chat_unanswered",
-          "database_unavailable"
+          "database_unavailable",
+          "too_many_streams"
         ],
         "title": "ErrorCode",
         "type": "string"
+      },
+      "EventDetailScalar": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "EventDetailValue": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/EventDetailScalar"
+          },
+          {
+            "items": {
+              "$ref": "#/components/schemas/EventDetailScalar"
+            },
+            "type": "array"
+          }
+        ]
       },
       "Evidence": {
         "additionalProperties": false,
@@ -3511,6 +3645,267 @@
         ]
       }
     },
+    "/v1/projects/{project_id}/chats/{chat_id}/events": {
+      "get": {
+        "description": "The chat's events so far, newest first, one page at a time.\n\nThe events of the chat's turns and of the research runs it started. A screen\nreads the first page for the history it shows, and pages further back for\nolder messages; it then streams what comes after the newest event of the\nfirst page (`streamChatEvents` with `after` that event's `id`).",
+        "operationId": "listChatEvents",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Chat Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The most items one response may hold.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most items one response may hold.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+              "maxLength": 200,
+              "title": "Cursor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatEventListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Events",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/chats/{chat_id}/events/stream": {
+      "get": {
+        "description": "The chat's events as they are stored, from after a cursor, as server-sent events.\n\n`after` (or the `Last-Event-ID` header, which wins) is the `id` of the last\nevent the client has; left out, the stream starts at the chat's first event.\n404 before anything is streamed when the chat is not found, and 503\n`too_many_streams` when the server has as many streams open as it keeps (the\nclient tries again after a while). The stream ends when the chat is removed,\nand after a few minutes in any case.",
+        "operationId": "streamChatEvents",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chat_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Chat Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "description": "The `id` of the last event the client got, which a browser sends when it reconnects. It wins over `after`, which the reconnecting URL still holds.",
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The `id` of the last event the client got, which a browser sends when it reconnects. It wins over `after`, which the reconnecting URL still holds.",
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "properties": {
+                    "data": {
+                      "contentMediaType": "application/json",
+                      "contentSchema": {
+                        "$ref": "#/components/schemas/ChatEventResponse"
+                      },
+                      "type": "string"
+                    },
+                    "event": {
+                      "description": "The event's `kind`.",
+                      "type": "string"
+                    },
+                    "id": {
+                      "description": "The event's `id`.",
+                      "type": "string"
+                    },
+                    "retry": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "event",
+                    "data"
+                  ],
+                  "type": "object"
+                },
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent events, oldest first. Each event is `id: <id>`, `event: <kind>` and `data: <ChatEventResponse as JSON>`; a `: keep-alive` comment is sent when nothing happened for a while, and the stream ends after a few minutes with a `retry:` hint sent at its start, so the client reconnects with `Last-Event-ID`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Stream Events",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/v1/projects/{project_id}/chats/{chat_id}/messages": {
       "get": {
         "description": "The chat's messages as they are now, newest first, one page at a time.",
@@ -3621,7 +4016,7 @@
         ]
       },
       "post": {
-        "description": "Answer one operator message in the chat, and store the exchange.\n\n201 with the stored question and answer. 409 `model_key_not_set`,\n`credential_unreadable` or `stored_setting_invalid` when the turn's model\ncannot be resolved. 503 `chat_unanswered` when the agent gave no answer\nwithin its limits and `model_unavailable` when the provider could not\nanswer; nothing is stored then, and sending the message again starts the\nturn again. A turn may start a research run when the operator asks for\nresearch (the request action `start_research`), and says so in the answer;\na run whose workflow could not be started is recorded as failed and the\nanswer says it could not be started.",
+        "description": "Answer one operator message in the chat, and store the exchange.\n\n201 with the stored question and answer. 409 `chat_busy` while another turn\nof the chat is running, and `model_key_not_set`, `credential_unreadable` or\n`stored_setting_invalid` when the turn's model cannot be resolved. 503\n`chat_unanswered` when the agent gave no answer within its limits and\n`model_unavailable` when the provider could not answer; the turn is\nrecorded as failed, no message is stored, and sending the message again\nstarts a new turn. A turn may start a research run when the operator asks for\nresearch (the request action `start_research`), and says so in the answer;\na run whose workflow could not be started is recorded as failed and the\nanswer says it could not be started.",
         "operationId": "sendChatMessage",
         "parameters": [
           {

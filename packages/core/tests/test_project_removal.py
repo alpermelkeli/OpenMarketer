@@ -18,16 +18,20 @@ from openmarketer_core.db.analysis_runs import (
     request_analysis_run,
 )
 from openmarketer_core.db.chat import append_exchange, create_chat
+from openmarketer_core.db.chat_turns import finish_turn, start_turn
 from openmarketer_core.db.evidence_store import save_analysis_of_project
 from openmarketer_core.db.models import (
     AnalysisRunRecord,
     ChatMessageRecord,
     ChatThreadRecord,
+    ChatTurnRecord,
+    ChatTurnTrigger,
     Evidence,
     ProductProfileRecord,
     Project,
     ProposalRecord,
     RepoSnapshot,
+    RunEventRecord,
     Workspace,
 )
 from openmarketer_core.db.profile_versions import approve_profile_version, save_edited_profile
@@ -38,9 +42,11 @@ from openmarketer_core.db.project_removal import (
 )
 from openmarketer_core.db.projects import ProjectNotFound, create_project
 from openmarketer_core.db.proposals import decide_proposal, propose_action
+from openmarketer_core.db.run_events import append_events
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.extraction import ExtractedFact
 from openmarketer_core.repository_analysis.intake import Snapshot
+from openmarketer_core.run_events import TURN_ANSWERED, TURN_STARTED, RunEvent
 
 REVIEWER = uuid.UUID("11111111-1111-4111-8111-111111111111")
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
@@ -109,6 +115,8 @@ def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
         "proposal": ProposalRecord.project_id,
         "chat_thread": ChatThreadRecord.project_id,
         "chat_message": ChatMessageRecord.project_id,
+        "chat_turn": ChatTurnRecord.project_id,
+        "run_event": RunEventRecord.project_id,
     }
     return {
         name: session.scalar(select(func.count()).where(column == project_id)) or 0
@@ -125,6 +133,8 @@ NOTHING = {
     "proposal": 0,
     "chat_thread": 0,
     "chat_message": 0,
+    "chat_turn": 0,
+    "run_event": 0,
 }
 
 
@@ -140,25 +150,32 @@ def test_project_is_deleted_with_its_runs_evidence_snapshots_and_versions(sessio
     assert all(
         count > 0
         for name, count in rows_of(session, project_id).items()
-        if name not in ("proposal", "chat_thread", "chat_message")
+        if name not in ("proposal", "chat_thread", "chat_message", "chat_turn", "run_event")
     )
     delete_project(session, workspace_id=workspace_id, project_id=project_id)
     assert rows_of(session, project_id) == NOTHING
 
 
-def test_project_is_deleted_with_its_chats_and_messages(session, workspace_id):
+def test_project_is_deleted_with_its_chats_turns_messages_and_events(session, workspace_id):
     project_id = new_project(session, workspace_id)
     chat = create_chat(session, workspace_id=workspace_id, project_id=project_id)
-    append_exchange(
+    ids = {"workspace_id": workspace_id, "project_id": project_id, "chat_id": chat.id}
+    turn = start_turn(session, **ids, trigger=ChatTurnTrigger.MESSAGE)
+    append_exchange(session, **ids, turn_id=turn.id, question="Is it ready?", answer="Yes.")
+    finish_turn(session, **ids, turn_id=turn.id)
+    start_turn(session, **ids, trigger=ChatTurnTrigger.MESSAGE)  # one still running
+    append_events(
         session,
         workspace_id=workspace_id,
         project_id=project_id,
-        chat_id=chat.id,
-        question="Is it ready?",
-        answer="Yes.",
+        run_kind="orchestrator-chat",
+        run_id=turn.id,
+        events=[RunEvent(TURN_STARTED), RunEvent(TURN_ANSWERED)],
     )
     assert rows_of(session, project_id)["chat_thread"] == 1
     assert rows_of(session, project_id)["chat_message"] == 2
+    assert rows_of(session, project_id)["chat_turn"] == 2
+    assert rows_of(session, project_id)["run_event"] == 2
     delete_project(session, workspace_id=workspace_id, project_id=project_id)
     assert rows_of(session, project_id) == NOTHING
 

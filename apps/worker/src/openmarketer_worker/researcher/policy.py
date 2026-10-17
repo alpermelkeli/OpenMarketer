@@ -4,8 +4,9 @@ One place for the numbers, so the workflow holds none. A run is, in order: the
 write that marks it started, the steps of the researcher's graph (planning,
 searches, the screening of their results, fetches, readings, one synthesis and
 its check, and the report), the searches and fetches the graph asks for as
-actions, and, if any of that did not work, the write that records why. Then
-its checkpoints are forgotten.
+actions, and, if any of that did not work, the write that records why; then
+the write that tells the chat that asked for the run how it ended, and the
+start of that chat's follow-up turn. Then its checkpoints are forgotten.
 
 ``ResearchPolicy`` limits the steps of the graph and is configuration
 (``settings.py`` next to this module reads what an operator changed; the
@@ -82,6 +83,14 @@ RECORD_FAILURE = DatabaseWritePolicy(
     max_retry_wait_seconds=60,
     give_up_after_seconds=60 * 60,
 )
+# Telling the chat that asked for the run how it ended is for a screen and a follow-up turn, not
+# for the run's record: ten minutes of trying, and the run ends as it did without it.
+RECORD_END = DatabaseWritePolicy(
+    attempt_timeout_seconds=30,
+    retry_after_seconds=1,
+    max_retry_wait_seconds=60,
+    give_up_after_seconds=10 * 60,
+)
 
 # Temporal's own default: no wait between two attempts is longer than this many first waits.
 LONGEST_RETRY_WAIT_IN_FIRST_WAITS = 100
@@ -117,8 +126,9 @@ def longest_research_seconds(policy: ResearchPolicy, limits: rules.Limits | None
 
     The sum of what the workflow can spend: the write that starts the run, each
     step of the graph and each search and fetch at every attempt's time limit
-    with the waits between the attempts, the time ``record_failure`` and the
-    forgetting of the checkpoints keep trying, and the allowance for attempts
+    with the waits between the attempts, the time ``record_failure``, ``record_end``
+    and the forgetting of the checkpoints keep trying (the follow-up is started, not
+    waited for), and the allowance for attempts
     waiting on a worker.
     """
     steps = graph_steps(limits)
@@ -141,6 +151,7 @@ def longest_research_seconds(policy: ResearchPolicy, limits: rules.Limits | None
         + searches_of_a_run(limits) * search
         + pages_of_a_run(limits) * fetch
         + _time_to_give_up(RECORD_FAILURE)
+        + _time_to_give_up(RECORD_END)
         + _time_to_give_up(FORGET_RUN_LIMITS)
         + WORKER_OUTAGE_ALLOWANCE_SECONDS
     )

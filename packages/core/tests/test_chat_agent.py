@@ -24,6 +24,8 @@ from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContex
 from openmarketer_core.orchestrator.chat_agent.graph import answer_message
 from openmarketer_core.orchestrator.chat_agent.rules import (
     SUBMIT,
+    TOOL_LABELS,
+    UNKNOWN_TOOL,
     ChatLimits,
     ChatTurnError,
     is_wrapping_up,
@@ -52,6 +54,8 @@ from openmarketer_core.orchestrator.reads import (
 )
 from openmarketer_core.orchestrator.requests import ResearchNotStarted
 from openmarketer_core.research.questions import ResearchRequest
+from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
+from openmarketer_core.run_events import RUN_STARTED, TOOL_ANSWERED, TOOL_CALLED, RunEvent
 
 PROJECT_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
@@ -402,7 +406,9 @@ def test_missing_answer_on_the_last_chance_fails(reads):
 def test_the_turn_fails_when_the_model_never_answers(reads):
     model = ScriptedModel()  # only ever reads the status
     with pytest.raises(ChatTurnError, match="no answer after 4 model calls"):
-        answer_message(reads, model, history(), limits=ChatLimits(max_model_calls=4))
+        answer_message(
+            reads, model, history(), limits=ChatLimits(max_model_calls=4), requests=FakeRequests()
+        )
     reading = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
     wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
     assert "read_profile" in reading
@@ -423,7 +429,9 @@ def test_request_actions_do_not_count_against_the_reading_budget():
 def test_cost_limit_stops_the_turn(reads):
     model = ScriptedModel(cost=0.2)
     with pytest.raises(ChatTurnError, match="cost limit reached"):
-        answer_message(reads, model, history(), limits=ChatLimits(max_cost_usd=0.5))
+        answer_message(
+            reads, model, history(), limits=ChatLimits(max_cost_usd=0.5), requests=FakeRequests()
+        )
     assert len(model.requests) == 3
     wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
     assert wrap_up == ["start_research", SUBMIT]
@@ -716,3 +724,81 @@ def test_an_empty_summary_fails_the_turn(reads):
     model = ScriptedModel("   ", [call(SUBMIT, answer="ok")])
     with pytest.raises(ChatTurnError):
         answer_message(reads, model, long_history())
+
+
+# ------------------------------------------------------------ the turn's events
+class RecordedEvents:
+    """``TurnEvents`` that keep what the turn recorded, in order."""
+
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+
+    def record(self, event: RunEvent) -> None:
+        self.events.append(event)
+
+
+def test_a_turn_records_each_tool_before_it_runs_and_after_it_answers(reads):
+    events = RecordedEvents()
+    model = ScriptedModel([call("get_project_status")], [call(SUBMIT, answer="Fine.")])
+
+    answer_message(reads, model, history(), events=events)
+
+    assert events.events == [
+        RunEvent(
+            TOOL_CALLED, {"tool": "get_project_status", "label": TOOL_LABELS["get_project_status"]}
+        ),
+        RunEvent(TOOL_ANSWERED, {"tool": "get_project_status", "ok": True}),
+    ]
+
+
+def test_a_tool_that_answered_with_an_error_is_recorded_as_not_done(reads):
+    events = RecordedEvents()
+    model = ScriptedModel(
+        [call("explain_proposal", proposal_id="not-a-uuid")], [call(SUBMIT, answer="No.")]
+    )
+
+    answer_message(reads, model, history(), events=events)
+
+    assert events.events[-1] == RunEvent(TOOL_ANSWERED, {"tool": "explain_proposal", "ok": False})
+
+
+def test_a_research_run_the_turn_started_is_recorded_with_its_id(reads):
+    events = RecordedEvents()
+    model = ScriptedModel(
+        [call("start_research", questions=["Is it live?"])], [call(SUBMIT, answer="Started.")]
+    )
+
+    answer_message(reads, model, history(), requests=FakeRequests(), events=events)
+
+    assert [event.kind for event in events.events] == [TOOL_CALLED, RUN_STARTED, TOOL_ANSWERED]
+    assert events.events[1].detail == {
+        "run_kind": RESEARCH_RUN_KIND,
+        "run_id": str(RESEARCH_RUN_ID),
+    }
+
+
+def test_the_submission_records_no_event(reads):
+    events = RecordedEvents()
+
+    answer_message(reads, ScriptedModel([call(SUBMIT, answer="Fine.")]), history(), events=events)
+
+    assert events.events == []
+
+
+def test_a_turn_whose_caller_cannot_start_runs_is_not_offered_start_research(reads):
+    model = ScriptedModel([call(SUBMIT, answer="Fine.")])
+
+    answer_message(reads, model, history())
+
+    offered = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
+    assert "start_research" not in offered
+    assert SUBMIT in offered
+
+
+def test_a_tool_the_agent_does_not_have_is_recorded_without_the_name_the_model_wrote(reads):
+    events = RecordedEvents()
+    model = ScriptedModel([call("drop_all_tables")], [call(SUBMIT, answer="No.")])
+
+    answer_message(reads, model, history(), events=events)
+
+    assert [event.detail["tool"] for event in events.events] == [UNKNOWN_TOOL, UNKNOWN_TOOL]

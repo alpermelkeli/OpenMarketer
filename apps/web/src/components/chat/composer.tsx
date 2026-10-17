@@ -14,14 +14,16 @@ type ComposerProps = {
   /** While a message is being answered, another one waits: the chat answers one at a time. */
   busy: boolean;
   placeholder: string;
+  /** Why nothing can be written now, such as a turn the orchestrator started itself; said in the field. */
+  waiting?: string;
   className?: string;
 };
 
 /** Where a message to the orchestrator is written. Enter sends it; Shift+Enter starts a new line. */
-export function Composer({ value, onChange, onSend, busy, placeholder, className }: ComposerProps) {
+export function Composer({ value, onChange, onSend, busy, placeholder, waiting, className }: ComposerProps) {
   const id = useId();
   const message = value.trim();
-  const canSend = message !== "" && !busy;
+  const canSend = message !== "" && !busy && waiting === undefined;
 
   function send() {
     if (canSend) onSend(message);
@@ -50,7 +52,8 @@ export function Composer({ value, onChange, onSend, busy, placeholder, className
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={sendOnEnter}
-          placeholder={placeholder}
+          placeholder={waiting ?? placeholder}
+          disabled={waiting !== undefined}
           className="max-h-60 min-h-20 min-w-0 resize-none border-0 shadow-none focus-visible:ring-0"
         />
         <Button type="submit" size="icon" disabled={!canSend}>
@@ -58,6 +61,7 @@ export function Composer({ value, onChange, onSend, busy, placeholder, className
           <span className="sr-only">Send</span>
         </Button>
       </div>
+      {waiting !== undefined && value !== "" && <p className="text-xs text-muted-foreground">{waiting}</p>}
     </form>
   );
 }

@@ -4,9 +4,13 @@ A chat is a thread. It is opened empty, named by the operator or left with the
 default name, and gathers the exchanges of one conversation; a chat turn writes
 the operator's message and the assistant's answer together
 (``append_exchange``), in one call, so the conversation always reads back as
-whole exchanges. A message is never changed or deleted once stored, and nothing
-about how an answer was produced is kept: which model answered and what the
-turn cost belong to the turn, not to the chat.
+whole exchanges. A follow-up turn, which the orchestrator takes on its own when
+a research run the thread started has ended, writes an answer with no question
+before it (``append_answer``). Every message names the turn that wrote it
+(``db/chat_turns.py``), which must be a turn of the same thread. A message is
+never changed or deleted once stored, and nothing about how an answer was
+produced is kept: which model answered and what the turn cost belong to the
+turn, not to the chat.
 
 The two messages of an exchange get creation times one after the other - the
 answer a moment after the question - because the list and the history order by
@@ -16,16 +20,20 @@ lock, so exchanges order as they were written, and the thread's last activity
 is the exchange's time.
 
 A thread is unread while a message is newer than the last time the operator
-read it (``mark_chat_read``). An empty thread is not unread, whatever
-``last_read_at`` holds. A thread still named ``DEFAULT_CHAT_TITLE`` takes its
-name from the first line of the operator's first message, cut at a word
-boundary; a name the operator gave is never changed here.
+read it (``mark_chat_read``), and busy while one of its turns is running and
+was started less than ``TURN_ABANDONED_AFTER`` ago: a turn running for longer
+was left by a process that stopped, and the next turn marks it failed. An
+empty thread is not unread, whatever ``last_read_at`` holds. A thread still
+named ``DEFAULT_CHAT_TITLE`` takes its name from the first line of the
+operator's first message, cut at a word boundary; a name the operator gave is
+never changed here.
 
 Every function is scoped to a workspace and a project, takes a session and
 never commits: the caller owns the transaction. Callers get frozen
 ``ChatThread`` and ``ChatMessage``, never the ORM row. A project the workspace
 does not have is ``ProjectNotFound``; a chat the project does not have is
-``ChatNotFound``, raised only after the project was found.
+``ChatNotFound``, raised only after the project was found, and a turn the chat
+does not have is ``ChatTurnNotFound``.
 
 This module does not run the chat agent; ``orchestrator/ask.py`` does that and
 stores the exchange here. Nothing here talks to a model.
@@ -37,13 +45,15 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import Select, func, select, tuple_
-from sqlalchemy.orm import Session
+from sqlalchemy import Exists, Select, exists, func, select, tuple_
+from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from openmarketer_core.db.models import (
     ChatMessageRecord,
     ChatRole,
     ChatThreadRecord,
+    ChatTurnRecord,
+    ChatTurnStatus,
     Project,
 )
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
@@ -52,6 +62,10 @@ from openmarketer_core.db.workspace_lock import wait_for_other_writes
 
 DEFAULT_CHAT_TITLE = "New chat"
 AUTOMATIC_TITLE_MAX_LENGTH = 60
+# A turn still running after this long was left by a process that stopped (a turn is
+# bounded by its own limits to well under it): it no longer keeps its thread busy, and the
+# next turn of the thread marks it failed (``chat_turns.start_turn``).
+TURN_ABANDONED_AFTER = timedelta(minutes=15)
 
 
 class ChatNotFound(Exception):
@@ -61,12 +75,19 @@ class ChatNotFound(Exception):
         super().__init__(f"project {project_id} has no chat {chat_id}")
 
 
+class ChatTurnNotFound(Exception):
+    """The chat has no such turn."""
+
+    def __init__(self, chat_id: uuid.UUID, turn_id: uuid.UUID) -> None:
+        super().__init__(f"chat {chat_id} has no turn {turn_id}")
+
+
 @dataclass(frozen=True)
 class ChatThread:
     """One named conversation of a project's chat, as it is now.
 
     ``unread`` is whether a message was written after the operator last read
-    the thread.
+    the thread; ``busy`` is whether a turn of it is running now.
     """
 
     id: uuid.UUID
@@ -76,15 +97,21 @@ class ChatThread:
     last_activity_at: datetime
     last_read_at: datetime | None
     unread: bool
+    busy: bool
 
 
 @dataclass(frozen=True)
 class ChatMessage:
-    """One stored message of a project's chat, as it was written."""
+    """One stored message of a project's chat, as it was written.
+
+    ``turn_id`` is the turn that wrote it, or ``None`` for a message stored
+    before turns were.
+    """
 
     id: uuid.UUID
     project_id: uuid.UUID
     thread_id: uuid.UUID
+    turn_id: uuid.UUID | None
     role: ChatRole
     content: str
     created_at: datetime
@@ -112,7 +139,7 @@ def create_chat(
     )
     session.add(record)
     session.flush()
-    return _thread(record, newest_message_at=None)
+    return _thread(record, newest_message_at=None, busy=False)
 
 
 def get_chat(
@@ -125,7 +152,19 @@ def get_chat(
     """
     get_project(session, workspace_id=workspace_id, project_id=project_id)
     record = _thread_of_project(session, workspace_id, project_id, chat_id)
-    return _thread(record, _newest_message_at(session, chat_id))
+    return _thread(record, _newest_message_at(session, chat_id), _is_busy(session, chat_id))
+
+
+def require_chat(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, chat_id: uuid.UUID
+) -> None:
+    """Whether the chat exists in the project, for a store that keeps rows of a chat.
+
+    Raises ``ProjectNotFound`` when the workspace has no such project and
+    ``ChatNotFound`` when the project has no such chat; returns nothing else.
+    """
+    get_project(session, workspace_id=workspace_id, project_id=project_id)
+    _thread_of_project(session, workspace_id, project_id, chat_id)
 
 
 def list_chats(
@@ -156,11 +195,11 @@ def list_chats(
             < tuple_(before.created_at, before.id)
         )
     rows = session.execute(
-        query.add_columns(newest)
+        query.add_columns(newest, _turn_running(ChatThreadRecord.id))
         .order_by(ChatThreadRecord.last_activity_at.desc(), ChatThreadRecord.id.desc())
         .limit(rows_to_fetch(limit))
     )
-    threads = [_thread(record, newest_message_at) for record, newest_message_at in rows]
+    threads = [_thread(record, newest_message_at, busy) for record, newest_message_at, busy in rows]
     return page_of(threads, limit, lambda last: CreatedPosition(last.last_activity_at, last.id))
 
 
@@ -179,7 +218,7 @@ def mark_chat_read(
     record = _thread_of_project(session, workspace_id, project_id, chat_id)
     record.last_read_at = session.execute(select(func.clock_timestamp())).scalar_one()
     session.flush()
-    return _thread(record, _newest_message_at(session, chat_id))
+    return _thread(record, _newest_message_at(session, chat_id), _is_busy(session, chat_id))
 
 
 def list_chat_messages(
@@ -241,26 +280,31 @@ def append_exchange(
     workspace_id: uuid.UUID,
     project_id: uuid.UUID,
     chat_id: uuid.UUID,
+    turn_id: uuid.UUID,
     question: str,
     answer: str,
 ) -> tuple[ChatMessage, ChatMessage]:
     """Store one exchange of the chat: the operator's message and the assistant's answer.
 
-    Returns the two stored messages, the question first. Both rows are written by
-    this call or neither, and the answer's creation time is the question's, a
-    moment later. The chat's last activity becomes the exchange's time, and a chat
-    still named ``DEFAULT_CHAT_TITLE`` is named after the operator's message when
-    that leaves a name. Takes the workspace lock like every write of a workspace.
-    Raises ``ProjectNotFound`` when the workspace has no such project and
-    ``ChatNotFound`` when the project has no such chat.
+    Returns the two stored messages, the question first, both written by the
+    turn ``turn_id``. Both rows are written by this call or neither, and the
+    answer's creation time is the question's, a moment later. The chat's last
+    activity becomes the exchange's time, and a chat still named
+    ``DEFAULT_CHAT_TITLE`` is named after the operator's message when that leaves
+    a name. Takes the workspace lock like every write of a workspace. Raises
+    ``ProjectNotFound`` when the workspace has no such project, ``ChatNotFound``
+    when the project has no such chat and ``ChatTurnNotFound`` when the chat has
+    no such turn.
     """
     wait_for_other_writes(session, workspace_id)
     get_project(session, workspace_id=workspace_id, project_id=project_id)
     thread = _thread_of_project(session, workspace_id, project_id, chat_id)
+    _require_turn_of_thread(session, chat_id, turn_id)
     asked_at = session.execute(select(func.clock_timestamp())).scalar_one()
     question_record = ChatMessageRecord(
         project_id=project_id,
         thread_id=chat_id,
+        turn_id=turn_id,
         role=ChatRole.USER,
         content=question,
         created_at=asked_at,
@@ -268,6 +312,7 @@ def append_exchange(
     answer_record = ChatMessageRecord(
         project_id=project_id,
         thread_id=chat_id,
+        turn_id=turn_id,
         role=ChatRole.ASSISTANT,
         content=answer,
         created_at=asked_at + timedelta(microseconds=1),
@@ -280,6 +325,43 @@ def append_exchange(
             thread.title = automatic
     session.flush()
     return _message(question_record), _message(answer_record)
+
+
+def append_answer(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    chat_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    answer: str,
+) -> ChatMessage:
+    """Store an answer the orchestrator gave on its own, with no question before it.
+
+    A follow-up turn writes it, when a run the thread started has ended. The
+    chat's last activity becomes the answer's time, so the chat is unread until
+    the operator reads it again; its name is not changed. Takes the workspace
+    lock like every write of a workspace. Raises ``ProjectNotFound`` when the
+    workspace has no such project, ``ChatNotFound`` when the project has no such
+    chat and ``ChatTurnNotFound`` when the chat has no such turn.
+    """
+    wait_for_other_writes(session, workspace_id)
+    get_project(session, workspace_id=workspace_id, project_id=project_id)
+    thread = _thread_of_project(session, workspace_id, project_id, chat_id)
+    _require_turn_of_thread(session, chat_id, turn_id)
+    answered_at = session.execute(select(func.clock_timestamp())).scalar_one()
+    record = ChatMessageRecord(
+        project_id=project_id,
+        thread_id=chat_id,
+        turn_id=turn_id,
+        role=ChatRole.ASSISTANT,
+        content=answer,
+        created_at=answered_at,
+    )
+    session.add(record)
+    thread.last_activity_at = answered_at
+    session.flush()
+    return _message(record)
 
 
 def _automatic_title(question: str) -> str:
@@ -311,6 +393,29 @@ def _thread_of_project(
     return record
 
 
+def _require_turn_of_thread(session: Session, chat_id: uuid.UUID, turn_id: uuid.UUID) -> None:
+    found = session.scalar(
+        select(ChatTurnRecord.id).where(
+            ChatTurnRecord.id == turn_id, ChatTurnRecord.thread_id == chat_id
+        )
+    )
+    if found is None:
+        raise ChatTurnNotFound(chat_id, turn_id)
+
+
+def _turn_running(thread_id: InstrumentedAttribute[uuid.UUID] | uuid.UUID) -> Exists:
+    """Whether a turn of the thread is running and was not abandoned."""
+    return exists().where(
+        ChatTurnRecord.thread_id == thread_id,
+        ChatTurnRecord.status == ChatTurnStatus.RUNNING,
+        ChatTurnRecord.created_at > func.now() - TURN_ABANDONED_AFTER,
+    )
+
+
+def _is_busy(session: Session, chat_id: uuid.UUID) -> bool:
+    return session.scalar(select(_turn_running(chat_id))) is True
+
+
 def _messages_of_thread(project_id: uuid.UUID, chat_id: uuid.UUID) -> Select[ChatMessageRecord]:
     return select(ChatMessageRecord).where(
         ChatMessageRecord.project_id == project_id, ChatMessageRecord.thread_id == chat_id
@@ -323,7 +428,7 @@ def _newest_message_at(session: Session, chat_id: uuid.UUID) -> datetime | None:
     )
 
 
-def _thread(record: ChatThreadRecord, newest_message_at: datetime | None) -> ChatThread:
+def _thread(record: ChatThreadRecord, newest_message_at: datetime | None, busy: bool) -> ChatThread:
     unread = newest_message_at is not None and (
         record.last_read_at is None or newest_message_at > record.last_read_at
     )
@@ -335,6 +440,7 @@ def _thread(record: ChatThreadRecord, newest_message_at: datetime | None) -> Cha
         last_activity_at=record.last_activity_at,
         last_read_at=record.last_read_at,
         unread=unread,
+        busy=busy,
     )
 
 
@@ -343,6 +449,7 @@ def _message(record: ChatMessageRecord) -> ChatMessage:
         id=record.id,
         project_id=record.project_id,
         thread_id=record.thread_id,
+        turn_id=record.turn_id,
         role=record.role,
         content=record.content,
         created_at=record.created_at,

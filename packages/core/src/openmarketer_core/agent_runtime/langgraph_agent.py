@@ -20,6 +20,14 @@ step outcome over 32 KiB). So the agent says, with ``finish``, what the workflow
 the run's reader need of the final state, and never the state: a model's whole
 conversation is in it.
 
+A step's progress is computed where the node's changes are known: inside the function of
+ours that runs each node. With ``record_progress``, ``AgentSteps`` hands every node's name,
+the state it ran on and the changes it answered with to the agent's ``progress_of``, and the
+events that gives to ``record_progress`` with the run, as each node ends. Nothing of it
+enters the workflow's history or the step's outcome. Progress never fails a step: a progress
+function or a recorder that raises is logged and the step goes on. A node that runs again (a
+step repeated after an attempt died before its checkpoint) shows its events again.
+
 ``run_from`` runs the same graph in memory from one of its nodes, for a command line and a
 benchmark that have no workflow: it never pauses, so it cannot run an action.
 
@@ -28,7 +36,8 @@ knows no workflow engine and runs no action: a node asks for one with
 ``request_action``, and the workflow answers.
 """
 
-from collections.abc import Callable, Mapping
+import logging
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -41,6 +50,15 @@ from openmarketer_core.agent_runtime.agent import Agent, GraphShape, InvalidAgen
 from openmarketer_core.agent_runtime.langgraph_steps import CompiledGraph, GraphThread
 from openmarketer_core.agent_runtime.steps import GraphRunRef, RunOfAnotherKind, StepOutcome
 from openmarketer_core.graph_checkpoints import RunCheckpoints
+from openmarketer_core.run_events import RunEvent
+
+logger = logging.getLogger(__name__)
+
+# What a node's end is told to, when a step's progress is recorded: the node's name, the state
+# it ran on and the changes it answered with.
+NodeObserver = Callable[[str, Mapping[str, Any], Mapping[str, Any]], None]
+# Where the progress of a run's step goes: the run, and the events of one node.
+ProgressRecorder = Callable[[GraphRunRef, Sequence[RunEvent]], None]
 
 
 class ActionAskedInLocalRun(Exception):
@@ -117,6 +135,7 @@ class AgentSteps:
         finish: Callable[[GraphRunRef, Mapping[str, Any]], dict[str, Any]],
         recursion_limit: int,
         context: Callable[[GraphRunRef, RunCheckpoints], Any] | None = None,
+        record_progress: ProgressRecorder | None = None,
     ) -> None:
         """What a run starts from, how it ends, and what its nodes are given besides the state.
 
@@ -129,7 +148,9 @@ class AgentSteps:
         as a second parameter: it is given only by an agent that declared a context type.
         ``recursion_limit`` bounds the graph steps of one ``advance`` (``GraphThread`` says why
         it has no default), and none of the others has a default either: an agent decides what
-        its runs start from and report.
+        its runs start from and report. ``record_progress`` is given the events of each node
+        of a step (``Agent.progress_of``) as the node ends, for a wiring that shows a run's
+        progress; without it nothing is computed.
 
         The graph is taken from the agent and compiled once here, so a defect is found when
         the worker starts and not at the first run, and what the agent declares afterwards
@@ -144,6 +165,8 @@ class AgentSteps:
         _compile(shape, InMemorySaver(), shape.start)
         self._kind = agent.kind
         self._shape = shape
+        self._progress_of = agent.progress_of
+        self._record_progress = record_progress
         self._initial_state = initial_state
         self._finish = finish
         self._context = context
@@ -161,7 +184,7 @@ class AgentSteps:
         if run.kind != self._kind:
             raise RunOfAnotherKind(run.kind, self._kind)
         thread = GraphThread(
-            _compile(self._shape, checkpoints.store, self._shape.start),
+            _compile(self._shape, checkpoints.store, self._shape.start, self._observer(run)),
             checkpoints,
             recursion_limit=self._recursion_limit,
             context=None if self._context is None else self._context(run, checkpoints),
@@ -171,15 +194,38 @@ class AgentSteps:
             return step
         return StepOutcome.finished(self._finish(run, step.output))
 
+    def _observer(self, run: GraphRunRef) -> NodeObserver | None:
+        """What records the progress of ``run``'s nodes, or ``None`` when nothing does."""
+        record = self._record_progress
+        if record is None:
+            return None
+        progress_of = self._progress_of
+
+        def observe(node: str, state: Mapping[str, Any], update: Mapping[str, Any]) -> None:
+            # Progress is for a screen: a defect in it is logged, never a reason to fail the step.
+            try:
+                events = progress_of(node, state, update)
+                if events:
+                    record(run, events)
+            except Exception:
+                logger.exception(
+                    "the progress of node %s of run %s was not recorded", node, run.run_id
+                )
+
+        return observe
+
 
 def _compile(
-    shape: GraphShape, checkpointer: BaseCheckpointSaver[str] | None, entry: str
+    shape: GraphShape,
+    checkpointer: BaseCheckpointSaver[str] | None,
+    entry: str,
+    observe: NodeObserver | None = None,
 ) -> CompiledGraph:
-    """The graph of ``shape``, entered at the node ``entry``."""
+    """The graph of ``shape``, entered at the node ``entry``, telling ``observe`` of each node."""
     try:
         builder = StateGraph(shape.state, context_schema=shape.context)
         for node in shape.nodes.values():
-            builder.add_node(node.name, _node_function(node))  # pyright: ignore[reportArgumentType]
+            builder.add_node(node.name, _node_function(node, observe))  # pyright: ignore[reportArgumentType]
         builder.add_edge(START, entry)
         for edge in shape.edges:
             # ``agent.END`` is LangGraph's own, so the end of an edge needs no translation.
@@ -192,10 +238,13 @@ def _compile(
         raise InvalidAgent(f"LangGraph refuses the graph of the agent: {refused}") from None
 
 
-def _node_function(node: Node) -> Callable[..., Mapping[str, Any]]:
+def _node_function(node: Node, observe: NodeObserver | None) -> Callable[..., Mapping[str, Any]]:
     # The library calls a function that has a parameter named ``runtime`` with the run's.
     def run_node(state: Any, runtime: Runtime[Any]) -> Mapping[str, Any]:
-        return node.run(state, runtime.context)
+        changes = node.run(state, runtime.context)
+        if observe is not None:
+            observe(node.name, state, changes)
+        return changes
 
     run_node.__name__ = node.name
     return run_node
