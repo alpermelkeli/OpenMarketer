@@ -5,6 +5,8 @@ import { problemText, roleLabel, roleSourceDisplay, tierSourceDisplay } from "./
 describe("the words for a role", () => {
   it("say which role runs today", () => {
     expect(roleLabel("repo_analyzer")).toMatchObject({ label: "Repository analyzer", inUse: true });
+    expect(roleLabel("researcher").inUse).toBe(true);
+    expect(roleLabel("reader").inUse).toBe(true);
     expect(roleLabel("writer").inUse).toBe(false);
   });
 

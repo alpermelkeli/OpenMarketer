@@ -27,7 +27,14 @@ const ROLES = new Map<string, RoleLabel>([
     },
   ],
   ["orchestrator", { label: "Orchestrator", purpose: "Answers questions and takes requests in the dashboard's chat.", inUse: false }],
-  ["researcher", { label: "Researcher", purpose: "Summarises market, competitor and trend research.", inUse: false }],
+  [
+    "researcher",
+    {
+      label: "Researcher",
+      purpose: "Plans the searches of a research run and writes its findings from what the reader read. Every research run uses it.",
+      inUse: true,
+    },
+  ],
   [
     "screener",
     {
@@ -41,8 +48,9 @@ const ROLES = new Map<string, RoleLabel>([
     "reader",
     {
       label: "Reader",
-      purpose: "Classifies untrusted text such as comments and messages. It is never given tools.",
-      inUse: false,
+      purpose:
+        "Reads untrusted text, such as the pages a research run fetched, into fixed fields. It is never given tools.",
+      inUse: true,
     },
   ],
   ["planner", { label: "Planner", purpose: "Writes the weekly plan, the channel mix and the ad plan.", inUse: false }],
