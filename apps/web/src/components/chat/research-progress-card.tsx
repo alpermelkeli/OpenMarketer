@@ -17,7 +17,8 @@ type ResearchProgressCardProps = {
 /**
  * A research run a turn of the chat started, as it goes: each stage it recorded, its state, and
  * the way to its own screen. Queries, titles and addresses are what a model or a web page wrote,
- * shown as text; the run's screen is where its sources are linked.
+ * shown as text; the run's screen is where its sources are linked. The stages are open while the
+ * run is going and folded once it has ended, and the person can fold them either way.
  */
 export function ResearchProgressCard({ projectId, view, status }: ResearchProgressCardProps) {
   const display = progressDisplay(status.state);
@@ -47,20 +48,25 @@ export function ResearchProgressCard({ projectId, view, status }: ResearchProgre
           <p className="text-muted-foreground">Starting: the run plans its queries first.</p>
         )}
         {view.stages.length > 0 && (
-          <ol className="grid gap-1.5 text-muted-foreground">
-            {view.stages.map((stage, index) => (
-              <li key={index} className="min-w-0 break-words">
-                {stageText(stage)}
-                {stage.kind === "planned" && stage.queries.length > 0 && (
-                  <ul className="mt-1 grid gap-0.5 border-l pl-3 text-xs">
-                    {stage.queries.map((query, queryIndex) => (
-                      <li key={queryIndex}>{query}</li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ol>
+          <details open={status.state === "running" || undefined}>
+            <summary className="w-fit cursor-pointer rounded-sm text-muted-foreground hover:text-foreground">
+              Steps ({view.stages.length})
+            </summary>
+            <ol className="mt-2 grid gap-1.5 text-muted-foreground">
+              {view.stages.map((stage, index) => (
+                <li key={index} className="min-w-0 break-words">
+                  {stageText(stage)}
+                  {stage.kind === "planned" && stage.queries.length > 0 && (
+                    <ul className="mt-1 grid gap-0.5 border-l pl-3 text-xs">
+                      {stage.queries.map((query, queryIndex) => (
+                        <li key={queryIndex}>{query}</li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </details>
         )}
         {outcome !== null && <p>{outcome}</p>}
         {status.state === "failed" && (
