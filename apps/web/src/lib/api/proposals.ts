@@ -2,7 +2,7 @@
 
 /** Query and mutation hooks for the proposals a project's agents wait on: actions held for a person. */
 
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { ApiError } from "./api-error";
 import { api, dataOf } from "./client";
@@ -53,5 +53,23 @@ export function useDecideProposal(projectId: string) {
     },
     // Where the proposal stands is the server's to say, after a refusal as much as after a success.
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.proposals(projectId) }),
+  });
+}
+
+/**
+ * How many of the newest page of the project's proposals wait for a person: enough for the sidebar to
+ * say that something waits. The dashboard's proxy forwards no `status` filter, so the page is counted
+ * here. Under a key of its own (see `queryKeys.shellWaitingProposals`).
+ */
+export function useWaitingProposalCount(projectId: string) {
+  return useQuery<ProposalList, ApiError, number>({
+    queryKey: queryKeys.shellWaitingProposals(projectId),
+    queryFn: async () =>
+      dataOf(
+        await api.GET("/v1/projects/{project_id}/proposals", {
+          params: { path: { project_id: projectId }, query: { limit: PAGE_SIZE } },
+        }),
+      ),
+    select: (page) => page.proposals.filter((proposal) => proposal.status === "pending").length,
   });
 }

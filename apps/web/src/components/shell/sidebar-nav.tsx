@@ -1,16 +1,21 @@
 "use client";
 
-import { FolderIcon, LayoutGridIcon, SettingsIcon } from "lucide-react";
-import Link from "next/link";
+import { LayoutGridIcon } from "lucide-react";
 import { usePathname } from "next/navigation";
 
-import { useProjects } from "@/lib/api/projects";
-import { cn } from "@/lib/utils";
+import { ProjectNav } from "@/components/project/project-nav";
+import { projectIdOfPath } from "@/lib/projects/project-navigation";
 
-/** Navigation: all projects, the most recent ones by name, and the settings. */
+import { NavLink, SettingsLink } from "./nav-link";
+
+/**
+ * The sidebar's navigation. Outside a project it leads to the projects and the settings; inside one it
+ * becomes that project's own menu, and another project is chosen from the projects page.
+ */
 export function SidebarNav() {
   const pathname = usePathname();
-  const { data: projects = [] } = useProjects();
+  const projectId = projectIdOfPath(pathname);
+  if (projectId !== null) return <ProjectNav projectId={projectId} pathname={pathname} />;
 
   return (
     <nav
@@ -21,45 +26,9 @@ export function SidebarNav() {
         <LayoutGridIcon aria-hidden="true" />
         Projects
       </NavLink>
-      {projects.length > 0 && (
-        <p className="hidden px-2.5 pt-6 pb-1.5 text-2xs tracking-widest text-muted-foreground uppercase lg:block">
-          Recent
-        </p>
-      )}
-      {projects.slice(0, 8).map((project) => (
-        <NavLink
-          key={project.id}
-          href={`/projects/${project.id}`}
-          current={pathname.startsWith(`/projects/${project.id}`)}
-        >
-          <FolderIcon aria-hidden="true" />
-          <span className="truncate">{project.name}</span>
-        </NavLink>
-      ))}
-      {/* Last in the sidebar, at its foot. In the top bar it stays at the right edge while the projects scroll. */}
-      <div className="sticky right-0 -mr-3 ml-auto bg-surface pr-3 pl-1 lg:static lg:m-0 lg:mt-auto lg:p-0">
-        <NavLink href="/settings" current={pathname.startsWith("/settings")}>
-          <SettingsIcon aria-hidden="true" />
-          Settings
-        </NavLink>
+      <div className="ml-auto lg:mt-auto lg:ml-0">
+        <SettingsLink current={pathname.startsWith("/settings")} />
       </div>
     </nav>
-  );
-}
-
-type NavLinkProps = { href: string; current: boolean; children: React.ReactNode };
-
-function NavLink({ href, current, children }: NavLinkProps) {
-  return (
-    <Link
-      href={href}
-      aria-current={current ? "page" : undefined}
-      className={cn(
-        "flex h-8 max-w-56 shrink-0 items-center gap-2.5 rounded-md px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:max-w-none [&_svg]:size-4 [&_svg]:shrink-0",
-        current && "bg-accent text-foreground",
-      )}
-    >
-      {children}
-    </Link>
   );
 }
