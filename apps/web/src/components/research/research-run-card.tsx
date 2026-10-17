@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { Notice } from "@/components/common/notice";
 import { StatusPill } from "@/components/common/status-pill";
+import { DeleteResearchButton } from "@/components/research/delete-research-button";
 import { formatDuration, isRunFinished, runStatusDisplay } from "@/lib/analysis/run-status";
 import type { ResearchRun } from "@/lib/api/types";
 import { formatDateTime, shortId } from "@/lib/format";
@@ -13,6 +14,8 @@ type ResearchRunCardProps = {
   elapsedMs: number;
   /** The run has been queued long enough that a missing worker is the likeliest reason. */
   waitingForWorker: boolean;
+  /** Run after the run has been deleted; the run's own screen goes back to the list with it. */
+  onDeleted?: () => void;
 };
 
 const REQUESTED_BY: Record<string, string> = {
@@ -22,7 +25,7 @@ const REQUESTED_BY: Record<string, string> = {
 };
 
 /** One research run: where it stands, how long it has taken, and what came of it. */
-export function ResearchRunCard({ run, elapsedMs, waitingForWorker }: ResearchRunCardProps) {
+export function ResearchRunCard({ run, elapsedMs, waitingForWorker, onDeleted }: ResearchRunCardProps) {
   const status = runStatusDisplay(run.status);
   const finished = isRunFinished(run);
 
@@ -38,6 +41,7 @@ export function ResearchRunCard({ run, elapsedMs, waitingForWorker }: ResearchRu
         <p className="ml-auto font-mono text-sm tabular-nums" aria-label={finished ? "Time taken" : "Time elapsed"}>
           {formatDuration(elapsedMs)}
         </p>
+        <DeleteResearchButton run={run} onDeleted={onDeleted} />
       </div>
 
       {/* Polite, so a screen reader hears the run move on without being interrupted. */}

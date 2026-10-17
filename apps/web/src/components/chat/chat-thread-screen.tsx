@@ -17,6 +17,7 @@ import { chatTimeline } from "@/lib/chat/timeline";
 import { cn } from "@/lib/utils";
 
 import { Composer } from "./composer";
+import { DeleteChatButton } from "./delete-chat-button";
 import { FollowedResearchProgress } from "./followed-research-progress";
 import { MessageMarkdown } from "./message-markdown";
 import { TurnActivity, TurnSteps } from "./turn-activity";
@@ -78,10 +79,18 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
 
   return (
     <section aria-labelledby="chat-title" className="grid min-h-[calc(100dvh-6rem)] grid-rows-[auto_1fr_auto] gap-4">
-      <header className="border-b pb-3">
+      <header className="flex items-center justify-between gap-4 border-b pb-3">
         <h1 id="chat-title" className="truncate font-heading text-title">
           {chat.data ? chat.data.title : <Skeleton className="h-7 w-64" />}
         </h1>
+        {chat.data && (
+          <DeleteChatButton
+            projectId={projectId}
+            chatId={chatId}
+            title={chat.data.title}
+            answering={submission?.status === "pending"}
+          />
+        )}
       </header>
 
       <div aria-live="polite" className="grid content-start gap-4">

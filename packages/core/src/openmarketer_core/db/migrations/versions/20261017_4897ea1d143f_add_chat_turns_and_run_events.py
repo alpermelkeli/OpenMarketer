@@ -115,11 +115,6 @@ def upgrade() -> None:
             ["project_id"], ["project.id"], name=op.f("fk_chat_turn_project_id_project")
         ),
         sa.ForeignKeyConstraint(
-            ["research_run_id"],
-            ["research_run.id"],
-            name=op.f("fk_chat_turn_research_run_id_research_run"),
-        ),
-        sa.ForeignKeyConstraint(
             ["thread_id"], ["chat_thread.id"], name=op.f("fk_chat_turn_thread_id_chat_thread")
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_chat_turn")),

@@ -14,7 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from openmarketer_api.dependencies import DbSession, no_request_body
+from openmarketer_api.dependencies import DbSession, Pages, no_request_body
 from openmarketer_api.errors import problems
 from openmarketer_api.identity import CurrentWorkspaceId
 from openmarketer_api.pagination import DEFAULT_PAGE_SIZE, CreatedBefore, PageLimit, created_cursor
@@ -135,13 +135,23 @@ def get(
     "/{project_id}",
     operation_id="deleteProject",
     status_code=204,
-    responses=problems(404, 409),
+    responses=problems(404, 409, 503),
     dependencies=[Depends(no_request_body)],
 )
-def delete(project_id: uuid.UUID, session: DbSession, workspace_id: CurrentWorkspaceId) -> None:
-    """Delete the project with its analyses, evidence, profile versions and proposals, for good.
+def delete(
+    project_id: uuid.UUID,
+    session: DbSession,
+    workspace_id: CurrentWorkspaceId,
+    pages: Pages,
+) -> None:
+    """Delete the project with everything stored about it, for good.
 
-    Refused while an analysis of the project is queued or running, or a proposal of it waits
-    for a decision. The repository is not touched.
+    That is its analyses, the evidence they found, every profile version, its
+    proposals, its chats and its research runs with their reports and the pages
+    they fetched. Refused while an analysis or a research run of the project is
+    queued or running, or a proposal of it waits for a decision. 503
+    `storage_unavailable` when the research pages' objects could not be removed
+    from object storage; the project stays then. The repository is not touched.
     """
-    delete_project(session, workspace_id=workspace_id, project_id=project_id)
+    for key in delete_project(session, workspace_id=workspace_id, project_id=project_id):
+        pages.remove(key)

@@ -377,7 +377,7 @@ class ResearchPageRecord(Base):
     signs the code found in its text. A run fetches one URL once: the unique
     constraint is what a repeated fetch of the same page of the same run finds
     instead of fetching and storing it again. Rows are removed when they
-    expire, and the objects with them.
+    expire, or with their run when it is deleted, and the objects with them.
     """
 
     __tablename__ = "research_page"
@@ -486,9 +486,10 @@ class ChatThreadRecord(Base):
 class ChatMessageRecord(Base):
     """One message of a project's chat thread, as it was written.
 
-    A message is never changed or deleted once stored; the thread is the record
-    of what was asked and answered. Which model answered, and what the turn
-    cost, are not stored with it: the row is what a person reads.
+    A message is never changed once stored, and it is deleted only with its
+    whole thread; the thread is the record of what was asked and answered.
+    Which model answered, and what the turn cost, are not stored with it: the
+    row is what a person reads.
     """
 
     __tablename__ = "chat_message"
@@ -537,7 +538,9 @@ class ChatTurnRecord(Base):
     project_id: Mapped[uuid.UUID] = _project_fk()
     thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_thread.id"), index=True)
     trigger: Mapped[ChatTurnTrigger] = mapped_column(_enum(ChatTurnTrigger, "trigger"))
-    research_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("research_run.id"))
+    # The finished run a follow-up is about, named without a foreign key, as run events
+    # name their run: the run can be deleted on its own while the turn stays.
+    research_run_id: Mapped[uuid.UUID | None] = mapped_column()
     status: Mapped[ChatTurnStatus] = mapped_column(
         _enum(ChatTurnStatus, "status"), server_default=ChatTurnStatus.RUNNING.value
     )

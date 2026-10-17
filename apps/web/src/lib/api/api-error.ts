@@ -28,6 +28,7 @@ const API_ERROR_CODES: Record<ErrorCode, true> = {
   role_not_found: true,
   project_already_exists: true,
   analysis_already_running: true,
+  research_unfinished: true,
   profile_already_approved: true,
   proposal_not_pending: true,
   proposal_pending: true,
@@ -45,6 +46,7 @@ const API_ERROR_CODES: Record<ErrorCode, true> = {
   model_unavailable: true,
   chat_unanswered: true,
   database_unavailable: true,
+  storage_unavailable: true,
 };
 
 export class ApiError extends Error {

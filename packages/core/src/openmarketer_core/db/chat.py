@@ -7,10 +7,11 @@ the operator's message and the assistant's answer together
 whole exchanges. A follow-up turn, which the orchestrator takes on its own when
 a research run the thread started has ended, writes an answer with no question
 before it (``append_answer``). Every message names the turn that wrote it
-(``db/chat_turns.py``), which must be a turn of the same thread. A message is
-never changed or deleted once stored, and nothing about how an answer was
-produced is kept: which model answered and what the turn cost belong to the
-turn, not to the chat.
+(``db/chat_turns.py``), which must be a turn of the same thread. A chat is
+deleted whole, with its messages (``delete_chat``); otherwise a stored message
+is never changed or deleted. Nothing about how an answer was produced is kept:
+which model answered and what the turn cost belong to the turn, not to the
+chat.
 
 The two messages of an exchange get creation times one after the other - the
 answer a moment after the question - because the list and the history order by
@@ -45,7 +46,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import Exists, Select, exists, func, select, tuple_
+from sqlalchemy import Exists, Select, delete, exists, func, select, tuple_, update
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from openmarketer_core.db.models import (
@@ -55,10 +56,13 @@ from openmarketer_core.db.models import (
     ChatTurnRecord,
     ChatTurnStatus,
     Project,
+    ResearchRunRecord,
+    RunEventRecord,
 )
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.projects import get_project
 from openmarketer_core.db.workspace_lock import wait_for_other_writes
+from openmarketer_core.orchestrator.chat_agent.definitions import CHAT_TURN_KIND
 
 DEFAULT_CHAT_TITLE = "New chat"
 AUTOMATIC_TITLE_MAX_LENGTH = 60
@@ -219,6 +223,59 @@ def mark_chat_read(
     record.last_read_at = session.execute(select(func.clock_timestamp())).scalar_one()
     session.flush()
     return _thread(record, _newest_message_at(session, chat_id), _is_busy(session, chat_id))
+
+
+def delete_chat(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, chat_id: uuid.UUID
+) -> None:
+    """Delete the chat with its turns, its messages and its turns' events, for good.
+
+    The research runs the chat asked for are records of the project of their
+    own: they stay, and stop naming the chat. Nothing is kept to restore the
+    chat from. Takes the workspace lock like every write of a workspace. Raises
+    ``ProjectNotFound`` when the workspace has no such project and
+    ``ChatNotFound`` when the project has no such chat.
+    """
+    wait_for_other_writes(session, workspace_id)
+    get_project(session, workspace_id=workspace_id, project_id=project_id)
+    _thread_of_project(session, workspace_id, project_id, chat_id)
+    turns_of_chat = select(ChatTurnRecord.id).where(
+        ChatTurnRecord.project_id == project_id, ChatTurnRecord.thread_id == chat_id
+    )
+    session.execute(
+        update(ResearchRunRecord)
+        .where(
+            ResearchRunRecord.project_id == project_id,
+            ResearchRunRecord.chat_thread_id == chat_id,
+        )
+        .values(chat_thread_id=None)
+    )
+    # The events described the turns' steps to a screen that is gone with the chat.
+    session.execute(
+        delete(RunEventRecord).where(
+            RunEventRecord.project_id == project_id,
+            RunEventRecord.run_kind == CHAT_TURN_KIND,
+            RunEventRecord.run_id.in_(turns_of_chat),
+        )
+    )
+    session.execute(
+        delete(ChatMessageRecord).where(
+            ChatMessageRecord.project_id == project_id,
+            ChatMessageRecord.thread_id == chat_id,
+        )
+    )
+    session.execute(
+        delete(ChatTurnRecord).where(
+            ChatTurnRecord.project_id == project_id,
+            ChatTurnRecord.thread_id == chat_id,
+        )
+    )
+    session.execute(
+        delete(ChatThreadRecord).where(
+            ChatThreadRecord.project_id == project_id,
+            ChatThreadRecord.id == chat_id,
+        )
+    )
 
 
 def list_chat_messages(

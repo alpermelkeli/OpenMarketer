@@ -9,7 +9,7 @@
 import { useInfiniteQuery, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { ApiError } from "./api-error";
-import { api, dataOf } from "./client";
+import { api, dataOf, doneOf } from "./client";
 import { PAGE_SIZE, mergePages, nextCursor } from "./pages";
 import { queryKeys } from "./query-keys";
 import type { Chat, ChatList, ChatMessage, ChatMessageList, ChatTurn } from "./types";
@@ -142,6 +142,27 @@ export function useSubmission(projectId: string, chatId: string): Submission | n
     status: latest.status,
     error: latest.error,
   };
+}
+
+/**
+ * Delete a chat for good, with its messages. The chat and the messages it held are
+ * dropped at once; the list and the sidebar are read again for the rest.
+ */
+export function useDeleteChat(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, ApiError, string>({
+    mutationFn: async (chatId) =>
+      doneOf(
+        await api.DELETE("/v1/projects/{project_id}/chats/{chat_id}", {
+          params: { path: { project_id: projectId, chat_id: chatId } },
+        }),
+      ),
+    onSuccess: (_deleted, chatId) => {
+      queryClient.removeQueries({ queryKey: queryKeys.chat(projectId, chatId) });
+      queryClient.removeQueries({ queryKey: queryKeys.chatMessages(projectId, chatId) });
+      return queryClient.invalidateQueries({ queryKey: queryKeys.chatScope(projectId) });
+    },
+  });
 }
 
 /** Record that the person has read the chat up to now. */

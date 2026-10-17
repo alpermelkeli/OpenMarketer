@@ -19,7 +19,9 @@ never commits. A project the workspace does not have is ``ProjectNotFound``;
 a chat the project does not have is ``ChatNotFound``. Appending does not check
 that the run exists: a run is named without a foreign key, and the caller is
 the run itself. Events are never changed; they are deleted with their project
-(``db/project_removal.py``).
+(``db/project_removal.py``), and a chat's turns' events with the chat
+(``db/chat.py``), while the events of a research run stay when the chat that
+asked for it is deleted: they are the run's.
 """
 
 from __future__ import annotations

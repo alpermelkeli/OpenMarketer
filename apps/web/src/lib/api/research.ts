@@ -2,12 +2,12 @@
 
 /** Query hooks for research runs: the project's runs, one run, and the report of a finished one. */
 
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { isRunFinished } from "@/lib/analysis/run-status";
 
 import type { ApiError } from "./api-error";
-import { api, dataOf } from "./client";
+import { api, dataOf, doneOf } from "./client";
 import { PAGE_SIZE, mergePages, nextCursor } from "./pages";
 import { queryKeys } from "./query-keys";
 import type { ResearchReport, ResearchRun, ResearchRunList } from "./types";
@@ -86,5 +86,25 @@ export function useResearchReport(projectId: string, runId: string, enabled: boo
     enabled,
     staleTime: Infinity,
     retry: false,
+  });
+}
+
+/**
+ * Delete a finished research run for good, with its report and the pages it fetched.
+ * The run and its report are dropped at once; the list is read again for the rest.
+ */
+export function useDeleteResearch(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, ApiError, string>({
+    mutationFn: async (runId) =>
+      doneOf(
+        await api.DELETE("/v1/projects/{project_id}/researches/{run_id}", {
+          params: { path: { project_id: projectId, run_id: runId } },
+        }),
+      ),
+    onSuccess: (_deleted, runId) => {
+      queryClient.removeQueries({ queryKey: queryKeys.researchRun(projectId, runId) });
+      return queryClient.invalidateQueries({ queryKey: queryKeys.researches(projectId) });
+    },
   });
 }

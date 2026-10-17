@@ -24,6 +24,10 @@ Everything else is refused: a finished run is never started, failed or given
 another result (``ResearchRunFinished``), and a run that was never started
 cannot succeed (``ResearchRunNotStarted``).
 
+A finished run can be deleted with its pages and its report (``delete_research_run``);
+a run that is queued or running cannot (``ResearchRunUnfinished``), because the
+worker would store pages or a report for a run that is gone.
+
 The request is stored with the run and read back strictly whenever the run is
 executed (``run_to_execute``): a stored request that no longer fits its schema
 is ``StoredResearchRequestInvalid``, and it ends that run with its words.
@@ -48,7 +52,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from pydantic import ValidationError
-from sqlalchemy import Select, func, select, tuple_, update
+from sqlalchemy import Select, delete, func, select, tuple_, update
 from sqlalchemy.orm import Session
 
 from openmarketer_core.agent_runtime.threads import thread_id
@@ -56,6 +60,8 @@ from openmarketer_core.db.chat import require_chat
 from openmarketer_core.db.models import (
     RUN_ERROR_MAX_LENGTH,
     Project,
+    ResearchPageRecord,
+    ResearchReportRecord,
     ResearchRunRecord,
     ResearchRunStatus,
 )
@@ -104,6 +110,15 @@ class ResearchRunNotStarted(Exception):
 
     def __init__(self, run_id: uuid.UUID) -> None:
         super().__init__(f"research run {run_id} was never started")
+
+
+class ResearchRunUnfinished(Exception):
+    """The run is queued or running; it is deleted once it has finished."""
+
+    def __init__(self, run_id: uuid.UUID, status: ResearchRunStatus) -> None:
+        super().__init__(
+            f"research run {run_id} is still {status.value}; it can be deleted when it has finished"
+        )
 
 
 @dataclass(frozen=True)
@@ -327,6 +342,49 @@ def list_research_runs(
     )
     runs = [_research_run(record) for record in rows]
     return page_of(runs, limit, lambda last: CreatedPosition(last.created_at, last.id))
+
+
+def delete_research_run(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, run_id: uuid.UUID
+) -> tuple[str, ...]:
+    """Delete a finished run with its pages and its report, for good.
+
+    Nothing is kept to restore it from. Answers the storage keys of the removed
+    pages; the caller removes each key's object from object storage before its
+    transaction commits, as the retention schedule does. Raises
+    ``ResearchRunNotFound`` when the workspace has no such run of the project,
+    and ``ResearchRunUnfinished`` while the run is queued or running: the
+    worker would store pages or a report for a run that is gone, and nothing
+    here stops its workflow.
+    """
+    record = _run_to_change(session, workspace_id, project_id, run_id)
+    if record.status not in FINISHED:
+        raise ResearchRunUnfinished(run_id, record.status)
+    keys = tuple(
+        session.scalars(
+            select(ResearchPageRecord.storage_key).where(
+                ResearchPageRecord.project_id == project_id,
+                ResearchPageRecord.run_id == run_id,
+            )
+        )
+    )
+    report_id = record.report_id
+    # The order the foreign keys allow: pages, then the run, then its report.
+    session.execute(
+        delete(ResearchPageRecord).where(
+            ResearchPageRecord.project_id == project_id,
+            ResearchPageRecord.run_id == run_id,
+        )
+    )
+    session.execute(delete(ResearchRunRecord).where(ResearchRunRecord.id == run_id))
+    if report_id is not None:
+        session.execute(
+            delete(ResearchReportRecord).where(
+                ResearchReportRecord.id == report_id,
+                ResearchReportRecord.project_id == project_id,
+            )
+        )
+    return keys
 
 
 def _stored_request(record: ResearchRunRecord, run_id: uuid.UUID) -> ResearchRequest:

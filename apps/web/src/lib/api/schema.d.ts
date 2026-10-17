@@ -61,10 +61,14 @@ export interface paths {
         post?: never;
         /**
          * Delete
-         * @description Delete the project with its analyses, evidence, profile versions and proposals, for good.
+         * @description Delete the project with everything stored about it, for good.
          *
-         *     Refused while an analysis of the project is queued or running, or a proposal of it waits
-         *     for a decision. The repository is not touched.
+         *     That is its analyses, the evidence they found, every profile version, its
+         *     proposals, its chats and its research runs with their reports and the pages
+         *     they fetched. Refused while an analysis or a research run of the project is
+         *     queued or running, or a proposal of it waits for a decision. 503
+         *     `storage_unavailable` when the research pages' objects could not be removed
+         *     from object storage; the project stays then. The repository is not touched.
          */
         delete: operations["deleteProject"];
         options?: never;
@@ -160,7 +164,13 @@ export interface paths {
         get: operations["getChat"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete
+         * @description Delete the chat with its messages, for good. Nothing is kept to restore it from.
+         *
+         *     The request takes no body; one is a 422.
+         */
+        delete: operations["deleteChat"];
         options?: never;
         head?: never;
         patch?: never;
@@ -523,7 +533,17 @@ export interface paths {
         get: operations["getResearch"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete
+         * @description Delete a finished run with its report and the pages it fetched, for good.
+         *
+         *     409 `research_unfinished` while the run is queued or running: the worker
+         *     would store pages or a report for a run that is gone. 503
+         *     `storage_unavailable` when the pages' objects could not be removed from
+         *     object storage; the run stays then, and can be deleted again. The request
+         *     takes no body; one is a 422.
+         */
+        delete: operations["deleteResearch"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1201,7 +1221,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "too_many_streams";
+        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
         EventDetailScalar: string | number | boolean | null;
         EventDetailValue: components["schemas"]["EventDetailScalar"] | components["schemas"]["EventDetailScalar"][];
         /**
@@ -2542,6 +2562,63 @@ export interface operations {
             };
         };
     };
+    deleteChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listChatEvents: {
         parameters: {
             query?: {
@@ -3651,6 +3728,72 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteResearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

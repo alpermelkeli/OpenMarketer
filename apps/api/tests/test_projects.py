@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from openmarketer_api.dependencies import db_session
+from openmarketer_api.dependencies import page_store as page_store_dependency
 from openmarketer_api.identity import LOCAL_USER_ID
 from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.agent_runtime.gate import RunScope
@@ -21,11 +22,25 @@ from openmarketer_core.db.evidence_store import local_workspace_id, save_analysi
 from openmarketer_core.db.models import Project, Workspace
 from openmarketer_core.db.profile_versions import approve_profile_version
 from openmarketer_core.db.proposals import propose_action
+from openmarketer_core.db.research_pages import NewPage, store_page
+from openmarketer_core.db.research_runs import (
+    mark_run_started as mark_research_started,
+)
+from openmarketer_core.db.research_runs import (
+    mark_run_succeeded as mark_research_succeeded,
+)
+from openmarketer_core.db.research_runs import (
+    request_research_run,
+)
+from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.intake import Snapshot
+from openmarketer_core.research.questions import ResearchRequest
+from openmarketer_core.research.research_agent.rules import Report
 
 REPOSITORY = "https://example.com/acme/app.git"
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
+REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
 NOON = datetime(2026, 10, 1, 12, tzinfo=UTC)
 PROJECT_FIELDS = {
     "id",
@@ -39,9 +54,10 @@ PROJECT_FIELDS = {
 
 
 @pytest.fixture(autouse=True)
-def database(app, session) -> None:
+def database(app, session, page_store) -> None:
     """Requests work in the test's session, which is rolled back afterwards."""
     app.dependency_overrides[db_session] = lambda: session
+    app.dependency_overrides[page_store_dependency] = lambda: page_store
 
 
 def create(client, **changes):
@@ -145,6 +161,50 @@ def analysed(session: Session, project_id: str) -> None:
         facts=[],
         profile=PROFILE,
     )
+
+
+def researched(session: Session, project_id: str) -> list[str]:
+    """Run a research of the project to success, storing a report and a page per key."""
+    scope = {"workspace_id": local_workspace_id(session), "project_id": uuid.UUID(project_id)}
+    run = request_research_run(
+        session,
+        workspace_id=scope["workspace_id"],
+        project_id=scope["project_id"],
+        request=REQUEST,
+        requested_by="person",
+    )
+    mark_research_started(session, **scope, run_id=run.id)
+    keys = ["pages/a.html", "pages/b.html"]
+    for key in keys:
+        store_page(
+            session,
+            **scope,
+            run_id=run.id,
+            page_id=uuid.uuid4(),
+            page=NewPage(
+                url=f"https://example.com/{key}",
+                title="A page",
+                content_type="text/html",
+                size_bytes=10,
+                storage_key=key,
+                sha256="a" * 64,
+                flags=(),
+            ),
+        )
+    report = save_research_report(
+        session,
+        **scope,
+        run_id=run.id,
+        report=Report(
+            questions=list(REQUEST.questions),
+            findings=[],
+            notes=[],
+            cost_usd=0.01,
+            model="fake/model",
+        ),
+    )
+    mark_research_succeeded(session, **scope, run_id=run.id, report_id=report.id)
+    return keys
 
 
 def test_project_is_read_back_as_it_was_created(client):
@@ -341,6 +401,42 @@ def test_delete_takes_no_body(client):
     project_id = create(client).json()["id"]
     response = client.request("DELETE", f"/v1/projects/{project_id}", json={"force": True})
     assert response.status_code == 422
+    assert client.get(f"/v1/projects/{project_id}").status_code == 200
+
+
+def test_project_is_deleted_with_its_research_and_its_pages_are_removed(
+    client, session, page_store
+):
+    project_id = project_created(session, minutes_ago=10)
+    keys = researched(session, project_id)
+
+    response = client.delete(f"/v1/projects/{project_id}")
+
+    assert response.status_code == 204
+    assert sorted(page_store.removed) == sorted(keys)
+    assert client.get(f"/v1/projects/{project_id}").status_code == 404
+
+
+def test_project_with_an_unfinished_research_is_not_deleted(client, session):
+    project_id = project_created(session, minutes_ago=10)
+    request_research_run(
+        session,
+        workspace_id=local_workspace_id(session),
+        project_id=uuid.UUID(project_id),
+        request=REQUEST,
+        requested_by="person",
+    )
+
+    response = client.delete(f"/v1/projects/{project_id}")
+
+    assert (response.status_code, response.json()) == (
+        409,
+        {
+            "code": "research_unfinished",
+            "message": f"project {project_id} has a research run in progress;"
+            " it can be deleted when the run has finished",
+        },
+    )
     assert client.get(f"/v1/projects/{project_id}").status_code == 200
 
 

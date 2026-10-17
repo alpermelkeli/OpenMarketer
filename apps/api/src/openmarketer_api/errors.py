@@ -46,17 +46,19 @@ from openmarketer_core.db.chat_turns import ChatBusy
 from openmarketer_core.db.profile_versions import ProfileAlreadyApproved, ProfileVersionNotFound
 from openmarketer_core.db.project_removal import (
     ProjectHasPendingProposal,
+    ProjectHasUnfinishedResearch,
     ProjectHasUnfinishedRun,
 )
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.proposals import ProposalNotFound, ProposalNotPending
-from openmarketer_core.db.research_runs import ResearchRunNotFound
+from openmarketer_core.db.research_runs import ResearchRunNotFound, ResearchRunUnfinished
 from openmarketer_core.db.research_store import ResearchReportNotFound
 from openmarketer_core.db.session import DatabaseError
 from openmarketer_core.llm import LLMError
 from openmarketer_core.orchestrator.chat_agent.rules import ChatTurnError
 from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.request import AnalysisNotStarted
+from openmarketer_core.research.page_store import PageStoreUnavailable
 from openmarketer_core.research.request import ResearchNotStarted
 from openmarketer_core.workspace_settings.analysis_limits import AnalysisLimitsRefused
 from openmarketer_core.workspace_settings.model_choices import ModelChoiceRefused
@@ -85,6 +87,7 @@ class ErrorCode(StrEnum):
     ROLE_NOT_FOUND = "role_not_found"
     PROJECT_ALREADY_EXISTS = "project_already_exists"
     ANALYSIS_ALREADY_RUNNING = "analysis_already_running"
+    RESEARCH_UNFINISHED = "research_unfinished"
     PROFILE_ALREADY_APPROVED = "profile_already_approved"
     PROPOSAL_NOT_PENDING = "proposal_not_pending"
     PROPOSAL_PENDING = "proposal_pending"
@@ -101,6 +104,7 @@ class ErrorCode(StrEnum):
     MODEL_UNAVAILABLE = "model_unavailable"
     CHAT_UNANSWERED = "chat_unanswered"
     DATABASE_UNAVAILABLE = "database_unavailable"
+    STORAGE_UNAVAILABLE = "storage_unavailable"
     TOO_MANY_STREAMS = "too_many_streams"
 
 
@@ -141,6 +145,8 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     UnknownRole: (404, ErrorCode.ROLE_NOT_FOUND),
     AnalysisAlreadyRunning: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProjectHasUnfinishedRun: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
+    ProjectHasUnfinishedResearch: (409, ErrorCode.RESEARCH_UNFINISHED),
+    ResearchRunUnfinished: (409, ErrorCode.RESEARCH_UNFINISHED),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
     ProposalNotPending: (409, ErrorCode.PROPOSAL_NOT_PENDING),
     ProjectHasPendingProposal: (409, ErrorCode.PROPOSAL_PENDING),
@@ -153,6 +159,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     StoredModelChoiceInvalid: (409, ErrorCode.STORED_SETTING_INVALID),
     AnalysisNotStarted: (503, ErrorCode.ANALYSIS_NOT_STARTED),
     ResearchNotStarted: (503, ErrorCode.RESEARCH_NOT_STARTED),
+    PageStoreUnavailable: (503, ErrorCode.STORAGE_UNAVAILABLE),
     LLMError: (503, ErrorCode.MODEL_UNAVAILABLE),
     TooManyStreams: (503, ErrorCode.TOO_MANY_STREAMS),
 }
