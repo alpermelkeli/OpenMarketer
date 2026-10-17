@@ -30,6 +30,16 @@ export function projectPageOfPath(pathname: string): ProjectPage | null {
   return page === "chat" || PROJECT_PAGES.some((p) => p.page === page) ? (page as ProjectPage) : null;
 }
 
+/** The chat an address shows, or null for a new chat and anything else. */
+export function chatIdOfPath(pathname: string): string | null {
+  return /^\/projects\/[^/]+\/chat\/([^/]+)$/.exec(pathname)?.[1] ?? null;
+}
+
+/** The address of one of the project's chats. */
+export function chatHref(projectId: string, chatId: string): string {
+  return `${projectPageHref(projectId, "chat")}/${chatId}`;
+}
+
 /** The address of one of a project's pages. */
 export function projectPageHref(projectId: string, page: ProjectPage): string {
   return `/projects/${projectId}/${page}`;

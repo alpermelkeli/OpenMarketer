@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { projectIdOfPath, projectPageHref, projectPageOfPath, shortRepositoryName } from "./project-navigation";
+import {
+  chatHref,
+  chatIdOfPath,
+  projectIdOfPath,
+  projectPageHref,
+  projectPageOfPath,
+  shortRepositoryName,
+} from "./project-navigation";
 
 const ID = "7b755025-304e-457a-99f6-9d8245b7a35a";
 
@@ -47,5 +54,21 @@ describe("the repository's name under the project", () => {
   it("keeps any other address whole", () => {
     expect(shortRepositoryName("https://git.example.org/owner/name")).toBe("https://git.example.org/owner/name");
     expect(shortRepositoryName("/home/me/repo")).toBe("/home/me/repo");
+  });
+});
+
+describe("which chat an address shows", () => {
+  const CHAT = "0f3c9a52-0d1e-4f54-8a55-2c4f1b7d9e10";
+
+  it("is the chat under the project's chat page", () => {
+    expect(chatIdOfPath(chatHref(ID, CHAT))).toBe(CHAT);
+  });
+
+  it("is none for a new chat", () => {
+    expect(chatIdOfPath(`/projects/${ID}/chat`)).toBeNull();
+  });
+
+  it("belongs to the chat page", () => {
+    expect(projectPageOfPath(chatHref(ID, CHAT))).toBe("chat");
   });
 });

@@ -5,10 +5,13 @@ import Link from "next/link";
 
 import { NavLink, SettingsLink } from "@/components/shell/nav-link";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useShellChats } from "@/lib/api/chats";
 import { useShellProject } from "@/lib/api/projects";
 import { useWaitingProposalCount } from "@/lib/api/proposals";
 import {
   PROJECT_PAGES,
+  chatHref,
+  chatIdOfPath,
   projectPageHref,
   projectPageOfPath,
   shortRepositoryName,
@@ -66,12 +69,15 @@ export function ProjectNav({ projectId, pathname }: ProjectNavProps) {
         {project.data && <DeleteProjectButton project={project.data} />}
       </div>
 
-      <NavLink href={projectPageHref(projectId, "chat")} current={page === "chat"} className="border bg-card lg:mb-1">
+      <NavLink
+        href={projectPageHref(projectId, "chat")}
+        current={page === "chat" && chatIdOfPath(pathname) === null}
+        className="border bg-card lg:mb-1"
+      >
         <PlusIcon aria-hidden="true" />
         New chat
       </NavLink>
-      <p className="hidden px-2.5 pt-3 pb-1 text-2xs tracking-widest text-muted-foreground uppercase lg:block">Chats</p>
-      <p className="hidden px-2.5 text-xs text-muted-foreground lg:block">No chats yet.</p>
+      <ChatList projectId={projectId} currentChatId={chatIdOfPath(pathname)} />
 
       <p className="hidden px-2.5 pt-6 pb-1 text-2xs tracking-widest text-muted-foreground uppercase lg:block">
         Project
@@ -96,5 +102,39 @@ export function ProjectNav({ projectId, pathname }: ProjectNavProps) {
         <SettingsLink current={false} />
       </div>
     </nav>
+  );
+}
+
+/** The project's most recently active chats, with a mark on those that have an answer not yet read. */
+function ChatList({ projectId, currentChatId }: { projectId: string; currentChatId: string | null }) {
+  const chats = useShellChats(projectId);
+  return (
+    <div className="hidden lg:contents">
+      <p className="px-2.5 pt-3 pb-1 text-2xs tracking-widest text-muted-foreground uppercase">Chats</p>
+      {chats.data === undefined ? (
+        chats.error ? (
+          <p className="px-2.5 text-xs text-muted-foreground">The chats could not be read.</p>
+        ) : (
+          <Skeleton className="mx-2.5 h-5" />
+        )
+      ) : chats.data.length === 0 ? (
+        <p className="px-2.5 text-xs text-muted-foreground">No chats yet.</p>
+      ) : (
+        <ul aria-label="Chats" className="grid gap-0.5">
+          {chats.data.map((chat) => (
+            <li key={chat.id}>
+              <NavLink href={chatHref(projectId, chat.id)} current={chat.id === currentChatId}>
+                <span className="truncate">{chat.title}</span>
+                {chat.unread && chat.id !== currentChatId && (
+                  <span className="ml-auto size-2 shrink-0 rounded-full bg-warning">
+                    <span className="sr-only">Unread</span>
+                  </span>
+                )}
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
