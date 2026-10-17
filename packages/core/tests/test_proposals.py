@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.agent_runtime.gate import ProposalStatus, RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
-from openmarketer_core.db.models import Project, ProposalRecord, Workspace
+from openmarketer_core.db.models import Project, ProposalRecord, RunEventRecord, Workspace
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.proposals import (
     ActionProposal,
@@ -24,9 +24,15 @@ from openmarketer_core.db.proposals import (
     decide_proposal,
     get_proposal,
     list_proposals,
+    list_waiting_proposals,
     proposal_status_of_action,
     propose_action,
     settle_proposal,
+)
+from openmarketer_core.run_events import (
+    PROPOSAL_DECIDED,
+    PROPOSAL_EXPIRED,
+    PROPOSAL_WAITING,
 )
 
 PERSON = uuid.uuid4()
@@ -84,6 +90,24 @@ def decide(session: Session, scope: RunScope, proposal: ActionProposal, *, appro
         approved=approved,
         decided_by=PERSON,
     )
+
+
+def second_project(session: Session, workspace_id: uuid.UUID) -> RunScope:
+    project = Project(
+        workspace_id=workspace_id, name="Other", source_repo_url="https://example.com/o.git"
+    )
+    session.add(project)
+    session.flush()
+    return RunScope(workspace_id=workspace_id, project_id=project.id)
+
+
+def events_of(session: Session, proposal: ActionProposal) -> list[RunEventRecord]:
+    stored = session.scalars(
+        select(RunEventRecord)
+        .where(RunEventRecord.run_id == proposal.run_id)
+        .order_by(RunEventRecord.id)
+    )
+    return list(stored)
 
 
 def test_proposed_action_waits_for_a_person_with_what_it_asked_for(session, scope):
@@ -235,6 +259,103 @@ def test_list_is_read_a_page_at_a_time(session, scope):
 def test_list_of_a_project_the_workspace_does_not_have_is_refused(session, scope):
     with pytest.raises(ProjectNotFound):
         list_proposals(session, workspace_id=uuid.uuid4(), project_id=scope.project_id, limit=10)
+
+
+def test_a_proposal_stored_now_is_recorded_on_its_run(session, scope):
+    proposal = propose(session, scope, payload={"text": "v2 is out"})
+
+    events = events_of(session, proposal)
+
+    assert [event.kind for event in events] == [PROPOSAL_WAITING]
+    assert events[0].detail == {
+        "proposal_id": str(proposal.id),
+        "action_name": "publish_post",
+        "effect": "publishes",
+    }
+
+
+def test_proposing_the_same_action_again_records_no_event_again(session, scope):
+    first = propose(session, scope, action_id="writer-run:r:1")
+    propose(session, scope, action_id="writer-run:r:1")
+
+    assert [event.kind for event in events_of(session, first)] == [PROPOSAL_WAITING]
+    assert session.scalar(select(func.count()).select_from(RunEventRecord)) == 1
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_a_persons_decision_is_recorded_on_its_run(session, scope, approved):
+    proposal = propose(session, scope)
+
+    decide(session, scope, proposal, approved=approved)
+
+    events = events_of(session, proposal)
+    assert [event.kind for event in events] == [PROPOSAL_WAITING, PROPOSAL_DECIDED]
+    assert events[-1].detail == {"proposal_id": str(proposal.id), "approved": approved}
+
+
+def test_a_decision_that_came_too_late_records_nothing(session, scope):
+    proposal = propose(session, scope, wait_seconds=0.001)
+    session.execute(select(func.pg_sleep(0.01)))
+
+    with pytest.raises(ProposalNotPending):
+        decide(session, scope, proposal, approved=True)
+    assert [event.kind for event in events_of(session, proposal)] == [PROPOSAL_WAITING]
+
+
+def test_an_expired_proposal_is_recorded_on_its_run(session, scope):
+    proposal = propose(session, scope, action_id="writer-run:r:1")
+
+    settle_proposal(session, scope=scope, action_id="writer-run:r:1", deadline_passed=True)
+
+    events = events_of(session, proposal)
+    assert [event.kind for event in events] == [PROPOSAL_WAITING, PROPOSAL_EXPIRED]
+    assert events[-1].detail == {"proposal_id": str(proposal.id)}
+
+
+def test_settling_a_proposal_that_did_not_expire_records_nothing(session, scope):
+    proposal = propose(session, scope, action_id="writer-run:r:1")
+
+    settle_proposal(session, scope=scope, action_id="writer-run:r:1", deadline_passed=False)
+
+    assert [event.kind for event in events_of(session, proposal)] == [PROPOSAL_WAITING]
+
+
+def test_waiting_list_holds_the_pending_proposals_of_every_project(session, scope):
+    other = second_project(session, scope.workspace_id)
+    waiting = propose(session, scope)
+    also_waiting = propose(session, other)
+    decided = propose(session, scope)
+    decide(session, scope, decided, approved=True)
+
+    page = list_waiting_proposals(session, workspace_id=scope.workspace_id, limit=10)
+
+    assert {proposal.id for proposal in page.items} == {waiting.id, also_waiting.id}
+    assert {proposal.project_id for proposal in page.items} == {scope.project_id, other.project_id}
+    assert page.next_before is None
+
+
+def test_waiting_list_does_not_hold_another_workspaces_proposals(session, scope):
+    propose(session, new_scope(session))
+
+    page = list_waiting_proposals(session, workspace_id=scope.workspace_id, limit=10)
+
+    assert page.items == ()
+
+
+def test_waiting_list_is_read_a_page_at_a_time(session, scope):
+    for _ in range(3):
+        propose(session, scope)
+
+    first = list_waiting_proposals(session, workspace_id=scope.workspace_id, limit=2)
+    rest = list_waiting_proposals(
+        session, workspace_id=scope.workspace_id, limit=2, before=first.next_before
+    )
+
+    assert len(first.items) == 2
+    assert first.next_before is not None
+    assert len(rest.items) == 1
+    assert rest.next_before is None
+    assert not {proposal.id for proposal in first.items} & {proposal.id for proposal in rest.items}
 
 
 def test_database_refuses_an_approval_with_nobody_who_approved(session, scope):

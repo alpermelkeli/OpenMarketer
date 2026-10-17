@@ -199,19 +199,25 @@ describe("the routes that are forwarded", () => {
 describe("the routes of proposals", () => {
   const proposal = (decision: string) => ["projects", PROJECT, "proposals", RUN, decision];
 
-  it("forward the list, an approval and a rejection", () => {
+  it("forward the list, an approval, a rejection and the workspace's waiting list", () => {
     expect(allowedApiPath("GET", ["projects", PROJECT, "proposals"])).toBe(`/v1/projects/${PROJECT}/proposals`);
     expect(allowedApiPath("POST", proposal("approval"))).toBe(`/v1/projects/${PROJECT}/proposals/${RUN}/approval`);
     expect(allowedApiPath("POST", proposal("rejection"))).toBe(`/v1/projects/${PROJECT}/proposals/${RUN}/rejection`);
+    expect(allowedApiPath("GET", ["proposals"])).toBe("/v1/proposals");
   });
 
-  it("do not include a decision by GET, a proposal that is not an id, or a filter", () => {
+  it("do not include one by its id, a decision by GET, a proposal that is not an id, or a filter", () => {
+    expect(() => allowedApiPath("GET", ["projects", PROJECT, "proposals", RUN])).toThrow();
     expect(() => allowedApiPath("GET", proposal("approval"))).toThrow();
     expect(() => allowedApiPath("POST", ["projects", PROJECT, "proposals", "latest", "approval"])).toThrow();
     expect(() => allowedApiPath("POST", ["projects", PROJECT, "proposals", RUN])).toThrow();
-    expect(() =>
-      allowedApiTarget("GET", ["projects", PROJECT, "proposals"], new URLSearchParams("status=pending")),
-    ).toThrow();
+    expect(() => allowedApiPath("GET", ["proposals", "latest"])).toThrow();
+    for (const segments of [
+      ["projects", PROJECT, "proposals"],
+      ["proposals"],
+    ]) {
+      expect(() => allowedApiTarget("GET", segments, new URLSearchParams("status=pending"))).toThrow();
+    }
   });
 });
 
@@ -398,6 +404,55 @@ describe("the events of a chat", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(await response.text()).toBe(problem);
+  });
+});
+
+describe("the events of the workspace", () => {
+  const STREAM = ["events", "stream"];
+  const streamPath = "/v1/events/stream";
+  const reading = { host: "localhost:3000", "sec-fetch-site": "same-origin" };
+
+  function apiStreaming(chunks: readonly string[]) {
+    return vi.fn<typeof fetch>(async () => {
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+          controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+  }
+
+  it("forward the stream from an event id, and nothing else", () => {
+    expect(allowedApiPath("GET", STREAM)).toBe(streamPath);
+    expect(allowedApiTarget("GET", STREAM, new URLSearchParams("after=42"))).toBe(`${streamPath}?after=42`);
+    expect(() => allowedApiPath("POST", STREAM)).toThrow();
+    expect(() => allowedApiPath("GET", [...STREAM, "1"])).toThrow();
+    expect(() => allowedApiPath("GET", ["events"])).toThrow();
+  });
+
+  it("refuse an `after` that is not an event id, and every other query", () => {
+    for (const query of ["after=-1", "after=abc", "after=1&after=2", "limit=5", "cursor=abc"]) {
+      expect(() => allowedApiTarget("GET", STREAM, new URLSearchParams(query))).toThrow("only `after`");
+    }
+  });
+
+  it("pass the stream through, with the browser's Last-Event-ID", async () => {
+    const api = apiStreaming(['id: 9\nevent: proposal_waiting\ndata: {"id":9}\n\n']);
+    const response = await proxyToApi(
+      request("GET", { ...reading, "last-event-id": "8" }),
+      STREAM,
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+    expect(await response.text()).toBe('id: 9\nevent: proposal_waiting\ndata: {"id":9}\n\n');
+    const [target, init] = api.mock.calls[0];
+    expect(String(target)).toBe(`http://127.0.0.1:8000${streamPath}`);
+    expect(init?.headers).toEqual({ accept: "text/event-stream", "last-event-id": "8" });
   });
 });
 

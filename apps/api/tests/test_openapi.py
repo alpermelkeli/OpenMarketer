@@ -42,6 +42,8 @@ OPERATIONS = {
     "getProposal": ("get", "/v1/projects/{project_id}/proposals/{proposal_id}"),
     "approveProposal": ("post", "/v1/projects/{project_id}/proposals/{proposal_id}/approval"),
     "rejectProposal": ("post", "/v1/projects/{project_id}/proposals/{proposal_id}/rejection"),
+    "listWaitingProposals": ("get", "/v1/proposals"),
+    "streamWorkspaceEvents": ("get", "/v1/events/stream"),
     "startResearch": ("post", "/v1/projects/{project_id}/researches"),
     "listResearches": ("get", "/v1/projects/{project_id}/researches"),
     "getResearch": ("get", "/v1/projects/{project_id}/researches/{run_id}"),
@@ -93,13 +95,24 @@ def test_every_workspace_route_declares_its_refusal_and_database_errors(schema):
                 assert declared == problem, (path, status)
 
 
-def test_the_event_stream_is_server_sent_events_of_the_chat_event_model(schema):
+def test_the_event_stream_is_server_sent_events_of_the_run_event_model(schema):
     stream = schema["paths"]["/v1/projects/{project_id}/chats/{chat_id}/events/stream"]["get"]
     [content] = stream["responses"]["200"]["content"].items()
     media_type, described = content
     assert media_type == "text/event-stream"
     data = described["itemSchema"]["properties"]["data"]
-    assert data["contentSchema"] == {"$ref": "#/components/schemas/ChatEventResponse"}
+    assert data["contentSchema"] == {"$ref": "#/components/schemas/RunEventResponse"}
+    parameters = {(p["in"], p["name"]) for p in stream["parameters"]}
+    assert {("query", "after"), ("header", "Last-Event-ID")} <= parameters
+
+
+def test_the_workspace_stream_is_server_sent_events_of_the_run_event_model(schema):
+    stream = schema["paths"]["/v1/events/stream"]["get"]
+    [content] = stream["responses"]["200"]["content"].items()
+    media_type, described = content
+    assert media_type == "text/event-stream"
+    data = described["itemSchema"]["properties"]["data"]
+    assert data["contentSchema"] == {"$ref": "#/components/schemas/RunEventResponse"}
     parameters = {(p["in"], p["name"]) for p in stream["parameters"]}
     assert {("query", "after"), ("header", "Last-Event-ID")} <= parameters
 
@@ -126,6 +139,7 @@ LISTS = {
         "messages",
     ),
     "/v1/projects/{project_id}/chats/{chat_id}/events": ("ChatEventListResponse", "events"),
+    "/v1/proposals": ("ProposalListResponse", "proposals"),
 }
 
 

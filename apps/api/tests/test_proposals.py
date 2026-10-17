@@ -94,6 +94,18 @@ def url(scope: RunScope, proposal: ActionProposal | None = None, then: str = "")
     return base if proposal is None else f"{base}/{proposal.id}{then}"
 
 
+def second_project(sessions: sessionmaker[Session], scope: RunScope) -> RunScope:
+    with transaction(sessions) as session:
+        project = Project(
+            workspace_id=scope.workspace_id,
+            name="Other",
+            source_repo_url="https://example.com/o.git",
+        )
+        session.add(project)
+        session.flush()
+        return RunScope(workspace_id=scope.workspace_id, project_id=project.id)
+
+
 def test_list_holds_the_projects_proposals_with_what_each_asks_for(
     client, signals, sessions, scope
 ):
@@ -205,3 +217,38 @@ def test_proposal_of_another_workspace_is_not_found(client, signals, sessions, s
 
     assert response.status_code == 404
     assert signals.told == []
+
+
+def test_the_waiting_list_holds_the_pending_proposals_of_every_project(
+    client, signals, sessions, scope
+):
+    elsewhere = second_project(sessions, scope)
+    waiting = proposed(sessions, scope)
+    also_waiting = proposed(sessions, elsewhere)
+    decided = proposed(sessions, scope)
+    client.post(url(scope, decided, "/rejection"))
+
+    body = client.get("/v1/proposals").json()
+
+    assert {p["id"] for p in body["proposals"]} == {str(waiting.id), str(also_waiting.id)}
+    assert body["next_cursor"] is None
+
+
+def test_the_waiting_list_does_not_hold_another_workspaces_proposals(
+    client, signals, sessions, scope
+):
+    with transaction(sessions) as session:
+        other = Workspace(name="Other")
+        session.add(other)
+        session.flush()
+        project = Project(
+            workspace_id=other.id, name="Theirs", source_repo_url="https://example.com/t.git"
+        )
+        session.add(project)
+        session.flush()
+        theirs = RunScope(workspace_id=other.id, project_id=project.id)
+    proposed(sessions, theirs)
+
+    body = client.get("/v1/proposals").json()
+
+    assert body["proposals"] == []

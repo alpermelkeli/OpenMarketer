@@ -15,13 +15,13 @@
 import { type InfiniteData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { EVENT_KINDS, inOrder, newestEventId, parseChatEvent } from "@/lib/chat/events";
+import { EVENT_KINDS, inOrder, newestEventId, parseRunEvent } from "@/lib/chat/events";
 
 import type { ApiError } from "./api-error";
 import { api, dataOf } from "./client";
 import { nextCursor } from "./pages";
 import { queryKeys, refreshedByChatEvent } from "./query-keys";
-import type { ChatEvent, ChatEventList } from "./types";
+import type { ChatEventList, RunEvent } from "./types";
 
 /** A turn records a few events and a research run a few dozen, so a page holds several turns. */
 const EVENT_PAGE_SIZE = 100;
@@ -30,7 +30,7 @@ type EventPages = InfiniteData<ChatEventList, string | undefined>;
 
 export type ChatEvents = {
   /** The events so far, oldest first; undefined until the first page is in. */
-  events: ChatEvent[] | undefined;
+  events: RunEvent[] | undefined;
   error: ApiError | null;
   hasOlderPage: boolean;
   pagesLoaded: number;
@@ -96,7 +96,7 @@ function useEventStream(
     const source = new EventSource(streamUrl(projectId, chatId, newestEventId(loaded)));
 
     const receive = (message: MessageEvent<string>) => {
-      const event = parseChatEvent(message.data);
+      const event = parseRunEvent(message.data);
       if (event === null) return;
       queryClient.setQueryData<EventPages>(queryKey, (data) => withEvent(data, event));
       for (const refresh of refreshedByChatEvent(projectId, chatId, event)) {
@@ -121,7 +121,7 @@ function streamUrl(projectId: string, chatId: string, after: number | null): str
 }
 
 /** The pages with `event` added at the top of the newest, unless a page already holds it. */
-function withEvent(data: EventPages | undefined, event: ChatEvent): EventPages | undefined {
+function withEvent(data: EventPages | undefined, event: RunEvent): EventPages | undefined {
   if (data === undefined) return data;
   if (data.pages.some((page) => page.events.some((held) => held.id === event.id))) return data;
   const [newest, ...older] = data.pages;

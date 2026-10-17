@@ -16,7 +16,13 @@ from openmarketer_core.db.chat_turns import start_turn
 from openmarketer_core.db.models import ChatTurnTrigger, Project, RunEventRecord, Workspace
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.research_runs import request_research_run
-from openmarketer_core.db.run_events import append_events, events_of_chat, latest_events_of_chat
+from openmarketer_core.db.run_events import (
+    append_events,
+    events_of_chat,
+    events_of_workspace,
+    latest_event_id_of_workspace,
+    latest_events_of_chat,
+)
 from openmarketer_core.orchestrator.chat_agent.definitions import CHAT_TURN_KIND
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
@@ -231,6 +237,53 @@ def test_the_events_of_a_project_of_another_workspace_are_not_found(session, sco
     with pytest.raises(ProjectNotFound):
         read(session, RunScope(workspace_id=other.workspace_id, project_id=scope.project_id),
              chat_id)  # fmt: skip
+
+
+def workspace_events(session: Session, scope: RunScope, after=None, limit=100):
+    return events_of_workspace(session, workspace_id=scope.workspace_id, after=after, limit=limit)
+
+
+def test_a_workspace_reads_every_its_projects_events_oldest_first(session, scope):
+    other = new_scope(session)
+    second = Project(
+        workspace_id=scope.workspace_id, name="Other", source_repo_url="https://example.com/o.git"
+    )
+    session.add(second)
+    session.flush()
+    second_scope = RunScope(workspace_id=scope.workspace_id, project_id=second.id)
+    record(session, scope, CHAT_TURN_KIND, uuid.uuid4(), TURN_STARTED)
+    record(session, second_scope, CHAT_TURN_KIND, uuid.uuid4(), SEARCHED)
+    record(session, other, CHAT_TURN_KIND, uuid.uuid4(), TURN_ANSWERED)
+
+    events = workspace_events(session, scope)
+
+    assert kinds(events) == [TURN_STARTED, SEARCHED]
+    assert [event.id for event in events] == sorted(event.id for event in events)
+
+
+def test_a_workspace_reader_continues_after_the_last_event_it_got(session, scope):
+    record(session, scope, CHAT_TURN_KIND, uuid.uuid4(), TURN_STARTED, TOOL_CALLED, TURN_ANSWERED)
+
+    first = workspace_events(session, scope, limit=2)
+    rest = workspace_events(session, scope, after=first[-1].id, limit=2)
+
+    assert kinds(first) == [TURN_STARTED, TOOL_CALLED]
+    assert kinds(rest) == [TURN_ANSWERED]
+    assert workspace_events(session, scope, after=rest[-1].id) == []
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+def test_a_workspace_read_asks_for_a_bounded_number_of_events(session, scope, limit):
+    with pytest.raises(ValueError):
+        workspace_events(session, scope, limit=limit)
+
+
+def test_a_workspace_with_no_events_has_no_latest_event(session, scope):
+    assert latest_event_id_of_workspace(session, workspace_id=scope.workspace_id) is None
+
+    stored = record(session, scope, CHAT_TURN_KIND, uuid.uuid4(), TURN_STARTED, TOOL_CALLED)
+
+    assert latest_event_id_of_workspace(session, workspace_id=scope.workspace_id) == stored[-1].id
 
 
 def test_events_of_one_workspace_become_visible_in_the_order_of_their_ids(engine):

@@ -1,6 +1,8 @@
 /** Query keys of the server state the dashboard holds, in one place so invalidation cannot drift. */
 
-import type { ChatEvent } from "./types";
+import { PROPOSAL_KINDS } from "@/lib/chat/events";
+
+import type { RunEvent } from "./types";
 
 export const queryKeys = {
   projects: () => ["projects", "list"] as const,
@@ -19,6 +21,8 @@ export const queryKeys = {
   profileVersion: (projectId: string, version: number) =>
     ["projects", "one", projectId, "versions", "one", version] as const,
   proposals: (projectId: string) => ["projects", "one", projectId, "proposals", "list"] as const,
+  /** Every proposal of the workspace that waits for a person, wherever it is: the notifications. */
+  waitingProposals: () => ["proposals", "waiting"] as const,
   /** Everything held about a project's chats: the list, each chat and its messages. */
   chatScope: (projectId: string) => ["projects", "one", projectId, "chats"] as const,
   chats: (projectId: string) => ["projects", "one", projectId, "chats", "list"] as const,
@@ -54,10 +58,11 @@ type Refresh = { queryKey: readonly unknown[]; exact?: boolean };
 /**
  * What a chat's event makes out of date. A turn that starts or ends changes whether the chat is
  * busy, and one that ends has stored its messages; a research run that starts is in the project's
- * list, and one that ends has its final state and perhaps a report. The chat's own key is refreshed
- * alone (`exact`), so its events, which the stream keeps current, are not read again.
+ * list, and one that ends has its final state and perhaps a report. A proposal event changes the
+ * project's proposals, which the approvals screen and the sidebar's count read. The chat's own key
+ * is refreshed alone (`exact`), so its events, which the stream keeps current, are not read again.
  */
-export function refreshedByChatEvent(projectId: string, chatId: string, event: ChatEvent): Refresh[] {
+export function refreshedByChatEvent(projectId: string, chatId: string, event: RunEvent): Refresh[] {
   const chat = { queryKey: queryKeys.chat(projectId, chatId), exact: true };
   if (event.run_kind === "orchestrator-chat") {
     if (event.kind === "turn_started") return [chat];
@@ -67,12 +72,28 @@ export function refreshedByChatEvent(projectId: string, chatId: string, event: C
     if (event.kind === "run_started") return [{ queryKey: queryKeys.researches(projectId) }];
     return [];
   }
-  if (event.run_kind === "research-run" && (event.kind === "finished" || event.kind === "failed")) {
+  if (event.run_kind !== "research-run") return [];
+  if (PROPOSAL_KINDS.includes(event.kind)) {
+    return [{ queryKey: queryKeys.proposals(projectId) }];
+  }
+  if (event.kind === "finished" || event.kind === "failed") {
     return [
       { queryKey: queryKeys.researchRun(projectId, event.run_id) },
       { queryKey: queryKeys.researches(projectId) },
       chat,
     ];
+  }
+  return [];
+}
+
+/**
+ * What a workspace event makes out of date: whether an action waits for a person changes the
+ * workspace's list of what waits, which is what the notifications show. A project's own screens
+ * are kept current by its chat streams' events (`refreshedByChatEvent`).
+ */
+export function refreshedByWorkspaceEvent(event: RunEvent): Refresh[] {
+  if (PROPOSAL_KINDS.includes(event.kind)) {
+    return [{ queryKey: queryKeys.waitingProposals() }];
   }
   return [];
 }

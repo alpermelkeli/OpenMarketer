@@ -13,12 +13,12 @@
  * Display only: what a run did is the server's record, and nothing here decides anything.
  */
 
-import type { ChatEvent, ChatMessage } from "@/lib/api/types";
+import type { ChatMessage, RunEvent } from "@/lib/api/types";
 
 export const CHAT_RUN = "orchestrator-chat";
 export const RESEARCH_RUN = "research-run";
 
-/** Every kind of event the API records for a chat, which a stream listens for by name. */
+/** Every kind of run event the API records, which a stream listens for by name. */
 export const EVENT_KINDS = [
   "turn_started",
   "tool_called",
@@ -35,7 +35,17 @@ export const EVENT_KINDS = [
   "synthesized",
   "finished",
   "failed",
+  "proposal_waiting",
+  "proposal_decided",
+  "proposal_expired",
 ] as const;
+
+/** The kinds that say where an action the policy gate held for a person stands. */
+export const PROPOSAL_KINDS: readonly string[] = [
+  "proposal_waiting",
+  "proposal_decided",
+  "proposal_expired",
+];
 
 /** The events after which what the API says of the chat, its messages or a run has changed. */
 export const TURN_ENDS: readonly string[] = ["turn_answered", "turn_failed"];
@@ -87,8 +97,19 @@ export type ResearchRunView = {
   /** How many checked findings it has: the last count it recorded, or its final one. */
   findings: number | null;
   reason: string | null;
+  /** The action the policy gate held for a person, and where it stands. */
+  proposal: ResearchProposal | null;
   firstEventId: number;
   startedAt: string;
+};
+
+export type ResearchProposal = {
+  id: string;
+  actionName: string;
+  /** What the action does beyond the run, as the event worded it ("publishes", "spends"). */
+  effect: string;
+  /** "waiting" until the person decides or the deadline passes. */
+  status: "waiting" | "approved" | "rejected" | "expired";
 };
 
 export type ChatActivity = {
@@ -100,9 +121,9 @@ export type ChatActivity = {
   runningTurn: TurnView | null;
 };
 
-type Detail = ChatEvent["detail"];
+type Detail = RunEvent["detail"];
 
-export function foldChatEvents(events: readonly ChatEvent[]): ChatActivity {
+export function foldChatEvents(events: readonly RunEvent[]): ChatActivity {
   const turns = new Map<string, TurnView>();
   const runs = new Map<string, ResearchRunView>();
   for (const event of inOrder(events)) {
@@ -118,14 +139,14 @@ export function foldChatEvents(events: readonly ChatEvent[]): ChatActivity {
 }
 
 /** Each event once, by its id, oldest first. */
-export function inOrder(events: readonly ChatEvent[]): ChatEvent[] {
-  const byId = new Map<number, ChatEvent>();
+export function inOrder(events: readonly RunEvent[]): RunEvent[] {
+  const byId = new Map<number, RunEvent>();
   for (const event of events) if (!byId.has(event.id)) byId.set(event.id, event);
   return [...byId.values()].sort((a, b) => a.id - b.id);
 }
 
 /** The id of the newest event, where a stream continues from; null when there is none. */
-export function newestEventId(events: readonly ChatEvent[]): number | null {
+export function newestEventId(events: readonly RunEvent[]): number | null {
   return events.reduce<number | null>((newest, event) => (newest === null || event.id > newest ? event.id : newest), null);
 }
 
@@ -133,7 +154,7 @@ export function newestEventId(events: readonly ChatEvent[]): number | null {
  * An event as the stream's `data` line holds it, or null when it is not one: a frame the dashboard
  * cannot read is skipped rather than shown half-way.
  */
-export function parseChatEvent(data: string): ChatEvent | null {
+export function parseRunEvent(data: string): RunEvent | null {
   let value: unknown;
   try {
     value = JSON.parse(data);
@@ -148,7 +169,7 @@ export function parseChatEvent(data: string): ChatEvent | null {
   return { id, run_kind: runKind, run_id: runId, kind, detail: detail as Detail, created_at: createdAt };
 }
 
-function turnOf(turns: Map<string, TurnView>, event: ChatEvent): TurnView {
+function turnOf(turns: Map<string, TurnView>, event: RunEvent): TurnView {
   let turn = turns.get(event.run_id);
   if (turn === undefined) {
     turn = {
@@ -168,7 +189,7 @@ function turnOf(turns: Map<string, TurnView>, event: ChatEvent): TurnView {
   return turn;
 }
 
-function runOf(runs: Map<string, ResearchRunView>, runId: string, event: ChatEvent): ResearchRunView {
+function runOf(runs: Map<string, ResearchRunView>, runId: string, event: RunEvent): ResearchRunView {
   let run = runs.get(runId);
   if (run === undefined) {
     run = {
@@ -178,6 +199,7 @@ function runOf(runs: Map<string, ResearchRunView>, runId: string, event: ChatEve
       status: "running",
       findings: null,
       reason: null,
+      proposal: null,
       firstEventId: event.id,
       startedAt: event.created_at,
     };
@@ -186,7 +208,7 @@ function runOf(runs: Map<string, ResearchRunView>, runId: string, event: ChatEve
   return run;
 }
 
-function foldTurnEvent(turn: TurnView, event: ChatEvent, runs: Map<string, ResearchRunView>): void {
+function foldTurnEvent(turn: TurnView, event: RunEvent, runs: Map<string, ResearchRunView>): void {
   const { detail } = event;
   switch (event.kind) {
     case "turn_started":
@@ -226,7 +248,7 @@ function foldTurnEvent(turn: TurnView, event: ChatEvent, runs: Map<string, Resea
   }
 }
 
-function foldResearchEvent(run: ResearchRunView, event: ChatEvent): void {
+function foldResearchEvent(run: ResearchRunView, event: RunEvent): void {
   const { detail } = event;
   if (event.kind === "finished") {
     run.status = "finished";
@@ -238,12 +260,38 @@ function foldResearchEvent(run: ResearchRunView, event: ChatEvent): void {
     run.reason = textOf(detail, "reason");
     return;
   }
+  if (PROPOSAL_KINDS.includes(event.kind)) {
+    foldProposalEvent(run, event);
+    return;
+  }
   const stage = stageOf(event.kind, detail);
   if (stage === null) return;
   if (stage.kind === "synthesized") run.findings = stage.findings;
   const previous = run.stages.at(-1);
   if (previous !== undefined && sameStage(previous, stage)) return;
   run.stages.push(stage);
+}
+
+function foldProposalEvent(run: ResearchRunView, event: RunEvent): void {
+  const { detail } = event;
+  if (event.kind === "proposal_waiting") {
+    const id = textOf(detail, "proposal_id");
+    if (id === null) return;
+    run.proposal = {
+      id,
+      actionName: textOf(detail, "action_name") ?? "action",
+      effect: textOf(detail, "effect") ?? "",
+      status: "waiting",
+    };
+    return;
+  }
+  // A decision or an expiry of another proposal (the harmless repeat of a retried step) changes nothing.
+  if (run.proposal === null || run.proposal.id !== textOf(detail, "proposal_id")) return;
+  if (event.kind === "proposal_expired") {
+    run.proposal.status = "expired";
+    return;
+  }
+  run.proposal.status = flagOf(detail, "approved") === false ? "rejected" : "approved";
 }
 
 function stageOf(kind: string, detail: Detail): ResearchStage | null {

@@ -2,9 +2,10 @@
 
 A run of any kind (a chat turn, a research run) records short events as it
 goes: which tool the orchestrator called, which queries a research run planned,
-which page it fetched. They are stored (``db/run_events.py``) and shown live in
-the chat thread that started the run. They are for the person's screen only:
-nothing here is ever given to a model.
+which page it fetched, and that the policy gate held one of its actions for a
+person and how that ended. They are stored (``db/run_events.py``) and shown
+live in the chat thread that started the run. They are for the person's screen
+only: nothing here is ever given to a model.
 
 An event holds structured data only: names, counts, identifiers, the queries a
 model wrote, a page's address and title. Page text and quotes never go into an
@@ -58,6 +59,12 @@ READ = "read"  # {pages}
 SYNTHESIZED = "synthesized"  # {findings, round}
 FINISHED = "finished"  # {findings}
 FAILED = "failed"  # {reason}
+
+# ------------------------------------------------------------- a run's actions
+# The policy gate held one of the run's actions for a person: it waits, and how it ended.
+PROPOSAL_WAITING = "proposal_waiting"  # {proposal_id, action_name, effect}
+PROPOSAL_DECIDED = "proposal_decided"  # {proposal_id, approved}
+PROPOSAL_EXPIRED = "proposal_expired"  # {proposal_id}
 
 
 class InvalidRunEvent(ValueError):

@@ -15,11 +15,16 @@ A proposal moves forwards only, and once:
 - ``pending`` to ``expired``, by the run (``settle_proposal``), when its deadline passed or the
   run ended while it waited.
 
-Every function is scoped to a workspace and a project but one: ``proposal_status_of_action``,
-with which the worker's ``run_action`` checks, from the action's idempotency key alone, that an
-action held by the gate was approved before it runs it. The key is the runtime's
-(``ActionRequest.action_id``), never a value a request chose. Functions take a session and
-never commit.
+Each of those transitions is recorded as an event of the run (``run_events.py``), so the
+person watching it sees the action wait and how it ended; a call that changes nothing records
+nothing.
+
+Every function is scoped to a workspace and a project but two: ``list_waiting_proposals``,
+which is the workspace's own view of what waits across its projects, and
+``proposal_status_of_action``, with which the worker's ``run_action`` checks, from the action's
+idempotency key alone, that an action held by the gate was approved before it runs it. The key
+is the runtime's (``ActionRequest.action_id``), never a value a request chose. Functions take a
+session and never commit.
 
 This module decides nothing about which actions need a proposal (the gate does) or who may
 decide (the API's identity does): the decider is whatever user id the caller authenticated.
@@ -42,6 +47,13 @@ from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.models import Project, ProposalRecord
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.projects import get_project
+from openmarketer_core.db.run_events import append_events
+from openmarketer_core.run_events import (
+    PROPOSAL_DECIDED,
+    PROPOSAL_EXPIRED,
+    PROPOSAL_WAITING,
+    RunEvent,
+)
 
 
 class ProposalNotFound(Exception):
@@ -120,25 +132,31 @@ def propose_action(
 ) -> ActionProposal:
     """Store ``request`` as a pending proposal, or return the one stored for it before.
 
-    The deadline is ``wait_seconds`` from now, by the database's clock. Raises
-    ``ProjectNotFound`` when the workspace has no such project, and ``ProposalNotFound`` when the
-    action's key is held by a proposal of another project.
+    A proposal stored now is recorded as the run's ``proposal_waiting`` event; one that was
+    already there records nothing. The deadline is ``wait_seconds`` from now, by the database's
+    clock. Raises ``ProjectNotFound`` when the workspace has no such project, and
+    ``ProposalNotFound`` when the action's key is held by a proposal of another project.
     """
     get_project(session, workspace_id=scope.workspace_id, project_id=scope.project_id)
-    session.execute(
-        insert(ProposalRecord)
-        .values(
-            project_id=scope.project_id,
-            run_kind=run.kind,
-            run_id=run.run_id,
-            workflow_id=workflow_id,
-            action_id=request.action_id,
-            action_name=request.name,
-            effect=effect,
-            payload=request.payload,
-            expires_at=func.now() + timedelta(seconds=wait_seconds),
+    # RETURNING answers whether the row was inserted: a conflicting insert returns no row.
+    stored_now = (
+        session.scalar(
+            insert(ProposalRecord)
+            .values(
+                project_id=scope.project_id,
+                run_kind=run.kind,
+                run_id=run.run_id,
+                workflow_id=workflow_id,
+                action_id=request.action_id,
+                action_name=request.name,
+                effect=effect,
+                payload=request.payload,
+                expires_at=func.now() + timedelta(seconds=wait_seconds),
+            )
+            .on_conflict_do_nothing(index_elements=[ProposalRecord.action_id])
+            .returning(ProposalRecord.id)
         )
-        .on_conflict_do_nothing(index_elements=[ProposalRecord.action_id])
+        is not None
     )
     record = session.scalar(
         _proposals_of_project(scope.workspace_id, scope.project_id).where(
@@ -147,6 +165,20 @@ def propose_action(
     )
     if record is None:
         raise ProposalNotFound(scope.project_id, request.action_id)
+    if stored_now:
+        _record_on_run(
+            session,
+            workspace_id=scope.workspace_id,
+            record=record,
+            event=RunEvent(
+                PROPOSAL_WAITING,
+                {
+                    "proposal_id": str(record.id),
+                    "action_name": record.action_name,
+                    "effect": record.effect.value,
+                },
+            ),
+        )
     return _proposal(record)
 
 
@@ -183,6 +215,12 @@ def decide_proposal(
         decided_by=decided_by,
         decided_at=func.now(),
     )
+    _record_on_run(
+        session,
+        workspace_id=workspace_id,
+        record=record,
+        event=RunEvent(PROPOSAL_DECIDED, {"proposal_id": str(record.id), "approved": approved}),
+    )
     return _proposal(record)
 
 
@@ -205,6 +243,12 @@ def settle_proposal(
     )
     if record.status is ProposalStatus.PENDING and deadline_passed:
         _change(session, record, status=ProposalStatus.EXPIRED, decided_at=func.now())
+        _record_on_run(
+            session,
+            workspace_id=scope.workspace_id,
+            record=record,
+            event=RunEvent(PROPOSAL_EXPIRED, {"proposal_id": str(record.id)}),
+        )
     return record.status
 
 
@@ -262,11 +306,64 @@ def list_proposals(
     return page_of(proposals, limit, lambda last: CreatedPosition(last.created_at, last.id))
 
 
+def list_waiting_proposals(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    limit: int,
+    before: CreatedPosition | None = None,
+) -> Page[ActionProposal, CreatedPosition]:
+    """The workspace's pending proposals, newest first, across all of its projects.
+
+    At most ``limit`` of them, starting after ``before`` (the ``next_before`` of the previous
+    page) or at the newest. This is the workspace's own view of what waits for a person, with
+    which the dashboard tells them wherever they are; a project's view is ``list_proposals``.
+    """
+    query = (
+        select(ProposalRecord)
+        .join(Project, Project.id == ProposalRecord.project_id)
+        .where(
+            Project.workspace_id == workspace_id,
+            ProposalRecord.status == ProposalStatus.PENDING,
+        )
+    )
+    if before is not None:
+        query = query.where(
+            tuple_(ProposalRecord.created_at, ProposalRecord.id)
+            < tuple_(before.created_at, before.id)
+        )
+    records = session.scalars(
+        query.order_by(ProposalRecord.created_at.desc(), ProposalRecord.id.desc()).limit(
+            rows_to_fetch(limit)
+        )
+    )
+    proposals = [_proposal(record) for record in records]
+    return page_of(proposals, limit, lambda last: CreatedPosition(last.created_at, last.id))
+
+
 def _proposals_of_project(workspace_id: uuid.UUID, project_id: uuid.UUID) -> Select[ProposalRecord]:
     return (
         select(ProposalRecord)
         .join(Project, Project.id == ProposalRecord.project_id)
         .where(Project.workspace_id == workspace_id, Project.id == project_id)
+    )
+
+
+def _record_on_run(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    record: ProposalRecord,
+    event: RunEvent,
+) -> None:
+    """Record ``event`` as one of the proposal's run's events, for the person watching it."""
+    append_events(
+        session,
+        workspace_id=workspace_id,
+        project_id=record.project_id,
+        run_kind=record.run_kind,
+        run_id=record.run_id,
+        events=[event],
     )
 
 

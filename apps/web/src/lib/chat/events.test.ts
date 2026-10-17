@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { ChatEvent, ChatMessage } from "@/lib/api/types";
+import type { ChatMessage, RunEvent } from "@/lib/api/types";
 
-import { awaitedTurn, foldChatEvents, inOrder, MAX_HISTORY_PAGES, needsOlderEvents, newestEventId, parseChatEvent } from "./events";
+import { awaitedTurn, foldChatEvents, inOrder, MAX_HISTORY_PAGES, needsOlderEvents, newestEventId, parseRunEvent } from "./events";
 
 const TURN = "11111111-1111-4111-8111-111111111111";
 const LATER_TURN = "22222222-2222-4222-8222-222222222222";
@@ -10,7 +10,7 @@ const RUN = "33333333-3333-4333-8333-333333333333";
 
 let nextId = 1;
 
-function event(kind: string, detail: ChatEvent["detail"] = {}, over: Partial<ChatEvent> = {}): ChatEvent {
+function event(kind: string, detail: RunEvent["detail"] = {}, over: Partial<RunEvent> = {}): RunEvent {
   const id = over.id ?? nextId++;
   return {
     id,
@@ -23,17 +23,17 @@ function event(kind: string, detail: ChatEvent["detail"] = {}, over: Partial<Cha
   };
 }
 
-function research(kind: string, detail: ChatEvent["detail"] = {}, over: Partial<ChatEvent> = {}): ChatEvent {
+function research(kind: string, detail: RunEvent["detail"] = {}, over: Partial<RunEvent> = {}): RunEvent {
   return event(kind, detail, { run_kind: "research-run", run_id: RUN, ...over });
 }
 
-function onlyTurn(events: ChatEvent[]) {
+function onlyTurn(events: RunEvent[]) {
   const [turn] = foldChatEvents(events).turns;
   if (turn === undefined) throw new Error("expected a turn");
   return turn;
 }
 
-function onlyRun(events: ChatEvent[]) {
+function onlyRun(events: RunEvent[]) {
   const [run] = foldChatEvents(events).runs;
   if (run === undefined) throw new Error("expected a run");
   return run;
@@ -182,6 +182,57 @@ describe("a research run", () => {
       { kind: "planned", round: null, queries: [] },
     ]);
   });
+
+  it("holds the action the policy gate waited on", () => {
+    const run = onlyRun([
+      research("proposal_waiting", { proposal_id: "p-1", action_name: "search_web", effect: "spends" }),
+    ]);
+    expect(run.proposal).toEqual({
+      id: "p-1",
+      actionName: "search_web",
+      effect: "spends",
+      status: "waiting",
+    });
+    expect(run.stages).toEqual([]);
+  });
+
+  it("shows where the held action stands once the person decided or it expired", () => {
+    const waiting = research("proposal_waiting", {
+      proposal_id: "p-1",
+      action_name: "search_web",
+      effect: "spends",
+    });
+    const decided = (approved: boolean) =>
+      onlyRun([waiting, research("proposal_decided", { proposal_id: "p-1", approved })]).proposal;
+    expect(decided(true)).toMatchObject({ id: "p-1", status: "approved" });
+    expect(decided(false)).toMatchObject({ id: "p-1", status: "rejected" });
+    expect(onlyRun([waiting, research("proposal_expired", { proposal_id: "p-1" })]).proposal).toMatchObject({
+      id: "p-1",
+      status: "expired",
+    });
+  });
+
+  it("counts a decision on another proposal as nothing", () => {
+    const run = onlyRun([
+      research("proposal_waiting", { proposal_id: "p-1", action_name: "search_web", effect: "spends" }),
+      research("proposal_decided", { proposal_id: "p-2", approved: true }),
+    ]);
+    expect(run.proposal).toMatchObject({ id: "p-1", status: "waiting" });
+  });
+
+  it("takes the last action the gate waited on", () => {
+    const run = onlyRun([
+      research("proposal_waiting", { proposal_id: "p-1", action_name: "search_web", effect: "spends" }),
+      research("proposal_decided", { proposal_id: "p-1", approved: true }),
+      research("proposal_waiting", { proposal_id: "p-2", action_name: "fetch_page", effect: "spends" }),
+    ]);
+    expect(run.proposal).toEqual({
+      id: "p-2",
+      actionName: "fetch_page",
+      effect: "spends",
+      status: "waiting",
+    });
+  });
 });
 
 describe("events from the history and the stream", () => {
@@ -208,12 +259,12 @@ describe("events from the history and the stream", () => {
 describe("an event the stream sends", () => {
   it("is read from its data line", () => {
     const sent = event("tool_called", { tool: "read_profile", label: "Reading" });
-    expect(parseChatEvent(JSON.stringify(sent))).toEqual(sent);
+    expect(parseRunEvent(JSON.stringify(sent))).toEqual(sent);
   });
 
   it("is skipped when it is not one", () => {
     for (const data of ["", "not json", "[]", '{"id":"1"}', JSON.stringify({ ...event("x"), detail: [] })]) {
-      expect(parseChatEvent(data)).toBeNull();
+      expect(parseRunEvent(data)).toBeNull();
     }
   });
 });

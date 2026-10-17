@@ -40,11 +40,10 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Sequence
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from openmarketer_api.chat_requests import PostgresChatRequests
@@ -72,12 +71,19 @@ from openmarketer_api.event_stream import (
 from openmarketer_api.identity import CurrentWorkspaceId
 from openmarketer_api.pagination import (
     DEFAULT_PAGE_SIZE,
-    HIGHEST_EVENT_ID,
     CreatedBefore,
     EventBefore,
     PageLimit,
     created_cursor,
     event_cursor,
+)
+from openmarketer_api.routes.events import (
+    STREAM_READ_SIZE,
+    STREAMED_EVENT_SCHEMA,
+    EventCursor,
+    EventCursorHeader,
+    RunEventResponse,
+    run_event_response,
 )
 from openmarketer_core.credentials.resolution import model_key
 from openmarketer_core.db.chat import (
@@ -94,7 +100,7 @@ from openmarketer_core.db.chat import (
 )
 from openmarketer_core.db.models import ChatRole
 from openmarketer_core.db.projects import ProjectNotFound
-from openmarketer_core.db.run_events import StoredRunEvent, events_of_chat, latest_events_of_chat
+from openmarketer_core.db.run_events import events_of_chat, latest_events_of_chat
 from openmarketer_core.db.session import DatabaseError, transaction
 from openmarketer_core.llm import ChatModel, RouterChatModel
 from openmarketer_core.orchestrator.ask import ask_project
@@ -107,11 +113,6 @@ router = APIRouter(prefix="/projects/{project_id}/chats", tags=["chat"])
 
 MAX_TITLE_LENGTH = 200
 MAX_MESSAGE_LENGTH = 10_000
-# The most events one read of a stream sends; a backlog is read again at once.
-STREAM_READ_SIZE = 100
-
-type EventDetailScalar = str | int | float | bool | None
-type EventDetailValue = EventDetailScalar | list[EventDetailScalar]
 
 
 class CreateChatRequest(BaseModel):
@@ -197,36 +198,10 @@ class ChatMessageListResponse(BaseModel):
     )
 
 
-class ChatEventResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: int = Field(
-        description=(
-            "The event's place in the order events were stored: larger for a later event."
-            " It is the cursor a stream continues from (`after`, `Last-Event-ID`)."
-        )
-    )
-    run_kind: str = Field(
-        description=(
-            "The kind of run that recorded it: `orchestrator-chat` for a turn of the chat,"
-            " `research-run` for a research run the chat started."
-        )
-    )
-    run_id: uuid.UUID = Field(description="The turn or the research run that recorded it.")
-    kind: str = Field(description="What happened, such as `tool_called` or `fetched`.")
-    detail: dict[str, EventDetailValue] = Field(
-        description=(
-            "What the screen shows of it: names, counts, identifiers, short texts; one flat"
-            " level of values and lists of values."
-        )
-    )
-    created_at: datetime
-
-
 class ChatEventListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    events: list[ChatEventResponse] = Field(description="Newest first.")
+    events: list[RunEventResponse] = Field(description="Newest first.")
     next_cursor: str | None = Field(
         description="Null on the last page; otherwise the `cursor` of the next request."
     )
@@ -381,23 +356,6 @@ def list_messages(
     )
 
 
-def _event(stored: StoredRunEvent) -> ChatEventResponse:
-    return ChatEventResponse(
-        id=stored.id,
-        run_kind=stored.run_kind,
-        run_id=stored.run_id,
-        kind=stored.kind,
-        detail={key: _detail_value(value) for key, value in stored.detail.items()},
-        created_at=stored.created_at,
-    )
-
-
-def _detail_value(value: Any) -> EventDetailValue:
-    if isinstance(value, Sequence) and not isinstance(value, str):
-        return list(value)
-    return value
-
-
 @router.get(
     "/{chat_id}/events",
     operation_id="listChatEvents",
@@ -428,29 +386,9 @@ def list_events(
         before=before,
     )
     return ChatEventListResponse(
-        events=[_event(event) for event in page.items],
+        events=[run_event_response(event) for event in page.items],
         next_cursor=event_cursor(page.next_before),
     )
-
-
-# One event of the stream, written as OpenAPI 3.2 describes a server-sent event.
-_STREAMED_EVENT_SCHEMA = {
-    "type": "object",
-    "required": ["id", "event", "data"],
-    "properties": {
-        "id": {"type": "string", "description": "The event's `id`."},
-        "event": {"type": "string", "description": "The event's `kind`."},
-        "data": {
-            "type": "string",
-            "contentMediaType": "application/json",
-            "contentSchema": {"$ref": "#/components/schemas/ChatEventResponse"},
-        },
-        "retry": {"type": "integer", "minimum": 0},
-    },
-}
-
-EventCursor = Annotated[int, Query(ge=0, le=HIGHEST_EVENT_ID)]
-EventCursorHeader = Annotated[int, Header(ge=0, le=HIGHEST_EVENT_ID)]
 
 
 @router.get(
@@ -462,12 +400,12 @@ EventCursorHeader = Annotated[int, Header(ge=0, le=HIGHEST_EVENT_ID)]
         200: {
             "description": (
                 "Server-sent events, oldest first. Each event is `id: <id>`, `event: <kind>` and"
-                " `data: <ChatEventResponse as JSON>`; a `: keep-alive` comment is sent when"
+                " `data: <RunEventResponse as JSON>`; a `: keep-alive` comment is sent when"
                 " nothing happened for a while, and the stream ends after a few minutes with"
                 " a `retry:` hint sent at its start, so the client reconnects with"
                 " `Last-Event-ID`."
             ),
-            "content": {EVENT_STREAM_MEDIA_TYPE: {"itemSchema": _STREAMED_EVENT_SCHEMA}},
+            "content": {EVENT_STREAM_MEDIA_TYPE: {"itemSchema": STREAMED_EVENT_SCHEMA}},
         },
         # 403 and 503 too: the workspace router declares them in this route's media type.
         **json_problems(403, 404, 503),
@@ -526,7 +464,9 @@ def stream_events(
             raise StreamEnded from e
         return [
             StreamedEvent(
-                id=event.id, event=event.kind, data=json_line(_event(event).model_dump(mode="json"))
+                id=event.id,
+                event=event.kind,
+                data=json_line(run_event_response(event).model_dump(mode="json")),
             )
             for event in events
         ]
