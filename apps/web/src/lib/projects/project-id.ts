@@ -10,3 +10,8 @@ export function isProjectId(value: string): boolean {
 export function isChatId(value: string): boolean {
   return UUID.test(value);
 }
+
+/** A research run's identifier is a UUID too, so it is checked the same way. */
+export function isResearchRunId(value: string): boolean {
+  return UUID.test(value);
+}

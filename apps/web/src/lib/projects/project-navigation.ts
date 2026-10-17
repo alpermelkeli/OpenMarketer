@@ -6,7 +6,7 @@
 
 import { isProjectId } from "./project-id";
 
-export type ProjectPage = "chat" | "profile" | "analyses" | "approvals";
+export type ProjectPage = "chat" | "profile" | "analyses" | "research" | "approvals";
 
 /** The project's pages, in the order the sidebar lists them under the project. */
 export const PROJECT_PAGES: readonly {
@@ -15,6 +15,7 @@ export const PROJECT_PAGES: readonly {
 }[] = [
   { page: "profile", label: "Profile" },
   { page: "analyses", label: "Analyses" },
+  { page: "research", label: "Research" },
   { page: "approvals", label: "Approvals" },
 ];
 
@@ -38,6 +39,11 @@ export function chatIdOfPath(pathname: string): string | null {
 /** The address of one of the project's chats. */
 export function chatHref(projectId: string, chatId: string): string {
   return `${projectPageHref(projectId, "chat")}/${chatId}`;
+}
+
+/** The address of one of the project's research runs. */
+export function researchHref(projectId: string, runId: string): string {
+  return `${projectPageHref(projectId, "research")}/${runId}`;
 }
 
 /** The address of one of a project's pages. */

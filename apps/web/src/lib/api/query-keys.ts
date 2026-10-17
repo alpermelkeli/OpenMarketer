@@ -8,6 +8,11 @@ export const queryKeys = {
   analyses: (projectId: string) => ["projects", "one", projectId, "analyses", "list"] as const,
   analysisRun: (projectId: string, runId: string) =>
     ["projects", "one", projectId, "analyses", "run", runId] as const,
+  researches: (projectId: string) => ["projects", "one", projectId, "researches", "list"] as const,
+  researchRun: (projectId: string, runId: string) =>
+    ["projects", "one", projectId, "researches", "run", runId] as const,
+  researchReport: (projectId: string, runId: string) =>
+    ["projects", "one", projectId, "researches", "run", runId, "report"] as const,
   profileVersions: (projectId: string) => ["projects", "one", projectId, "versions", "list"] as const,
   profileVersion: (projectId: string, version: number) =>
     ["projects", "one", projectId, "versions", "one", version] as const,

@@ -15,6 +15,11 @@ export type AnalysisRun = Schemas["AnalysisRunResponse"];
 export type AnalysisRunList = Schemas["AnalysisRunListResponse"];
 export type AnalysisRunStatus = Schemas["AnalysisRunStatus"];
 
+export type ResearchRun = Schemas["ResearchRunResponse"];
+export type ResearchRunList = Schemas["ResearchRunListResponse"];
+export type ResearchRunStatus = Schemas["ResearchRunStatus"];
+export type ResearchReport = Schemas["ResearchReportResponse"];
+
 export type ProfileVersion = Schemas["ProfileVersionResponse"];
 export type ProfileVersionSummary = Schemas["ProfileVersionSummaryResponse"];
 export type ProfileVersionList = Schemas["ProfileVersionListResponse"];

@@ -246,6 +246,30 @@ describe("the routes of a project's chat", () => {
   });
 });
 
+describe("the routes of research", () => {
+  const RESEARCHES = ["projects", PROJECT, "researches"];
+  const RESEARCH = "0b0e6c6e-2222-4333-8444-555566667777";
+
+  it("forward the runs and the report of one", () => {
+    expect(allowedApiPath("GET", RESEARCHES)).toBe(`/v1/projects/${PROJECT}/researches`);
+    expect(allowedApiPath("GET", [...RESEARCHES, RESEARCH])).toBe(
+      `/v1/projects/${PROJECT}/researches/${RESEARCH}`,
+    );
+    expect(allowedApiPath("GET", [...RESEARCHES, RESEARCH, "report"])).toBe(
+      `/v1/projects/${PROJECT}/researches/${RESEARCH}/report`,
+    );
+  });
+
+  it("do not include starting a run, a run that is not an id, a path below one, or a filter", () => {
+    expect(() => allowedApiPath("POST", RESEARCHES)).toThrow();
+    expect(() => allowedApiPath("GET", [...RESEARCHES, "latest"])).toThrow();
+    expect(() => allowedApiPath("GET", [...RESEARCHES, RESEARCH, "pages"])).toThrow();
+    expect(() =>
+      allowedApiTarget("GET", RESEARCHES, new URLSearchParams("status=succeeded")),
+    ).toThrow();
+  });
+});
+
 describe("the route that deletes a project", () => {
   it("takes one project by its id", () => {
     expect(allowedApiPath("DELETE", ["projects", PROJECT])).toBe(`/v1/projects/${PROJECT}`);
