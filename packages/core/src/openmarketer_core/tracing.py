@@ -21,9 +21,14 @@ batches. Two kinds are made here:
   see them. ``TracedChatModel`` records each as a *generation* under the node that made it:
   its role, the messages and tools it was sent, the message it got back, the model, its
   tokens and its cost.
+- **A decision call.** ``decisions.py`` posts to its own endpoint, not through LangChain
+  either. ``TracedDecisionModel`` records each as a generation the same way: its role, the
+  texts and the questions it was sent, the probability of each answer, the model and its
+  cost (the endpoint reports no tokens).
 
 What leaves the process, when tracing is on: the graph's state and every prompt and reply,
-which hold repository content (after intake blanked out the secrets it found), sent to
+which hold repository content (after intake blanked out the secrets it found), and the texts
+and answers of every decision call (a research run's questions and search results), sent to
 Langfuse Cloud unless ``LANGFUSE_BASE_URL`` names a self-hosted Langfuse. That is why it is off
 by default. What does not: the model provider's key, which is in no call's inputs (they are
 built here, never taken from the wrapped model) and in no graph's state; a run's context is
@@ -38,7 +43,7 @@ one. This is the only module that imports ``langfuse``; it decides nothing about
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -51,6 +56,8 @@ from langfuse.langchain import CallbackHandler
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter
 
+from openmarketer_core.decision_questions import YesNoQuestion
+from openmarketer_core.decisions import DecisionModel, DecisionReply
 from openmarketer_core.llm import ChatModel, ChatReply, LLMError
 
 logger = logging.getLogger(__name__)
@@ -137,6 +144,12 @@ class Tracing:
         if self._client is None:
             return inner
         return TracedChatModel(inner, self._client)
+
+    def decisions(self, inner: DecisionModel) -> DecisionModel:
+        """``inner``, with its calls traced when tracing is on; ``inner`` itself when it is off."""
+        if self._client is None:
+            return inner
+        return TracedDecisionModel(inner, self._client)
 
     @contextmanager
     def traced(self) -> Iterator[None]:
@@ -234,6 +247,37 @@ class TracedChatModel:
                 output=reply.message,
                 model=reply.model,
                 usage_details={"input": reply.prompt_tokens, "output": reply.completion_tokens},
+                cost_details={"total": reply.cost_usd},
+            )
+            return reply
+
+
+@dataclass(frozen=True)
+class TracedDecisionModel:
+    """A ``DecisionModel`` whose every call is a Langfuse generation."""
+
+    inner: DecisionModel
+    client: Langfuse
+
+    def decide(
+        self, role: str, state: Sequence[str], questions: Mapping[str, YesNoQuestion]
+    ) -> DecisionReply:
+        call = {
+            "state": list(state),
+            "questions": {key: question.as_request() for key, question in questions.items()},
+        }
+        with self.client.start_as_current_observation(
+            as_type="generation", name=role, input=call, metadata={"role": role}
+        ) as generation:
+            try:
+                reply = self.inner.decide(role, state, questions)
+            except LLMError as e:
+                # A ``DecisionError``: its message says the status and never what was written.
+                generation.update(level="ERROR", status_message=str(e))
+                raise
+            generation.update(
+                output=dict(reply.answers),
+                model=reply.model,
                 cost_details={"total": reply.cost_usd},
             )
             return reply
