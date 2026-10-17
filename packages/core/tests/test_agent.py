@@ -20,6 +20,8 @@ from openmarketer_core.agent_runtime.actions import (
     ActionPolicy,
     InvalidActionDefinition,
     NotAnAction,
+    RunKind,
+    RunTarget,
     action_name_of,
 )
 from openmarketer_core.agent_runtime.agent import (
@@ -116,6 +118,52 @@ def test_action_that_says_nothing_of_its_effect_works_for_the_run_itself(agent):
     agent.action("clone")(new_model())
 
     assert agent.policies["clone"].effect is ActionEffect.INTERNAL
+
+
+# --------------------------------------------------------- actions that start a run
+def a_run_target() -> RunTarget:
+    return RunTarget(
+        workflow="WriteContent",
+        task_queue="openmarketer-writing",
+        kind=RunKind.WAIT,
+        longest_seconds=600,
+        input_of=lambda child: {"run_id": str(child.run_id)},
+    )
+
+
+def test_action_declared_with_a_run_target_is_known_by_its_name(agent):
+    target = a_run_target()
+
+    @agent.action("research", run=target)
+    class Research(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        question: str
+
+    assert action_name_of(Research(question="why?")) == "research"
+    assert agent.definitions[0].run is target
+    assert set(agent.run_targets) == {"research"}
+    assert agent.run_targets["research"].workflow == "WriteContent"
+
+
+def test_run_targets_are_only_the_actions_that_start_a_run(agent):
+    agent.action("send_email")(new_model())
+    agent.action("research", run=a_run_target())(new_model())
+
+    assert list(agent.run_targets) == ["research"]
+
+
+def test_run_action_that_says_it_publishes_is_refused(agent):
+    target = a_run_target()
+    with pytest.raises(InvalidActionDefinition, match="'research'.*neither publishes nor spends"):
+        agent.action("research", run=target, effect=ActionEffect.PUBLISHES)(new_model())
+
+
+def test_run_action_with_limits_of_an_activity_is_refused(agent):
+    target = a_run_target()
+    for limit, value in (("timeout", 60), ("attempts", 2), ("retry_after", 5), ("heartbeat", 30)):
+        with pytest.raises(InvalidActionDefinition, match="'research'.*do not apply"):
+            agent.action("research", run=target, **{limit: value})(new_model())
 
 
 def test_effect_and_approval_wait_of_an_action_become_its_policy(agent):

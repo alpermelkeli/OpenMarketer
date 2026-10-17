@@ -4,7 +4,9 @@ A graph asks for an action by name, with a payload the model may have shaped.
 ``ActionRoutes`` is what the worker holds to answer: the ``ActionCatalog`` that
 decides whether the name and the payload are allowed (core's rule) and the
 handler that runs the action. One route holds both so that an action cannot be
-allowed without a handler.
+allowed without a handler. An action that starts another agent's run runs no
+handler: its route holds the ``RunTarget`` of the run it starts and the
+``PrepareRun`` callable that creates the child run's record (``RunRoutes``).
 
 The limits an action runs under (timeouts, attempts, heartbeats) are not here but in the
 workflow, which is the one place they are set: its ``actions`` mapping names the actions a
@@ -21,13 +23,19 @@ service) like any activity. It holds no action of its own and runs none:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel
 
-from openmarketer_core.agent_runtime.actions import ActionCatalog, ActionDefinition
+from openmarketer_core.agent_runtime.actions import (
+    ActionCatalog,
+    ActionDefinition,
+    RunTarget,
+)
+from openmarketer_core.agent_runtime.gate import RunScope
 
 
 @dataclass(frozen=True)
@@ -71,4 +79,46 @@ class ActionRoutes:
 
     def route(self, name: str) -> ActionRoute:
         """The route of the action ``name``, which a request that passed the catalog names."""
+        return self._by_name[name]
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """What a run action's prepare gets besides its payload.
+
+    ``action_id`` is the idempotency key of the action, and ``scope`` the workspace and
+    project of the run that asked: the child run's record belongs to them, and the callable
+    reaches the database with them.
+    """
+
+    action_id: str
+    scope: RunScope
+
+
+# Creates the child run's record, keyed by ``RunContext.action_id`` so that an attempt that is
+# tried again finds the same run, and answers with its id. It is blocking and runs in a thread,
+# like a handler. What it raises that is not worded is logged and reported as unexpected.
+type PrepareRun[Payload: BaseModel] = Callable[[Payload, RunContext], uuid.UUID]
+
+
+@dataclass(frozen=True)
+class RunRoute:
+    """One action that starts another agent's run: what it takes, and how its run is created."""
+
+    definition: ActionDefinition
+    target: RunTarget
+    prepare: PrepareRun
+
+
+class RunRoutes:
+    """The run actions of an agent, by action name."""
+
+    def __init__(self, routes: Iterable[RunRoute]) -> None:
+        """Raises ``InvalidActionDefinition`` when two routes have the same name."""
+        held = tuple(routes)
+        self.catalog = ActionCatalog(route.definition for route in held)
+        self._by_name = {route.definition.name: route for route in held}
+
+    def route(self, name: str) -> RunRoute:
+        """The route of the run action ``name``, which a request that passed the catalog names."""
         return self._by_name[name]

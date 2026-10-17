@@ -12,7 +12,7 @@ from openmarketer_worker.agent_runtime.vocabulary import GraphRunPolicy
 from openmarketer_worker.agent_runtime.workflow_dsl import agent_workflow
 
 with workflow.unsafe.imports_passed_through():
-    from dsl.definitions import agent
+    from dsl.definitions import agent, the_greeters_project
 
 GRAPH = GraphRunPolicy(
     attempt_timeout_seconds=32,
@@ -22,6 +22,6 @@ GRAPH = GraphRunPolicy(
 )
 
 
-@agent_workflow(agent, name="GreeterPassedThrough", graph=GRAPH)
+@agent_workflow(agent, name="GreeterPassedThrough", graph=GRAPH, scope_of=the_greeters_project)
 class GreeterPassedThrough:
     """Defines no hook: a class with none is a workflow too."""

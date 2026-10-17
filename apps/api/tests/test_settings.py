@@ -105,3 +105,28 @@ def test_start_with_a_model_configuration_that_is_not_valid_is_refused(tmp_path)
 def test_settings_do_not_show_the_environment_through_the_model_configuration():
     settings = Settings.from_env({**DATABASE, "OPENROUTER_API_KEY": "sk-made-up-value"})
     assert "sk-made-up-value" not in repr(settings)
+
+
+def test_tracing_is_off_without_langfuses_keys():
+    assert Settings.from_env(DATABASE).tracing.enabled is False
+
+
+def test_tracing_is_on_with_both_of_langfuses_keys():
+    settings = Settings.from_env(
+        {**DATABASE, "LANGFUSE_PUBLIC_KEY": "pk-made-up", "LANGFUSE_SECRET_KEY": "sk-made-up"}
+    )
+    assert settings.tracing.enabled is True
+    assert "made-up" not in repr(settings)
+
+
+@pytest.mark.parametrize(
+    ("given", "missing"),
+    [
+        ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"),
+        ("LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY"),
+    ],
+)
+def test_start_with_one_of_langfuses_keys_is_refused_naming_the_missing_one(given, missing):
+    with pytest.raises(SettingsError, match=missing) as refused:
+        Settings.from_env({**DATABASE, given: "pk-made-up-value"})
+    assert "pk-made-up-value" not in str(refused.value)

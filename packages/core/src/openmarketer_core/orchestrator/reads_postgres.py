@@ -35,6 +35,18 @@ from openmarketer_core.db.proposals import (
     list_proposals,
     pending_proposals_summary,
 )
+from openmarketer_core.db.research_runs import (
+    ResearchRun,
+    ResearchRunNotFound,
+    list_research_runs,
+)
+from openmarketer_core.db.research_store import (
+    ResearchReport,
+    ResearchReportNotFound,
+)
+from openmarketer_core.db.research_store import (
+    research_report as stored_research_report,
+)
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
     PROFILE_SECTIONS,
@@ -42,6 +54,8 @@ from openmarketer_core.orchestrator.reads import (
     ProfileReading,
     ProjectStatusReading,
     ProposalReading,
+    ResearchReportReading,
+    ResearchRunReading,
     RunReading,
     UnknownProfileSection,
 )
@@ -136,6 +150,38 @@ class PostgresChatReads:
         )
         return [_run(item) for item in page.items]
 
+    def recent_research(self, limit: int) -> Sequence[ResearchRunReading]:
+        page = list_research_runs(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            limit=limit,
+        )
+        return [_research_run(item) for item in page.items]
+
+    def research_report(self, run_id: uuid.UUID | None = None) -> ResearchReportReading | None:
+        if run_id is None:
+            runs = list_research_runs(
+                self.session,
+                workspace_id=self.workspace_id,
+                project_id=self.project_id,
+                limit=MAX_LISTED_RECORDS,
+            ).items
+            with_report = next((run for run in runs if run.report_id is not None), None)
+            if with_report is None:
+                return None
+            run_id = with_report.id
+        try:
+            stored = stored_research_report(
+                self.session,
+                workspace_id=self.workspace_id,
+                project_id=self.project_id,
+                run_id=run_id,
+            )
+        except (ResearchRunNotFound, ResearchReportNotFound):
+            return None
+        return _research_report(stored)
+
 
 def _profile(stored: ProfileVersion, section: str | None) -> ProfileReading:
     content = stored.profile.model_dump(mode="json")
@@ -174,4 +220,30 @@ def _run(run: AnalysisRun) -> RunReading:
         created_at=run.created_at,
         started_at=run.started_at,
         finished_at=run.finished_at,
+    )
+
+
+def _research_run(run: ResearchRun) -> ResearchRunReading:
+    return ResearchRunReading(
+        id=run.id,
+        status=run.status,
+        requested_by=run.requested_by,
+        error=run.error,
+        report_id=run.report_id,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+    )
+
+
+def _research_report(report: ResearchReport) -> ResearchReportReading:
+    return ResearchReportReading(
+        run_id=report.run_id,
+        requested_by=report.requested_by,
+        questions=report.questions,
+        findings=report.findings,
+        notes=report.notes,
+        cost_usd=report.cost_usd,
+        model=report.model,
+        created_at=report.created_at,
     )

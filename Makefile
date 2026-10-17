@@ -16,7 +16,7 @@ install: ## Install Python and web dependencies
 	uv sync
 	cd apps/web && pnpm install
 
-up: ## Start PostgreSQL, Temporal and object storage; tracing=1 adds Langfuse on http://localhost:3001
+up: ## Start PostgreSQL, Temporal, object storage, search and page rendering; tracing=1 adds Langfuse on http://localhost:3001
 	$(if $(filter 1,$(call given,tracing)),$(COMPOSE_ALL),$(COMPOSE)) up -d
 
 down: ## Stop the dev stack (data is kept)

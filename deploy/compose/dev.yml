@@ -104,6 +104,28 @@ services:
         done
         exit 1
 
+  # SearXNG: the researcher agent's web search, self-hosted and free: no third-party search
+  # API and no key. The JSON API is enabled by the settings mounted below; `SEARXNG_SECRET`
+  # signs its session state and is overwritten into the settings by the image.
+  searxng:
+    image: searxng/searxng:latest
+    environment:
+      SEARXNG_SECRET: openmarketer-dev-searxng-secret
+      SEARXNG_BASE_URL: http://localhost:${SEARXNG_PORT:-8888}/
+    volumes:
+      - ./searxng:/etc/searxng:ro
+    ports:
+      - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"
+
+  # Lightpanda: the headless browser the researcher renders JavaScript-heavy pages with.
+  # It speaks the Chrome DevTools Protocol on 9222; `--obey-robots` makes it honour
+  # robots.txt of every domain it fetches from.
+  lightpanda:
+    image: lightpanda/browser:nightly
+    command: ["lightpanda", "serve", "--obey-robots", "--host", "0.0.0.0", "--port", "9222"]
+    ports:
+      - "127.0.0.1:${LIGHTPANDA_PORT:-9222}:9222"
+
   # ---- profile `tracing`: a self-hosted Langfuse --------------------------------------------
 
   # One-shot: creates Langfuse's database in the stack's PostgreSQL, also on a volume made

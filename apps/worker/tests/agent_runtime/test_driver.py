@@ -7,7 +7,9 @@ what it needs through the ``runtime`` and ``serving`` fixtures of ``conftest.py`
 """
 
 import asyncio
+import uuid
 from dataclasses import replace
+from typing import Any
 
 import pytest
 from scripted_actions import (
@@ -39,17 +41,27 @@ from scripted_rig import (
     thread_of,
 )
 from temporalio.client import WorkflowFailureError
+from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import (
     ActivityError,
     ApplicationError,
     CancelledError,
+    ChildWorkflowError,
     RetryState,
     TimeoutError,
     TimeoutType,
+    WorkflowAlreadyStartedError,
 )
 from temporalio.worker import Worker
+from temporalio.workflow import ChildWorkflowCancellationType, ParentClosePolicy
 
-from openmarketer_core.agent_runtime.actions import ActionPolicy
+from openmarketer_core.agent_runtime.actions import (
+    ActionPolicy,
+    ActionRequest,
+    RunKind,
+    RunTarget,
+)
+from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import MissingInitialState, StepOutcome
 from openmarketer_worker.agent_runtime import driver, vocabulary
 from openmarketer_worker.agent_runtime.vocabulary import (
@@ -57,7 +69,11 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     MAX_ERROR_CHARACTERS,
     MAX_RESULT_BYTES,
     WORDED_BY_THE_RUNTIME,
+    PreparedRun,
 )
+
+# The name of the child the run actions of these tests start, as a target names it.
+CHILD_WORKFLOW = "GreetingChild"
 
 SECRET = "sk-live-4242-not-for-history"
 
@@ -500,3 +516,240 @@ async def test_step_that_holds_neither_an_output_nor_an_action_ends_the_run_for_
     with pytest.raises(ApplicationError) as refused:
         await driver.run_graph_with_actions(some_run(), actions=ALLOWED, policy=STEP_LIMITS)
     assert (refused.value.type, refused.value.non_retryable) == (vocabulary.STEP_REFUSED, True)
+
+
+# ------------------------------------------------------- actions that start another run
+SCOPE = RunScope(workspace_id=uuid.uuid4(), project_id=uuid.uuid4())
+
+
+def a_target(kind: RunKind) -> RunTarget:
+    return RunTarget(
+        workflow=CHILD_WORKFLOW,
+        task_queue="children-of-the-tests",
+        kind=kind,
+        longest_seconds=60,
+        input_of=lambda child: {"run_id": str(child.run_id), "name": child.payload["name"]},
+    )
+
+
+def a_run_action(name: str = "research") -> ActionRequest:
+    return ActionRequest(action_id=f"{thread_of(some_run())}:7", name=name, payload={"name": "Ada"})
+
+
+class FakeChildren:
+    """The child workflow functions of one test: what was started, and what the child answers.
+
+    Replacing ``driver.workflow`` with it: the driver reaches no other function of the engine
+    on this path.
+    """
+
+    def __init__(
+        self,
+        *,
+        result: Any = None,
+        failure: BaseException | None = None,
+        start_fails: BaseException | None = None,
+        cancellation: str | None = None,
+    ) -> None:
+        self.result = {"greeting": "hello, Ada"} if result is None else result
+        self.failure = failure
+        self.start_fails = start_fails
+        self.cancellation = cancellation
+        self.started: list[dict[str, Any]] = []
+        self.awaited: list[dict[str, Any]] = []
+
+    def cancellation_reason(self) -> str | None:
+        return self.cancellation
+
+    async def start_child_workflow(self, workflow_name, argument, **limits):
+        if self.start_fails is not None:
+            raise self.start_fails
+        self.started.append({"workflow": workflow_name, "argument": argument, **limits})
+
+    async def execute_child_workflow(self, workflow_name, argument, **limits):
+        self.awaited.append({"workflow": workflow_name, "argument": argument, **limits})
+        if self.start_fails is not None:
+            # An id that is taken fails the start, whether the caller then waits or not.
+            raise self.start_fails
+        if self.failure is not None:
+            raise self.failure
+        return self.result
+
+
+def a_child_failure(message: str) -> ChildWorkflowError:
+    return ChildWorkflowError(
+        message,
+        namespace="default",
+        workflow_id="child-1",
+        run_id="run-1",
+        workflow_type=CHILD_WORKFLOW,
+        initiated_event_id=1,
+        started_event_id=2,
+        retry_state=None,
+    )
+
+
+def a_failed_child() -> ChildWorkflowError:
+    return a_child_failure("the child's own words stay in its own history")
+
+
+def a_cancelled_child() -> ChildWorkflowError:
+    failure = a_child_failure("child workflow cancelled")
+    failure.__cause__ = CancelledError("the child was cancelled")
+    return failure
+
+
+def preparing(monkeypatch, run_id: uuid.UUID) -> None:
+    """Replace the record-creating activity of the driver with one that makes ``run_id``."""
+
+    async def database_write(step, argument, limits, *, not_retried, result_type=None):
+        return PreparedRun(run_id=run_id)
+
+    monkeypatch.setattr(driver, "database_write", database_write)
+
+
+def test_child_workflow_id_is_derived_from_the_run_and_the_action_and_from_nothing_else():
+    run = some_run()
+    first = driver.child_workflow_id(run, "a:1:2")
+    assert first == driver.child_workflow_id(run, "a:1:2")
+    assert first != driver.child_workflow_id(run, "a:1:3")
+    assert first != driver.child_workflow_id(some_run(), "a:1:2")
+    assert "a:1:2" in first
+
+
+async def test_a_run_waited_for_hands_the_child_its_input_and_gives_its_answer_back(
+    monkeypatch,
+):
+    run, run_id = some_run(), uuid.uuid4()
+    children = FakeChildren(result={"greeting": "hello, Ada", "child_run_id": "x"})
+    monkeypatch.setattr(driver, "workflow", children)
+    preparing(monkeypatch, run_id)
+    request = a_run_action()
+
+    outcome = await driver._start_or_wait_the_run(
+        run, SCOPE, request, a_target(RunKind.WAIT), WORDED_BY_THE_RUNTIME
+    )
+
+    assert outcome.succeeded is True
+    assert outcome.result == children.result
+    (awaited,) = children.awaited
+    assert awaited["workflow"] == CHILD_WORKFLOW
+    assert awaited["task_queue"] == "children-of-the-tests"
+    assert awaited["id"] == driver.child_workflow_id(run, request.action_id)
+    assert awaited["argument"] == {"run_id": str(run_id), "name": "Ada"}
+    assert awaited["id_reuse_policy"] is WorkflowIDReusePolicy.REJECT_DUPLICATE
+    assert awaited["cancellation_type"] is ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED
+    assert awaited["parent_close_policy"] is ParentClosePolicy.ABANDON
+
+
+async def test_a_run_that_is_started_is_answered_with_its_id_without_waiting(monkeypatch):
+    run_id = uuid.uuid4()
+    children = FakeChildren()
+    monkeypatch.setattr(driver, "workflow", children)
+    preparing(monkeypatch, run_id)
+    request = a_run_action()
+
+    outcome = await driver._start_or_wait_the_run(
+        some_run(), SCOPE, request, a_target(RunKind.START), WORDED_BY_THE_RUNTIME
+    )
+
+    assert (outcome.succeeded, outcome.result) == (True, {"run_id": str(run_id)})
+    assert children.awaited == []
+    (started,) = children.started
+    assert started["argument"] == {"run_id": str(run_id), "name": "Ada"}
+    assert started["cancellation_type"] is ChildWorkflowCancellationType.ABANDON
+    assert started["parent_close_policy"] is ParentClosePolicy.ABANDON
+
+
+async def test_a_child_that_did_not_finish_is_a_failed_outcome_in_fixed_words(monkeypatch):
+    children = FakeChildren(failure=a_failed_child())
+    monkeypatch.setattr(driver, "workflow", children)
+    preparing(monkeypatch, uuid.uuid4())
+
+    outcome = await driver._start_or_wait_the_run(
+        some_run(), SCOPE, a_run_action(), a_target(RunKind.WAIT), WORDED_BY_THE_RUNTIME
+    )
+
+    assert outcome.succeeded is False
+    assert outcome.error == vocabulary.CHILD_RUN_DID_NOT_FINISH
+
+
+async def test_a_child_cancelled_for_its_own_sake_is_a_failed_outcome(monkeypatch):
+    children = FakeChildren(failure=a_cancelled_child(), cancellation=None)
+    monkeypatch.setattr(driver, "workflow", children)
+    preparing(monkeypatch, uuid.uuid4())
+
+    outcome = await driver._start_or_wait_the_run(
+        some_run(), SCOPE, a_run_action(), a_target(RunKind.WAIT), WORDED_BY_THE_RUNTIME
+    )
+
+    assert outcome.succeeded is False
+    assert outcome.error == vocabulary.CHILD_RUN_DID_NOT_FINISH
+
+
+async def test_a_child_cancelled_with_a_cancelled_parent_cancels_the_run(monkeypatch):
+    children = FakeChildren(failure=a_cancelled_child(), cancellation="a person cancelled it")
+    monkeypatch.setattr(driver, "workflow", children)
+    preparing(monkeypatch, uuid.uuid4())
+
+    with pytest.raises(asyncio.CancelledError):
+        await driver._start_or_wait_the_run(
+            some_run(), SCOPE, a_run_action(), a_target(RunKind.WAIT), WORDED_BY_THE_RUNTIME
+        )
+
+
+async def test_a_child_whose_id_is_taken_is_known_to_a_waiting_action(monkeypatch):
+    children = FakeChildren(start_fails=WorkflowAlreadyStartedError("child-1", CHILD_WORKFLOW))
+    monkeypatch.setattr(driver, "workflow", children)
+    preparing(monkeypatch, uuid.uuid4())
+
+    outcome = await driver._start_or_wait_the_run(
+        some_run(), SCOPE, a_run_action(), a_target(RunKind.WAIT), WORDED_BY_THE_RUNTIME
+    )
+
+    assert outcome.succeeded is False
+    assert outcome.error == vocabulary.CHILD_RUN_ALREADY_STARTED
+
+
+async def test_a_started_run_whose_id_is_taken_counts_as_started(monkeypatch):
+    children = FakeChildren(start_fails=WorkflowAlreadyStartedError("child-1", CHILD_WORKFLOW))
+    monkeypatch.setattr(driver, "workflow", children)
+    run_id = uuid.uuid4()
+    preparing(monkeypatch, run_id)
+
+    outcome = await driver._start_or_wait_the_run(
+        some_run(), SCOPE, a_run_action(), a_target(RunKind.START), WORDED_BY_THE_RUNTIME
+    )
+
+    assert (outcome.succeeded, outcome.result) == (True, {"run_id": str(run_id)})
+
+
+async def test_a_child_that_reported_no_small_outcome_is_a_failed_outcome(monkeypatch):
+    children = FakeChildren(result="a sentence the child should not have answered with")
+    monkeypatch.setattr(driver, "workflow", children)
+    preparing(monkeypatch, uuid.uuid4())
+
+    outcome = await driver._start_or_wait_the_run(
+        some_run(), SCOPE, a_run_action(), a_target(RunKind.WAIT), WORDED_BY_THE_RUNTIME
+    )
+
+    assert outcome.succeeded is False
+    assert outcome.error == vocabulary.CHILD_RUN_UNREADABLE
+
+
+async def test_a_run_action_without_a_scope_is_refused_for_good(monkeypatch):
+    request = a_run_action()
+
+    async def take_step(step, policy):
+        return StepOutcome.waiting_for(request)
+
+    monkeypatch.setattr(driver, "_take_step", take_step)
+    with pytest.raises(ApplicationError) as refused:
+        await driver.run_graph_with_actions(
+            some_run(),
+            actions={"research": ALLOWED["send_email"]},
+            policy=STEP_LIMITS,
+            run_targets={"research": a_target(RunKind.WAIT)},
+            scope=None,
+        )
+    assert (refused.value.type, refused.value.non_retryable) == (vocabulary.RUN_REFUSED, True)

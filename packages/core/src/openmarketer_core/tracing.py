@@ -14,7 +14,9 @@ batches. Two kinds are made here:
   sets), so LangGraph reports each node, with the state it read and what it changed, and the
   graph adapters need no import of Langfuse. They name a run after its kind and give a step of
   a workflow's run its thread as its Langfuse session (``langgraph_steps.py``), so the steps of
-  one run are one session.
+  one run are one session. Work that may not descend from the context ``start_tracing`` ran in
+  is run under ``Tracing.traced`` instead (the API's chat turns), which sets the same handler
+  for the work's own context.
 - **A model call.** Ours go through ``llm.py`` and not through LangChain, so LangGraph cannot
   see them. ``TracedChatModel`` records each as a *generation* under the node that made it:
   its role, the messages and tools it was sent, the message it got back, the model, its
@@ -36,7 +38,8 @@ one. This is the only module that imports ``langfuse``; it decides nothing about
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
@@ -115,9 +118,15 @@ class TracingSettings:
 class Tracing:
     """The tracing of one process: off, or a Langfuse client and the handler of its graphs."""
 
-    def __init__(self, client: Langfuse | None, token: Token[BaseCallbackHandler | None] | None):
+    def __init__(
+        self,
+        client: Langfuse | None,
+        token: Token[BaseCallbackHandler | None] | None,
+        handler: BaseCallbackHandler | None = None,
+    ):
         self._client = client
         self._token = token
+        self._handler = handler
 
     @property
     def enabled(self) -> bool:
@@ -128,6 +137,23 @@ class Tracing:
         if self._client is None:
             return inner
         return TracedChatModel(inner, self._client)
+
+    @contextmanager
+    def traced(self) -> Iterator[None]:
+        """Run the graphs of this context traced, whatever context this runs in.
+
+        ``start_tracing`` sets the handler in the context it runs in and what descends from
+        it; a caller that cannot rely on descending (the API runs a chat turn in a worker
+        thread of its server) runs the work under this instead. Nothing when tracing is off.
+        """
+        if self._handler is None:
+            yield
+            return
+        token = _GRAPH_HANDLER.set(self._handler)
+        try:
+            yield
+        finally:
+            _GRAPH_HANDLER.reset(token)
 
     def flush(self) -> None:
         """Send what is queued; a failure to send is logged and never raised."""
@@ -170,8 +196,9 @@ def start_tracing(
         tracer_provider=TracerProvider(),
         span_exporter=span_exporter,
     )
-    token = _GRAPH_HANDLER.set(CallbackHandler(public_key=settings.public_key))
-    return Tracing(client, token)
+    handler = CallbackHandler(public_key=settings.public_key)
+    token = _GRAPH_HANDLER.set(handler)
+    return Tracing(client, token, handler)
 
 
 @dataclass(frozen=True)

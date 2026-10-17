@@ -920,6 +920,8 @@
           "not_local_request",
           "project_not_found",
           "analysis_not_found",
+          "research_not_found",
+          "research_report_not_found",
           "chat_not_found",
           "profile_not_found",
           "credential_not_found",
@@ -939,6 +941,7 @@
           "stored_setting_invalid",
           "internal_error",
           "analysis_not_started",
+          "research_not_started",
           "model_unavailable",
           "chat_unanswered",
           "database_unavailable"
@@ -1816,6 +1819,264 @@
         ],
         "title": "RejectedParametersResponse",
         "type": "object"
+      },
+      "ResearchReportResponse": {
+        "additionalProperties": false,
+        "description": "A finished run's report: its findings, each with the pages it rests on.",
+        "properties": {
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "notes": {
+            "description": "What the code dropped or worked around on the way.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "requested_by": {
+            "title": "Requested By",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "run_id",
+          "requested_by",
+          "questions",
+          "findings",
+          "notes",
+          "cost_usd",
+          "model",
+          "created_at"
+        ],
+        "title": "ResearchReportResponse",
+        "type": "object"
+      },
+      "ResearchRequest": {
+        "additionalProperties": false,
+        "description": "The questions one research run answers, and the scope it answers them in.",
+        "properties": {
+          "competitors": {
+            "items": {
+              "maxLength": 60,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Competitors",
+            "type": "array"
+          },
+          "max_sources": {
+            "default": 8,
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Max Sources",
+            "type": "integer"
+          },
+          "questions": {
+            "items": {
+              "maxLength": 300,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Questions",
+            "type": "array"
+          },
+          "time_window": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Time Window",
+            "type": "string"
+          },
+          "topics": {
+            "items": {
+              "maxLength": 60,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Topics",
+            "type": "array"
+          }
+        },
+        "required": [
+          "questions"
+        ],
+        "title": "ResearchRequest",
+        "type": "object"
+      },
+      "ResearchRunListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the last page; otherwise the `cursor` of the next request.",
+            "title": "Next Cursor"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/ResearchRunResponse"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "next_cursor"
+        ],
+        "title": "ResearchRunListResponse",
+        "type": "object"
+      },
+      "ResearchRunResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "requested_by": {
+            "description": "Who asked for the run: `person`, `orchestrator` (the chat) or `run`.",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResearchRunStatus"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "status",
+          "requested_by",
+          "created_at",
+          "started_at",
+          "finished_at",
+          "error",
+          "report_id"
+        ],
+        "title": "ResearchRunResponse",
+        "type": "object"
+      },
+      "ResearchRunStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed"
+        ],
+        "title": "ResearchRunStatus",
+        "type": "string"
       },
       "ResolvedModelResponse": {
         "additionalProperties": false,
@@ -3360,7 +3621,7 @@
         ]
       },
       "post": {
-        "description": "Answer one operator message in the chat, and store the exchange.\n\n201 with the stored question and answer. 409 `model_key_not_set`,\n`credential_unreadable` or `stored_setting_invalid` when the turn's model\ncannot be resolved. 503 `chat_unanswered` when the agent gave no answer\nwithin its limits and `model_unavailable` when the provider could not\nanswer; nothing is stored then, and sending the message again starts the\nturn again.",
+        "description": "Answer one operator message in the chat, and store the exchange.\n\n201 with the stored question and answer. 409 `model_key_not_set`,\n`credential_unreadable` or `stored_setting_invalid` when the turn's model\ncannot be resolved. 503 `chat_unanswered` when the agent gave no answer\nwithin its limits and `model_unavailable` when the provider could not\nanswer; nothing is stored then, and sending the message again starts the\nturn again. A turn may start a research run when the operator asks for\nresearch (the request action `start_research`), and says so in the answer;\na run whose workflow could not be started is recorded as failed and the\nanswer says it could not be started.",
         "operationId": "sendChatMessage",
         "parameters": [
           {
@@ -4448,6 +4709,356 @@
         "summary": "Reject",
         "tags": [
           "proposals"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/researches": {
+      "get": {
+        "description": "The project's research runs as they are now, newest first, one page at a time.",
+        "operationId": "listResearches",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The most items one response may hold.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most items one response may hold.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+              "maxLength": 200,
+              "title": "Cursor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List All",
+        "tags": [
+          "research"
+        ]
+      },
+      "post": {
+        "description": "Queue a research run for the questions and return the run to poll.\n\nA worker executes it later; a project may have several runs at once. 503\n`research_not_started` when the run could not be handed to a worker: it is\nthen stored as failed and a new one can be started.",
+        "operationId": "startResearch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Start",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/researches/{run_id}": {
+      "get": {
+        "description": "The run as it is now: queued, running, succeeded (with the report) or failed.",
+        "operationId": "getResearch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/researches/{run_id}/report": {
+      "get": {
+        "description": "The report of a run that succeeded, with the evidence of every finding.\n\n404 `research_report_not_found` while the run has no report: it is\nunfinished or it failed.",
+        "operationId": "getResearchReport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Report",
+        "tags": [
+          "research"
         ]
       }
     },

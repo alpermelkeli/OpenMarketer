@@ -47,11 +47,14 @@ from openmarketer_core.db.project_removal import (
 )
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.proposals import ProposalNotFound, ProposalNotPending
+from openmarketer_core.db.research_runs import ResearchRunNotFound
+from openmarketer_core.db.research_store import ResearchReportNotFound
 from openmarketer_core.db.session import DatabaseError
 from openmarketer_core.llm import LLMError
 from openmarketer_core.orchestrator.chat_agent.rules import ChatTurnError
 from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.request import AnalysisNotStarted
+from openmarketer_core.research.request import ResearchNotStarted
 from openmarketer_core.workspace_settings.analysis_limits import AnalysisLimitsRefused
 from openmarketer_core.workspace_settings.model_choices import ModelChoiceRefused
 from openmarketer_core.workspace_settings.model_settings import (
@@ -69,6 +72,8 @@ class ErrorCode(StrEnum):
     NOT_LOCAL_REQUEST = "not_local_request"
     PROJECT_NOT_FOUND = "project_not_found"
     ANALYSIS_NOT_FOUND = "analysis_not_found"
+    RESEARCH_NOT_FOUND = "research_not_found"
+    RESEARCH_REPORT_NOT_FOUND = "research_report_not_found"
     CHAT_NOT_FOUND = "chat_not_found"
     PROFILE_NOT_FOUND = "profile_not_found"
     CREDENTIAL_NOT_FOUND = "credential_not_found"
@@ -88,6 +93,7 @@ class ErrorCode(StrEnum):
     STORED_SETTING_INVALID = "stored_setting_invalid"
     INTERNAL_ERROR = "internal_error"
     ANALYSIS_NOT_STARTED = "analysis_not_started"
+    RESEARCH_NOT_STARTED = "research_not_started"
     MODEL_UNAVAILABLE = "model_unavailable"
     CHAT_UNANSWERED = "chat_unanswered"
     DATABASE_UNAVAILABLE = "database_unavailable"
@@ -119,6 +125,8 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     NotLocalRequest: (403, ErrorCode.NOT_LOCAL_REQUEST),
     ProjectNotFound: (404, ErrorCode.PROJECT_NOT_FOUND),
     AnalysisRunNotFound: (404, ErrorCode.ANALYSIS_NOT_FOUND),
+    ResearchRunNotFound: (404, ErrorCode.RESEARCH_NOT_FOUND),
+    ResearchReportNotFound: (404, ErrorCode.RESEARCH_REPORT_NOT_FOUND),
     ChatNotFound: (404, ErrorCode.CHAT_NOT_FOUND),
     ProfileVersionNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
     ProfileNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
@@ -138,6 +146,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ModelKeyNotSet: (409, ErrorCode.MODEL_KEY_NOT_SET),
     StoredModelChoiceInvalid: (409, ErrorCode.STORED_SETTING_INVALID),
     AnalysisNotStarted: (503, ErrorCode.ANALYSIS_NOT_STARTED),
+    ResearchNotStarted: (503, ErrorCode.RESEARCH_NOT_STARTED),
     LLMError: (503, ErrorCode.MODEL_UNAVAILABLE),
 }
 

@@ -13,20 +13,30 @@ import pytest
 from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.agent_runtime.langgraph_agent import compile_agent
-from openmarketer_core.db.models import AnalysisRunStatus, ProfileStatus, ProjectStatus
+from openmarketer_core.db.models import (
+    AnalysisRunStatus,
+    ProfileStatus,
+    ProjectStatus,
+    ResearchRunStatus,
+)
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContext, agent
-from openmarketer_core.orchestrator.chat_agent.graph import FORCE_SUBMIT, answer_message
+from openmarketer_core.orchestrator.chat_agent.graph import answer_message
 from openmarketer_core.orchestrator.chat_agent.rules import (
     SUBMIT,
     ChatLimits,
     ChatTurnError,
+    is_wrapping_up,
     submit_schema,
+    wrap_up_tool_schemas,
 )
 from openmarketer_core.orchestrator.chat_agent.tools import (
+    list_analysis_runs,
     list_pending_proposals,
-    list_runs,
+    list_research_runs,
     read_profile,
+    read_research_report,
+    start_research,
 )
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
@@ -35,13 +45,18 @@ from openmarketer_core.orchestrator.reads import (
     ProfileReading,
     ProjectStatusReading,
     ProposalReading,
+    ResearchReportReading,
+    ResearchRunReading,
     RunReading,
     UnknownProfileSection,
 )
+from openmarketer_core.orchestrator.requests import ResearchNotStarted
+from openmarketer_core.research.questions import ResearchRequest
 
 PROJECT_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
 PROPOSAL_ID = uuid.UUID("00000000-0000-4000-8000-000000000003")
+RESEARCH_RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000004")
 
 
 def call(name: str, **arguments) -> dict:
@@ -62,7 +77,12 @@ class ScriptedModel:
 
     def chat(self, role, messages, *, tools=None, tool_choice=None):
         self.requests.append(
-            {"role": role, "messages": [dict(m) for m in messages], "tool_choice": tool_choice}
+            {
+                "role": role,
+                "messages": [dict(m) for m in messages],
+                "tools": tools,
+                "tool_choice": tool_choice,
+            }
         )
         turn = self.turns.pop(0) if self.turns else [call("get_project_status")]
         if isinstance(turn, Exception):
@@ -92,6 +112,8 @@ class FakeReads:
         self.proposal_calls: list[uuid.UUID] = []
         self.run_calls: list[uuid.UUID] = []
         self.run_limits: list[int] = []
+        self.research_limits: list[int] = []
+        self.report_calls: list[uuid.UUID | None] = []
 
     def project_status(self) -> ProjectStatusReading:
         self.status_calls += 1
@@ -150,6 +172,16 @@ class FakeReads:
         self.run_limits.append(limit)
         return [] if self.empty else [self._run()]
 
+    def recent_research(self, limit: int) -> list[ResearchRunReading]:
+        self.research_limits.append(limit)
+        return [] if self.empty else [self._research_run()]
+
+    def research_report(self, run_id: uuid.UUID | None = None) -> ResearchReportReading | None:
+        self.report_calls.append(run_id)
+        if self.empty or (run_id is not None and run_id != RESEARCH_RUN_ID):
+            return None
+        return self._research_report()
+
     def _content(self, section: str | None) -> object | None:
         if section is None:
             return None
@@ -184,10 +216,80 @@ class FakeReads:
             decided_at=None,
         )
 
+    def _research_run(self) -> ResearchRunReading:
+        now = datetime.now(UTC)
+        return ResearchRunReading(
+            id=RESEARCH_RUN_ID,
+            status=ResearchRunStatus.SUCCEEDED,
+            requested_by="person",
+            error=None,
+            report_id=PROPOSAL_ID,
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+        )
+
+    def _research_report(self) -> ResearchReportReading:
+        return ResearchReportReading(
+            run_id=RESEARCH_RUN_ID,
+            requested_by="person",
+            questions=["What did competitors post last month?"],
+            findings=[
+                {
+                    "question_index": 0,
+                    "statement": "A competitor shipped a dark mode.",
+                    "confidence": 0.8,
+                    "flagged": False,
+                    "sources": [
+                        {"page_id": str(RUN_ID), "url": "https://example.com/a", "quotes": []}
+                    ],
+                }
+            ],
+            notes=[],
+            cost_usd=0.12,
+            model="fake/model",
+            created_at=datetime.now(UTC),
+        )
+
 
 @pytest.fixture
 def reads() -> FakeReads:
     return FakeReads()
+
+
+class FakeRequests:
+    """The turn's caller, recorded: what it was asked to start, and what it answers.
+
+    ``fails`` makes it refuse the way the port may (``ResearchNotStarted``); the request is
+    recorded either way, so a test can tell a refusal that reached the caller from one that
+    never did.
+    """
+
+    def __init__(self, *, fails: Exception | None = None) -> None:
+        self.fails = fails
+        self.started: list[ResearchRequest] = []
+
+    def start_research(self, request: ResearchRequest) -> ResearchRunReading:
+        self.started.append(request)
+        if self.fails is not None:
+            raise self.fails
+        now = datetime.now(UTC)
+        return ResearchRunReading(
+            id=RESEARCH_RUN_ID,
+            status=ResearchRunStatus.QUEUED,
+            requested_by="orchestrator",
+            error=None,
+            report_id=None,
+            created_at=now,
+            started_at=None,
+            finished_at=None,
+        )
+
+
+def a_context(reads: FakeReads, requests: FakeRequests | None) -> ChatTurnContext:
+    return ChatTurnContext(
+        model=ScriptedModel(), reads=reads, limits=ChatLimits(), requests=requests
+    )
 
 
 def history() -> list[dict]:
@@ -262,7 +364,9 @@ def test_unknown_tool_is_reported_back(reads):
 
 
 def test_bad_tool_arguments_are_reported_back(reads):
-    model = ScriptedModel([call("get_run", run_id="not-an-id")], [call(SUBMIT, answer="ok")])
+    model = ScriptedModel(
+        [call("get_analysis_run", run_id="not-an-id")], [call(SUBMIT, answer="ok")]
+    )
     answer_message(reads, model, history())
     result = model.tool_results()[0]
     assert result.startswith("error:")
@@ -271,7 +375,11 @@ def test_bad_tool_arguments_are_reported_back(reads):
 
 
 def test_unparseable_arguments_are_reported_back(reads):
-    broken = {"id": "c1", "type": "function", "function": {"name": "get_run", "arguments": "{"}}
+    broken = {
+        "id": "c1",
+        "type": "function",
+        "function": {"name": "get_analysis_run", "arguments": "{"},
+    }
     model = ScriptedModel([broken], [call(SUBMIT, answer="ok")])
     answer_message(reads, model, history())
     assert model.tool_results()[0].startswith("error: could not parse the arguments")
@@ -291,16 +399,25 @@ def test_missing_answer_on_the_last_chance_fails(reads):
         answer_message(reads, model, history(), limits=ChatLimits(max_model_calls=2))
 
 
-def test_forced_to_answer_when_the_model_calls_run_out(reads):
+def test_the_turn_fails_when_the_model_never_answers(reads):
     model = ScriptedModel()  # only ever reads the status
     with pytest.raises(ChatTurnError, match="no answer after 4 model calls"):
         answer_message(reads, model, history(), limits=ChatLimits(max_model_calls=4))
-    choices = [r["tool_choice"] for r in model.requests]
-    assert choices == [None, None, FORCE_SUBMIT, FORCE_SUBMIT]
-    wrap_up = [
+    reading = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
+    wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
+    assert "read_profile" in reading
+    assert wrap_up == ["start_research", SUBMIT]
+    messages = [
         m for m in model.requests[-1]["messages"] if "You are out of reading budget" in str(m)
     ]
-    assert len(wrap_up) == 1
+    assert len(messages) == 1
+
+
+def test_request_actions_do_not_count_against_the_reading_budget():
+    limits = ChatLimits()
+    assert not is_wrapping_up(1, 0.0, ["start_research"] * limits.max_tool_calls, limits)
+    assert not is_wrapping_up(1, 0.0, ["get_project_status"] * 5, limits)
+    assert is_wrapping_up(1, 0.0, ["get_project_status"] * 6, limits)
 
 
 def test_cost_limit_stops_the_turn(reads):
@@ -308,7 +425,8 @@ def test_cost_limit_stops_the_turn(reads):
     with pytest.raises(ChatTurnError, match="cost limit reached"):
         answer_message(reads, model, history(), limits=ChatLimits(max_cost_usd=0.5))
     assert len(model.requests) == 3
-    assert model.requests[-1]["tool_choice"] is not None
+    wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
+    assert wrap_up == ["start_research", SUBMIT]
 
 
 # ------------------------------------------------------------------- tools
@@ -325,10 +443,164 @@ def test_read_profile_passes_the_section_and_refuses_an_unknown_one(reads):
     assert all(section in second for section in PROFILE_SECTIONS)
 
 
-def test_list_runs_bounds_the_limit(reads):
-    model = ScriptedModel([call("list_runs", limit=100)], [call(SUBMIT, answer="ok")])
+def test_list_analysis_runs_bounds_the_limit(reads):
+    model = ScriptedModel([call("list_analysis_runs", limit=100)], [call(SUBMIT, answer="ok")])
     answer_message(reads, model, history())
     assert reads.run_limits == [MAX_LISTED_RECORDS]
+
+
+def test_list_research_runs_bounds_the_limit(reads):
+    model = ScriptedModel([call("list_research_runs", limit=100)], [call(SUBMIT, answer="ok")])
+    answer_message(reads, model, history())
+    assert reads.research_limits == [MAX_LISTED_RECORDS]
+
+
+def test_read_research_report_passes_the_run_and_can_default_to_the_latest(reads):
+    model = ScriptedModel(
+        [call("read_research_report", run_id=str(RESEARCH_RUN_ID))],
+        [call("read_research_report")],
+        [call(SUBMIT, answer="ok")],
+    )
+    answer_message(reads, model, history())
+    assert reads.report_calls == [RESEARCH_RUN_ID, None]
+    first, second = model.tool_results()
+    assert json.loads(first)["findings"][0]["statement"].startswith("A competitor")
+    assert json.loads(second)["run_id"] == str(RESEARCH_RUN_ID)
+
+
+def test_read_research_report_refuses_a_non_uuid(reads):
+    model = ScriptedModel(
+        [call("read_research_report", run_id="not-an-id")], [call(SUBMIT, answer="ok")]
+    )
+    answer_message(reads, model, history())
+    assert reads.report_calls == []
+    assert model.tool_results()[0].startswith("error:")
+
+
+def test_read_research_report_without_a_report_says_so():
+    context = ChatTurnContext(
+        model=ScriptedModel(), reads=FakeReads(empty=True), limits=ChatLimits()
+    )
+    assert read_research_report(context) == "No research run of this project has a report yet."
+    assert list_research_runs(context) == "The project has no research runs."
+    assert read_research_report(context, run_id=str(RESEARCH_RUN_ID)).startswith("error:")
+
+
+# ---------------------------------------------------------- the request action
+def test_start_research_asks_the_caller_for_the_exact_request():
+    requests = FakeRequests()
+    context = a_context(FakeReads(), requests)
+
+    answer = start_research(
+        context,
+        questions=["What did competitors post last month?"],
+        topics=["social"],
+        competitors=["Acme"],
+        time_window="last month",
+        max_sources=4,
+    )
+
+    [request] = requests.started
+    assert request == ResearchRequest(
+        questions=["What did competitors post last month?"],
+        topics=["social"],
+        competitors=["Acme"],
+        time_window="last month",
+        max_sources=4,
+    )
+    body = json.loads(answer)
+    assert body["run_id"] == str(RESEARCH_RUN_ID)
+    assert body["status"] == "queued"
+
+
+def test_start_research_reads_only_the_questions_the_rest_have_defaults():
+    requests = FakeRequests()
+    context = a_context(FakeReads(), requests)
+
+    start_research(context, questions=["Is it live?"])
+
+    [request] = requests.started
+    assert (request.topics, request.competitors, request.time_window) == ([], [], "")
+    assert request.max_sources == 8
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"questions": []},
+        {"questions": ["x" * 400]},
+        {"questions": ["ok"], "topics": ["t"] * 6},
+        {"questions": ["ok"], "time_window": "w" * 41},
+        {"questions": ["ok"], "max_sources": 0},
+        {"questions": ["ok"], "max_sources": 13},
+    ],
+    ids=["no-questions", "question-too-long", "too-many-topics", "window-too-long", "none", "many"],
+)
+def test_start_research_refuses_what_does_not_fit_without_reaching_the_caller(arguments):
+    requests = FakeRequests()
+    context = a_context(FakeReads(), requests)
+
+    answer = start_research(context, **arguments)
+
+    assert answer.startswith("error:")
+    assert requests.started == []
+    # The refusal names the fields at fault and never a value the model wrote.
+    assert "x" * 10 not in answer
+    assert "w" * 10 not in answer
+
+
+def test_start_research_without_a_caller_says_starting_runs_is_not_available():
+    context = a_context(FakeReads(), None)
+
+    assert start_research(context, questions=["Is it live?"]) == (
+        "error: starting a research run is not available here"
+    )
+
+
+def test_a_run_that_could_not_be_started_is_an_error_the_turn_reads_not_a_failed_turn():
+    refused = ResearchNotStarted("the research could not be handed to a worker")
+    context = a_context(FakeReads(), FakeRequests(fails=refused))
+    model = ScriptedModel(
+        [call("start_research", questions=["Is it live?"])],
+        [call(SUBMIT, answer="I could not start it.")],
+    )
+
+    turn = answer_message(FakeReads(), model, history(), requests=context.requests)
+
+    assert turn.answer == "I could not start it."
+    assert model.tool_results()[0] == ("error: the research could not be handed to a worker")
+
+
+def test_a_turn_can_start_a_research_run_and_says_its_id(reads):
+    requests = FakeRequests()
+    model = ScriptedModel(
+        [call("start_research", questions=["Is it live?"])],
+        [call(SUBMIT, answer=f"Started run {RESEARCH_RUN_ID}.")],
+    )
+
+    turn = answer_message(reads, model, history(), requests=requests)
+
+    [request] = requests.started
+    assert request.questions == ["Is it live?"]
+    assert turn.answer == f"Started run {RESEARCH_RUN_ID}."
+    assert json.loads(model.tool_results()[0])["run_id"] == str(RESEARCH_RUN_ID)
+
+
+def test_a_spent_reading_budget_still_lets_the_turn_start_research(reads):
+    requests = FakeRequests()
+    model = ScriptedModel(
+        [call("get_project_status") for _ in range(6)],
+        [call("start_research", questions=["Is it live?"])],
+        [call(SUBMIT, answer="Started it.")],
+    )
+
+    turn = answer_message(reads, model, history(), requests=requests)
+
+    assert [request.questions for request in requests.started] == [["Is it live?"]]
+    assert turn.answer == "Started it."
+    assert any("out of reading budget" in str(m) for m in model.requests[1]["messages"])
+    wrap_up = [schema["function"]["name"] for schema in model.requests[1]["tools"]]
+    assert wrap_up == ["start_research", SUBMIT]
 
 
 def test_empty_readings_are_plain_sentences():
@@ -336,19 +608,22 @@ def test_empty_readings_are_plain_sentences():
         model=ScriptedModel(), reads=FakeReads(empty=True), limits=ChatLimits()
     )
     assert list_pending_proposals(context) == "No proposals wait for a person."
-    assert list_runs(context) == "The project has no analysis runs."
+    assert list_analysis_runs(context) == "The project has no analysis runs."
     assert read_profile(context) == "The project has no Product Profile yet."
 
 
-def test_tool_schemas_are_the_reads_plus_the_submission():
+def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
     schemas = agent.tool_schemas()
     assert [schema["function"]["name"] for schema in schemas] == [
         "get_project_status",
         "read_profile",
         "list_pending_proposals",
         "explain_proposal",
-        "get_run",
-        "list_runs",
+        "get_analysis_run",
+        "list_analysis_runs",
+        "list_research_runs",
+        "read_research_report",
+        "start_research",
     ]
     assert submit_schema()["function"]["name"] == SUBMIT
     by_name = {schema["function"]["name"]: schema for schema in schemas}
@@ -356,6 +631,20 @@ def test_tool_schemas_are_the_reads_plus_the_submission():
     assert "section" in parameters["properties"]
     assert not parameters.get("required")
     assert not by_name["get_project_status"]["function"]["parameters"].get("properties")
+    started = by_name["start_research"]["function"]["parameters"]
+    assert list(started["properties"]) == [
+        "questions",
+        "topics",
+        "competitors",
+        "time_window",
+        "max_sources",
+    ]
+    assert started["required"] == ["questions"]
+
+
+def test_the_wrap_up_offers_the_request_action_and_the_submission_only():
+    names = [schema["function"]["name"] for schema in wrap_up_tool_schemas(agent)]
+    assert names == ["start_research", SUBMIT]
 
 
 # ------------------------------------------------------------------- graph

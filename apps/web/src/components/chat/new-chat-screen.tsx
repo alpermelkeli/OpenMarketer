@@ -113,8 +113,8 @@ export function NewChatScreen({ projectId }: { projectId: string }) {
       </ul>
 
       <p className="mx-auto max-w-prose text-center text-xs text-pretty text-muted-foreground">
-        The orchestrator answers from the project&rsquo;s stored records: its profile, analyses and proposals. It
-        changes nothing, and nothing is published until you approve it.
+        The orchestrator answers from the project&rsquo;s stored records, its profile, analyses and proposals, and can
+        start a research run. Nothing is published until you approve it.
       </p>
     </section>
   );

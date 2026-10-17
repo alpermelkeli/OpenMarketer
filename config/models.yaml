@@ -87,7 +87,7 @@ roles:
   reader:                        # quarantined reader: classifies untrusted comments, DMs, web text
     tier: fast
     temperature: 0.0
-    max_tokens: 1024
+    max_tokens: 3072               # room for a reading at the schema's own bounds plus a thinking model's reasoning
     requires: [structured_output]   # NO tools by design
 
   # --- planning and creating ------------------------------------------
