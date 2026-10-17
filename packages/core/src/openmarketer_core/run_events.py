@@ -59,6 +59,16 @@ SYNTHESIZED = "synthesized"  # {findings, round}
 FINISHED = "finished"  # {findings}
 FAILED = "failed"  # {reason}
 
+# ------------------------------------------------------------ studio run
+BRIEFED = "briefed"  # {technique}
+PRODUCED = "produced"  # {operation, version_id, technique, round, ok}
+CHECKED = "checked"  # {version_id, passed, failures}
+VERIFIED = "verified"  # {version_id, passed, failed}
+TECHNIQUE_SWITCHED = "technique_switched"  # {from_technique, to_technique, round}
+EDIT_PLANNED = "edit_planned"  # {round, steps}
+FINALIZED = "finalized"  # {version_id, round}
+ESCALATED = "escalated"  # {version_id, reason}
+
 
 class InvalidRunEvent(ValueError):
     """An event that code built wrongly: a bad kind or key, too many keys, or a non-JSON value."""

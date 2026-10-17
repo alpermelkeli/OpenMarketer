@@ -90,6 +90,7 @@ class MediaAssetStatus(StrEnum):
 
 class AssetTechnique(StrEnum):
     GENERATED = "generated"  # the image model made the whole image, its words included
+    HTML_REFERENCE = "html_reference"  # a layout rendered from HTML, given to the image model
     BACKGROUND_OVERLAY = "background_overlay"  # a generated background, words laid over in code
     COMPOSED = "composed"  # made in code in the sandbox, without a generated image
 
