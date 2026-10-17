@@ -40,10 +40,14 @@ from openmarketer_core.db.models import (
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.research_runs import ResearchRunNotFound, request_research_run
 from openmarketer_core.db.run_events import StoredRunEvent, events_of_chat
+from openmarketer_core.db.studio_runs import StudioRunNotFound, request_studio_run
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.run_events import TURN_FAILED, TURN_STARTED
+from openmarketer_core.studio.platforms import Platform
+from openmarketer_core.studio.requests import AssetRequest
 
 REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
+ASSET_REQUEST = AssetRequest(goal="Announce the launch", platform=Platform.X_POST)
 
 
 def new_scope(session: Session) -> RunScope:
@@ -93,6 +97,26 @@ def follow_up(session: Session, scope: RunScope, chat_id: uuid.UUID, run_id: uui
         **ids(scope, chat_id),
         trigger=ChatTurnTrigger.RESEARCH_FINISHED,
         research_run_id=run_id,
+    )
+
+
+def studio_run_of(session: Session, scope: RunScope, chat_id: uuid.UUID | None) -> uuid.UUID:
+    return request_studio_run(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        request=ASSET_REQUEST,
+        requested_by="orchestrator",
+        chat_thread_id=chat_id,
+    ).id
+
+
+def studio_follow_up(session: Session, scope: RunScope, chat_id: uuid.UUID, run_id: uuid.UUID):
+    return start_turn(
+        session,
+        **ids(scope, chat_id),
+        trigger=ChatTurnTrigger.STUDIO_FINISHED,
+        studio_run_id=run_id,
     )
 
 
@@ -269,6 +293,8 @@ def test_the_database_holds_one_running_turn_per_chat(session, scope, chat_id):
     ("columns", "constraint"),
     [
         ({"trigger": ChatTurnTrigger.RESEARCH_FINISHED}, "ck_chat_turn_research_run_id"),
+        ({"trigger": ChatTurnTrigger.STUDIO_FINISHED}, "ck_chat_turn_studio_run_id"),
+        ({"studio_run_id": uuid.uuid4()}, "ck_chat_turn_studio_run_id"),
         ({"status": ChatTurnStatus.FAILED, "finished_at": func.now()}, "ck_chat_turn_error"),
         ({"status": ChatTurnStatus.ANSWERED}, "ck_chat_turn_finished_at"),
         ({"error": "why"}, "ck_chat_turn_error"),
@@ -323,6 +349,68 @@ def test_a_research_run_is_named_only_for_a_follow_up(session, scope, chat_id):
         )
     with pytest.raises(ValueError):
         start_turn(session, **ids(scope, chat_id), trigger=ChatTurnTrigger.RESEARCH_FINISHED)
+
+
+def test_a_follow_up_names_the_studio_run_it_is_about(session, scope, chat_id):
+    run_id = studio_run_of(session, scope, chat_id)
+
+    turn = studio_follow_up(session, scope, chat_id, run_id)
+
+    assert turn.trigger is ChatTurnTrigger.STUDIO_FINISHED
+    assert (turn.studio_run_id, turn.research_run_id) == (run_id, None)
+
+
+def test_a_follow_up_about_a_studio_run_another_chat_asked_for_is_refused(session, scope, chat_id):
+    other = create_chat(session, workspace_id=scope.workspace_id, project_id=scope.project_id)
+    run_id = studio_run_of(session, scope, other.id)
+
+    with pytest.raises(StudioRunNotFound):
+        studio_follow_up(session, scope, chat_id, run_id)
+
+
+def test_a_studio_run_is_named_only_for_its_follow_up(session, scope, chat_id):
+    run_id = studio_run_of(session, scope, chat_id)
+
+    with pytest.raises(ValueError):
+        start_turn(
+            session,
+            **ids(scope, chat_id),
+            trigger=ChatTurnTrigger.RESEARCH_FINISHED,
+            studio_run_id=run_id,
+        )
+    with pytest.raises(ValueError):
+        start_turn(session, **ids(scope, chat_id), trigger=ChatTurnTrigger.STUDIO_FINISHED)
+
+
+def test_a_studio_run_a_turn_has_answered_about_is_not_followed_up_again(session, scope, chat_id):
+    run_id = studio_run_of(session, scope, chat_id)
+    turn = studio_follow_up(session, scope, chat_id, run_id)
+    finish_turn(session, **ids(scope, chat_id), turn_id=turn.id)
+
+    with pytest.raises(FollowUpAnswered):
+        studio_follow_up(session, scope, chat_id, run_id)
+
+
+def test_a_studio_follow_up_that_never_got_to_a_turn_is_recorded_as_one_that_failed(
+    session, scope, chat_id
+):
+    run_id = studio_run_of(session, scope, chat_id)
+
+    recorded = record_unstarted_follow_up(
+        session, **ids(scope, chat_id), studio_run_id=run_id, error="It could not start."
+    )
+
+    assert recorded is not None
+    assert recorded.studio_run_id == run_id
+    assert [(e.kind, e.detail) for e in chat_events(session, scope, chat_id)][0] == (
+        TURN_STARTED,
+        {"trigger": "studio_finished"},
+    )
+
+
+def test_an_unstarted_follow_up_is_about_exactly_one_run(session, scope, chat_id):
+    with pytest.raises(ValueError):
+        record_unstarted_follow_up(session, **ids(scope, chat_id), error="Neither.")
 
 
 def test_a_run_a_turn_has_answered_about_is_not_followed_up_again(session, scope, chat_id):

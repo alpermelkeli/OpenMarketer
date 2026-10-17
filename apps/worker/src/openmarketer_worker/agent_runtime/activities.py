@@ -36,7 +36,10 @@ checked after the handler ran, so a retry would run it again.
 An action the policy gate holds for a person (``held_actions``) runs only when ``is_approved``
 says a person approved that very action: the workflow waits for the approval before it asks for
 the action, and this is the check that holds when a workflow did not (``ACTION_NOT_APPROVED``,
-which ends the run).
+which ends the run). An action that spends (``spending_actions``) runs only when
+``is_cleared_to_spend`` says the creative budget holds a reservation for it, approved by a
+person if the budget asked for one (``spend_activities.SpendActivities.is_cleared``), with the
+same failure.
 
 Activities run at least once. A step is safe to run again: an outcome that an
 earlier attempt applied is not applied twice (``GraphThread.advance``). An
@@ -166,6 +169,8 @@ class RuntimeActivities:
         on_run_end: Callable[[GraphRunRef], None] | None = None,
         held_actions: Collection[str] = (),
         is_approved: Callable[[str], bool] | None = None,
+        spending_actions: Collection[str] = (),
+        is_cleared_to_spend: Callable[[str], bool] | None = None,
         run_routes: RunRoutes | None = None,
     ) -> None:
         """The activities of the agent whose runs are of ``kind``, in its ``texts``.
@@ -174,15 +179,21 @@ class RuntimeActivities:
         errors say what its own texts say. ``on_run_end`` is called with each run that is
         forgotten. ``held_actions`` are the names of the actions the gate holds for a person,
         and ``is_approved`` says, blocking, whether a person approved an action by its id.
+        ``spending_actions`` are the names of the actions that spend, and ``is_cleared_to_spend``
+        says, blocking, whether the creative budget let an action's spend through, by its id.
         ``run_routes`` are the actions that start another agent's run, with the callable that
         creates each child run's record; without them a request for such an action is refused.
-        Raises ``ValueError`` for a ``kind`` that cannot name a thread, and for held actions
-        with no way to check an approval.
+        Raises ``ValueError`` for a ``kind`` that cannot name a thread, for held actions with no
+        way to check an approval, and for actions that spend with no way to check the budget.
         """
         validate_kind(kind)
         if held_actions and is_approved is None:
             raise ValueError(
                 f"agent {kind!r} has actions that wait for a person and no way to check approvals"
+            )
+        if spending_actions and is_cleared_to_spend is None:
+            raise ValueError(
+                f"agent {kind!r} has actions that spend and no way to check the creative budget"
             )
         self._checkpoints = checkpoints
         self._graph = graph
@@ -192,6 +203,8 @@ class RuntimeActivities:
         self._on_run_end = on_run_end
         self._held_actions = frozenset(held_actions)
         self._is_approved = is_approved
+        self._spending_actions = frozenset(spending_actions)
+        self._is_cleared_to_spend = is_cleared_to_spend
         self._run_routes = run_routes if run_routes is not None else RunRoutes(())
 
     @activity.defn(name=RUN_GRAPH_STEP)
@@ -223,6 +236,8 @@ class RuntimeActivities:
             payload = self._validated(self._routes.catalog, request, subject)
             if request.name in self._held_actions:
                 await self._require_approval(request, subject)
+            if request.name in self._spending_actions:
+                await self._require_a_cleared_spend(request, subject)
             route = self._routes.route(request.name)
             result = await self._run_handler(
                 route, payload, ActionContext(request.action_id), subject
@@ -304,6 +319,18 @@ class RuntimeActivities:
         logger.warning("%s was refused: a person has not approved it", subject)
         raise ApplicationError(
             f"action {request.name} was not approved by a person",
+            type=ACTION_NOT_APPROVED,
+            non_retryable=True,
+        )
+
+    async def _require_a_cleared_spend(self, request: ActionRequest, subject: str) -> None:
+        is_cleared = self._is_cleared_to_spend
+        if is_cleared is not None and await asyncio.to_thread(is_cleared, request.action_id):
+            return
+        logger.warning("%s was refused: the creative budget did not let its spend through", subject)
+        raise ApplicationError(
+            f"action {request.name} spends and the creative budget holds no spend of it "
+            "that may run",
             type=ACTION_NOT_APPROVED,
             non_retryable=True,
         )

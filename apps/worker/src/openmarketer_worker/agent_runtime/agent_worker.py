@@ -11,6 +11,9 @@ and the limits it runs under). ``AgentWorker`` is where it says what runs each o
     @worker.prepare_run(Research)
     def prepare_research(payload: Research, context: RunContext) -> uuid.UUID: ...
 
+    @worker.estimate(GenerateImage)
+    def estimate_image(payload: GenerateImage, context: SpendContext) -> Decimal: ...
+
     @worker.run_ended
     def release(run: GraphRunRef) -> None: ...
 
@@ -23,7 +26,11 @@ the handler as it is, so it is tested as a plain function. An action with a ``Ru
 creates the child run's record, keyed by the action's id, and answers with its id; the
 workflow starts and awaits the child workflow itself. ``run_ended`` is the one function
 that releases what a run left outside the checkpoints (a folder on disk) once the run is over,
-called by ``forget_run`` and blocking too.
+called by ``forget_run`` and blocking too. ``estimate`` is what an action that spends
+(``ActionEffect.SPENDS``) is estimated to cost, in US dollars, from its payload: it blocks and
+runs in the activity ``reserve_spend``, which reserves the estimate under the creative budget
+before the handler may run, and every such action has one. Its handler reports what it spent in
+its result's ``cost_usd`` (``vocabulary.COST_USD``), or is taken to have spent the estimate.
 
 ``registration`` turns the handlers into what the process serves: the runtime's activities
 (``run_graph_step``, ``run_action``, ``prepare_run`` and ``forget_run``) with the agent's
@@ -32,17 +39,22 @@ words, the agent's own activities (the ones its workflow's hooks call) and its w
 An agent with an action the policy gate holds for a person also gives ``registration`` the
 worker's database sessions: it registers the gate's activities (``propose_action`` and
 ``settle_proposal``) with them, and ``run_action`` checks each such action's approval there.
+An agent with an action that spends gives the sessions and the process's environment too, and
+gets the budget's activities (``reserve_spend`` and ``settle_spend``), which resolve the
+workspace's caps at each attempt.
 ``registration`` is also given how long a run of the agent can take at most
 (``longest_run``), and adds core's rule for its kind to the cleanups of left-over checkpoints
 (``checkpoint_cleanup.stale_threads_of``), so that no agent's threads are left for nobody to
 remove.
 
 Whatever can be wrong is wrong when the worker starts, not at the first run: an action with no
-handler, a run action with no prepare callable, an action that waits for a person with no
-sessions to store its proposal in, a handler or prepare for a model the agent did not declare
-or for an action that has one already, a ``longest_run`` that does not cover what an action
-can wait for, a workflow class that is not one this agent's ``agent_workflow`` made. The
-errors name the action, the model or the class, never a payload.
+handler, a run action with no prepare callable, an action that spends with no estimate, an
+estimate for an action that does not spend, an action that waits for a person with no sessions
+to store its proposal in, an action that spends with no environment to read the caps in, a
+handler, prepare or estimate for a model the agent did not declare or for an action that has
+one already, a ``longest_run`` that does not cover what an action can wait for, a workflow
+class that is not one this agent's ``agent_workflow`` made. The errors name the action, the
+model or the class, never a payload.
 
 This module is for the worker process: it imports the activities and the database, and the
 workflow sandbox never loads it. It runs no action and builds no graph: the agent's wiring hands
@@ -57,9 +69,9 @@ from typing import Any, cast
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
-from openmarketer_core.agent_runtime.actions import ActionDefinition, RunKind
+from openmarketer_core.agent_runtime.actions import ActionCatalog, ActionDefinition, RunKind
 from openmarketer_core.agent_runtime.agent import Agent
-from openmarketer_core.agent_runtime.gate import GateVerdict, verdict_for
+from openmarketer_core.agent_runtime.gate import may_wait_for_a_person, spends
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_worker import AgentRegistration, PeriodicTask
 from openmarketer_worker.agent_runtime.activities import AgentGraph, RuntimeActivities
@@ -73,7 +85,9 @@ from openmarketer_worker.agent_runtime.routes import (
     PrepareRun,
     RunRoute,
     RunRoutes,
+    SpendEstimate,
 )
+from openmarketer_worker.agent_runtime.spend_activities import SpendActivities
 from openmarketer_worker.agent_runtime.vocabulary import RUN_TEXTS, FailureTexts
 from openmarketer_worker.agent_runtime.workflow_dsl import agent_of
 from openmarketer_worker.checkpoint_cleanup import CheckpointCleanup, stale_threads_of
@@ -95,6 +109,7 @@ class AgentWorker:
         self._task_queue = task_queue
         self._handlers: dict[str, ActionHandler] = {}
         self._prepares: dict[str, PrepareRun] = {}
+        self._estimates: dict[str, SpendEstimate] = {}
         self._run_ended: RunEnded | None = None
 
     def handler[Payload: BaseModel](
@@ -173,6 +188,43 @@ class AgentWorker:
 
         return register
 
+    def estimate[Payload: BaseModel](
+        self, payload: type[Payload]
+    ) -> Callable[[SpendEstimate[Payload]], SpendEstimate[Payload]]:
+        """Make the function it decorates the estimate of the action ``payload`` was declared for.
+
+        It is given the validated payload and a ``SpendContext`` (the action's id and the run's
+        workspace and project), and answers with what the action will cost in US dollars, which
+        the creative budget decides on before the handler may run. It blocks and runs in an
+        activity. Raises ``InvalidAgentWorker`` for a model the agent did not declare, an action
+        that does not spend (``ActionEffect.SPENDS``), a second estimate for one action, and an
+        ``async def``.
+        """
+        definition = self._definition_of(payload)
+        action = definition.name
+        if not spends(self._agent.policies[action]):
+            raise InvalidAgentWorker(
+                f"action {action!r} of agent {self._agent.kind!r} does not spend: only an action "
+                "declared with effect=ActionEffect.SPENDS has an estimate"
+            )
+
+        def register(estimate: SpendEstimate[Payload]) -> SpendEstimate[Payload]:
+            if inspect.iscoroutinefunction(estimate):
+                raise InvalidAgentWorker(
+                    f"estimate of action {action!r} is an async def: it blocks and runs in an "
+                    "activity, and returns the amount"
+                )
+            taken = self._estimates.get(action)
+            if taken is not None:
+                raise InvalidAgentWorker(
+                    f"action {action!r} of agent {self._agent.kind!r} has two estimates: "
+                    f"{_named(taken)} and {_named(estimate)}"
+                )
+            self._estimates[action] = cast(SpendEstimate, estimate)
+            return estimate
+
+        return register
+
     def run_ended(self, function: RunEnded) -> RunEnded:
         """Make the function it decorates the one that releases what a run left once it is over.
 
@@ -206,6 +258,7 @@ class AgentWorker:
         checkpoint_cleanups: Sequence[CheckpointCleanup] = (),
         periodic_tasks: Sequence[PeriodicTask] = (),
         sessions: sessionmaker[Session] | None = None,
+        environ: Mapping[str, str] | None = None,
     ) -> AgentRegistration:
         """What the worker registers for the agent: its workflows and every activity they call.
 
@@ -219,18 +272,20 @@ class AgentWorker:
         rules of the agent's own, beside that one. ``periodic_tasks`` are schedules of the
         agent's own, which the process runs while it serves (the researcher's page
         retention). ``sessions`` are the database's, for an
-        agent with an action that waits for a person. Raises ``InvalidAgentWorker`` for an
-        action with no handler or a run action with no prepare callable, for an action that
-        waits for a person without ``sessions``, for the bounds above, and for a class that is
-        not a workflow of this agent.
+        agent with an action that waits for a person or spends, and ``environ`` the process's
+        environment, for an agent with an action that spends: a cap set there wins over the
+        workspace's choice. Raises ``InvalidAgentWorker`` for an action with no handler, a run
+        action with no prepare callable or an action that spends with no estimate, for an
+        action that waits for a person without ``sessions``, for one that spends without
+        ``environ``, for the bounds above, and for a class that is not a workflow of this agent.
         """
         self._require_a_run_that_outlasts_its_waits(longest_run)
         routes = self._routes()
         run_routes = self._run_routes()
         for workflow_class in workflows:
             self._require_a_workflow_of_this_agent(workflow_class)
-        held = self._held_actions()
-        gate = self._gate_of(held, sessions)
+        budget = self._budget_of(sessions, environ)
+        gate = self._gate_of(sessions)
         runtime = RuntimeActivities(
             checkpoints,
             graph,
@@ -238,11 +293,14 @@ class AgentWorker:
             kind=self._agent.kind,
             texts=texts,
             on_run_end=self._run_ended,
-            held_actions=held,
+            held_actions=self._actions_that_publish(),
             is_approved=None if gate is None else gate.is_approved,
+            spending_actions=self._spending_actions(),
+            is_cleared_to_spend=None if budget is None else budget.is_cleared,
             run_routes=run_routes,
         )
         gate_activities = [] if gate is None else [gate.propose_action, gate.settle_proposal]
+        budget_activities = [] if budget is None else [budget.reserve_spend, budget.settle_spend]
         return AgentRegistration(
             task_queue=self._task_queue,
             workflows=list(workflows),
@@ -252,6 +310,7 @@ class AgentWorker:
                 runtime.prepare_run,
                 runtime.forget_run,
                 *gate_activities,
+                *budget_activities,
                 *activities,
             ],
             checkpoint_cleanups=[
@@ -266,7 +325,7 @@ class AgentWorker:
             raise InvalidAgentWorker(
                 f"the longest run of agent {self._agent.kind!r} must be longer than nothing"
             )
-        for action in self._held_actions():
+        for action in self._actions_that_may_wait():
             wait = timedelta(seconds=self._agent.policies[action].approval_wait_seconds)
             if longest_run < wait:
                 raise InvalidAgentWorker(
@@ -287,16 +346,22 @@ class AgentWorker:
                     "its checkpoints would be removed while it waits"
                 )
 
-    def _held_actions(self) -> list[str]:
+    def _actions_that_may_wait(self) -> list[str]:
         return [
             action
             for action, policy in self._agent.policies.items()
-            if verdict_for(policy) is GateVerdict.ASK_A_PERSON
+            if may_wait_for_a_person(policy)
         ]
 
-    def _gate_of(
-        self, held: list[str], sessions: sessionmaker[Session] | None
-    ) -> ProposalActivities | None:
+    def _actions_that_publish(self) -> list[str]:
+        spending = set(self._spending_actions())
+        return [action for action in self._actions_that_may_wait() if action not in spending]
+
+    def _spending_actions(self) -> list[str]:
+        return [action for action, policy in self._agent.policies.items() if spends(policy)]
+
+    def _gate_of(self, sessions: sessionmaker[Session] | None) -> ProposalActivities | None:
+        held = self._actions_that_may_wait()
         if not held:
             return None
         if sessions is None:
@@ -305,6 +370,36 @@ class AgentWorker:
                 "give registration the database sessions its proposals are stored with"
             )
         return ProposalActivities(sessions)
+
+    def _budget_of(
+        self, sessions: sessionmaker[Session] | None, environ: Mapping[str, str] | None
+    ) -> SpendActivities | None:
+        spending = self._spending_actions()
+        if not spending:
+            return None
+        without_estimate = [action for action in spending if action not in self._estimates]
+        if without_estimate:
+            raise InvalidAgentWorker(
+                f"agent {self._agent.kind!r} declares "
+                f"{', '.join(repr(name) for name in without_estimate)} that spend with no "
+                "estimate: register one with @worker.estimate"
+            )
+        if sessions is None or environ is None:
+            raise InvalidAgentWorker(
+                f"action {spending[0]!r} of agent {self._agent.kind!r} spends: give registration "
+                "the database sessions its ledger is kept with and the process's environment, "
+                "where a cap of the creative budget may be set"
+            )
+        spending_catalog = ActionCatalog(
+            definition for definition in self._agent.definitions if definition.name in spending
+        )
+        return SpendActivities(
+            sessions,
+            environ,
+            kind=self._agent.kind,
+            catalog=spending_catalog,
+            estimates=dict(self._estimates),
+        )
 
     def _definition_of(self, payload: type[BaseModel]) -> ActionDefinition:
         for definition in self._agent.definitions:

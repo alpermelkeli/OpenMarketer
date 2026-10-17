@@ -6,7 +6,9 @@ decides whether the name and the payload are allowed (core's rule) and the
 handler that runs the action. One route holds both so that an action cannot be
 allowed without a handler. An action that starts another agent's run runs no
 handler: its route holds the ``RunTarget`` of the run it starts and the
-``PrepareRun`` callable that creates the child run's record (``RunRoutes``).
+``PrepareRun`` callable that creates the child run's record (``RunRoutes``). An action
+that spends has a handler and also a ``SpendEstimate``, which the creative budget decides on
+before the handler may run (``spend_activities.py``).
 
 The limits an action runs under (timeouts, attempts, heartbeats) are not here but in the
 workflow, which is the one place they are set: its ``actions`` mapping names the actions a
@@ -26,6 +28,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel
@@ -56,8 +59,30 @@ class ActionContext:
 # up on it. What it raises that is not an ``ApplicationError`` it worded is logged and replaced
 # by a failure that is tried again. One it worded leaves with its type and message and nothing
 # it was raised from, and its message is what the graph is told of the failure (cut to
-# ``MAX_ERROR_CHARACTERS``): it holds nothing the model must not see.
+# ``MAX_ERROR_CHARACTERS``): it holds nothing the model must not see. The handler of an action
+# that spends says what it spent in its result's ``cost_usd`` (``vocabulary.COST_USD``), a number
+# or its text in US dollars; without it, the action is taken to have spent its estimate.
 ActionHandler = Callable[[BaseModel, ActionContext], Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
+class SpendContext:
+    """What the estimate of an action that spends gets besides its payload.
+
+    ``action_id`` is the action's idempotency key and ``scope`` the workspace and project of
+    the run that asks, whose budget the spend is reserved in.
+    """
+
+    action_id: str
+    scope: RunScope
+
+
+# What an action that spends is estimated to cost, in US dollars, from its validated payload: a
+# ``Decimal`` (an ``int`` or a text of one will do), never below what it will spend if it can
+# help it, since the ledger decides on it. It blocks and runs in an activity, so it may read the
+# database or a price list; it is called again when the activity is tried again, and the ledger
+# keeps the amount its first reservation was made with. What it raises is worded like a handler's.
+type SpendEstimate[Payload: BaseModel] = Callable[[Payload, SpendContext], Decimal | int | str]
 
 
 @dataclass(frozen=True)

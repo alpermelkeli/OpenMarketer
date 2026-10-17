@@ -30,6 +30,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Select, func, select, tuple_, update
@@ -76,6 +77,8 @@ class ActionProposal:
     expires_at: datetime
     decided_by: uuid.UUID | None
     decided_at: datetime | None
+    # What an action that spends was estimated to cost, in US dollars; None for any other.
+    estimate_usd: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -117,10 +120,12 @@ def propose_action(
     request: ActionRequest,
     effect: ActionEffect,
     wait_seconds: float,
+    estimate_usd: Decimal | None = None,
 ) -> ActionProposal:
     """Store ``request`` as a pending proposal, or return the one stored for it before.
 
-    The deadline is ``wait_seconds`` from now, by the database's clock. Raises
+    The deadline is ``wait_seconds`` from now, by the database's clock. ``estimate_usd`` is
+    what an action that spends is estimated to cost, shown to the person who decides. Raises
     ``ProjectNotFound`` when the workspace has no such project, and ``ProposalNotFound`` when the
     action's key is held by a proposal of another project.
     """
@@ -136,6 +141,7 @@ def propose_action(
             action_name=request.name,
             effect=effect,
             payload=request.payload,
+            estimate_usd=estimate_usd,
             expires_at=func.now() + timedelta(seconds=wait_seconds),
         )
         .on_conflict_do_nothing(index_elements=[ProposalRecord.action_id])
@@ -311,4 +317,5 @@ def _proposal(record: ProposalRecord) -> ActionProposal:
         expires_at=record.expires_at,
         decided_by=record.decided_by,
         decided_at=record.decided_at,
+        estimate_usd=record.estimate_usd,
     )

@@ -25,7 +25,7 @@ from openmarketer_core.budget.ledger import (
     reserve_spend,
     spent_this_month,
 )
-from openmarketer_core.db.budget_ledger import month_balance
+from openmarketer_core.db.budget_ledger import held_decision_of_action, month_balance
 from openmarketer_core.db.models import (
     BudgetLedgerEntryRecord,
     LedgerEntryKind,
@@ -361,3 +361,35 @@ def test_the_database_records_a_release_as_zero(session, scope, action):
 
     with pytest.raises(IntegrityError, match="ck_budget_ledger_entry_release_amount"):
         session.flush()
+
+
+def held_decision(sessions, action_id: str) -> SpendDecision | None:
+    with transaction(sessions) as session:
+        return held_decision_of_action(session, run_kind=RUN_KIND, action_id=action_id)
+
+
+@pytest.mark.parametrize(
+    ("estimate", "decision"),
+    [("0.10", SpendDecision.RUN_AUTOMATICALLY), ("0.50", SpendDecision.ASK_A_PERSON)],
+)
+def test_a_held_reservation_is_found_by_its_key_alone(action, sessions, scope, estimate, decision):
+    reserve(sessions, scope, estimate, action)
+
+    assert held_decision(sessions, action) is decision
+
+
+def test_an_action_with_no_reservation_holds_nothing(action, sessions, scope):
+    reserve(sessions, scope, "5", action)  # refused: nothing is written
+
+    assert held_decision(sessions, action) is None
+
+
+@pytest.mark.parametrize("settle", ["commit", "release"])
+def test_a_settled_reservation_holds_nothing_any_more(action, sessions, scope, settle):
+    reserve(sessions, scope, "0.10", action)
+    if settle == "commit":
+        commit(sessions, scope, action, "0.10")
+    else:
+        release(sessions, scope, action)
+
+    assert held_decision(sessions, action) is None

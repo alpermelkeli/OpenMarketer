@@ -66,13 +66,14 @@ it reaches the agent's declarations (``definitions.py``) and never the graph or 
 Nothing here records anything on a run, holds an agent's words or reads an agent's settings:
 that is the hooks' and the agent's.
 
-An agent with an action the policy gate holds for a person (``ActionEffect.PUBLISHES`` or
+An agent with an action the policy gate may hold for a person (``ActionEffect.PUBLISHES`` or
 ``SPENDS``), or with an action that starts another agent's run (``Agent.action(run=...)``),
 gives ``scope_of``, which says from the input which workspace and project a run works for: its
-proposals and its child runs belong there. The decorator refuses such an agent's workflow
-without it. Every workflow it makes hears the signal ``PROPOSAL_DECIDED_SIGNAL`` (the method
-``proposal_decided``, which it writes as it writes ``run``), so that the API can wake a run that
-waits for a person (``approval_wait.py``); the signal carries an id, never the decision.
+proposals, its spends and its child runs belong there. The decorator refuses such an agent's
+workflow without it. Every workflow it makes hears the signal ``PROPOSAL_DECIDED_SIGNAL`` (the
+method ``proposal_decided``, which it writes as it writes ``run``), so that the API can wake a
+run that waits for a person (``approval_wait.py``); the signal carries an id, never the
+decision.
 
 The class is marked with the agent it was made for (``agent_of``), so that the worker's
 registration refuses the workflow of another agent. Temporal accepts a ``run`` method only when
@@ -94,9 +95,8 @@ with workflow.unsafe.imports_passed_through():
     from openmarketer_core.agent_runtime.agent import Agent
     from openmarketer_core.agent_runtime.gate import (
         PROPOSAL_DECIDED_SIGNAL,
-        GateVerdict,
         RunScope,
-        verdict_for,
+        may_wait_for_a_person,
     )
     from openmarketer_core.agent_runtime.model_input import shown
     from openmarketer_core.agent_runtime.steps import GraphRunRef
@@ -260,11 +260,7 @@ def _require_a_scope_for_actions_that_need_one(
     """Refuse a workflow whose agent has an action that needs the run's workspace and project."""
     if scope_of is not None:
         return
-    held = [
-        action
-        for action, policy in agent.policies.items()
-        if verdict_for(policy) == GateVerdict.ASK_A_PERSON
-    ]
+    held = [action for action, policy in agent.policies.items() if may_wait_for_a_person(policy)]
     if held:
         raise InvalidAgentWorkflow(
             f"workflow {name!r} runs agent {agent.kind!r}, whose action {held[0]!r} waits for a "

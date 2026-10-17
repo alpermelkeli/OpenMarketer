@@ -11,8 +11,12 @@ A month is a calendar month in UTC, by the database's clock, and an action count
 in the month it was reserved in: the month whose cap its decision was made
 against, also when it is settled after the month ended.
 
-Every function is scoped to a workspace: a reservation of another workspace is
-treated as missing. Functions take a session, flush and never commit; whether
+Every function is scoped to a workspace, and a reservation of another workspace is
+treated as missing, but one: ``held_decision_of_action``, with which the worker's
+``run_action`` checks, from the run's kind and the action's idempotency key alone, that
+an action that spends holds a reservation before its handler runs. The key is the
+runtime's (``ActionRequest.action_id``), never a value a request chose, and the kind is
+the agent's own. Functions take a session, flush and never commit; whether
 the caller's transaction is SERIALIZABLE, which keeps two reservations from
 jointly passing the cap, is the caller's (``budget/ledger.py``). Callers get
 frozen dataclasses, never the ORM row.
@@ -90,6 +94,25 @@ def reservation_of_action(
         return None
     record, settlement, settled_usd = row
     return _reservation(record, settlement, settled_usd)
+
+
+def held_decision_of_action(
+    session: Session, *, run_kind: str, action_id: str
+) -> SpendDecision | None:
+    """The decision the action's reservation was made with, while it is held and not settled.
+
+    ``None`` when the action has no reservation, or its spend was committed or released.
+    """
+    return session.scalar(
+        select(_reserve.decision)
+        .outerjoin(_settle, _SETTLES)
+        .where(
+            _reserve.run_kind == run_kind,
+            _reserve.action_id == action_id,
+            _reserve.entry_kind == LedgerEntryKind.RESERVE,
+            _settle.id.is_(None),
+        )
+    )
 
 
 def month_balance(session: Session, *, workspace_id: uuid.UUID) -> MonthBalance:
