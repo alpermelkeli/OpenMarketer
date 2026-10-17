@@ -329,6 +329,7 @@
       "AssetTechnique": {
         "enum": [
           "generated",
+          "html_reference",
           "background_overlay",
           "composed"
         ],
@@ -3266,6 +3267,117 @@
         "title": "StoredCredentialResponse",
         "type": "object"
       },
+      "StudioRunDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cost_usd": {
+            "description": "What the run spent, in USD, once it has ended.",
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "final_asset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The asset a run that succeeded or needs review ended with.",
+            "title": "Final Asset Id"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudioRunRequestResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the run was asked for; null when the stored request no longer fits the request's schema, which a later version may have tightened."
+          },
+          "requested_by": {
+            "description": "Who asked for the run: `person`, `orchestrator` (the chat) or `run`.",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StudioRunStatus"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "status",
+          "platform",
+          "requested_by",
+          "error",
+          "final_asset_id",
+          "cost_usd",
+          "created_at",
+          "started_at",
+          "finished_at",
+          "request"
+        ],
+        "title": "StudioRunDetailResponse",
+        "type": "object"
+      },
       "StudioRunListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -3294,6 +3406,49 @@
           "next_cursor"
         ],
         "title": "StudioRunListResponse",
+        "type": "object"
+      },
+      "StudioRunRequestResponse": {
+        "additionalProperties": false,
+        "description": "What a run was asked for, as it was stored.",
+        "properties": {
+          "exact_copy": {
+            "description": "The lines of text the image must show, exactly; empty for no text.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Exact Copy",
+            "type": "array"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "reference_asset_ids": {
+            "description": "Assets of the project the studio was asked to look at.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Reference Asset Ids",
+            "type": "array"
+          },
+          "style_notes": {
+            "title": "Style Notes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "goal",
+          "exact_copy",
+          "platform",
+          "style_notes",
+          "reference_asset_ids"
+        ],
+        "title": "StudioRunRequestResponse",
         "type": "object"
       },
       "StudioRunResponse": {
@@ -7250,7 +7405,7 @@
         ]
       },
       "get": {
-        "description": "The run as it is now: queued, running, succeeded, needs review (with its asset) or failed.",
+        "description": "The run as it is now, with what it was asked for.\n\nQueued, running, succeeded, needs review (with its asset) or failed.",
         "operationId": "getStudioRun",
         "parameters": [
           {
@@ -7279,7 +7434,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StudioRunResponse"
+                  "$ref": "#/components/schemas/StudioRunDetailResponse"
                 }
               }
             },

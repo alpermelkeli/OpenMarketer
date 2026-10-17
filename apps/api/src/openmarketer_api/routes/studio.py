@@ -13,6 +13,10 @@ only whether it has code and how long it is. A version's image is served from ob
 with the type stored with the version, never one guessed from the bytes or the request, and
 only under the asset and the project it belongs to.
 
+A single run is read with what it was asked for (goal, exact copy, platform, style notes and
+reference assets), read back strictly; a stored request that no longer fits the schema is
+answered as no request rather than as an error. The list of runs leaves the request out.
+
 A person accepts or rejects a draft asset once its run has ended; the decision is recorded as
 the current user, never as anything the request names.
 """
@@ -54,12 +58,13 @@ from openmarketer_core.db.studio_runs import (
     StudioRun,
     delete_studio_run,
     list_studio_runs,
+    requested_asset,
     studio_run,
 )
 from openmarketer_core.studio.asset_store import EXTENSIONS
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.request import request_asset
-from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.studio.requests import AssetRequest, StoredAssetRequestInvalid
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["studio"])
 
@@ -88,6 +93,31 @@ class StudioRunResponse(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class StudioRunRequestResponse(BaseModel):
+    """What a run was asked for, as it was stored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str
+    exact_copy: list[str] = Field(
+        description="The lines of text the image must show, exactly; empty for no text."
+    )
+    platform: Platform
+    style_notes: str
+    reference_asset_ids: list[uuid.UUID] = Field(
+        description="Assets of the project the studio was asked to look at."
+    )
+
+
+class StudioRunDetailResponse(StudioRunResponse):
+    request: StudioRunRequestResponse | None = Field(
+        description=(
+            "What the run was asked for; null when the stored request no longer fits the "
+            "request's schema, which a later version may have tightened."
+        )
+    )
 
 
 class StudioRunListResponse(BaseModel):
@@ -175,6 +205,16 @@ def _run_response(run: StudioRun) -> StudioRunResponse:
         created_at=run.created_at,
         started_at=run.started_at,
         finished_at=run.finished_at,
+    )
+
+
+def _request_response(request: AssetRequest) -> StudioRunRequestResponse:
+    return StudioRunRequestResponse(
+        goal=request.goal,
+        exact_copy=list(request.exact_copy),
+        platform=request.platform,
+        style_notes=request.style_notes,
+        reference_asset_ids=list(request.reference_asset_ids),
     )
 
 
@@ -276,7 +316,7 @@ def list_runs(
 @router.get(
     "/studio-runs/{run_id}",
     operation_id="getStudioRun",
-    response_model=StudioRunResponse,
+    response_model=StudioRunDetailResponse,
     responses=problems(404),
 )
 def get_run(
@@ -284,11 +324,21 @@ def get_run(
     run_id: uuid.UUID,
     session: DbSession,
     workspace_id: CurrentWorkspaceId,
-) -> StudioRunResponse:
-    """The run as it is now: queued, running, succeeded, needs review (with its asset) or failed."""
-    return _run_response(
-        studio_run(session, workspace_id=workspace_id, project_id=project_id, run_id=run_id)
-    )
+) -> StudioRunDetailResponse:
+    """The run as it is now, with what it was asked for.
+
+    Queued, running, succeeded, needs review (with its asset) or failed.
+    """
+    run = studio_run(session, workspace_id=workspace_id, project_id=project_id, run_id=run_id)
+    try:
+        request = _request_response(
+            requested_asset(
+                session, workspace_id=workspace_id, project_id=project_id, run_id=run_id
+            )
+        )
+    except StoredAssetRequestInvalid:
+        request = None
+    return StudioRunDetailResponse(**_run_response(run).model_dump(), request=request)
 
 
 @router.delete(

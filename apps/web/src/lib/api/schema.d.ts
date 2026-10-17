@@ -745,7 +745,9 @@ export interface paths {
         };
         /**
          * Get Run
-         * @description The run as it is now: queued, running, succeeded, needs review (with its asset) or failed.
+         * @description The run as it is now, with what it was asked for.
+         *
+         *     Queued, running, succeeded, needs review (with its asset) or failed.
          */
         get: operations["getStudioRun"];
         put?: never;
@@ -1148,7 +1150,7 @@ export interface components {
          * AssetTechnique
          * @enum {string}
          */
-        AssetTechnique: "generated" | "background_overlay" | "composed";
+        AssetTechnique: "generated" | "html_reference" | "background_overlay" | "composed";
         /** Audience */
         Audience: {
             /**
@@ -2340,6 +2342,49 @@ export interface components {
              */
             set_by: string;
         };
+        /** StudioRunDetailResponse */
+        StudioRunDetailResponse: {
+            /**
+             * Cost Usd
+             * @description What the run spent, in USD, once it has ended.
+             */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /**
+             * Final Asset Id
+             * @description The asset a run that succeeded or needs review ended with.
+             */
+            final_asset_id: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            platform: components["schemas"]["Platform"];
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** @description What the run was asked for; null when the stored request no longer fits the request's schema, which a later version may have tightened. */
+            request: components["schemas"]["StudioRunRequestResponse"] | null;
+            /**
+             * Requested By
+             * @description Who asked for the run: `person`, `orchestrator` (the chat) or `run`.
+             */
+            requested_by: string;
+            /** Started At */
+            started_at: string | null;
+            status: components["schemas"]["StudioRunStatus"];
+        };
         /** StudioRunListResponse */
         StudioRunListResponse: {
             /**
@@ -2349,6 +2394,27 @@ export interface components {
             next_cursor: string | null;
             /** Runs */
             runs: components["schemas"]["StudioRunResponse"][];
+        };
+        /**
+         * StudioRunRequestResponse
+         * @description What a run was asked for, as it was stored.
+         */
+        StudioRunRequestResponse: {
+            /**
+             * Exact Copy
+             * @description The lines of text the image must show, exactly; empty for no text.
+             */
+            exact_copy: string[];
+            /** Goal */
+            goal: string;
+            platform: components["schemas"]["Platform"];
+            /**
+             * Reference Asset Ids
+             * @description Assets of the project the studio was asked to look at.
+             */
+            reference_asset_ids: string[];
+            /** Style Notes */
+            style_notes: string;
         };
         /** StudioRunResponse */
         StudioRunResponse: {
@@ -4952,7 +5018,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StudioRunResponse"];
+                    "application/json": components["schemas"]["StudioRunDetailResponse"];
                 };
             };
             /** @description Forbidden */

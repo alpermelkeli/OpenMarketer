@@ -10,13 +10,20 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_api.dependencies import Services
 from openmarketer_api.identity import LOCAL_USER_ID, current_workspace_id
 from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.db.media_assets import NewAssetVersion, add_version
-from openmarketer_core.db.models import AssetTechnique, Project, StudioRunStatus, Workspace
+from openmarketer_core.db.models import (
+    AssetTechnique,
+    Project,
+    StudioRunRecord,
+    StudioRunStatus,
+    Workspace,
+)
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.db.studio_runs import (
     mark_run_started,
@@ -286,12 +293,42 @@ def test_list_and_get_show_a_run_as_it_is(
     [listed] = client.get(runs_url(scope)).json()["runs"]
     one = client.get(runs_url(scope, f"/{run_id}")).json()
 
-    assert listed == one
+    assert listed == {key: value for key, value in one.items() if key != "request"}
     assert (one["status"], one["final_asset_id"], one["cost_usd"]) == (
         "succeeded",
         str(asset_id),
         0.08,
     )
+
+
+def test_a_run_is_read_with_what_it_was_asked_for(client: TestClient, services, scope, sessions):
+    run_id = queued_run(sessions, scope)
+
+    request = client.get(runs_url(scope, f"/{run_id}")).json()["request"]
+
+    assert request == {
+        "goal": "Announce v2",
+        "exact_copy": ["v2 is out"],
+        "platform": "x_post",
+        "style_notes": "",
+        "reference_asset_ids": [],
+    }
+
+
+def test_a_stored_request_that_no_longer_fits_is_answered_as_none(
+    client: TestClient, services, scope, sessions
+):
+    run_id = queued_run(sessions, scope)
+    with transaction(sessions) as session:
+        session.execute(
+            update(StudioRunRecord)
+            .where(StudioRunRecord.id == run_id)
+            .values(request={"goal": "Announce v2", "unknown": True})
+        )
+
+    response = client.get(runs_url(scope, f"/{run_id}"))
+
+    assert (response.status_code, response.json()["request"]) == (200, None)
 
 
 def test_run_list_is_paged(client: TestClient, services, scope, sessions):
