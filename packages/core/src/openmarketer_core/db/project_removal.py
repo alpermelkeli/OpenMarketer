@@ -25,12 +25,15 @@ The function answers the storage keys of the research pages it removed as
 rows; the caller removes each key's object from object storage before its
 transaction commits, as deleting one research run does (``db/research_runs.py``).
 
-What this does not do: it does not commit, does not touch the repository
-itself, does not stop workflows, and does not remove the graph checkpoints of
-the project's runs. Those were forgotten when each run ended, and what was
-missed is a thread of a run that no longer exists, which the worker's
-periodic cleanup removes (``db/checkpoint_cleanup.py``). Deleted rows stay in
-PostgreSQL's dead tuples until vacuum, in its write-ahead log and in backups.
+What this does not do: it does not remove the project's entries of the budget
+ledger (``db/budget_ledger.py``), which name it without a foreign key, so what
+its runs spent still counts against the workspace's monthly cap. It does not
+commit, does not touch the repository itself, does not stop workflows, and does
+not remove the graph checkpoints of the project's runs. Those were forgotten
+when each run ended, and what was missed is a thread of a run that no longer
+exists, which the worker's periodic cleanup removes (``db/checkpoint_cleanup.py``).
+Deleted rows stay in PostgreSQL's dead tuples until vacuum, in its write-ahead
+log and in backups.
 """
 
 from __future__ import annotations

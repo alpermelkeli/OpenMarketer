@@ -1,17 +1,20 @@
 """Tables for projects, repository evidence, Product Profile versions, analysis runs, research
 runs and their reports and pages, stored credentials, the settings a workspace chose from the
 dashboard, the proposals of actions that wait for a person, the operator's chat threads
-about a project with their turns, and the events runs record for the person watching them.
+about a project with their turns, the events runs record for the person watching them, and
+the budget ledger of what runs spend.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project; ``credential`` and
-``workspace_setting`` belong to the workspace itself and carry ``workspace_id``.
+``workspace_setting`` belong to the workspace itself and carry ``workspace_id``, and
+``budget_ledger_entry`` carries both.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -27,6 +30,7 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     SmallInteger,
     Text,
     UniqueConstraint,
@@ -38,6 +42,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.gate import ProposalStatus
+from openmarketer_core.budget.caps import SpendDecision
 from openmarketer_core.db.base import Base
 from openmarketer_core.research.questions import MAX_SOURCES
 
@@ -567,4 +572,65 @@ class RunEventRecord(Base):
     run_id: Mapped[uuid.UUID]
     kind: Mapped[str] = mapped_column(Text)
     detail: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = _created_at()
+
+
+# ----------------------------------------------------------------- budget
+class LedgerEntryKind(StrEnum):
+    RESERVE = "reserve"  # an action's estimate, held before it runs
+    COMMIT = "commit"  # what the action spent, once it ran
+    RELEASE = "release"  # the hold given back: the action did not run
+
+
+class BudgetLedgerEntryRecord(Base):
+    """One entry of the ledger of what a workspace's runs spend (``openmarketer_core.budget``).
+
+    The ledger only grows: an action's estimate is reserved once, and settled at most once, by
+    a commit of what it spent or a release. Balances are derived by query, never stored. The
+    trigger ``budget_ledger_entry_append_only`` (in the migration, not shown here) refuses an
+    update or a delete, and a settling entry for an action that has no reservation in its
+    workspace.
+
+    The action is named by its run's kind and its idempotency key
+    (``ActionRequest.action_id``), and the project and the run without a foreign key: what was
+    spent stays counted against the workspace's cap when a project is deleted. ``decision`` is
+    the one the reservation was made with, so that a retried reservation finds it again; a
+    refused spend writes no entry.
+    """
+
+    __tablename__ = "budget_ledger_entry"
+    __table_args__ = (
+        CheckConstraint("amount_usd >= 0", name="amount_usd"),
+        CheckConstraint(
+            "(entry_kind = 'reserve') = (decision IS NOT NULL)", name="reserve_decision"
+        ),
+        CheckConstraint("decision <> 'refuse'", name="decision_held"),
+        CheckConstraint("entry_kind <> 'release' OR amount_usd = 0", name="release_amount"),
+        Index(
+            "uq_budget_ledger_entry_reserve",
+            "run_kind",
+            "action_id",
+            unique=True,
+            postgresql_where=text("entry_kind = 'reserve'"),
+        ),
+        Index(
+            "uq_budget_ledger_entry_settlement",
+            "run_kind",
+            "action_id",
+            unique=True,
+            postgresql_where=text("entry_kind IN ('commit', 'release')"),
+        ),
+        # The month's balance reads a workspace's reservations from the month's start.
+        Index("ix_budget_ledger_entry_workspace_id_created_at", "workspace_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspace.id"))
+    project_id: Mapped[uuid.UUID]
+    run_kind: Mapped[str] = mapped_column(Text)
+    run_id: Mapped[uuid.UUID]
+    action_id: Mapped[str] = mapped_column(Text)
+    entry_kind: Mapped[LedgerEntryKind] = mapped_column(_enum(LedgerEntryKind, "entry_kind"))
+    amount_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6))
+    decision: Mapped[SpendDecision | None] = mapped_column(_enum(SpendDecision, "decision"))
     created_at: Mapped[datetime] = _created_at()
