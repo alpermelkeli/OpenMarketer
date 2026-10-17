@@ -45,7 +45,7 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
   return (
     <section aria-labelledby="chat-title" className="grid min-h-[calc(100dvh-6rem)] grid-rows-[auto_1fr_auto] gap-4">
       <header className="border-b pb-3">
-        <h1 id="chat-title" className="truncate font-heading text-xl">
+        <h1 id="chat-title" className="truncate font-heading text-title">
           {chat.data ? chat.data.title : <Skeleton className="h-7 w-64" />}
         </h1>
       </header>
