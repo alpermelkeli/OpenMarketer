@@ -87,11 +87,12 @@ roles:
   researcher:                    # market, competitor and trend research summaries
     tier: balanced
     temperature: 0.3
+    max_tokens: 16384              # thinking counts against this cap: a real run's synthesis spent the 4096 default on reasoning and never submitted, twice
     requires: [tools]
   reader:                        # quarantined reader: classifies untrusted comments, DMs, web text
     tier: fast
     temperature: 0.0
-    max_tokens: 3072               # room for a reading at the schema's own bounds plus a thinking model's reasoning
+    max_tokens: 8192               # room for a reading at the schema's own bounds plus a thinking model's reasoning; at 3072, two real-run readings were cut off mid-thinking and asked again
     requires: [structured_output]   # NO tools by design
 
   # --- planning and creating ------------------------------------------
