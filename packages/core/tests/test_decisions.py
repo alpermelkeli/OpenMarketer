@@ -6,7 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from openmarketer_core.decisions import DecisionError, RouterDecisionModel, YesNoQuestion
+from openmarketer_core.decision_questions import YesNoQuestion
+from openmarketer_core.decisions import DecisionError, RouterDecisionModel
 from openmarketer_core.llm_config import ModelRouter
 
 MODELS_YAML = Path(__file__).resolve().parents[3] / "config" / "models.yaml"

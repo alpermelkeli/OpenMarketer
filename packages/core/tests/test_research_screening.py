@@ -19,7 +19,8 @@ from openmarketer_core.agent_runtime.actions import ActionOutcome
 from openmarketer_core.agent_runtime.langgraph_agent import AgentSteps
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.agent_runtime.threads import thread_id
-from openmarketer_core.decisions import DecisionError, DecisionReply, YesNoQuestion
+from openmarketer_core.decision_questions import YesNoQuestion
+from openmarketer_core.decisions import DecisionError, DecisionReply
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.research.questions import ResearchRequest
