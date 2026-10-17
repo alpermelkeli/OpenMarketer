@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useShellChats } from "@/lib/api/chats";
 import { useShellProject } from "@/lib/api/projects";
 import { useWaitingProposalCount } from "@/lib/api/proposals";
+import { shortTitle } from "@/lib/format";
 import {
   PROJECT_PAGES,
   chatHref,
@@ -120,11 +121,13 @@ function ChatList({ projectId, currentChatId }: { projectId: string; currentChat
       ) : chats.data.length === 0 ? (
         <p className="px-2.5 text-xs text-muted-foreground">No chats yet.</p>
       ) : (
-        <ul aria-label="Chats" className="grid gap-0.5">
+        <ul aria-label="Chats" className="grid grid-cols-[minmax(0,1fr)] gap-0.5">
           {chats.data.map((chat) => (
             <li key={chat.id}>
               <NavLink href={chatHref(projectId, chat.id)} current={chat.id === currentChatId}>
-                <span className="truncate">{chat.title}</span>
+                <span className="min-w-0 truncate" title={chat.title}>
+                  {shortTitle(chat.title)}
+                </span>
                 {chat.unread && chat.id !== currentChatId && (
                   <span className="ml-auto size-2 shrink-0 rounded-full bg-warning">
                     <span className="sr-only">Unread</span>

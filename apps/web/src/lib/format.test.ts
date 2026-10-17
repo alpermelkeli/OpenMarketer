@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatTimeAgo } from "./format";
+import { formatTimeAgo, shortTitle } from "./format";
 
 const THEN = "2026-10-08T12:00:00Z";
 const after = (ms: number) => Date.parse(THEN) + ms;
@@ -34,5 +34,19 @@ describe("how long ago a time was", () => {
 
   it("is the text as it came when it is not a time", () => {
     expect(formatTimeAgo("not a time", after(0))).toBe("not a time");
+  });
+});
+
+describe("how a title is shortened for a list", () => {
+  it("keeps a title of twenty characters as it is", () => {
+    expect(shortTitle("Pricing page reviews")).toBe("Pricing page reviews");
+  });
+
+  it("cuts a longer title after twenty characters and marks it with an ellipsis", () => {
+    expect(shortTitle("How does the pricing page work")).toBe("How does the pricing…");
+  });
+
+  it("does not split a character at the cut", () => {
+    expect(shortTitle(`${"x".repeat(19)}😀 and more`)).toBe(`${"x".repeat(19)}😀…`);
   });
 });

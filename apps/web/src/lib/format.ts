@@ -5,6 +5,16 @@ export function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
+const TITLE_MAX_LENGTH = 20;
+
+/** The first twenty characters of a title, with an ellipsis when there was more. */
+export function shortTitle(title: string): string {
+  const characters = Array.from(title);
+  return characters.length > TITLE_MAX_LENGTH
+    ? `${characters.slice(0, TITLE_MAX_LENGTH).join("")}…`
+    : title;
+}
+
 const DATE_TIME = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" });
 
 /** "Oct 8, 2026, 3:32 PM" in the reader's time zone, or the text as it came if it is not a time. */

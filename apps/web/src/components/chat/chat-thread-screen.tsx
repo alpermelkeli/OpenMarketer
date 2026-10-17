@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 import { InlineCodeText } from "@/components/common/inline-code-text";
 import { Notice } from "@/components/common/notice";
@@ -13,6 +14,7 @@ import type { ChatMessage } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
 import { Composer } from "./composer";
+import { MessageMarkdown } from "./message-markdown";
 
 /**
  * One chat with the orchestrator: its messages, oldest first, and where the next one is written. A
@@ -75,7 +77,7 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
         {submission && (
           <>
             <Bubble author="You" mine>
-              {submission.message}
+              <MessageMarkdown text={submission.message} />
             </Bubble>
             {submission.status === "pending" ? (
               <p role="status" className="text-sm text-muted-foreground">
@@ -115,12 +117,12 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   const mine = message.role === "user";
   return (
     <Bubble author={mine ? "You" : "Orchestrator"} mine={mine}>
-      {message.content}
+      <MessageMarkdown text={message.content} />
     </Bubble>
   );
 }
 
-function Bubble({ author, mine, children }: { author: string; mine: boolean; children: string }) {
+function Bubble({ author, mine, children }: { author: string; mine: boolean; children: ReactNode }) {
   return (
     <article
       className={cn(
@@ -129,8 +131,7 @@ function Bubble({ author, mine, children }: { author: string; mine: boolean; chi
       )}
     >
       <p className="mb-1 text-xs text-muted-foreground">{author}</p>
-      {/* What the agent wrote is shown as text; nothing in it is rendered as markup or links. */}
-      <p className="break-words whitespace-pre-wrap">{children}</p>
+      {children}
     </article>
   );
 }
