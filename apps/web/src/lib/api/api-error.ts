@@ -32,6 +32,8 @@ const API_ERROR_CODES: Record<ErrorCode, true> = {
   profile_already_approved: true,
   proposal_not_pending: true,
   proposal_pending: true,
+  chat_busy: true,
+  too_many_streams: true,
   credential_set_by_environment: true,
   credential_unreadable: true,
   encryption_key_missing: true,

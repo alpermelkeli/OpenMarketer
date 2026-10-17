@@ -22,6 +22,7 @@ from fastapi import Depends, Request
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
+from openmarketer_api.event_stream import OpenStreams, StreamTiming
 from openmarketer_api.workflows import Workflows
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.session import transaction
@@ -118,6 +119,20 @@ def process_tracing(services: Annotated[Services, Depends(_services)]) -> Tracin
     return services.tracing
 
 
+def event_stream_timing() -> StreamTiming:
+    """How a stream of events polls, keeps alive and ends; a test makes it quick."""
+    return StreamTiming()
+
+
+# One count for the whole process: every stream of every request takes its place here.
+_OPEN_STREAMS = OpenStreams()
+
+
+def open_event_streams() -> OpenStreams:
+    """The streams this process has open; a test gives its own, with a small limit."""
+    return _OPEN_STREAMS
+
+
 async def no_request_body(request: Request) -> None:
     """Refuse a body on a route that takes none, instead of ignoring what the client sent.
 
@@ -141,4 +156,6 @@ Catalog = Annotated[ModelCatalog, Depends(model_catalog)]
 Pages = Annotated[PageStore, Depends(page_store)]
 ProcessTracing = Annotated[Tracing, Depends(process_tracing)]
 StartWorkflow = Annotated[Callable[[WorkflowStart], None], Depends(start_workflow)]
+EventStreamTiming = Annotated[StreamTiming, Depends(event_stream_timing)]
+EventStreamsOpen = Annotated[OpenStreams, Depends(open_event_streams)]
 TellRun = Annotated[Callable[[str, uuid.UUID], None], Depends(tell_run)]

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_api.chat_requests import PostgresChatRequests
+from openmarketer_core.db.chat import create_chat
 from openmarketer_core.db.models import Project, ResearchRunRecord, Workspace
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.orchestrator.requests import ResearchNotStarted
@@ -34,7 +35,8 @@ def sessions(engine) -> sessionmaker[Session]:
 
 
 @pytest.fixture
-def scope(sessions) -> tuple[uuid.UUID, uuid.UUID]:
+def scope(sessions) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    """The workspace, the project and the chat whose turn asks for research."""
     with transaction(sessions) as session:
         workspace = Workspace(name="Acme")
         session.add(workspace)
@@ -44,7 +46,8 @@ def scope(sessions) -> tuple[uuid.UUID, uuid.UUID]:
         )
         session.add(project)
         session.flush()
-        return workspace.id, project.id
+        chat = create_chat(session, workspace_id=workspace.id, project_id=project.id)
+        return workspace.id, project.id, chat.id
 
 
 def test_starting_a_research_run_stores_it_and_hands_its_workflow_to_the_starter(sessions, scope):
@@ -54,6 +57,7 @@ def test_starting_a_research_run_stores_it_and_hands_its_workflow_to_the_starter
         start_workflow=started.append,
         workspace_id=scope[0],
         project_id=scope[1],
+        chat_id=scope[2],
     )
 
     reading = adapter.start_research(REQUEST)
@@ -67,6 +71,7 @@ def test_starting_a_research_run_stores_it_and_hands_its_workflow_to_the_starter
         stored = session.get(ResearchRunRecord, reading.id)
     assert stored is not None
     assert (stored.requested_by, stored.questions) == ("orchestrator", list(REQUEST.questions))
+    assert stored.chat_thread_id == scope[2]
 
 
 def test_a_workflow_that_cannot_be_started_is_the_ports_own_error(sessions, scope):
@@ -78,6 +83,7 @@ def test_a_workflow_that_cannot_be_started_is_the_ports_own_error(sessions, scop
         start_workflow=refusing,
         workspace_id=scope[0],
         project_id=scope[1],
+        chat_id=scope[2],
     )
 
     with pytest.raises(ResearchNotStarted, match="could not be handed to a worker"):

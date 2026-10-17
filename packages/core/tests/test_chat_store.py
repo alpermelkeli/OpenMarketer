@@ -4,9 +4,10 @@ They need PostgreSQL (see the root ``conftest.py``).
 """
 
 import uuid
+from datetime import timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from openmarketer_core.agent_runtime.gate import RunScope
@@ -14,6 +15,8 @@ from openmarketer_core.db.chat import (
     DEFAULT_CHAT_TITLE,
     ChatNotFound,
     ChatThread,
+    ChatTurnNotFound,
+    append_answer,
     append_exchange,
     chat_history,
     create_chat,
@@ -23,8 +26,22 @@ from openmarketer_core.db.chat import (
     list_chats,
     mark_chat_read,
 )
-from openmarketer_core.db.models import ChatMessageRecord, ChatRole, Project, Workspace
+from openmarketer_core.db.chat_turns import finish_turn, start_turn
+from openmarketer_core.db.models import (
+    ChatMessageRecord,
+    ChatRole,
+    ChatTurnRecord,
+    ChatTurnTrigger,
+    Project,
+    RunEventRecord,
+    Workspace,
+)
 from openmarketer_core.db.projects import ProjectNotFound
+from openmarketer_core.db.research_runs import request_research_run, research_run
+from openmarketer_core.db.run_events import append_events
+from openmarketer_core.orchestrator.chat_agent.definitions import CHAT_TURN_KIND
+from openmarketer_core.research.questions import ResearchRequest
+from openmarketer_core.run_events import TURN_STARTED, RunEvent
 
 
 def new_scope(session: Session) -> RunScope:
@@ -50,13 +67,53 @@ def open_chat(session: Session, scope: RunScope, title: str | None = None) -> Ch
     )
 
 
-def store(session: Session, scope: RunScope, chat_id: uuid.UUID, question: str, answer: str):
-    return append_exchange(
+def new_turn(session: Session, scope: RunScope, chat_id: uuid.UUID) -> uuid.UUID:
+    return start_turn(
         session,
         workspace_id=scope.workspace_id,
         project_id=scope.project_id,
         chat_id=chat_id,
+        trigger=ChatTurnTrigger.MESSAGE,
+    ).id
+
+
+def store(
+    session: Session,
+    scope: RunScope,
+    chat_id: uuid.UUID,
+    question: str,
+    answer: str,
+    turn_id: uuid.UUID | None = None,
+):
+    """Store an exchange the way a turn does: start the turn, store, finish the turn."""
+    turn = turn_id or new_turn(session, scope, chat_id)
+    exchange = append_exchange(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        chat_id=chat_id,
+        turn_id=turn,
         question=question,
+        answer=answer,
+    )
+    if turn_id is None:
+        finish_turn(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            turn_id=turn,
+        )
+    return exchange
+
+
+def follow_up(session: Session, scope: RunScope, chat_id: uuid.UUID, answer: str):
+    return append_answer(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        chat_id=chat_id,
+        turn_id=new_turn(session, scope, chat_id),
         answer=answer,
     )
 
@@ -310,7 +367,7 @@ def test_a_chat_the_project_does_not_have_is_not_found(session, scope):
             chat_id=unknown,
         )
     with pytest.raises(ChatNotFound):
-        store(session, scope, unknown, "question", "answer")
+        store(session, scope, unknown, "question", "answer", turn_id=uuid.uuid4())
     with pytest.raises(ChatNotFound):
         mark_chat_read(
             session, workspace_id=scope.workspace_id, project_id=scope.project_id, chat_id=unknown
@@ -326,7 +383,7 @@ def test_the_chat_of_another_project_is_not_found(session, scope):
     with pytest.raises(ChatNotFound):
         listed(session, scope, foreign.id, limit=10)
     with pytest.raises(ChatNotFound):
-        store(session, scope, foreign.id, "question", "answer")
+        store(session, scope, foreign.id, "question", "answer", turn_id=uuid.uuid4())
     with pytest.raises(ChatNotFound):
         mark_chat_read(
             session, workspace_id=scope.workspace_id, project_id=scope.project_id,
@@ -349,9 +406,89 @@ def test_reading_another_workspaces_project_under_this_workspace_is_not_found(se
 def test_appending_to_an_unknown_project_writes_nothing(session, scope):
     with pytest.raises(ProjectNotFound):
         store(session, RunScope(workspace_id=scope.workspace_id, project_id=uuid.uuid4()),
-              uuid.uuid4(), "question", "answer")  # fmt: skip
+              uuid.uuid4(), "question", "answer", turn_id=uuid.uuid4())  # fmt: skip
     count = session.scalar(select(func.count()).select_from(ChatMessageRecord))
     assert count == 0
+
+
+def test_an_exchange_names_the_turn_that_wrote_it(session, scope):
+    chat = open_chat(session, scope)
+    turn_id = new_turn(session, scope, chat.id)
+
+    question, answer = store(session, scope, chat.id, "Is it ready?", "Yes.", turn_id=turn_id)
+
+    assert question.turn_id == turn_id
+    assert answer.turn_id == turn_id
+
+
+def test_an_exchange_of_a_turn_of_another_chat_is_refused(session, scope):
+    chat = open_chat(session, scope)
+    other = open_chat(session, scope)
+    foreign_turn = new_turn(session, scope, other.id)
+
+    with pytest.raises(ChatTurnNotFound):
+        store(session, scope, chat.id, "question", "answer", turn_id=foreign_turn)
+    with pytest.raises(ChatTurnNotFound):
+        append_answer(session, workspace_id=scope.workspace_id, project_id=scope.project_id,
+                      chat_id=chat.id, turn_id=foreign_turn, answer="answer")  # fmt: skip
+
+
+def test_a_follow_up_answer_has_no_question_before_it(session, scope):
+    chat = open_chat(session, scope)
+    store(session, scope, chat.id, "Research our competitors", "Started a research run.")
+
+    answer = follow_up(session, scope, chat.id, "The research found three competitors.")
+
+    assert answer.role is ChatRole.ASSISTANT
+    history = chat_history(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, chat_id=chat.id
+    )
+    assert [(m.role, m.content) for m in history][-2:] == [
+        (ChatRole.ASSISTANT, "Started a research run."),
+        (ChatRole.ASSISTANT, "The research found three competitors."),
+    ]
+
+
+def test_a_follow_up_answer_leaves_the_chat_unread_and_keeps_its_name(session, scope):
+    chat = open_chat(session, scope, title="Competitors")
+    mark_chat_read(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, chat_id=chat.id
+    )
+
+    answer = follow_up(session, scope, chat.id, "The research found three competitors.")
+
+    thread = stored_thread(session, scope, chat.id)
+    assert thread.unread
+    assert thread.last_activity_at == answer.created_at
+    assert thread.title == "Competitors"
+
+
+def test_a_chat_is_busy_while_a_turn_runs(session, scope):
+    chat = open_chat(session, scope)
+    assert not stored_thread(session, scope, chat.id).busy
+
+    turn_id = new_turn(session, scope, chat.id)
+
+    assert stored_thread(session, scope, chat.id).busy
+    listed_chats = list_chats(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, limit=10
+    )
+    assert [thread.busy for thread in listed_chats.items] == [True]
+    finish_turn(session, workspace_id=scope.workspace_id, project_id=scope.project_id,
+                chat_id=chat.id, turn_id=turn_id)  # fmt: skip
+    assert not stored_thread(session, scope, chat.id).busy
+
+
+def test_a_turn_left_running_too_long_does_not_keep_the_chat_busy(session, scope):
+    chat = open_chat(session, scope)
+    turn_id = new_turn(session, scope, chat.id)
+    session.execute(
+        update(ChatTurnRecord)
+        .where(ChatTurnRecord.id == turn_id)
+        .values(created_at=func.now() - timedelta(minutes=16))
+    )
+
+    assert not stored_thread(session, scope, chat.id).busy
 
 
 def test_a_deleted_chat_is_gone_with_its_messages(session, scope):
@@ -432,3 +569,54 @@ def test_deleting_a_chat_of_another_workspace_is_not_found(session, scope):
         )
 
     assert stored_thread(session, scope, chat.id).id == chat.id
+
+
+def test_deleting_a_chat_takes_its_turns_and_their_events(session, scope):
+    chat = open_chat(session, scope)
+    turn_id = new_turn(session, scope, chat.id)
+    store(session, scope, chat.id, "Is it ready?", "Yes.", turn_id=turn_id)
+    finish_turn(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        chat_id=chat.id,
+        turn_id=turn_id,
+    )
+    append_events(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        run_kind=CHAT_TURN_KIND,
+        run_id=turn_id,
+        events=[RunEvent(TURN_STARTED)],
+    )
+    kept_chat = open_chat(session, scope)
+    kept_turn = new_turn(session, scope, kept_chat.id)
+
+    delete_chat(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, chat_id=chat.id
+    )
+
+    assert session.scalars(select(ChatTurnRecord.id)).all() == [kept_turn]
+    assert session.scalar(select(func.count()).select_from(RunEventRecord)) == 0
+
+
+def test_deleting_a_chat_keeps_the_research_runs_it_asked_for(session, scope):
+    chat = open_chat(session, scope)
+    run = request_research_run(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        request=ResearchRequest(questions=["What did competitors post last month?"]),
+        requested_by="orchestrator",
+        chat_thread_id=chat.id,
+    )
+
+    delete_chat(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, chat_id=chat.id
+    )
+
+    kept = research_run(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, run_id=run.id
+    )
+    assert kept.chat_thread_id is None

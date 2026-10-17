@@ -281,6 +281,126 @@ describe("the routes of research", () => {
   });
 });
 
+describe("the events of a chat", () => {
+  const CHAT = "0b0e6c6e-aaaa-4bbb-8ccc-ddddeeeeffff";
+  const EVENTS = ["projects", PROJECT, "chats", CHAT, "events"];
+  const STREAM = [...EVENTS, "stream"];
+  const streamPath = `/v1/projects/${PROJECT}/chats/${CHAT}/events/stream`;
+  const reading = { host: "localhost:3000", "sec-fetch-site": "same-origin" };
+
+  function apiStreaming(chunks: readonly string[]) {
+    return vi.fn<typeof fetch>(async () => {
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+          controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+  }
+
+  it("forward the history page by page, and the stream from an event id", () => {
+    expect(allowedApiTarget("GET", EVENTS, new URLSearchParams("limit=100&cursor=abc"))).toBe(
+      `/v1/projects/${PROJECT}/chats/${CHAT}/events?limit=100&cursor=abc`,
+    );
+    expect(allowedApiPath("GET", STREAM)).toBe(streamPath);
+    expect(allowedApiTarget("GET", STREAM, new URLSearchParams("after=42"))).toBe(`${streamPath}?after=42`);
+  });
+
+  it("take no other method, and nothing below the stream", () => {
+    expect(() => allowedApiPath("POST", EVENTS)).toThrow();
+    expect(() => allowedApiPath("POST", STREAM)).toThrow();
+    expect(() => allowedApiPath("GET", [...STREAM, "1"])).toThrow();
+    expect(() => allowedApiPath("GET", ["projects", PROJECT, "chats", "latest", "events", "stream"])).toThrow();
+  });
+
+  it("refuse an `after` that is not an event id, and every other query on the stream", () => {
+    for (const query of ["after=-1", "after=1e3", "after=abc", "after=", "after=01", "after=1&after=2", "limit=5", "cursor=abc"]) {
+      expect(() => allowedApiTarget("GET", STREAM, new URLSearchParams(query))).toThrow("only `after`");
+    }
+    expect(() => allowedApiTarget("GET", EVENTS, new URLSearchParams("after=1"))).toThrow("only `limit`");
+  });
+
+  it("pass the stream through as it arrives, with no buffering", async () => {
+    const api = apiStreaming(["retry: 1000\n\n", 'id: 3\nevent: tool_called\ndata: {"id":3}\n\n']);
+    const response = await proxyToApi(request("GET", reading, undefined, "?after=2"), STREAM, undefined, api);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("no-store, no-transform");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+    expect(await response.text()).toBe('retry: 1000\n\nid: 3\nevent: tool_called\ndata: {"id":3}\n\n');
+    const [target, init] = api.mock.calls[0];
+    expect(String(target)).toBe(`http://127.0.0.1:8000${streamPath}?after=2`);
+    expect(init?.headers).toEqual({ accept: "text/event-stream" });
+  });
+
+  it("hand the stream its first chunk before the API has finished sending", async () => {
+    let finish: () => void = () => undefined;
+    const api = vi.fn<typeof fetch>(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("retry: 1000\n\n"));
+          finish = () => controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const response = await proxyToApi(request("GET", reading), STREAM, undefined, api);
+    const reader = response.body?.getReader();
+    const first = await reader?.read();
+    expect(new TextDecoder().decode(first?.value)).toBe("retry: 1000\n\n");
+    finish();
+  });
+
+  it("forward the browser's Last-Event-ID, and only when it is an event id", async () => {
+    const api = apiStreaming([]);
+    await proxyToApi(request("GET", { ...reading, "last-event-id": "17" }), STREAM, undefined, api);
+    expect(api.mock.calls[0][1]?.headers).toEqual({ accept: "text/event-stream", "last-event-id": "17" });
+
+    const refusedApi = apiStreaming([]);
+    const response = await proxyToApi(
+      request("GET", { ...reading, "last-event-id": "17, 18" }),
+      STREAM,
+      undefined,
+      refusedApi,
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "proxy_header_rejected" });
+    expect(refusedApi).not.toHaveBeenCalled();
+  });
+
+  it("do not forward a Last-Event-ID to any other route", async () => {
+    const api = apiAnswering(200, '{"events":[],"next_cursor":null}');
+    await proxyToApi(request("GET", { ...reading, "last-event-id": "17" }), EVENTS, undefined, api);
+    expect(api.mock.calls[0][1]?.headers).toEqual({ accept: "application/json" });
+  });
+
+  it("end the upstream request when the browser leaves", async () => {
+    const api = apiStreaming([]);
+    const browser = new AbortController();
+    await proxyToApi(
+      new Request("http://localhost:3000/api/v1/ignored", { headers: reading, signal: browser.signal }),
+      STREAM,
+      undefined,
+      api,
+    );
+    const signal = api.mock.calls[0][1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    browser.abort();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("pass the API's refusal on as JSON", async () => {
+    const problem = '{"code":"chat_not_found","message":"no chat"}';
+    const response = await proxyToApi(request("GET", reading), STREAM, undefined, apiAnswering(404, problem));
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(await response.text()).toBe(problem);
+  });
+});
+
 describe("the route that deletes a project", () => {
   it("takes one project by its id", () => {
     expect(allowedApiPath("DELETE", ["projects", PROJECT])).toBe(`/v1/projects/${PROJECT}`);

@@ -176,6 +176,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/chats/{chat_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Events
+         * @description The chat's events so far, newest first, one page at a time.
+         *
+         *     The events of the chat's turns and of the research runs it started. A screen
+         *     reads the first page for the history it shows, and pages further back for
+         *     older messages; it then streams what comes after the newest event of the
+         *     first page (`streamChatEvents` with `after` that event's `id`).
+         */
+        get: operations["listChatEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/chats/{chat_id}/events/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Events
+         * @description The chat's events as they are stored, from after a cursor, as server-sent events.
+         *
+         *     `after` (or the `Last-Event-ID` header, which wins) is the `id` of the last
+         *     event the client has; left out, the stream starts at the chat's first event.
+         *     404 before anything is streamed when the chat is not found, and 503
+         *     `too_many_streams` when the server has as many streams open as it keeps (the
+         *     client tries again after a while). The stream ends when the chat is removed,
+         *     and after a few minutes in any case.
+         */
+        get: operations["streamChatEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{project_id}/chats/{chat_id}/messages": {
         parameters: {
             query?: never;
@@ -193,12 +245,13 @@ export interface paths {
          * Send
          * @description Answer one operator message in the chat, and store the exchange.
          *
-         *     201 with the stored question and answer. 409 `model_key_not_set`,
-         *     `credential_unreadable` or `stored_setting_invalid` when the turn's model
-         *     cannot be resolved. 503 `chat_unanswered` when the agent gave no answer
-         *     within its limits and `model_unavailable` when the provider could not
-         *     answer; nothing is stored then, and sending the message again starts the
-         *     turn again. A turn may start a research run when the operator asks for
+         *     201 with the stored question and answer. 409 `chat_busy` while another turn
+         *     of the chat is running, and `model_key_not_set`, `credential_unreadable` or
+         *     `stored_setting_invalid` when the turn's model cannot be resolved. 503
+         *     `chat_unanswered` when the agent gave no answer within its limits and
+         *     `model_unavailable` when the provider could not answer; the turn is
+         *     recorded as failed, no message is stored, and sending the message again
+         *     starts a new turn. A turn may start a research run when the operator asks for
          *     research (the request action `start_research`), and says so in the answer;
          *     a run whose workflow could not be started is recorded as failed and the
          *     answer says it could not be started.
@@ -922,6 +975,55 @@ export interface components {
             /** Supported Parameters */
             supported_parameters: string[];
         };
+        /** ChatEventListResponse */
+        ChatEventListResponse: {
+            /**
+             * Events
+             * @description Newest first.
+             */
+            events: components["schemas"]["ChatEventResponse"][];
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+        };
+        /** ChatEventResponse */
+        ChatEventResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Detail
+             * @description What the screen shows of it: names, counts, identifiers, short texts; one flat level of values and lists of values.
+             */
+            detail: {
+                [key: string]: components["schemas"]["EventDetailValue"];
+            };
+            /**
+             * Id
+             * @description The event's place in the order events were stored: larger for a later event. It is the cursor a stream continues from (`after`, `Last-Event-ID`).
+             */
+            id: number;
+            /**
+             * Kind
+             * @description What happened, such as `tool_called` or `fetched`.
+             */
+            kind: string;
+            /**
+             * Run Id
+             * Format: uuid
+             * @description The turn or the research run that recorded it.
+             */
+            run_id: string;
+            /**
+             * Run Kind
+             * @description The kind of run that recorded it: `orchestrator-chat` for a turn of the chat, `research-run` for a research run the chat started.
+             */
+            run_kind: string;
+        };
         /** ChatMessageListResponse */
         ChatMessageListResponse: {
             /** Messages */
@@ -963,6 +1065,11 @@ export interface components {
             project_id: string;
             /** @description Who wrote it: `user` for the operator, `assistant` for the chat agent. */
             role: components["schemas"]["ChatRole"];
+            /**
+             * Turn Id
+             * @description The turn that wrote it, whose events have it as `run_id` with `run_kind` `orchestrator-chat`; null for a message stored before turns were.
+             */
+            turn_id: string | null;
         };
         /**
          * ChatRole
@@ -981,6 +1088,11 @@ export interface components {
         };
         /** ChatThreadResponse */
         ChatThreadResponse: {
+            /**
+             * Busy
+             * @description Whether a turn of the chat is running now; a message sent meanwhile is a 409 `chat_busy`.
+             */
+            busy: boolean;
             /**
              * Created At
              * Format: date-time
@@ -1109,7 +1221,9 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable";
+        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
+        EventDetailScalar: string | number | boolean | null;
+        EventDetailValue: components["schemas"]["EventDetailScalar"] | components["schemas"]["EventDetailScalar"][];
         /**
          * Evidence
          * @description A location in the analysed repository that supports a claim.
@@ -2466,6 +2580,134 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listChatEvents: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatEventListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    streamChatEvents: {
+        parameters: {
+            query?: {
+                after?: number | null;
+            };
+            header?: {
+                /** @description The `id` of the last event the client got, which a browser sends when it reconnects. It wins over `after`, which the reconnecting URL still holds. */
+                "Last-Event-ID"?: number | null;
+            };
+            path: {
+                project_id: string;
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent events, oldest first. Each event is `id: <id>`, `event: <kind>` and `data: <ChatEventResponse as JSON>`; a `: keep-alive` comment is sent when nothing happened for a while, and the stream ends after a few minutes with a `retry:` hint sent at its start, so the client reconnects with `Last-Event-ID`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
             };
             /** @description Forbidden */
             403: {

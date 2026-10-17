@@ -8,7 +8,9 @@ anything or asks for an action.
 ``start_research`` is the other kind: a *request action*. It asks the turn's caller
 (``ChatTurnContext.requests``) to create a research run for the project and start it, and
 answers with the run's id and status; it writes nothing itself and starts no workflow, and a
-caller that gave no port is told that starting runs is not available. What it sends is read
+caller that gave no port is told that starting runs is not available. A run that was started
+is recorded for the person watching the turn (``run_started``, through
+``ChatTurnContext.events``), so the chat can follow the run's own progress. What it sends is read
 strictly against ``ResearchRequest`` first, so a request that does not fit is refused with
 the fields at fault and never their values.
 
@@ -36,6 +38,8 @@ from openmarketer_core.orchestrator.reads import (
 )
 from openmarketer_core.orchestrator.requests import ResearchNotStarted
 from openmarketer_core.research.questions import DEFAULT_MAX_SOURCES, ResearchRequest
+from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
+from openmarketer_core.run_events import RUN_STARTED, RunEvent
 
 # The most a tool answer is; a profile with many features is the long one.
 MAX_ANSWER_CHARS = 6000
@@ -191,6 +195,9 @@ def start_research(
         run = context.requests.start_research(request)
     except ResearchNotStarted as e:
         return f"error: {e}"
+    context.events.record(
+        RunEvent(RUN_STARTED, {"run_kind": RESEARCH_RUN_KIND, "run_id": str(run.id)})
+    )
     return _text({"run_id": str(run.id), "status": run.status, "requested_by": run.requested_by})
 
 

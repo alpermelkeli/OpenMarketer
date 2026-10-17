@@ -18,11 +18,14 @@ from openmarketer_core.db.analysis_runs import (
     request_analysis_run,
 )
 from openmarketer_core.db.chat import append_exchange, create_chat
+from openmarketer_core.db.chat_turns import finish_turn, start_turn
 from openmarketer_core.db.evidence_store import save_analysis_of_project
 from openmarketer_core.db.models import (
     AnalysisRunRecord,
     ChatMessageRecord,
     ChatThreadRecord,
+    ChatTurnRecord,
+    ChatTurnTrigger,
     Evidence,
     ProductProfileRecord,
     Project,
@@ -31,6 +34,7 @@ from openmarketer_core.db.models import (
     ResearchPageRecord,
     ResearchReportRecord,
     ResearchRunRecord,
+    RunEventRecord,
     Workspace,
 )
 from openmarketer_core.db.profile_versions import approve_profile_version, save_edited_profile
@@ -56,11 +60,13 @@ from openmarketer_core.db.research_runs import (
     request_research_run,
 )
 from openmarketer_core.db.research_store import save_research_report
+from openmarketer_core.db.run_events import append_events
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.extraction import ExtractedFact
 from openmarketer_core.repository_analysis.intake import Snapshot
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import Report
+from openmarketer_core.run_events import TURN_ANSWERED, TURN_STARTED, RunEvent
 
 REVIEWER = uuid.UUID("11111111-1111-4111-8111-111111111111")
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
@@ -176,6 +182,8 @@ def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
         "proposal": ProposalRecord.project_id,
         "chat_thread": ChatThreadRecord.project_id,
         "chat_message": ChatMessageRecord.project_id,
+        "chat_turn": ChatTurnRecord.project_id,
+        "run_event": RunEventRecord.project_id,
         "research_run": ResearchRunRecord.project_id,
         "research_page": ResearchPageRecord.project_id,
         "research_report": ResearchReportRecord.project_id,
@@ -195,12 +203,14 @@ NOTHING = {
     "proposal": 0,
     "chat_thread": 0,
     "chat_message": 0,
+    "chat_turn": 0,
+    "run_event": 0,
     "research_run": 0,
     "research_page": 0,
     "research_report": 0,
 }
 
-WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message") + (
+WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message", "chat_turn", "run_event") + (
     "research_run",
     "research_page",
     "research_report",
@@ -226,19 +236,26 @@ def test_project_is_deleted_with_its_runs_evidence_snapshots_and_versions(sessio
     assert rows_of(session, project_id) == NOTHING
 
 
-def test_project_is_deleted_with_its_chats_and_messages(session, workspace_id):
+def test_project_is_deleted_with_its_chats_turns_messages_and_events(session, workspace_id):
     project_id = new_project(session, workspace_id)
     chat = create_chat(session, workspace_id=workspace_id, project_id=project_id)
-    append_exchange(
+    ids = {"workspace_id": workspace_id, "project_id": project_id, "chat_id": chat.id}
+    turn = start_turn(session, **ids, trigger=ChatTurnTrigger.MESSAGE)
+    append_exchange(session, **ids, turn_id=turn.id, question="Is it ready?", answer="Yes.")
+    finish_turn(session, **ids, turn_id=turn.id)
+    start_turn(session, **ids, trigger=ChatTurnTrigger.MESSAGE)  # one still running
+    append_events(
         session,
         workspace_id=workspace_id,
         project_id=project_id,
-        chat_id=chat.id,
-        question="Is it ready?",
-        answer="Yes.",
+        run_kind="orchestrator-chat",
+        run_id=turn.id,
+        events=[RunEvent(TURN_STARTED), RunEvent(TURN_ANSWERED)],
     )
     assert rows_of(session, project_id)["chat_thread"] == 1
     assert rows_of(session, project_id)["chat_message"] == 2
+    assert rows_of(session, project_id)["chat_turn"] == 2
+    assert rows_of(session, project_id)["run_event"] == 2
     delete_project(session, workspace_id=workspace_id, project_id=project_id)
     assert rows_of(session, project_id) == NOTHING
 
@@ -252,6 +269,25 @@ def test_project_is_deleted_with_its_research_reports_and_pages(session, workspa
     answered = delete_project(session, workspace_id=workspace_id, project_id=project_id)
 
     assert sorted(answered) == sorted(keys)
+    assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_is_deleted_with_a_research_run_a_chat_asked_for(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    chat = create_chat(session, workspace_id=workspace_id, project_id=project_id)
+    scope = {"workspace_id": workspace_id, "project_id": project_id}
+    run = request_research_run(
+        session,
+        **scope,
+        request=RESEARCH_REQUEST,
+        requested_by="orchestrator",
+        chat_thread_id=chat.id,
+    )
+    mark_research_started(session, **scope, run_id=run.id)
+    mark_research_failed(session, **scope, run_id=run.id, error="boom")
+
+    delete_project(session, **scope)
+
     assert rows_of(session, project_id) == NOTHING
 
 

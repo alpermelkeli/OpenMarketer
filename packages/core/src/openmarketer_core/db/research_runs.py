@@ -56,6 +56,7 @@ from sqlalchemy import Select, delete, func, select, tuple_, update
 from sqlalchemy.orm import Session
 
 from openmarketer_core.agent_runtime.threads import thread_id
+from openmarketer_core.db.chat import require_chat
 from openmarketer_core.db.models import (
     RUN_ERROR_MAX_LENGTH,
     Project,
@@ -122,7 +123,11 @@ class ResearchRunUnfinished(Exception):
 
 @dataclass(frozen=True)
 class ResearchRun:
-    """One requested research run and how far it got."""
+    """One requested research run and how far it got.
+
+    ``chat_thread_id`` is the chat whose turn asked for the run, which hears
+    back when it ends; ``None`` for a run asked for anywhere else.
+    """
 
     id: uuid.UUID
     project_id: uuid.UUID
@@ -130,6 +135,7 @@ class ResearchRun:
     error: str | None
     report_id: uuid.UUID | None
     requested_by: str
+    chat_thread_id: uuid.UUID | None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -154,6 +160,7 @@ def request_research_run(
     request: ResearchRequest,
     requested_by: str,
     origin_action_id: str | None = None,
+    chat_thread_id: uuid.UUID | None = None,
 ) -> ResearchRun:
     """Add a queued research run for the project, with the request it answers.
 
@@ -161,10 +168,16 @@ def request_research_run(
     second one. With ``origin_action_id`` -- the idempotency key of the action
     of another run that asked for this one -- a run already asked for under that
     key is found and given back instead: an attempt of that action which is
-    tried again starts no second run. Raises ``ProjectNotFound`` when the
-    workspace has no such project.
+    tried again starts no second run. ``chat_thread_id`` is the chat whose turn
+    asked for the run, a chat of the same project. Raises ``ProjectNotFound``
+    when the workspace has no such project, and ``ChatNotFound`` when the
+    project has no such chat.
     """
     project = get_project(session, workspace_id=workspace_id, project_id=project_id)
+    if chat_thread_id is not None:
+        require_chat(
+            session, workspace_id=workspace_id, project_id=project_id, chat_id=chat_thread_id
+        )
     if origin_action_id is not None:
         asked_before = session.scalar(
             select(ResearchRunRecord).where(
@@ -178,6 +191,7 @@ def request_research_run(
         project_id=project.id,
         requested_by=requested_by,
         origin_action_id=origin_action_id,
+        chat_thread_id=chat_thread_id,
         questions=list(request.questions),
         scope={
             "topics": list(request.topics),
@@ -436,6 +450,7 @@ def _research_run(record: ResearchRunRecord) -> ResearchRun:
         error=record.error,
         report_id=record.report_id,
         requested_by=record.requested_by,
+        chat_thread_id=record.chat_thread_id,
         created_at=record.created_at,
         started_at=record.started_at,
         finished_at=record.finished_at,

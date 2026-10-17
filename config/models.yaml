@@ -71,7 +71,8 @@ limits:
 
 roles:
   # --- operator-facing -------------------------------------------------
-  orchestrator:                  # dashboard chat: status questions and special requests
+  orchestrator:                  # dashboard chat: status questions and special requests, and the
+                                 # worker's follow-up turn after a research run the chat started
     tier: strong
     temperature: 0.3
     max_tokens: 4096

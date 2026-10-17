@@ -8,7 +8,8 @@ has no workflow and no checkpoints: it runs in the process that serves the messa
 
 - ``ChatTurnState`` is what the graph keeps between its steps: plain data only.
 - ``ChatTurnContext`` is what a node is given besides the state: the model, the reading port
-  of the project the turn is about, and the turn's limits. It is built for each turn.
+  of the project the turn is about, the turn's limits, and where its events go. It is built
+  for each turn.
 - ``agent`` is the agent; importing ``graph.py`` is what puts its nodes and tools on it.
 
 Nothing here runs: no node, no model call, no read. The prompt, the limits and the checks
@@ -17,7 +18,7 @@ are in ``rules.py``; the tools are in ``tools.py``.
 
 import operator
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, TypedDict
 
 from openmarketer_core.agent_runtime.agent import Agent
@@ -29,6 +30,7 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
     ChatTurnError,
     conversation_messages,
 )
+from openmarketer_core.orchestrator.events import NoTurnEvents, TurnEvents
 from openmarketer_core.orchestrator.reads import ChatReads
 from openmarketer_core.orchestrator.requests import ChatRequests
 
@@ -55,14 +57,17 @@ class ChatTurnContext:
     the graph cannot read beyond the project. ``requests`` is what a request action may ask
     of the process that runs the turn (``orchestrator/requests.py``): a caller that holds a
     database and a workflow server gives one; without it (the CLI, a test that only reads)
-    the tool that would ask answers that starting runs is not available. A context serves one
-    turn, in one thread.
+    the tool that would ask is not offered to the model, and answers that starting runs is not
+    available if it is called all the same. ``events`` is where the turn records what it does
+    for the person watching (``orchestrator/events.py``); nobody watches by default. A context
+    serves one turn, in one thread.
     """
 
     model: ChatModel
     reads: ChatReads
     limits: ChatLimits
     requests: ChatRequests | None = None
+    events: TurnEvents = field(default_factory=NoTurnEvents)
 
 
 agent = Agent(CHAT_TURN_KIND, state=ChatTurnState, context=ChatTurnContext)

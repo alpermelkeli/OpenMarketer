@@ -2,10 +2,10 @@
 
 A project is deleted with its analysis runs, its snapshots, the evidence found
 in them, every Product Profile version, approved ones included, the proposals
-of its runs, decided or expired, its chat threads with their messages, and its
-research runs with their reports and the pages they fetched. Nothing is kept to
-restore it from: deleting is final, and a project made again for the same
-repository starts with no history.
+of its runs, decided or expired, its chat threads with their turns and
+messages, its research runs with their reports and the pages they fetched, and
+the events its runs recorded. Nothing is kept to restore it from: deleting is
+final, and a project made again for the same repository starts with no history.
 
 A project with an unfinished run is not deleted (``ProjectHasUnfinishedRun``):
 the worker that runs it would store a profile for a project that is gone, and
@@ -46,6 +46,7 @@ from openmarketer_core.db.models import (
     AnalysisRunRecord,
     ChatMessageRecord,
     ChatThreadRecord,
+    ChatTurnRecord,
     Evidence,
     ProductProfileRecord,
     Project,
@@ -54,6 +55,7 @@ from openmarketer_core.db.models import (
     ResearchPageRecord,
     ResearchReportRecord,
     ResearchRunRecord,
+    RunEventRecord,
 )
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.research_runs import FINISHED as RESEARCH_FINISHED
@@ -128,15 +130,18 @@ def delete_project(
         )
     )
     session.execute(delete(ProposalRecord).where(ProposalRecord.project_id == project_id))
+    session.execute(delete(RunEventRecord).where(RunEventRecord.project_id == project_id))
     session.execute(delete(ChatMessageRecord).where(ChatMessageRecord.project_id == project_id))
-    session.execute(delete(ChatThreadRecord).where(ChatThreadRecord.project_id == project_id))
-    session.execute(delete(AnalysisRunRecord).where(AnalysisRunRecord.project_id == project_id))
-    # The order the foreign keys allow: pages, then runs, then reports.
+    session.execute(delete(ChatTurnRecord).where(ChatTurnRecord.project_id == project_id))
+    # The order the foreign keys allow: pages, then the runs, then the reports; a run
+    # names the chat thread that asked for it, so the runs go before the threads.
     session.execute(delete(ResearchPageRecord).where(ResearchPageRecord.project_id == project_id))
     session.execute(delete(ResearchRunRecord).where(ResearchRunRecord.project_id == project_id))
     session.execute(
         delete(ResearchReportRecord).where(ResearchReportRecord.project_id == project_id)
     )
+    session.execute(delete(ChatThreadRecord).where(ChatThreadRecord.project_id == project_id))
+    session.execute(delete(AnalysisRunRecord).where(AnalysisRunRecord.project_id == project_id))
     session.execute(delete(Evidence).where(Evidence.project_id == project_id))
     _delete_profile_versions(session, project_id)
     session.execute(delete(RepoSnapshot).where(RepoSnapshot.project_id == project_id))

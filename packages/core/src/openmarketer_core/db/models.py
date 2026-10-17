@@ -1,7 +1,7 @@
 """Tables for projects, repository evidence, Product Profile versions, analysis runs, research
 runs and their reports and pages, stored credentials, the settings a workspace chose from the
-dashboard, the proposals of actions that wait for a person, and the operator's chat threads
-about a project.
+dashboard, the proposals of actions that wait for a person, the operator's chat threads
+about a project with their turns, and the events runs record for the person watching them.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project; ``credential`` and
@@ -16,12 +16,14 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     Enum,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     LargeBinary,
@@ -71,6 +73,8 @@ ANALYSIS_ERROR_MAX_LENGTH = 2000
 # The same for a research run, whose failures come from a model or a service and can carry
 # a provider's answer.
 RUN_ERROR_MAX_LENGTH = 2000
+# And for a chat turn, whose failure is a sentence worded for the operator.
+CHAT_TURN_ERROR_MAX_LENGTH = 2000
 
 
 def _enum(enum_cls: type[StrEnum], name: str) -> Enum:
@@ -328,6 +332,11 @@ class ResearchRunRecord(Base):
     questions: Mapped[list[str]] = mapped_column(JSONB)
     scope: Mapped[dict[str, Any]] = mapped_column(JSONB)
     max_sources: Mapped[int] = mapped_column(Integer)
+    # The chat thread whose turn asked for the run, which the run reports back to; null for a
+    # run asked for anywhere else.
+    chat_thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chat_thread.id"), index=True
+    )
     created_at: Mapped[datetime] = _created_at()
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -435,6 +444,17 @@ class ChatRole(StrEnum):
     ASSISTANT = "assistant"
 
 
+class ChatTurnTrigger(StrEnum):
+    MESSAGE = "message"  # the operator wrote a message
+    RESEARCH_FINISHED = "research_finished"  # a research run the thread started has ended
+
+
+class ChatTurnStatus(StrEnum):
+    RUNNING = "running"
+    ANSWERED = "answered"
+    FAILED = "failed"
+
+
 class ChatThreadRecord(Base):
     """One named conversation of the operator's chat about a project.
 
@@ -481,6 +501,70 @@ class ChatMessageRecord(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     project_id: Mapped[uuid.UUID] = _project_fk()
     thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_thread.id"))
+    # The turn that wrote the message; null for a message stored before turns were.
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chat_turn.id"), index=True)
     role: Mapped[ChatRole] = mapped_column(_enum(ChatRole, "role"))
     content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class ChatTurnRecord(Base):
+    """One turn of the orchestrator in a chat thread, from its start to its answer or failure.
+
+    A turn answers the operator's message, or follows up on a research run the
+    thread started (``research_run_id``, set exactly for that trigger). A thread
+    has at most one running turn; a failed turn keeps why, worded for the
+    operator.
+    """
+
+    __tablename__ = "chat_turn"
+    __table_args__ = (
+        CheckConstraint(
+            "(trigger = 'research_finished') = (research_run_id IS NOT NULL)",
+            name="research_run_id",
+        ),
+        CheckConstraint("(status = 'failed') = (error IS NOT NULL)", name="error"),
+        CheckConstraint(f"char_length(error) <= {CHAT_TURN_ERROR_MAX_LENGTH}", name="error_length"),
+        CheckConstraint("(status = 'running') = (finished_at IS NULL)", name="finished_at"),
+        Index(
+            "uq_chat_turn_thread_id_running",
+            "thread_id",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    thread_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_thread.id"), index=True)
+    trigger: Mapped[ChatTurnTrigger] = mapped_column(_enum(ChatTurnTrigger, "trigger"))
+    # The finished run a follow-up is about, named without a foreign key, as run events
+    # name their run: the run can be deleted on its own while the turn stays.
+    research_run_id: Mapped[uuid.UUID | None] = mapped_column()
+    status: Mapped[ChatTurnStatus] = mapped_column(
+        _enum(ChatTurnStatus, "status"), server_default=ChatTurnStatus.RUNNING.value
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ----------------------------------------------------------------- events
+class RunEventRecord(Base):
+    """One event a run recorded for the person watching it (``openmarketer_core.run_events``).
+
+    The identifier increases with every event and is the cursor a reader
+    continues from. A run is named by its kind and id, as a proposal names it,
+    without a foreign key: the events of every kind of run share the table.
+    """
+
+    __tablename__ = "run_event"
+    __table_args__ = (Index("ix_run_event_run_kind_run_id_id", "run_kind", "run_id", "id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    run_kind: Mapped[str] = mapped_column(Text)
+    run_id: Mapped[uuid.UUID]
+    kind: Mapped[str] = mapped_column(Text)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _created_at()

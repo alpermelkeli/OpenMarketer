@@ -14,6 +14,13 @@ agents share nothing and importing a module that defines an agent twice gives
 two fresh ones. The one thing an agent writes outside itself is the name a
 payload model carries (``actions.mark_as_action``).
 
+An agent may declare how its runs' progress is shown (``progress``): a pure function of a
+node's name, the state it ran on and the changes it answered with, which gives the run's
+events for the person watching it (``openmarketer_core.run_events``). ``progress_of`` is
+what the runtime calls after each node; an agent that declared none has no events. The
+outcome of an action needs no function of its own: the node that asked runs again with it,
+and what it answers with then is what came of the action.
+
 An agent may declare a context type: what a run needs that is not the graph's state, such
 as a model client or the repository snapshot of the attempt. It is built by the agent's
 wiring for each attempt and is never stored with the state, so it may hold anything. A node,
@@ -52,6 +59,7 @@ from openmarketer_core.agent_runtime.actions import (
 from openmarketer_core.agent_runtime.steps import InvalidNodeResult
 from openmarketer_core.agent_runtime.threads import validate_kind
 from openmarketer_core.agent_runtime.tools import InvalidTool, Toolbox, ToolFunction
+from openmarketer_core.run_events import RunEvent
 
 # The end of the graph, as an edge or a route names it. It is the text LangGraph's own end is,
 # so that a route's answer reaches the graph as it is; a test holds the two together.
@@ -73,6 +81,9 @@ DEFAULT_RETRY_AFTER_SECONDS = 1
 # follows, or END. The state and the context are the agent's own types, so these accept any.
 NodeFunction = Callable[..., Mapping[str, Any]]
 RouteChooser = Callable[..., str]
+# What a run's progress is, after a node: the node's name, the state it ran on and the changes
+# it answered with, to the events the person watching the run is shown.
+ProgressFunction = Callable[[str, Mapping[str, Any], Mapping[str, Any]], Sequence[RunEvent]]
 
 
 class InvalidAgent(ValueError):
@@ -192,6 +203,7 @@ class Agent:
         self._edges: list[tuple[NodeFunction, NodeFunction | str]] = []
         self._routes: list[_DeclaredRoute] = []
         self._tools = Toolbox(kind, context)
+        self._progress: ProgressFunction | None = None
 
     # ------------------------------------------------------------------ actions
     @property
@@ -373,6 +385,32 @@ class Agent:
                 )
         nodes = MappingProxyType(dict(self._nodes))
         return GraphShape(self.state, self.context, nodes, self._start, edges, routes)
+
+    # ----------------------------------------------------------------- progress
+    def progress[Function: ProgressFunction](self, function: Function) -> Function:
+        """Declare how the agent's runs show their progress: one function, for every node.
+
+        ``function(node, state, update)`` is given a node's name, the state the node ran on
+        and the changes it answered with, and gives the events of that step, often none. It
+        is pure: it reads what it is given and nothing else, and it is called again when a
+        node runs again, so an event may be shown twice. Raises ``InvalidAgent`` for an agent
+        that declared one already.
+        """
+        if self._progress is not None:
+            raise InvalidAgent(f"agent {self.kind!r} declares its progress twice")
+        self._progress = function
+        return function
+
+    def progress_of(
+        self, node: str, state: Mapping[str, Any], update: Mapping[str, Any]
+    ) -> tuple[RunEvent, ...]:
+        """The events of node ``node``, which ran on ``state`` and answered with ``update``.
+
+        None for an agent that declared no progress.
+        """
+        if self._progress is None:
+            return ()
+        return tuple(self._progress(node, state, update))
 
     # -------------------------------------------------------------------- tools
     def tool[Tool: ToolFunction](self, function: Tool) -> Tool:

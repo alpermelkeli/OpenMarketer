@@ -23,6 +23,9 @@ readings into findings with their sources, ``check`` verifies them against the p
 fetched, and ``report`` finishes the run; whoever runs the graph stores the report when it
 ends.
 
+What each node shows of the run's progress, for the chat that asked for it, is
+``progress.py``'s, declared on the agent here.
+
 Every node is safe to run twice: a step that died before its checkpoint is taken again from
 the same state, and the model calls are made for this attempt only.
 
@@ -51,7 +54,7 @@ from openmarketer_core.decisions import DecisionError
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.research.page_text import PageTextUnavailable
 from openmarketer_core.research.questions import ResearchRequest
-from openmarketer_core.research.research_agent import rules
+from openmarketer_core.research.research_agent import progress, rules
 from openmarketer_core.research.research_agent.definitions import (
     FetchPage,
     ResearchContext,
@@ -336,7 +339,7 @@ def fetch(state: ResearchState, context: ResearchContext) -> dict[str, Any]:
     if not outcome.succeeded:
         return {
             "next_result": next_result,
-            "notes": [*state["notes"], f"a page was not fetched: {outcome.error}"],
+            "notes": [*state["notes"], f"{progress.FETCH_FAILED_NOTE}{outcome.error}"],
         }
     page = {
         "page_id": str(outcome.result["page_id"]),
@@ -461,6 +464,7 @@ def report(state: ResearchState, context: ResearchContext) -> dict[str, Any]:
 
 
 agent.edge(plan, search)
+agent.progress(progress.progress_of)
 agent.edge(synthesize, check)
 agent.edge(report, END)
 

@@ -14,7 +14,10 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from openmarketer_core.db.chat import ChatNotFound, create_chat
+from openmarketer_core.db.chat_turns import start_turn
 from openmarketer_core.db.models import (
+    ChatTurnTrigger,
     Project,
     ResearchPageRecord,
     ResearchReportRecord,
@@ -32,6 +35,7 @@ from openmarketer_core.db.research_runs import (
     mark_run_started,
     mark_run_succeeded,
     request_research_run,
+    research_run,
 )
 from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.research.questions import ResearchRequest
@@ -169,6 +173,53 @@ def test_a_run_of_a_project_the_workspace_does_not_have_is_refused(session, proj
         )
 
 
+def test_a_run_a_chat_asked_for_names_the_chat(session, project):
+    chat = create_chat(session, workspace_id=project.workspace_id, project_id=project.project_id)
+
+    run = request_research_run(
+        session,
+        workspace_id=project.workspace_id,
+        project_id=project.project_id,
+        request=REQUEST,
+        requested_by="orchestrator",
+        chat_thread_id=chat.id,
+    )
+
+    assert run.chat_thread_id == chat.id
+    read_back = research_run(
+        session, workspace_id=project.workspace_id, project_id=project.project_id, run_id=run.id
+    )
+    assert read_back.chat_thread_id == chat.id
+
+
+def test_a_run_asked_for_elsewhere_names_no_chat(session, project):
+    run = request_research_run(
+        session,
+        workspace_id=project.workspace_id,
+        project_id=project.project_id,
+        request=REQUEST,
+        requested_by="person",
+    )
+
+    assert run.chat_thread_id is None
+
+
+def test_a_run_cannot_name_a_chat_of_another_project(session, project):
+    other = new_project(session)
+    foreign = create_chat(session, workspace_id=other.workspace_id, project_id=other.project_id)
+
+    with pytest.raises(ChatNotFound):
+        request_research_run(
+            session,
+            workspace_id=project.workspace_id,
+            project_id=project.project_id,
+            request=REQUEST,
+            requested_by="orchestrator",
+            chat_thread_id=foreign.id,
+        )
+    assert stored_origins(session, project) == []
+
+
 def ids(project: ProjectInWorkspace) -> dict:
     return {"workspace_id": project.workspace_id, "project_id": project.project_id}
 
@@ -304,3 +355,41 @@ def test_deleting_a_run_of_another_project_is_not_found_and_keeps_it(session, pr
         delete_research_run(session, **ids(other), run_id=run.id)
 
     assert rows_for_run(session, run) == (1, 1, 1)
+
+
+def test_a_run_a_follow_up_named_is_deleted_on_its_own(session, project):
+    chat = create_chat(session, workspace_id=project.workspace_id, project_id=project.project_id)
+    run = request_research_run(
+        session,
+        **ids(project),
+        request=REQUEST,
+        requested_by="orchestrator",
+        chat_thread_id=chat.id,
+    )
+    mark_run_started(session, **ids(project), run_id=run.id)
+    report = save_research_report(
+        session,
+        **ids(project),
+        run_id=run.id,
+        report=Report(
+            questions=list(REQUEST.questions),
+            findings=[],
+            notes=[],
+            cost_usd=0.01,
+            model="fake/model",
+        ),
+    )
+    run = mark_run_succeeded(session, **ids(project), run_id=run.id, report_id=report.id)
+    start_turn(
+        session,
+        workspace_id=project.workspace_id,
+        project_id=project.project_id,
+        chat_id=chat.id,
+        trigger=ChatTurnTrigger.RESEARCH_FINISHED,
+        research_run_id=run.id,
+    )
+
+    keys = delete_research_run(session, **ids(project), run_id=run.id)
+
+    assert keys == ()
+    assert rows_for_run(session, run) == (0, 0, 0)

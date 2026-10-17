@@ -8,8 +8,14 @@
  *
  * This module decides and builds; it does no I/O except through the `fetch` it is
  * given. It deliberately is not a general proxy: only the routes listed in
- * `ALLOWED_ROUTES` exist, the only query parameters are the two that page a list,
- * and the upstream URL is built from validated parts, never from the incoming URL.
+ * `ALLOWED_ROUTES` exist, the only query parameters are the two that page a list
+ * and the one that resumes the chat's event stream, and the upstream URL is built
+ * from validated parts, never from the incoming URL.
+ *
+ * One route streams: a chat's events, as server-sent events. Its answer is passed
+ * through as it arrives instead of being read whole, it is the only route that takes
+ * a browser header (`Last-Event-ID`, which `EventSource` sends when it reconnects,
+ * checked to be an event id), and the upstream request ends when the browser leaves.
  *
  * A request body can hold a secret (a credential being stored). It is passed on to
  * the API and nowhere else: nothing here logs it or puts it in an answer.
@@ -35,25 +41,31 @@ const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i;
 
 type Method = "GET" | "POST" | "PUT" | "DELETE";
 
+/**
+ * What a route takes besides its path: nothing; a list's page (`limit` and `cursor`);
+ * or, for an event stream, where it resumes (`after`, or the `Last-Event-ID` header).
+ */
+type RouteKind = "plain" | "paged" | "stream";
+
 type AllowedRoute = {
   method: Method;
   /** The API path this route forwards to, kept in step with the contract by its type. */
   template: keyof paths;
   pattern: RegExp;
-  /** A list that is read page by page: `limit` and `cursor` are forwarded. */
-  paged: boolean;
+  kind: RouteKind;
 };
 
-function route(method: Method, template: keyof paths, paged = false): AllowedRoute {
+function route(method: Method, template: keyof paths, kind: RouteKind = "plain"): AllowedRoute {
   const pattern = template
     .replace(/\{(project_id|run_id|proposal_id|chat_id)\}/g, UUID)
     .replace(/\{version\}/g, VERSION)
     .replace(/\{name\}/g, CREDENTIAL_NAME)
     .replace(/\{(tier|role)\}/g, SETTING_KEY);
-  return { method, template, pattern: new RegExp(`^${pattern}$`), paged };
+  return { method, template, pattern: new RegExp(`^${pattern}$`), kind };
 }
 
-const PAGED = true;
+const PAGED = "paged";
+const STREAM = "stream";
 
 /** Every API route the dashboard uses. Nothing else is forwarded. */
 export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
@@ -75,6 +87,8 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("POST", "/v1/projects/{project_id}/chats/{chat_id}/messages"),
   route("POST", "/v1/projects/{project_id}/chats/{chat_id}/read"),
   route("DELETE", "/v1/projects/{project_id}/chats/{chat_id}"),
+  route("GET", "/v1/projects/{project_id}/chats/{chat_id}/events", PAGED),
+  route("GET", "/v1/projects/{project_id}/chats/{chat_id}/events/stream", STREAM),
   route("GET", "/v1/projects/{project_id}/profile/versions", PAGED),
   route("GET", "/v1/projects/{project_id}/profile/versions/{version}"),
   route("POST", "/v1/projects/{project_id}/profile/versions/{version}/edits"),
@@ -103,6 +117,8 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
 const MAX_PAGE_SIZE = 100;
 const LIMIT = /^[1-9][0-9]{0,2}$/;
 const CURSOR = /^[A-Za-z0-9_-]{1,200}$/;
+// An event's id, as the API numbers them: a non-negative integer in decimal.
+const EVENT_ID = /^(0|[1-9][0-9]{0,17})$/;
 
 export class ProxyRefusal extends Error {
   constructor(
@@ -154,18 +170,26 @@ export function assertFromDashboard(method: string, headers: Headers): void {
   }
 }
 
+/** Where an allowed request goes: the API path and query, and whether its answer streams. */
+export type ApiTarget = { pathAndQuery: string; streams: boolean };
+
 /**
  * The API path and query for an allowed request; refuses every other method and path.
  *
  * A query is refused rather than dropped, so a caller learns that what it sent had
  * no effect: only a paged list takes one, only `limit` and `cursor`, each once and
- * each in the form the API issues.
+ * each in the form the API issues; and the event stream takes only `after`, once,
+ * as an event id.
  */
 export function allowedApiTarget(
   method: string,
   pathSegments: readonly string[],
   query: URLSearchParams,
 ): string {
+  return allowedRoute(method, pathSegments, query).pathAndQuery;
+}
+
+function allowedRoute(method: string, pathSegments: readonly string[], query: URLSearchParams): ApiTarget {
   const path = `/v1/${pathSegments.join("/")}`;
   const matched = ALLOWED_ROUTES.find((r) => r.method === method && r.pattern.test(path));
   if (matched === undefined) {
@@ -175,31 +199,53 @@ export function allowedApiTarget(
       "the dashboard does not forward this method and path",
     );
   }
-  const forwarded = pageQuery(query, matched.paged);
-  return forwarded === "" ? path : `${path}?${forwarded}`;
+  const forwarded = routeQuery(query, matched.kind);
+  return {
+    pathAndQuery: forwarded === "" ? path : `${path}?${forwarded}`,
+    streams: matched.kind === "stream",
+  };
 }
 
-function pageQuery(query: URLSearchParams, paged: boolean): string {
+const QUERY_RULE: Record<RouteKind, string> = {
+  plain: "this route takes no query parameters",
+  paged: "a list takes only `limit` (1 to 100) and `cursor` (as the API issued it), each once",
+  stream: "the event stream takes only `after`, once, as an event id",
+};
+
+function routeQuery(query: URLSearchParams, kind: RouteKind): string {
   const forwarded = new URLSearchParams();
   for (const name of new Set(query.keys())) {
     const values = query.getAll(name);
-    const valid =
-      paged &&
-      values.length === 1 &&
-      ((name === "limit" && LIMIT.test(values[0]) && Number(values[0]) <= MAX_PAGE_SIZE) ||
-        (name === "cursor" && CURSOR.test(values[0])));
-    if (!valid) {
-      throw new ProxyRefusal(
-        400,
-        "proxy_query_rejected",
-        paged
-          ? "a list takes only `limit` (1 to 100) and `cursor` (as the API issued it), each once"
-          : "this route takes no query parameters",
-      );
+    if (values.length !== 1 || !isAllowedParameter(kind, name, values[0])) {
+      throw new ProxyRefusal(400, "proxy_query_rejected", QUERY_RULE[kind]);
     }
     forwarded.set(name, values[0]);
   }
   return forwarded.toString();
+}
+
+function isAllowedParameter(kind: RouteKind, name: string, value: string): boolean {
+  if (kind === "paged") {
+    return (
+      (name === "limit" && LIMIT.test(value) && Number(value) <= MAX_PAGE_SIZE) ||
+      (name === "cursor" && CURSOR.test(value))
+    );
+  }
+  if (kind === "stream") return name === "after" && EVENT_ID.test(value);
+  return false;
+}
+
+/**
+ * The `Last-Event-ID` a browser's `EventSource` sends when it reconnects, checked to be
+ * an event id; nothing when the browser sent none. Read for the event stream only.
+ */
+export function lastEventId(headers: Headers): string | undefined {
+  const value = headers.get("last-event-id");
+  if (value === null) return undefined;
+  if (!EVENT_ID.test(value)) {
+    throw new ProxyRefusal(400, "proxy_header_rejected", "`Last-Event-ID` must be an event id");
+  }
+  return value;
 }
 
 /** The API's base URL from server configuration: an http(s) origin and nothing more. */
@@ -248,7 +294,8 @@ export async function readJsonBody(request: Request): Promise<string | undefined
  * Check a request and forward it to the API, or answer with the refusal.
  *
  * Only the method, the validated path, a list's page parameters and the JSON body
- * travel upstream: no cookie, no other query and no header of the browser's.
+ * travel upstream: no cookie, no other query and no header of the browser's, except
+ * the event stream's checked `Last-Event-ID`.
  */
 export async function proxyToApi(
   request: Request,
@@ -259,9 +306,10 @@ export async function proxyToApi(
   try {
     assertFromDashboard(request.method, request.headers);
     const query = new URL(request.url).searchParams;
-    const pathAndQuery = allowedApiTarget(request.method, pathSegments, query);
-    const body = await readJsonBody(request);
+    const { pathAndQuery, streams } = allowedRoute(request.method, pathSegments, query);
     const target = new URL(pathAndQuery, apiBaseUrl(configuredApiUrl));
+    if (streams) return await forwardStream(send, target, lastEventId(request.headers), request.signal);
+    const body = await readJsonBody(request);
     return await forward(send, target, request.method, body);
   } catch (error) {
     if (error instanceof ProxyRefusal) return error.toResponse();
@@ -275,18 +323,60 @@ async function forward(
   method: string,
   body: string | undefined,
 ): Promise<Response> {
-  let upstream: Response;
+  const upstream = await reach(send, target, {
+    method,
+    body,
+    headers: {
+      accept: "application/json",
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+  });
+  const text = await upstream.text();
+  // A status that may not carry a body (204, 304) cannot be given one.
+  return jsonResponse(upstream.status, text === "" ? null : text);
+}
+
+/**
+ * Forward the event stream: its events are passed on as the API sends them, never read
+ * whole, and the upstream request is aborted when the browser goes away (`signal`). An
+ * answer that is not an event stream (the API's 404 for a chat it does not have) is
+ * passed on as JSON, like any other.
+ */
+async function forwardStream(
+  send: typeof fetch,
+  target: URL,
+  resumeAfter: string | undefined,
+  signal: AbortSignal,
+): Promise<Response> {
+  const upstream = await reach(send, target, {
+    method: "GET",
+    headers: {
+      accept: "text/event-stream",
+      ...(resumeAfter === undefined ? {} : { "last-event-id": resumeAfter }),
+    },
+    signal,
+  });
+  const mediaType = upstream.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  if (!upstream.ok || mediaType !== "text/event-stream" || upstream.body === null) {
+    const text = await upstream.text();
+    return jsonResponse(upstream.status, text === "" ? null : text);
+  }
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      // `no-transform` keeps compression from holding events back; `X-Accel-Buffering`
+      // asks a reverse proxy in front of the dashboard not to buffer them either.
+      "cache-control": "no-store, no-transform",
+      "x-accel-buffering": "no",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+async function reach(send: typeof fetch, target: URL, init: RequestInit): Promise<Response> {
   try {
-    upstream = await send(target, {
-      method,
-      body,
-      headers: {
-        accept: "application/json",
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      redirect: "manual",
-      cache: "no-store",
-    });
+    return await send(target, { ...init, redirect: "manual", cache: "no-store" });
   } catch {
     throw new ProxyRefusal(
       502,
@@ -294,9 +384,6 @@ async function forward(
       "the OpenMarketer API did not answer; start it with `make api`",
     );
   }
-  const text = await upstream.text();
-  // A status that may not carry a body (204, 304) cannot be given one.
-  return jsonResponse(upstream.status, text === "" ? null : text);
 }
 
 function refused(message: string): ProxyRefusal {

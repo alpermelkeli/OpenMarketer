@@ -23,6 +23,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from enum import StrEnum
+from http import HTTPStatus
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -30,6 +31,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
 
+from openmarketer_api.event_stream import TooManyStreams
 from openmarketer_api.identity import NotLocalRequest
 from openmarketer_core.credentials.catalog import CredentialValueRefused, UnknownCredential
 from openmarketer_core.credentials.resolution import (
@@ -40,6 +42,7 @@ from openmarketer_core.credentials.resolution import (
 )
 from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
 from openmarketer_core.db.chat import ChatNotFound
+from openmarketer_core.db.chat_turns import ChatBusy
 from openmarketer_core.db.profile_versions import ProfileAlreadyApproved, ProfileVersionNotFound
 from openmarketer_core.db.project_removal import (
     ProjectHasPendingProposal,
@@ -88,6 +91,7 @@ class ErrorCode(StrEnum):
     PROFILE_ALREADY_APPROVED = "profile_already_approved"
     PROPOSAL_NOT_PENDING = "proposal_not_pending"
     PROPOSAL_PENDING = "proposal_pending"
+    CHAT_BUSY = "chat_busy"
     CREDENTIAL_SET_BY_ENVIRONMENT = "credential_set_by_environment"
     CREDENTIAL_UNREADABLE = "credential_unreadable"
     ENCRYPTION_KEY_MISSING = "encryption_key_missing"
@@ -101,6 +105,7 @@ class ErrorCode(StrEnum):
     CHAT_UNANSWERED = "chat_unanswered"
     DATABASE_UNAVAILABLE = "database_unavailable"
     STORAGE_UNAVAILABLE = "storage_unavailable"
+    TOO_MANY_STREAMS = "too_many_streams"
 
 
 class ProfileNotFound(Exception):
@@ -145,6 +150,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
     ProposalNotPending: (409, ErrorCode.PROPOSAL_NOT_PENDING),
     ProjectHasPendingProposal: (409, ErrorCode.PROPOSAL_PENDING),
+    ChatBusy: (409, ErrorCode.CHAT_BUSY),
     CredentialSetByEnvironment: (409, ErrorCode.CREDENTIAL_SET_BY_ENVIRONMENT),
     CredentialUnreadable: (409, ErrorCode.CREDENTIAL_UNREADABLE),
     EncryptionKeyMissing: (409, ErrorCode.ENCRYPTION_KEY_MISSING),
@@ -155,12 +161,28 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ResearchNotStarted: (503, ErrorCode.RESEARCH_NOT_STARTED),
     PageStoreUnavailable: (503, ErrorCode.STORAGE_UNAVAILABLE),
     LLMError: (503, ErrorCode.MODEL_UNAVAILABLE),
+    TooManyStreams: (503, ErrorCode.TOO_MANY_STREAMS),
 }
 
 
 def problems(*statuses: int) -> dict[int | str, dict[str, Any]]:
     """The error responses a route declares in the OpenAPI document."""
     return {status: {"model": Problem} for status in statuses}
+
+
+def json_problems(*statuses: int) -> dict[int | str, dict[str, Any]]:
+    """The error responses of a route whose own response is not JSON, such as a stream.
+
+    ``problems`` would declare them in the route's own media type; they are JSON
+    whatever the route answers when it succeeds.
+    """
+    return {
+        status: {
+            "description": HTTPStatus(status).phrase,
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Problem"}}},
+        }
+        for status in statuses
+    }
 
 
 def register_error_handlers(app: FastAPI) -> None:

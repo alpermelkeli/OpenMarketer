@@ -18,8 +18,9 @@ now, and the workspace's choices are laid over it at each attempt.
 
 ``researcher`` reads the environment; ``registration`` takes what was built
 (``ResearcherParts``) and declares the agent's worker side: the handlers of its
-two actions, the steps of its graph, the two activities of the workflow's
-hooks, the cleanup of its runs' checkpoints and the page expiry task.
+two actions, the steps of its graph (which record each node's progress), the
+three activities of the workflow's hooks, the cleanup of its runs' checkpoints
+and the page expiry task.
 
 This module holds no rule: what may be fetched, what a finding must rest on and
 how a run changes state are all in core. It does not connect to Temporal, build
@@ -189,6 +190,8 @@ def registration(parts: ResearcherParts) -> AgentRegistration:
         finish=work.finish,
         context=work.context,
         recursion_limit=recursion_limit(parts.limits),
+        # What each node did, stored as it ends for the chat that asked for the run.
+        record_progress=work.record_progress,
     )
     activities = ResearchActivities(parts.sessions, parts.policy)
     return worker.registration(
@@ -196,7 +199,7 @@ def registration(parts: ResearcherParts) -> AgentRegistration:
         graph=WordedSteps(graph_steps),
         workflows=[Research],
         texts=steps.RESEARCH_TEXTS,
-        activities=[activities.start_run, activities.record_failure],
+        activities=[activities.start_run, activities.record_failure, activities.record_end],
         longest_run=timedelta(seconds=longest_research_seconds(parts.policy, parts.limits)),
         checkpoint_cleanups=[cleanup_of_research_runs(parts.policy, parts.limits)],
         periodic_tasks=[

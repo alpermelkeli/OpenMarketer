@@ -9,8 +9,9 @@ the tool turns into words for the operator.
 
 This module holds no rule of its own: ``request_research`` is core's use case, the starter is
 the API's workflow adapter (the same function a route gets), and who asked is fixed to the
-orchestrator's chat. An adapter is built for one turn and holds the turn's workspace and
-project, so a tool cannot start a run elsewhere.
+orchestrator's chat. An adapter is built for one turn and holds the turn's workspace,
+project and chat, so a tool cannot start a run elsewhere, and the run is the chat's: it is
+stored with the chat's id, and the chat hears back from it when it ends.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ class PostgresChatRequests:
     start_workflow: Callable[[WorkflowStart], None]
     workspace_id: uuid.UUID
     project_id: uuid.UUID
+    chat_id: uuid.UUID
 
     def start_research(self, request: ResearchRequest) -> ResearchRunReading:
         """Store a research run for the turn's project and start its workflow.
@@ -52,6 +54,7 @@ class PostgresChatRequests:
                 request=request,
                 start_workflow=self.start_workflow,
                 requested_by=research.REQUESTED_BY_THE_CHAT,
+                chat_thread_id=self.chat_id,
             )
         except research.ResearchNotStarted as e:
             raise chat.ResearchNotStarted(str(e)) from e
