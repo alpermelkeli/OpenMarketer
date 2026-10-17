@@ -78,8 +78,10 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
   }
 
   return (
-    <section aria-labelledby="chat-title" className="grid min-h-[calc(100dvh-6rem)] grid-rows-[auto_1fr_auto] gap-4">
-      <header className="flex items-center justify-between gap-4 border-b pb-3">
+    // The shell's bottom padding is taken back so the screen reaches the window's bottom edge and the
+    // document itself does not scroll; from lg the section is one windowful and the thread scrolls inside it.
+    <section aria-labelledby="chat-title" className="-mb-24 flex min-h-[calc(100dvh-6rem)] flex-col gap-4 lg:h-[calc(100dvh-3.5rem)]">
+      <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b bg-background pb-3">
         <h1 id="chat-title" className="truncate font-heading text-title">
           {chat.data ? chat.data.title : <Skeleton className="h-7 w-64" />}
         </h1>
@@ -93,7 +95,7 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
         )}
       </header>
 
-      <div aria-live="polite" className="grid content-start gap-4">
+      <div aria-live="polite" className="grid flex-1 content-start gap-4 lg:min-h-0 lg:overflow-y-auto">
         {messages.hasNextPage && (
           <div className="justify-self-center">
             <Button
@@ -174,10 +176,10 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
             This page has stopped following the chat live. Reload it to see what has happened since.
           </p>
         )}
-        <div ref={end} />
+        <div ref={end} className="scroll-mb-28 lg:scroll-mb-0" />
       </div>
 
-      <div className="sticky bottom-0 bg-background pb-2">
+      <div className="sticky bottom-0 z-10 shrink-0 bg-background pb-2">
         <Composer
           value={draft}
           onChange={setDraft}
