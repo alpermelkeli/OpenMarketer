@@ -38,7 +38,8 @@ def test_request_and_reply():
                             "tool_calls": [
                                 {"id": "1", "function": {"name": "t", "arguments": "{}"}}
                             ],
-                        }
+                        },
+                        "finish_reason": "tool_calls",
                     }
                 ],
                 "usage": {"prompt_tokens": 120, "completion_tokens": 30, "cost": 0.0042},
@@ -60,7 +61,31 @@ def test_request_and_reply():
     }
     assert (reply.cost_usd, reply.prompt_tokens, reply.completion_tokens) == (0.0042, 120, 30)
     assert reply.tool_calls and reply.text == ""
+    assert reply.finish_reason == "tool_calls"
     assert model.calls == [reply]
+
+
+def test_a_cut_off_answer_keeps_the_length_finish_reason():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "content": None}, "finish_reason": "length"}
+                ]
+            },
+        )
+
+    reply = client(handler).chat("writer", [{"role": "user", "content": "hi"}])
+
+    assert reply.finish_reason == "length"
+
+
+def test_a_reply_without_a_finish_reason_keeps_none():
+    reply = client(lambda request: reply_naming("provider/model")).chat(
+        "writer", [{"role": "user", "content": "hi"}]
+    )
+    assert reply.finish_reason is None
 
 
 def reply_naming(model: object) -> httpx.Response:

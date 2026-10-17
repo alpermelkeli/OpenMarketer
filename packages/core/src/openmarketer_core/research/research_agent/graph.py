@@ -48,6 +48,7 @@ from openmarketer_core.agent_runtime.agent import END
 from openmarketer_core.agent_runtime.langgraph_steps import request_action
 from openmarketer_core.agent_runtime.model_input import DoesNotFit, read_strict_json
 from openmarketer_core.decisions import DecisionError
+from openmarketer_core.llm import ChatReply
 from openmarketer_core.research.page_text import PageTextUnavailable
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent import rules
@@ -90,24 +91,39 @@ def _ask_for[Model: BaseModel](
 
     The first call forces the submission tool. An answer that is not the call, carries no
     readable arguments, or does not fit the fields is told what was wrong and asked once
-    more, inside the same node; a second unusable answer ends the run. Every call's cost is
-    added to ``spent``, whichever attempt it belonged to.
+    more, inside the same node; an answer the model's length limit cut off is told that as
+    well, and the run that ends on one ends in those words: a thinking model can spend its
+    whole budget on reasoning and submit nothing (a real run's synthesis did, twice), which
+    is otherwise indistinguishable from a model that refused. A second unusable answer ends
+    the run. Every call's cost is added to ``spent``, whichever attempt it belonged to.
     """
+    cut_off = False
     for _ in range(rules.SUBMISSION_ATTEMPTS):
         reply = context.model.chat(
             role, messages, tools=[tool], tool_choice=rules.forced(tool_name)
         )
         spent.cost_usd += reply.cost_usd
         spent.model = reply.model or spent.model
+        cut_off = _cut_off(reply)
         submitted = _read_call(reply, tool_name, model_type)
         if not isinstance(submitted, str):
             return submitted
+        if cut_off:
+            submitted = f"The answer was cut off by the model's length limit. {submitted}"
         messages = [*messages, reply.message, {"role": "user", "content": submitted}]
-    raise ResearchError(f"the model did not submit a readable {tool_name} after two attempts")
+    raise ResearchError(
+        f"the model did not submit a readable {tool_name} after two attempts"
+        + ("; the last answer was cut off by the model's length limit" if cut_off else "")
+    )
+
+
+def _cut_off(reply: ChatReply) -> bool:
+    """Whether the model's length limit stopped the answer before it was complete."""
+    return reply.finish_reason == "length"
 
 
 def _read_call[Model: BaseModel](
-    reply: Any, tool_name: str, model_type: type[Model]
+    reply: ChatReply, tool_name: str, model_type: type[Model]
 ) -> Model | str:
     """The submission of the forced call, or the text to tell the model what was wrong."""
     calls = [c for c in reply.tool_calls if c.get("function", {}).get("name") == tool_name]
@@ -138,18 +154,24 @@ def _ask_in_text[Model: BaseModel](
     The reader reads untrusted text and is quarantined: its call carries no tools at all, so
     the submission is the one JSON object the answer holds. An answer that is not that
     object, or does not fit the fields, is told what was wrong and asked once more, inside
-    the same node; a second unusable answer ends the run.
+    the same node, and an answer the model's length limit cut off is told that as well; a
+    second unusable answer ends the run.
     """
+    cut_off = False
     for _ in range(rules.SUBMISSION_ATTEMPTS):
         reply = context.model.chat(role, messages)
         spent.cost_usd += reply.cost_usd
         spent.model = reply.model or spent.model
+        cut_off = _cut_off(reply)
         submitted = _read_text(reply.text, model_type)
         if not isinstance(submitted, str):
             return submitted
+        if cut_off:
+            submitted = f"The answer was cut off by the model's length limit. {submitted}"
         messages = [*messages, reply.message, {"role": "user", "content": submitted}]
     raise ResearchError(
         f"the model did not answer a readable {model_type.__name__} after two attempts"
+        + ("; the last answer was cut off by the model's length limit" if cut_off else "")
     )
 
 

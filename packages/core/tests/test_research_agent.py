@@ -2,8 +2,9 @@
 
 The reader is the one node that takes untrusted page text, and its role may not be sent tools
 (the design's reader/actor split, checked by the router): it answers with the fixed fields as
-one JSON object, which the node reads strictly and asks for again when it does not fit. These
-tests call the node directly with a scripted model; they reach no network and no database.
+one JSON object, which the node reads strictly and asks for again when it does not fit, and
+tells so when the model's length limit cut it off. These tests call the node directly with a
+scripted model; they reach no network and no database.
 """
 
 import json
@@ -36,9 +37,13 @@ READING = {
 
 
 class ScriptedModel:
-    """A reader whose answers are prepared: each call records what it was sent."""
+    """A reader whose answers are prepared: each call records what it was sent.
 
-    def __init__(self, *answers: str):
+    An answer is the reader's text, or a whole ``ChatReply`` for a test that scripts the
+    reply's ``finish_reason`` (a thinking model cut off by its length limit writes nothing).
+    """
+
+    def __init__(self, *answers: str | ChatReply):
         self.answers = list(answers)
         self.calls: list[dict[str, Any]] = []
 
@@ -47,6 +52,8 @@ class ScriptedModel:
             {"role": role, "messages": messages, "tools": tools, "tool_choice": tool_choice}
         )
         answer = self.answers.pop(0)
+        if isinstance(answer, ChatReply):
+            return answer
         return ChatReply(
             message={"role": "assistant", "content": answer},
             model="vendor/model-1",
@@ -83,6 +90,16 @@ def a_state() -> ResearchState:
         "cost_usd": 0.0,
         "model": "",
     }
+
+
+def a_cut_off_answer() -> ChatReply:
+    """A thinking model's answer when its length limit ran out mid-thought, as in a real run."""
+    return ChatReply(
+        message={"role": "assistant"},
+        model="vendor/model-1",
+        cost_usd=0.002,
+        finish_reason="length",
+    )
 
 
 def a_context(model: ScriptedModel) -> ResearchContext:
@@ -145,6 +162,25 @@ def test_two_unreadable_answers_end_the_run():
     model = ScriptedModel("nope", "still not JSON")
 
     with pytest.raises(ResearchError, match="readable Reading"):
+        read(a_state(), a_context(model))
+
+
+def test_a_reading_cut_off_by_the_length_limit_is_told_so_and_asked_once_more():
+    model = ScriptedModel(a_cut_off_answer(), json.dumps({"summary": "Fine."}))
+
+    changes = read(a_state(), a_context(model))
+
+    assert len(model.calls) == 2
+    told = model.calls[1]["messages"][-1]
+    assert told["role"] == "user"
+    assert told["content"].startswith("The answer was cut off by the model's length limit.")
+    assert changes["readings"][0]["reading"]["summary"] == "Fine."
+
+
+def test_two_answers_cut_off_by_the_length_limit_end_the_run_naming_it():
+    model = ScriptedModel(a_cut_off_answer(), a_cut_off_answer())
+
+    with pytest.raises(ResearchError, match="cut off by the model's length limit"):
         read(a_state(), a_context(model))
 
 

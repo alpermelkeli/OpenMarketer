@@ -1,9 +1,10 @@
 """Tests for the researcher's findings: what a synthesis must submit, and what a run keeps.
 
-A synthesis that sends ``{}`` is asked again rather than read as nothing found, and a later
-round's findings replace earlier ones only for the questions they answer. The nodes are called
-with a scripted model; one test runs two rounds of the graph in memory with ``AgentSteps``, the
-searches and the fetches answered by the test. Nothing reaches a network or a database.
+A synthesis that sends ``{}`` is asked again rather than read as nothing found, a synthesis the
+model's length limit cut off is told so, and a later round's findings replace earlier ones only
+for the questions they answer. The nodes are called with a scripted model; one test runs two
+rounds of the graph in memory with ``AgentSteps``, the searches and the fetches answered by the
+test. Nothing reaches a network or a database.
 """
 
 import json
@@ -48,15 +49,22 @@ QUOTE = "schedules reviews with spaced repetition"
 
 
 class ScriptedChat:
-    """The researcher and the reader, answering in the order the graph asks; it records calls."""
+    """The researcher and the reader, answering in the order the graph asks; it records calls.
 
-    def __init__(self, *messages: dict[str, Any]):
-        self.messages = list(messages)
+    An answer is a message or a whole ``ChatReply``, for a test that scripts the reply's
+    ``finish_reason`` (a thinking model cut off by its length limit submits nothing).
+    """
+
+    def __init__(self, *replies: dict[str, Any] | ChatReply):
+        self.replies = list(replies)
         self.calls: list[dict[str, Any]] = []
 
     def chat(self, role, messages, *, tools=None, tool_choice=None) -> ChatReply:
         self.calls.append({"role": role, "messages": messages})
-        return ChatReply(message=self.messages.pop(0), model="vendor/model-1", cost_usd=0.001)
+        reply = self.replies.pop(0)
+        if isinstance(reply, ChatReply):
+            return reply
+        return ChatReply(message=reply, model="vendor/model-1", cost_usd=0.001)
 
 
 class KeepEverything:
@@ -76,6 +84,16 @@ def submission(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 
 def a_reading(summary: str) -> dict[str, Any]:
     return {"role": "assistant", "content": json.dumps({"summary": summary})}
+
+
+def a_cut_off_reply() -> ChatReply:
+    """A thinking model's answer when its length limit ran out mid-thought, as in a real run."""
+    return ChatReply(
+        message={"role": "assistant"},
+        model="vendor/model-1",
+        cost_usd=0.001,
+        finish_reason="length",
+    )
 
 
 def a_draft(question_index: int, page_id: str = PAGE_IDS[0]) -> dict[str, Any]:
@@ -163,6 +181,49 @@ def test_a_first_round_whose_synthesis_cannot_be_read_ends_the_run():
 
     with pytest.raises(ResearchError, match="submit_findings"):
         synthesize(a_state(), a_context(chat))
+
+
+def test_a_cut_off_synthesis_is_told_so_and_asked_once_more():
+    chat = ScriptedChat(
+        a_cut_off_reply(), submission(rules.SUBMIT_FINDINGS, {"findings": [a_draft(0)]})
+    )
+
+    changes = synthesize(a_state(), a_context(chat))
+
+    assert len(chat.calls) == 2
+    told = chat.calls[1]["messages"][-1]["content"]
+    assert told.startswith("The answer was cut off by the model's length limit.")
+    assert [draft["question_index"] for draft in changes["drafts"]] == [0]
+
+
+def test_a_synthesis_cut_off_twice_ends_the_run_naming_the_length_limit():
+    chat = ScriptedChat(a_cut_off_reply(), a_cut_off_reply())
+
+    with pytest.raises(ResearchError, match="cut off by the model's length limit"):
+        synthesize(a_state(), a_context(chat))
+
+
+def test_a_first_cut_off_answer_whose_second_is_rejected_ends_the_run_plain():
+    chat = ScriptedChat(a_cut_off_reply(), submission(rules.SUBMIT_FINDINGS, {}))
+
+    with pytest.raises(ResearchError) as error:
+        synthesize(a_state(), a_context(chat))
+
+    assert (
+        str(error.value) == "the model did not submit a readable submit_findings after two attempts"
+    )
+
+
+def test_a_run_that_ends_on_a_cut_off_second_answer_says_the_last_one_was_cut_off():
+    chat = ScriptedChat(submission(rules.SUBMIT_FINDINGS, {}), a_cut_off_reply())
+
+    with pytest.raises(ResearchError) as error:
+        synthesize(a_state(), a_context(chat))
+
+    assert str(error.value) == (
+        "the model did not submit a readable submit_findings after two attempts"
+        "; the last answer was cut off by the model's length limit"
+    )
 
 
 def test_a_later_round_whose_synthesis_cannot_be_read_keeps_the_earlier_findings():
@@ -253,7 +314,7 @@ def test_a_second_round_that_submitted_nothing_readable_at_first_keeps_the_first
             action_id=step.action.action_id, succeeded=True, result=answer, error=""
         )
 
-    assert chat.messages == []  # every answer was asked for, the rejected {} too
+    assert chat.replies == []  # every answer was asked for, the rejected {} too
     assert step.output is not None
     [finding] = step.output["findings"]
     assert finding["question_index"] == 0

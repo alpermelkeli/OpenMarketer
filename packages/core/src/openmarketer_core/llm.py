@@ -57,6 +57,10 @@ class ChatReply:
     cost_usd: float
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # Why the answer stopped: "stop", "tool_calls", "length" (the answer was cut off by the
+    # request's `max_tokens`), or whatever the provider reports. A caller that must tell a
+    # cut-off answer from an empty one reads this.
+    finish_reason: str | None = None
 
     @property
     def tool_calls(self) -> list[dict[str, Any]]:
@@ -134,8 +138,10 @@ class RouterChatModel:
             logger.warning("model provider reported an error: %r", str(error)[:300])
             raise LLMError("the model provider reported an error", status=reported_status(error))
 
-        message = body["choices"][0]["message"]
+        choice = body["choices"][0]
+        message = choice["message"]
         usage = body.get("usage") or {}
+        finish_reason = choice.get("finish_reason")
         reply = ChatReply(
             message={
                 key: message[key]
@@ -146,6 +152,7 @@ class RouterChatModel:
             cost_usd=float(usage.get("cost") or 0.0),
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
+            finish_reason=finish_reason if isinstance(finish_reason, str) else None,
         )
         self.calls.append(reply)
         return reply
