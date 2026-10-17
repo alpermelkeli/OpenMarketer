@@ -6,6 +6,7 @@ is stored with the core function the worker calls.
 """
 
 import uuid
+from decimal import Decimal
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
@@ -59,7 +60,9 @@ def scope(sessions) -> RunScope:
 
 
 @pytest.fixture
-def signals(app, sessions, scope, repository_models, no_catalog, page_store) -> FakeSignals:
+def signals(
+    app, sessions, scope, repository_models, no_catalog, page_store, asset_store
+) -> FakeSignals:
     """The application wired to the test database, this test's workspace and fake signals."""
     fake = FakeSignals()
     app.state.services = Services(
@@ -70,6 +73,7 @@ def signals(app, sessions, scope, repository_models, no_catalog, page_store) -> 
         model_router=repository_models,
         model_catalog=no_catalog,
         page_store=page_store,
+        asset_store=asset_store,
     )
     app.dependency_overrides[current_workspace_id] = lambda: scope.workspace_id
     return fake
@@ -117,6 +121,28 @@ def test_list_can_hold_the_pending_proposals_only(client, signals, sessions, sco
     body = client.get(url(scope), params={"status": "pending"}).json()
 
     assert [p["id"] for p in body["proposals"]] == [str(pending.id)]
+
+
+def test_a_proposal_that_spends_shows_its_estimate(client, signals, sessions, scope):
+    run = GraphRunRef(kind="studio-run", run_id=uuid.uuid4())
+    with transaction(sessions) as session:
+        proposal = propose_action(
+            session,
+            scope=scope,
+            run=run,
+            workflow_id=f"studio-{run.run_id}",
+            request=ActionRequest(f"studio-run:{run.run_id}:1", "generate_image", {"n": 1}),
+            effect=ActionEffect.SPENDS,
+            wait_seconds=3600,
+            estimate_usd=Decimal("0.42"),
+        )
+
+    assert client.get(url(scope, proposal)).json()["estimate_usd"] == 0.42
+
+
+def test_a_proposal_that_does_not_spend_has_no_estimate(client, signals, sessions, scope):
+    proposal = proposed(sessions, scope)
+    assert client.get(url(scope, proposal)).json()["estimate_usd"] is None
 
 
 def test_one_proposal_is_read_by_its_id(client, signals, sessions, scope):

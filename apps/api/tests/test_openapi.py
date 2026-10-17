@@ -47,6 +47,25 @@ OPERATIONS = {
     "getResearch": ("get", "/v1/projects/{project_id}/researches/{run_id}"),
     "getResearchReport": ("get", "/v1/projects/{project_id}/researches/{run_id}/report"),
     "deleteResearch": ("delete", "/v1/projects/{project_id}/researches/{run_id}"),
+    "startStudioRun": ("post", "/v1/projects/{project_id}/studio-runs"),
+    "listStudioRuns": ("get", "/v1/projects/{project_id}/studio-runs"),
+    "getStudioRun": ("get", "/v1/projects/{project_id}/studio-runs/{run_id}"),
+    "deleteStudioRun": ("delete", "/v1/projects/{project_id}/studio-runs/{run_id}"),
+    "listMediaAssets": ("get", "/v1/projects/{project_id}/media-assets"),
+    "getMediaAsset": ("get", "/v1/projects/{project_id}/media-assets/{asset_id}"),
+    "acceptMediaAsset": ("post", "/v1/projects/{project_id}/media-assets/{asset_id}/accept"),
+    "rejectMediaAsset": ("post", "/v1/projects/{project_id}/media-assets/{asset_id}/reject"),
+    "getMediaAssetImage": (
+        "get",
+        "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/image",
+    ),
+    "downloadMediaAssetImage": (
+        "get",
+        "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download",
+    ),
+    "getCreativeBudget": ("get", "/v1/settings/creative-budget"),
+    "setCreativeBudget": ("put", "/v1/settings/creative-budget"),
+    "removeCreativeBudget": ("delete", "/v1/settings/creative-budget"),
     "getModelSettings": ("get", "/v1/settings/models"),
     "setTierModel": ("put", "/v1/settings/models/tiers/{tier}"),
     "removeTierModel": ("delete", "/v1/settings/models/tiers/{tier}"),
@@ -126,6 +145,8 @@ LISTS = {
         "messages",
     ),
     "/v1/projects/{project_id}/chats/{chat_id}/events": ("ChatEventListResponse", "events"),
+    "/v1/projects/{project_id}/studio-runs": ("StudioRunListResponse", "runs"),
+    "/v1/projects/{project_id}/media-assets": ("MediaAssetListResponse", "assets"),
 }
 
 
@@ -199,6 +220,20 @@ def test_removing_a_credential_takes_no_request_body_and_answers_with_none(schem
     removal = schema["paths"]["/v1/settings/credentials/{name}"]["delete"]
     assert "requestBody" not in removal
     assert "content" not in removal["responses"]["204"]
+
+
+def test_an_image_is_served_in_an_image_type_and_its_errors_as_json(schema):
+    path = "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/image"
+    responses = schema["paths"][path]["get"]["responses"]
+    assert set(responses["200"]["content"]) == {"image/png", "image/jpeg", "image/webp"}
+    for status in ("403", "404", "503"):
+        assert set(responses[status]["content"]) == {"application/json"}, status
+
+
+def test_a_media_asset_version_carries_no_sandbox_code(schema):
+    fields = set(schema["components"]["schemas"]["MediaAssetVersionResponse"]["properties"])
+    assert "code" not in fields
+    assert {"has_code", "code_chars"} <= fields
 
 
 def test_routes_import_no_database_or_agent_code():

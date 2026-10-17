@@ -5,10 +5,11 @@ and never build error responses themselves. Messages come from the domain
 error; database failures and anything unexpected get a fixed message, because
 their text may name hosts, statements or paths.
 
-A credential value, a choice of models or a limit of an analysis that breaks a
-rule is answered in the shape of a request validation error (422), beside the
-field it was sent in: it is a refusal of what the body holds, like a field of
-the wrong type.
+A credential value, a choice of models, a limit of an analysis, a cap of the
+budget for generated media or a reference asset a studio request names that is
+not the project's is answered in the shape of a request validation error
+(422), beside the field it was sent in: it is a refusal of what the body holds,
+like a field of the wrong type.
 
 A chat turn the agent gave no answer for is answered with a fixed message: the
 agent's own wording of a failed turn may repeat what the model sent.
@@ -43,24 +44,42 @@ from openmarketer_core.credentials.resolution import (
 from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
 from openmarketer_core.db.chat import ChatNotFound
 from openmarketer_core.db.chat_turns import ChatBusy
+from openmarketer_core.db.media_assets import (
+    MediaAssetDecided,
+    MediaAssetNotFound,
+    MediaAssetVersionNotFound,
+)
 from openmarketer_core.db.profile_versions import ProfileAlreadyApproved, ProfileVersionNotFound
 from openmarketer_core.db.project_removal import (
     ProjectHasPendingProposal,
     ProjectHasUnfinishedResearch,
     ProjectHasUnfinishedRun,
+    ProjectHasUnfinishedStudioRun,
 )
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.proposals import ProposalNotFound, ProposalNotPending
 from openmarketer_core.db.research_runs import ResearchRunNotFound, ResearchRunUnfinished
 from openmarketer_core.db.research_store import ResearchReportNotFound
 from openmarketer_core.db.session import DatabaseError
+from openmarketer_core.db.studio_runs import (
+    ReferenceAssetNotFound,
+    StudioRunNotFound,
+    StudioRunUnfinished,
+)
 from openmarketer_core.llm import LLMError
 from openmarketer_core.orchestrator.chat_agent.rules import ChatTurnError
 from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.request import AnalysisNotStarted
 from openmarketer_core.research.page_store import PageStoreUnavailable
 from openmarketer_core.research.request import ResearchNotStarted
+from openmarketer_core.studio.asset_store import AssetStoreUnavailable
+from openmarketer_core.studio.request import StudioNotStarted
 from openmarketer_core.workspace_settings.analysis_limits import AnalysisLimitsRefused
+from openmarketer_core.workspace_settings.creative_budget import CreativeBudgetRefused
+from openmarketer_core.workspace_settings.creative_budget_settings import (
+    CreativeBudgetEnvironmentInvalid,
+    CreativeBudgetSetByEnvironment,
+)
 from openmarketer_core.workspace_settings.model_choices import ModelChoiceRefused
 from openmarketer_core.workspace_settings.model_settings import (
     ModelSetByEnvironment,
@@ -79,6 +98,9 @@ class ErrorCode(StrEnum):
     ANALYSIS_NOT_FOUND = "analysis_not_found"
     RESEARCH_NOT_FOUND = "research_not_found"
     RESEARCH_REPORT_NOT_FOUND = "research_report_not_found"
+    STUDIO_RUN_NOT_FOUND = "studio_run_not_found"
+    MEDIA_ASSET_NOT_FOUND = "media_asset_not_found"
+    MEDIA_ASSET_VERSION_NOT_FOUND = "media_asset_version_not_found"
     CHAT_NOT_FOUND = "chat_not_found"
     PROFILE_NOT_FOUND = "profile_not_found"
     CREDENTIAL_NOT_FOUND = "credential_not_found"
@@ -88,6 +110,8 @@ class ErrorCode(StrEnum):
     PROJECT_ALREADY_EXISTS = "project_already_exists"
     ANALYSIS_ALREADY_RUNNING = "analysis_already_running"
     RESEARCH_UNFINISHED = "research_unfinished"
+    STUDIO_RUN_UNFINISHED = "studio_run_unfinished"
+    MEDIA_ASSET_DECIDED = "media_asset_decided"
     PROFILE_ALREADY_APPROVED = "profile_already_approved"
     PROPOSAL_NOT_PENDING = "proposal_not_pending"
     PROPOSAL_PENDING = "proposal_pending"
@@ -96,11 +120,14 @@ class ErrorCode(StrEnum):
     CREDENTIAL_UNREADABLE = "credential_unreadable"
     ENCRYPTION_KEY_MISSING = "encryption_key_missing"
     MODEL_SET_BY_ENVIRONMENT = "model_set_by_environment"
+    CAP_SET_BY_ENVIRONMENT = "cap_set_by_environment"
+    ENVIRONMENT_SETTING_INVALID = "environment_setting_invalid"
     MODEL_KEY_NOT_SET = "model_key_not_set"
     STORED_SETTING_INVALID = "stored_setting_invalid"
     INTERNAL_ERROR = "internal_error"
     ANALYSIS_NOT_STARTED = "analysis_not_started"
     RESEARCH_NOT_STARTED = "research_not_started"
+    STUDIO_NOT_STARTED = "studio_not_started"
     MODEL_UNAVAILABLE = "model_unavailable"
     CHAT_UNANSWERED = "chat_unanswered"
     DATABASE_UNAVAILABLE = "database_unavailable"
@@ -136,6 +163,9 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     AnalysisRunNotFound: (404, ErrorCode.ANALYSIS_NOT_FOUND),
     ResearchRunNotFound: (404, ErrorCode.RESEARCH_NOT_FOUND),
     ResearchReportNotFound: (404, ErrorCode.RESEARCH_REPORT_NOT_FOUND),
+    StudioRunNotFound: (404, ErrorCode.STUDIO_RUN_NOT_FOUND),
+    MediaAssetNotFound: (404, ErrorCode.MEDIA_ASSET_NOT_FOUND),
+    MediaAssetVersionNotFound: (404, ErrorCode.MEDIA_ASSET_VERSION_NOT_FOUND),
     ChatNotFound: (404, ErrorCode.CHAT_NOT_FOUND),
     ProfileVersionNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
     ProfileNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
@@ -147,6 +177,9 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ProjectHasUnfinishedRun: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProjectHasUnfinishedResearch: (409, ErrorCode.RESEARCH_UNFINISHED),
     ResearchRunUnfinished: (409, ErrorCode.RESEARCH_UNFINISHED),
+    ProjectHasUnfinishedStudioRun: (409, ErrorCode.STUDIO_RUN_UNFINISHED),
+    StudioRunUnfinished: (409, ErrorCode.STUDIO_RUN_UNFINISHED),
+    MediaAssetDecided: (409, ErrorCode.MEDIA_ASSET_DECIDED),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
     ProposalNotPending: (409, ErrorCode.PROPOSAL_NOT_PENDING),
     ProjectHasPendingProposal: (409, ErrorCode.PROPOSAL_PENDING),
@@ -157,9 +190,13 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ModelSetByEnvironment: (409, ErrorCode.MODEL_SET_BY_ENVIRONMENT),
     ModelKeyNotSet: (409, ErrorCode.MODEL_KEY_NOT_SET),
     StoredModelChoiceInvalid: (409, ErrorCode.STORED_SETTING_INVALID),
+    CreativeBudgetSetByEnvironment: (409, ErrorCode.CAP_SET_BY_ENVIRONMENT),
+    CreativeBudgetEnvironmentInvalid: (409, ErrorCode.ENVIRONMENT_SETTING_INVALID),
     AnalysisNotStarted: (503, ErrorCode.ANALYSIS_NOT_STARTED),
     ResearchNotStarted: (503, ErrorCode.RESEARCH_NOT_STARTED),
+    StudioNotStarted: (503, ErrorCode.STUDIO_NOT_STARTED),
     PageStoreUnavailable: (503, ErrorCode.STORAGE_UNAVAILABLE),
+    AssetStoreUnavailable: (503, ErrorCode.STORAGE_UNAVAILABLE),
     LLMError: (503, ErrorCode.MODEL_UNAVAILABLE),
     TooManyStreams: (503, ErrorCode.TOO_MANY_STREAMS),
 }
@@ -192,6 +229,8 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(CredentialValueRefused, _credential_value_refused)
     app.add_exception_handler(ModelChoiceRefused, _setting_refused)
     app.add_exception_handler(AnalysisLimitsRefused, _setting_refused)
+    app.add_exception_handler(CreativeBudgetRefused, _setting_refused)
+    app.add_exception_handler(ReferenceAssetNotFound, _reference_asset_not_found)
     app.add_exception_handler(ChatTurnError, _chat_unanswered)
     app.add_exception_handler(DatabaseError, _database_error)
     app.add_exception_handler(Exception, _unexpected_error)
@@ -228,6 +267,12 @@ def _setting_refused(_: Request, error: Exception) -> JSONResponse:
     # The message names the rule that was broken; the field is the part of the body that did.
     field = getattr(error, "field", "")
     refusal = {"type": "value_error", "loc": ["body", field], "msg": str(error)}
+    return JSONResponse({"detail": [refusal]}, 422)
+
+
+def _reference_asset_not_found(_: Request, error: Exception) -> JSONResponse:
+    # The project's own assets are the only ones a request may name; another's is as missing.
+    refusal = {"type": "value_error", "loc": ["body", "reference_asset_ids"], "msg": str(error)}
     return JSONResponse({"detail": [refusal]}, 422)
 
 

@@ -70,7 +70,7 @@ def test_settings_do_not_show_the_encryption_key_when_printed():
     assert key not in repr(Settings.from_env({**DATABASE, "ENCRYPTION_KEY": key}))
 
 
-def test_services_do_not_show_the_environment_when_printed(no_catalog, page_store):
+def test_services_do_not_show_the_environment_when_printed(no_catalog, page_store, asset_store):
     services = Services(
         sessions=None,  # pyright: ignore[reportArgumentType]
         workflows=None,  # pyright: ignore[reportArgumentType]
@@ -79,6 +79,7 @@ def test_services_do_not_show_the_environment_when_printed(no_catalog, page_stor
         model_router=ModelRouter.from_file(MODELS_FILE, env={"GITHUB_TOKEN": "ghp_made_up_value"}),
         model_catalog=no_catalog,
         page_store=page_store,
+        asset_store=asset_store,
     )
     assert "ghp_made_up_value" not in repr(services)
 

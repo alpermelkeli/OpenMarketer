@@ -22,6 +22,7 @@ function proposal(id: string, status: Proposal["status"]): Proposal {
     action_name: "publish_post",
     effect: "publishes",
     payload: { text: "v2 is out" },
+    estimate_usd: null,
     status,
     run_kind: "writer-run",
     run_id: "r",
