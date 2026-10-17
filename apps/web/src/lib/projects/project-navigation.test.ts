@@ -6,6 +6,7 @@ import {
   projectIdOfPath,
   projectPageHref,
   projectPageOfPath,
+  researchHref,
   shortRepositoryName,
 } from "./project-navigation";
 
@@ -32,6 +33,7 @@ describe("which page of the project an address shows", () => {
     expect(projectPageOfPath(`/projects/${ID}/chat`)).toBe("chat");
     expect(projectPageOfPath(`/projects/${ID}/profile`)).toBe("profile");
     expect(projectPageOfPath(`/projects/${ID}/analyses`)).toBe("analyses");
+    expect(projectPageOfPath(`/projects/${ID}/research`)).toBe("research");
     expect(projectPageOfPath(`/projects/${ID}/approvals`)).toBe("approvals");
   });
 
@@ -70,5 +72,17 @@ describe("which chat an address shows", () => {
 
   it("belongs to the chat page", () => {
     expect(projectPageOfPath(chatHref(ID, CHAT))).toBe("chat");
+  });
+});
+
+describe("the address of a research run", () => {
+  const RUN = "6d5e4f3a-2b1c-4d5e-8f90-1a2b3c4d5e6f";
+
+  it("sits under the project's research page", () => {
+    expect(researchHref(ID, RUN)).toBe(`/projects/${ID}/research/${RUN}`);
+  });
+
+  it("belongs to the research page", () => {
+    expect(projectPageOfPath(researchHref(ID, RUN))).toBe("research");
   });
 });
