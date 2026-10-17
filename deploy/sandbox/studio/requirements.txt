@@ -1,0 +1,7 @@
+# The libraries agent-written code may import in the studio's sandbox. Keep in step with
+# PREINSTALLED_MODULES in packages/core/src/openmarketer_core/studio/code_screening.py.
+pillow==11.3.0
+numpy==2.3.2
+cairosvg==2.8.2
+qrcode==8.2
+fonttools==4.59.0

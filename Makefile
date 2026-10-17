@@ -1,13 +1,14 @@
 COMPOSE := docker compose -f deploy/compose/dev.yml
-# The dev stack with its optional Langfuse (profile `tracing`), for the targets that stop,
-# list or follow it, so that they reach Langfuse too once `make up tracing=1` started it.
-COMPOSE_ALL := $(COMPOSE) --profile tracing
+# The dev stack with its optional Langfuse (profile `tracing`) and the studio sandbox's egress
+# proxy (profile `studio`), for the targets that stop, list or follow it, so that they reach
+# those too once `make up tracing=1 studio=1` started them.
+COMPOSE_ALL := $(COMPOSE) --profile tracing --profile studio
 
 # What a target reads counts only when given on the command line: make also turns
 # environment variables into variables, and one named `live` must not spend credit.
 given = $(if $(filter command line,$(origin $(1))),$($(1)))
 
-.PHONY: help install up down reset logs ps psql analyze evaluate migrate migration api openapi worker web lint format typecheck test check
+.PHONY: help install sandbox up down reset logs ps psql analyze evaluate migrate migration api openapi worker web lint format typecheck test check
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -16,8 +17,11 @@ install: ## Install Python and web dependencies
 	uv sync
 	cd apps/web && pnpm install
 
-up: ## Start PostgreSQL, Temporal, object storage, search and page rendering; tracing=1 adds Langfuse on http://localhost:3001
-	$(if $(filter 1,$(call given,tracing)),$(COMPOSE_ALL),$(COMPOSE)) up -d
+up: ## Start PostgreSQL, Temporal, object storage, search and page rendering; tracing=1 adds Langfuse on http://localhost:3001, studio=1 the sandbox's egress proxy
+	$(COMPOSE) $(if $(filter 1,$(call given,tracing)),--profile tracing) $(if $(filter 1,$(call given,studio)),--profile studio) up -d
+
+sandbox: ## Build the creative studio's sandbox image (openmarketer/studio-sandbox:dev)
+	docker build -t openmarketer/studio-sandbox:dev deploy/sandbox/studio
 
 down: ## Stop the dev stack (data is kept)
 	$(COMPOSE_ALL) down
