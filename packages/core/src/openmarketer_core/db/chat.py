@@ -4,9 +4,10 @@ A chat is a thread. It is opened empty, named by the operator or left with the
 default name, and gathers the exchanges of one conversation; a chat turn writes
 the operator's message and the assistant's answer together
 (``append_exchange``), in one call, so the conversation always reads back as
-whole exchanges. A message is never changed or deleted once stored, and nothing
-about how an answer was produced is kept: which model answered and what the
-turn cost belong to the turn, not to the chat.
+whole exchanges. A chat is deleted whole, with its messages (``delete_chat``);
+otherwise a stored message is never changed or deleted. Nothing about how an
+answer was produced is kept: which model answered and what the turn cost belong
+to the turn, not to the chat.
 
 The two messages of an exchange get creation times one after the other - the
 answer a moment after the question - because the list and the history order by
@@ -37,7 +38,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import Select, func, select, tuple_
+from sqlalchemy import Select, delete, func, select, tuple_
 from sqlalchemy.orm import Session
 
 from openmarketer_core.db.models import (
@@ -180,6 +181,32 @@ def mark_chat_read(
     record.last_read_at = session.execute(select(func.clock_timestamp())).scalar_one()
     session.flush()
     return _thread(record, _newest_message_at(session, chat_id))
+
+
+def delete_chat(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, chat_id: uuid.UUID
+) -> None:
+    """Delete the chat with its messages, for good.
+
+    Nothing is kept to restore it from. Takes the workspace lock like every
+    write of a workspace. Raises ``ProjectNotFound`` when the workspace has no
+    such project and ``ChatNotFound`` when the project has no such chat.
+    """
+    wait_for_other_writes(session, workspace_id)
+    get_project(session, workspace_id=workspace_id, project_id=project_id)
+    _thread_of_project(session, workspace_id, project_id, chat_id)
+    session.execute(
+        delete(ChatMessageRecord).where(
+            ChatMessageRecord.project_id == project_id,
+            ChatMessageRecord.thread_id == chat_id,
+        )
+    )
+    session.execute(
+        delete(ChatThreadRecord).where(
+            ChatThreadRecord.project_id == project_id,
+            ChatThreadRecord.id == chat_id,
+        )
+    )
 
 
 def list_chat_messages(

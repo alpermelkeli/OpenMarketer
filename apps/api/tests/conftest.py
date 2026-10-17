@@ -18,6 +18,7 @@ from openmarketer_api.identity import current_workspace_id
 from openmarketer_api.main import create_app
 from openmarketer_core.llm_catalog import ModelCatalog
 from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.research.page_store import PageStoreUnavailable
 
 MODELS_FILE = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
 
@@ -30,6 +31,24 @@ class UnreadableCatalog(ModelCatalog):
 
     def models(self):
         return None
+
+
+class RecordingPageStore:
+    """The object storage of these tests: what it removed, unless it is told to be unreachable."""
+
+    def __init__(self) -> None:
+        self.removed: list[str] = []
+        self.unreachable = False
+
+    def remove(self, key: str) -> None:
+        if self.unreachable:
+            raise PageStoreUnavailable("object storage is not reachable")
+        self.removed.append(key)
+
+
+@pytest.fixture
+def page_store() -> RecordingPageStore:
+    return RecordingPageStore()
 
 
 @pytest.fixture

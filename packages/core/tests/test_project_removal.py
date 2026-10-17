@@ -28,23 +28,44 @@ from openmarketer_core.db.models import (
     Project,
     ProposalRecord,
     RepoSnapshot,
+    ResearchPageRecord,
+    ResearchReportRecord,
+    ResearchRunRecord,
     Workspace,
 )
 from openmarketer_core.db.profile_versions import approve_profile_version, save_edited_profile
 from openmarketer_core.db.project_removal import (
     ProjectHasPendingProposal,
+    ProjectHasUnfinishedResearch,
     ProjectHasUnfinishedRun,
     delete_project,
 )
 from openmarketer_core.db.projects import ProjectNotFound, create_project
 from openmarketer_core.db.proposals import decide_proposal, propose_action
+from openmarketer_core.db.research_pages import NewPage, store_page
+from openmarketer_core.db.research_runs import (
+    mark_run_failed as mark_research_failed,
+)
+from openmarketer_core.db.research_runs import (
+    mark_run_started as mark_research_started,
+)
+from openmarketer_core.db.research_runs import (
+    mark_run_succeeded as mark_research_succeeded,
+)
+from openmarketer_core.db.research_runs import (
+    request_research_run,
+)
+from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.extraction import ExtractedFact
 from openmarketer_core.repository_analysis.intake import Snapshot
+from openmarketer_core.research.questions import ResearchRequest
+from openmarketer_core.research.research_agent.rules import Report
 
 REVIEWER = uuid.UUID("11111111-1111-4111-8111-111111111111")
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
 FACT = ExtractedFact(extractor="manifest", kind="manifest.name", value="app", file="package.json")
+RESEARCH_REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
 
 
 def new_workspace(session: Session) -> uuid.UUID:
@@ -82,6 +103,52 @@ def analysed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -
     mark_run_succeeded(session, **scope, run_id=run.id, profile_id=saved.profile_id)
 
 
+def researched(
+    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID
+) -> tuple[uuid.UUID, list[str]]:
+    """Run a research of the project to success, storing a report and a page per key."""
+    scope = {"workspace_id": workspace_id, "project_id": project_id}
+    run = request_research_run(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        request=RESEARCH_REQUEST,
+        requested_by="person",
+    )
+    mark_research_started(session, **scope, run_id=run.id)
+    keys = ["pages/a.html", "pages/b.html"]
+    for key in keys:
+        store_page(
+            session,
+            **scope,
+            run_id=run.id,
+            page_id=uuid.uuid4(),
+            page=NewPage(
+                url=f"https://example.com/{key}",
+                title="A page",
+                content_type="text/html",
+                size_bytes=10,
+                storage_key=key,
+                sha256="a" * 64,
+                flags=(),
+            ),
+        )
+    report = save_research_report(
+        session,
+        **scope,
+        run_id=run.id,
+        report=Report(
+            questions=list(RESEARCH_REQUEST.questions),
+            findings=[],
+            notes=[],
+            cost_usd=0.01,
+            model="fake/model",
+        ),
+    )
+    mark_research_succeeded(session, **scope, run_id=run.id, report_id=report.id)
+    return run.id, keys
+
+
 def proposed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -> uuid.UUID:
     """A pending proposal of an action a run of the project asked for."""
     run = GraphRunRef(kind="writer-run", run_id=uuid.uuid4())
@@ -109,6 +176,9 @@ def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
         "proposal": ProposalRecord.project_id,
         "chat_thread": ChatThreadRecord.project_id,
         "chat_message": ChatMessageRecord.project_id,
+        "research_run": ResearchRunRecord.project_id,
+        "research_page": ResearchPageRecord.project_id,
+        "research_report": ResearchReportRecord.project_id,
     }
     return {
         name: session.scalar(select(func.count()).where(column == project_id)) or 0
@@ -125,12 +195,22 @@ NOTHING = {
     "proposal": 0,
     "chat_thread": 0,
     "chat_message": 0,
+    "research_run": 0,
+    "research_page": 0,
+    "research_report": 0,
 }
+
+WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message") + (
+    "research_run",
+    "research_page",
+    "research_report",
+)
 
 
 def test_project_without_history_is_deleted(session, workspace_id):
     project_id = new_project(session, workspace_id)
-    delete_project(session, workspace_id=workspace_id, project_id=project_id)
+    keys = delete_project(session, workspace_id=workspace_id, project_id=project_id)
+    assert keys == ()
     assert rows_of(session, project_id) == NOTHING
 
 
@@ -140,7 +220,7 @@ def test_project_is_deleted_with_its_runs_evidence_snapshots_and_versions(sessio
     assert all(
         count > 0
         for name, count in rows_of(session, project_id).items()
-        if name not in ("proposal", "chat_thread", "chat_message")
+        if name not in WITHOUT_HISTORY
     )
     delete_project(session, workspace_id=workspace_id, project_id=project_id)
     assert rows_of(session, project_id) == NOTHING
@@ -161,6 +241,57 @@ def test_project_is_deleted_with_its_chats_and_messages(session, workspace_id):
     assert rows_of(session, project_id)["chat_message"] == 2
     delete_project(session, workspace_id=workspace_id, project_id=project_id)
     assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_is_deleted_with_its_research_reports_and_pages(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    _, keys = researched(session, workspace_id, project_id)
+    assert rows_of(session, project_id)["research_page"] == 2
+    assert rows_of(session, project_id)["research_report"] == 1
+
+    answered = delete_project(session, workspace_id=workspace_id, project_id=project_id)
+
+    assert sorted(answered) == sorted(keys)
+    assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_with_a_failed_research_is_deleted(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    scope = {"workspace_id": workspace_id, "project_id": project_id}
+    run = request_research_run(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        request=RESEARCH_REQUEST,
+        requested_by="person",
+    )
+    mark_research_started(session, **scope, run_id=run.id)
+    mark_research_failed(session, **scope, run_id=run.id, error="boom")
+
+    keys = delete_project(session, **scope)
+
+    assert keys == ()
+    assert rows_of(session, project_id) == NOTHING
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_project_with_an_unfinished_research_is_not_deleted(session, workspace_id, started):
+    project_id = new_project(session, workspace_id)
+    scope = {"workspace_id": workspace_id, "project_id": project_id}
+    run = request_research_run(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        request=RESEARCH_REQUEST,
+        requested_by="person",
+    )
+    if started:
+        mark_research_started(session, **scope, run_id=run.id)
+
+    with pytest.raises(ProjectHasUnfinishedResearch):
+        delete_project(session, **scope)
+
+    assert rows_of(session, project_id)["research_run"] == 1
 
 
 def test_approved_and_edited_versions_are_deleted_too(session, workspace_id):
@@ -209,6 +340,7 @@ def test_other_projects_keep_their_rows(session, workspace_id):
     kept = new_project(session, workspace_id)
     analysed(session, workspace_id, deleted)
     analysed(session, workspace_id, kept)
+    researched(session, workspace_id, kept)
     before = rows_of(session, kept)
     delete_project(session, workspace_id=workspace_id, project_id=deleted)
     assert rows_of(session, kept) == before

@@ -219,7 +219,7 @@ describe("the routes of a project's chat", () => {
   const CHAT = "0b0e6c6e-aaaa-4bbb-8ccc-ddddeeeeffff";
   const CHATS = ["projects", PROJECT, "chats"];
 
-  it("forward the chats, one of them, its messages and its read mark", () => {
+  it("forward the chats, one of them, its messages, its read mark and its deletion", () => {
     expect(allowedApiPath("GET", CHATS)).toBe(`/v1/projects/${PROJECT}/chats`);
     expect(allowedApiPath("POST", CHATS)).toBe(`/v1/projects/${PROJECT}/chats`);
     expect(allowedApiPath("GET", [...CHATS, CHAT])).toBe(`/v1/projects/${PROJECT}/chats/${CHAT}`);
@@ -232,6 +232,9 @@ describe("the routes of a project's chat", () => {
     expect(allowedApiPath("POST", [...CHATS, CHAT, "read"])).toBe(
       `/v1/projects/${PROJECT}/chats/${CHAT}/read`,
     );
+    expect(allowedApiPath("DELETE", [...CHATS, CHAT])).toBe(
+      `/v1/projects/${PROJECT}/chats/${CHAT}`,
+    );
   });
 
   it("do not include a wrong method, a chat that is not an id, or a path below one", () => {
@@ -239,6 +242,8 @@ describe("the routes of a project's chat", () => {
     expect(() => allowedApiPath("POST", [...CHATS, CHAT])).toThrow();
     expect(() => allowedApiPath("POST", [...CHATS, CHAT, "messages", RUN])).toThrow();
     expect(() => allowedApiPath("GET", [...CHATS, "latest"])).toThrow();
+    expect(() => allowedApiPath("DELETE", CHATS)).toThrow();
+    expect(() => allowedApiPath("DELETE", [...CHATS, "latest"])).toThrow();
     expect(() => allowedApiPath("GET", ["projects", PROJECT, "chat"])).toThrow();
     expect(() =>
       allowedApiTarget("GET", [...CHATS, CHAT, "messages"], new URLSearchParams("role=user")),
@@ -250,7 +255,7 @@ describe("the routes of research", () => {
   const RESEARCHES = ["projects", PROJECT, "researches"];
   const RESEARCH = "0b0e6c6e-2222-4333-8444-555566667777";
 
-  it("forward the runs and the report of one", () => {
+  it("forward the runs, the report of one and the deletion of one", () => {
     expect(allowedApiPath("GET", RESEARCHES)).toBe(`/v1/projects/${PROJECT}/researches`);
     expect(allowedApiPath("GET", [...RESEARCHES, RESEARCH])).toBe(
       `/v1/projects/${PROJECT}/researches/${RESEARCH}`,
@@ -258,10 +263,16 @@ describe("the routes of research", () => {
     expect(allowedApiPath("GET", [...RESEARCHES, RESEARCH, "report"])).toBe(
       `/v1/projects/${PROJECT}/researches/${RESEARCH}/report`,
     );
+    expect(allowedApiPath("DELETE", [...RESEARCHES, RESEARCH])).toBe(
+      `/v1/projects/${PROJECT}/researches/${RESEARCH}`,
+    );
   });
 
-  it("do not include starting a run, a run that is not an id, a path below one, or a filter", () => {
+  it("do not include a wrong method, a run that is not an id, a path below one, or a filter", () => {
     expect(() => allowedApiPath("POST", RESEARCHES)).toThrow();
+    expect(() => allowedApiPath("DELETE", RESEARCHES)).toThrow();
+    expect(() => allowedApiPath("DELETE", [...RESEARCHES, "latest"])).toThrow();
+    expect(() => allowedApiPath("DELETE", [...RESEARCHES, RESEARCH, "report"])).toThrow();
     expect(() => allowedApiPath("GET", [...RESEARCHES, "latest"])).toThrow();
     expect(() => allowedApiPath("GET", [...RESEARCHES, RESEARCH, "pages"])).toThrow();
     expect(() =>

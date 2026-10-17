@@ -59,7 +59,7 @@ def scope(sessions) -> RunScope:
 
 
 @pytest.fixture
-def signals(app, sessions, scope, repository_models, no_catalog) -> FakeSignals:
+def signals(app, sessions, scope, repository_models, no_catalog, page_store) -> FakeSignals:
     """The application wired to the test database, this test's workspace and fake signals."""
     fake = FakeSignals()
     app.state.services = Services(
@@ -69,6 +69,7 @@ def signals(app, sessions, scope, repository_models, no_catalog) -> FakeSignals:
         credential_cipher=None,
         model_router=repository_models,
         model_catalog=no_catalog,
+        page_store=page_store,
     )
     app.dependency_overrides[current_workspace_id] = lambda: scope.workspace_id
     return fake
