@@ -67,21 +67,21 @@
 
 @theme {
   /* Type scale: small steps, hierarchy by size and colour rather than weight. */
-  --text-2xs: 0.6875rem;
-  --text-2xs--line-height: 1rem;
-  --text-xs: 0.75rem;
-  --text-xs--line-height: 1.125rem;
-  --text-sm: 0.8125rem;
-  --text-sm--line-height: 1.25rem;
-  --text-base: 0.9375rem;
-  --text-base--line-height: 1.5rem;
-  --text-lg: 1.0625rem;
-  --text-lg--line-height: 1.625rem;
-  --text-title: 1.375rem;
-  --text-title--line-height: 1.75rem;
+  --text-2xs: 0.75rem;
+  --text-2xs--line-height: 1.0625rem;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.1875rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.3125rem;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5625rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.75rem;
+  --text-title: 1.5rem;
+  --text-title--line-height: 1.875rem;
   --text-title--letter-spacing: -0.01em;
-  --text-display: 2rem;
-  --text-display--line-height: 2.375rem;
+  --text-display: 2.125rem;
+  --text-display--line-height: 2.5rem;
   --text-display--letter-spacing: -0.02em;
 
   /* Layout measures, on the 0.25rem spacing scale. */
