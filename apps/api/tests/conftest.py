@@ -19,6 +19,7 @@ from openmarketer_api.main import create_app
 from openmarketer_core.llm_catalog import ModelCatalog
 from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.research.page_store import PageStoreUnavailable
+from openmarketer_core.studio.asset_store import AssetStoreUnavailable
 
 MODELS_FILE = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
 
@@ -49,6 +50,33 @@ class RecordingPageStore:
 @pytest.fixture
 def page_store() -> RecordingPageStore:
     return RecordingPageStore()
+
+
+class FakeAssetStore:
+    """The studio's object storage of these tests: images in memory, unless it is unreachable."""
+
+    def __init__(self) -> None:
+        self.images: dict[str, bytes] = {}
+        self.removed: list[str] = []
+        self.unreachable = False
+
+    def put(self, key: str, body: bytes, *, content_type: str) -> None:
+        self.images[key] = body
+
+    def get(self, key: str) -> bytes:
+        if self.unreachable:
+            raise AssetStoreUnavailable("object storage is not reachable")
+        return self.images[key]
+
+    def remove(self, key: str) -> None:
+        if self.unreachable:
+            raise AssetStoreUnavailable("object storage is not reachable")
+        self.removed.append(key)
+
+
+@pytest.fixture
+def asset_store() -> FakeAssetStore:
+    return FakeAssetStore()
 
 
 @pytest.fixture

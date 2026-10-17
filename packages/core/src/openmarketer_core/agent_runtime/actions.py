@@ -169,8 +169,10 @@ class ActionEffect(StrEnum):
     """What an action does to the world beyond the run, as its declaration says.
 
     ``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it
-    runs when the graph asks. ``PUBLISHES`` puts something in front of other people and
-    ``SPENDS`` costs money; the gate holds both for a person's approval.
+    runs when the graph asks. ``PUBLISHES`` puts something in front of other people, and the
+    gate holds it for a person's approval. ``SPENDS`` costs money: the gate reserves its
+    estimate under the creative budget, which lets it run, holds it for a person or refuses it
+    (``gate.py``); its worker declares how its cost is estimated.
     """
 
     INTERNAL = "internal"

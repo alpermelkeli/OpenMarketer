@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import type { Proposal } from "@/lib/api/types";
 import { formatDateTime, shortId } from "@/lib/format";
 import {
+  actionLabel,
   effectLabel,
+  estimateText,
   payloadText,
   proposalStatusDisplay,
   timeLeftToDecide,
@@ -24,6 +26,8 @@ type ProposalCardProps = {
 export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
   const status = proposalStatusDisplay(proposal.status);
   const waiting = proposal.status === "pending";
+  const label = actionLabel(proposal.action_name);
+  const estimate = estimateText(proposal.estimate_usd);
 
   return (
     <article
@@ -36,8 +40,12 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <StatusPill tone={status.tone}>{status.label}</StatusPill>
-        <p className="font-mono text-sm">{proposal.action_name}</p>
+        {label !== null && <p className="text-sm">{label}</p>}
+        <p className={label === null ? "font-mono text-sm" : "font-mono text-xs text-muted-foreground"}>
+          {proposal.action_name}
+        </p>
         <p className="text-2xs tracking-widest text-muted-foreground uppercase">{effectLabel(proposal.effect)}</p>
+        {estimate !== null && <p className="font-mono text-sm tabular-nums">{estimate}</p>}
         <p className="ml-auto text-sm text-muted-foreground">Asked {formatDateTime(proposal.created_at)}</p>
       </div>
 

@@ -1,8 +1,9 @@
 """``wait_for_a_person``: how a run holds an action the gate stopped until a person decides.
 
-The driver calls it for an action whose verdict is ``ASK_A_PERSON`` (core's ``gate.py``). It
-stores the action as a proposal (the activity ``propose_action``), then waits, with no activity
-running, until one of three things happens:
+The driver calls it for an action whose verdict is ``ASK_A_PERSON`` (core's ``gate.py``): one
+that publishes, or one that spends more than the creative budget lets run on its own, whose
+estimate the proposal shows. It stores the action as a proposal (the activity
+``propose_action``), then waits, with no activity running, until one of three things happens:
 
 - the API signals that a person decided (``PROPOSAL_DECIDED_SIGNAL``, heard by the agent's
   workflow into ``DecidedProposals``);
@@ -67,9 +68,15 @@ async def wait_for_a_person(
     request: ActionRequest,
     limits: ActionPolicy,
     decided: DecidedProposals,
+    *,
+    estimate_usd: str | None = None,
 ) -> ProposalStatus:
-    """Store ``request`` as a proposal and wait until it is approved, rejected or expired."""
-    held, cancelled = await _proposed(run, scope, request, limits)
+    """Store ``request`` as a proposal and wait until it is approved, rejected or expired.
+
+    ``estimate_usd`` is what an action that spends is estimated to cost, stored with the
+    proposal for the person who decides.
+    """
+    held, cancelled = await _proposed(run, scope, request, limits, estimate_usd)
     try:
         if cancelled:
             raise asyncio.CancelledError
@@ -90,7 +97,11 @@ async def wait_for_a_person(
 
 
 async def _proposed(
-    run: GraphRunRef, scope: RunScope, request: ActionRequest, limits: ActionPolicy
+    run: GraphRunRef,
+    scope: RunScope,
+    request: ActionRequest,
+    limits: ActionPolicy,
+    estimate_usd: str | None,
 ) -> tuple[ProposalHeld, bool]:
     """The proposal, stored to its end even if the workflow is cancelled meanwhile, and whether
     it was.
@@ -110,6 +121,7 @@ async def _proposed(
                 request=request,
                 effect=limits.effect.value,
                 wait_seconds=limits.approval_wait_seconds,
+                estimate_usd=estimate_usd,
             ),
             PROPOSAL_WRITE_LIMITS,
             not_retried=[PROPOSAL_REFUSED],

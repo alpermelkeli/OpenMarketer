@@ -15,6 +15,13 @@ describe("the words for a role", () => {
     expect(roleLabel("screener").purpose).toContain("takes a model only");
   });
 
+  it("say that the orchestrator and the studio's roles run today", () => {
+    for (const role of ["orchestrator", "creative_director", "studio", "asset_verifier", "image_generator"]) {
+      expect(roleLabel(role).inUse).toBe(true);
+    }
+    expect(roleLabel("image_generator").purpose).toContain("takes a model only");
+  });
+
   it("call a role the dashboard does not know by its name", () => {
     expect(roleLabel("poet")).toMatchObject({ label: "poet", inUse: false });
     expect(roleLabel("constructor").label).toBe("constructor");

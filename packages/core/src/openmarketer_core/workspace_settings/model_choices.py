@@ -116,8 +116,8 @@ def acceptable_model(value: Any, field: str) -> str:
 def acceptable_role_choice(choice: RoleChoice, role: RoleConfig) -> RoleChoice:
     """``choice`` with its models trimmed, if every part of it is valid for ``role``.
 
-    A role that is not a chat role (one that makes embeddings or answers decisions) takes a
-    model only: the other parts are those of a chat request.
+    A role that is not a chat role (one that makes embeddings, answers decisions or makes
+    images) takes a model only: the other parts are those of a chat request.
     """
     if role.kind != "chat":
         for part in ("fallbacks", "temperature", "max_tokens", "reasoning_effort"):

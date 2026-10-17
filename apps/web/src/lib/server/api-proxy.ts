@@ -17,6 +17,12 @@
  * a browser header (`Last-Event-ID`, which `EventSource` sends when it reconnects,
  * checked to be an event id), and the upstream request ends when the browser leaves.
  *
+ * Two routes answer with an image: a studio version's, to show in the page or to save.
+ * They are reads only. Their body is passed on as bytes, but only when the API says it is
+ * a PNG, a JPEG or a WebP image and it is no larger than `MAX_IMAGE_BYTES`; anything else
+ * is refused. Of the API's headers only the five an image needs come back, and the type
+ * is the one checked, never whatever else the API wrote.
+ *
  * A request body can hold a secret (a credential being stored). It is passed on to
  * the API and nowhere else: nothing here logs it or puts it in an answer.
  */
@@ -28,6 +34,17 @@ export const DEFAULT_API_URL = "http://127.0.0.1:8000";
 
 /** Larger than any profile the analyzer produces; small enough to refuse abuse. */
 export const MAX_BODY_BYTES = 1_000_000;
+
+/** Twice the largest file any studio platform takes (8 MiB); larger is not an image the studio made. */
+export const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
+
+/** The only types an image route may answer with, as the API stores a version's. */
+export const IMAGE_TYPES: readonly string[] = ["image/png", "image/jpeg", "image/webp"];
+
+// The disposition the API writes: inline or attachment, named after the version's UUID.
+const CONTENT_DISPOSITION = /^(inline|attachment); filename="[0-9a-fA-F-]{36}\.(png|jpg|jpeg|webp)"$/;
+// What the API asks of a cache for an image: directives only, no quoted text.
+const CACHE_CONTROL = /^[a-z0-9=, -]{1,100}$/i;
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const VERSION = "[1-9][0-9]{0,8}";
@@ -43,9 +60,10 @@ type Method = "GET" | "POST" | "PUT" | "DELETE";
 
 /**
  * What a route takes besides its path: nothing; a list's page (`limit` and `cursor`);
- * or, for an event stream, where it resumes (`after`, or the `Last-Event-ID` header).
+ * for an event stream, where it resumes (`after`, or the `Last-Event-ID` header); or,
+ * for an image, nothing either, but its answer is bytes of an allowed type.
  */
-type RouteKind = "plain" | "paged" | "stream";
+type RouteKind = "plain" | "paged" | "stream" | "image";
 
 type AllowedRoute = {
   method: Method;
@@ -56,8 +74,10 @@ type AllowedRoute = {
 };
 
 function route(method: Method, template: keyof paths, kind: RouteKind = "plain"): AllowedRoute {
+  // An image is only ever read: its bytes are never a request's body.
+  if (kind === "image" && method !== "GET") throw new Error(`an image route is a GET: ${template}`);
   const pattern = template
-    .replace(/\{(project_id|run_id|proposal_id|chat_id)\}/g, UUID)
+    .replace(/\{(project_id|run_id|proposal_id|chat_id|asset_id|version_id)\}/g, UUID)
     .replace(/\{version\}/g, VERSION)
     .replace(/\{name\}/g, CREDENTIAL_NAME)
     .replace(/\{(tier|role)\}/g, SETTING_KEY);
@@ -66,6 +86,7 @@ function route(method: Method, template: keyof paths, kind: RouteKind = "plain")
 
 const PAGED = "paged";
 const STREAM = "stream";
+const IMAGE = "image";
 
 /** Every API route the dashboard uses. Nothing else is forwarded. */
 export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
@@ -80,6 +101,16 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/projects/{project_id}/researches/{run_id}"),
   route("GET", "/v1/projects/{project_id}/researches/{run_id}/report"),
   route("DELETE", "/v1/projects/{project_id}/researches/{run_id}"),
+  route("GET", "/v1/projects/{project_id}/studio-runs", PAGED),
+  route("POST", "/v1/projects/{project_id}/studio-runs"),
+  route("GET", "/v1/projects/{project_id}/studio-runs/{run_id}"),
+  route("DELETE", "/v1/projects/{project_id}/studio-runs/{run_id}"),
+  route("GET", "/v1/projects/{project_id}/media-assets", PAGED),
+  route("GET", "/v1/projects/{project_id}/media-assets/{asset_id}"),
+  route("POST", "/v1/projects/{project_id}/media-assets/{asset_id}/accept"),
+  route("POST", "/v1/projects/{project_id}/media-assets/{asset_id}/reject"),
+  route("GET", "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/image", IMAGE),
+  route("GET", "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download", IMAGE),
   route("GET", "/v1/projects/{project_id}/chats", PAGED),
   route("POST", "/v1/projects/{project_id}/chats"),
   route("GET", "/v1/projects/{project_id}/chats/{chat_id}"),
@@ -110,6 +141,9 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/settings/analysis"),
   route("PUT", "/v1/settings/analysis"),
   route("DELETE", "/v1/settings/analysis"),
+  route("GET", "/v1/settings/creative-budget"),
+  route("PUT", "/v1/settings/creative-budget"),
+  route("DELETE", "/v1/settings/creative-budget"),
 ];
 
 // What a page of a list may be asked for, as the contract has it: 1 to 100 items,
@@ -170,8 +204,8 @@ export function assertFromDashboard(method: string, headers: Headers): void {
   }
 }
 
-/** Where an allowed request goes: the API path and query, and whether its answer streams. */
-export type ApiTarget = { pathAndQuery: string; streams: boolean };
+/** Where an allowed request goes: the API path and query, and what kind of route answers it. */
+export type ApiTarget = { pathAndQuery: string; kind: RouteKind };
 
 /**
  * The API path and query for an allowed request; refuses every other method and path.
@@ -202,7 +236,7 @@ function allowedRoute(method: string, pathSegments: readonly string[], query: UR
   const forwarded = routeQuery(query, matched.kind);
   return {
     pathAndQuery: forwarded === "" ? path : `${path}?${forwarded}`,
-    streams: matched.kind === "stream",
+    kind: matched.kind,
   };
 }
 
@@ -210,6 +244,7 @@ const QUERY_RULE: Record<RouteKind, string> = {
   plain: "this route takes no query parameters",
   paged: "a list takes only `limit` (1 to 100) and `cursor` (as the API issued it), each once",
   stream: "the event stream takes only `after`, once, as an event id",
+  image: "this route takes no query parameters",
 };
 
 function routeQuery(query: URLSearchParams, kind: RouteKind): string {
@@ -306,9 +341,10 @@ export async function proxyToApi(
   try {
     assertFromDashboard(request.method, request.headers);
     const query = new URL(request.url).searchParams;
-    const { pathAndQuery, streams } = allowedRoute(request.method, pathSegments, query);
+    const { pathAndQuery, kind } = allowedRoute(request.method, pathSegments, query);
     const target = new URL(pathAndQuery, apiBaseUrl(configuredApiUrl));
-    if (streams) return await forwardStream(send, target, lastEventId(request.headers), request.signal);
+    if (kind === "stream") return await forwardStream(send, target, lastEventId(request.headers), request.signal);
+    if (kind === "image") return await forwardImage(send, target, request.signal);
     const body = await readJsonBody(request);
     return await forward(send, target, request.method, body);
   } catch (error) {
@@ -372,6 +408,79 @@ async function forwardStream(
       "x-content-type-options": "nosniff",
     },
   });
+}
+
+/**
+ * Forward an image: its bytes are passed on only when the API says it is one of
+ * `IMAGE_TYPES` and it is no larger than `MAX_IMAGE_BYTES`, and only the headers an image
+ * needs come back. An answer that is not a success (the API's 404 for a version it does
+ * not have) is passed on as JSON, like any other.
+ */
+async function forwardImage(send: typeof fetch, target: URL, signal: AbortSignal): Promise<Response> {
+  const upstream = await reach(send, target, {
+    method: "GET",
+    headers: { accept: IMAGE_TYPES.join(", ") },
+    signal,
+  });
+  if (!upstream.ok) {
+    const text = await upstream.text();
+    return jsonResponse(upstream.status, text === "" ? null : text);
+  }
+  const mediaType = upstream.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  if (mediaType === undefined || !IMAGE_TYPES.includes(mediaType)) {
+    await upstream.body?.cancel();
+    throw upstreamRejected("the API answered with something that is not a PNG, JPEG or WebP image");
+  }
+  const declared = Number(upstream.headers.get("content-length") ?? "0");
+  if (declared > MAX_IMAGE_BYTES) {
+    await upstream.body?.cancel();
+    throw upstreamRejected("the image is larger than the dashboard passes on");
+  }
+  const bytes = await readAtMost(upstream, MAX_IMAGE_BYTES);
+  const headers = new Headers({
+    "content-type": mediaType,
+    "content-length": String(bytes.byteLength),
+    "cache-control": headerMatching(upstream, "cache-control", CACHE_CONTROL) ?? "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  const disposition = headerMatching(upstream, "content-disposition", CONTENT_DISPOSITION);
+  if (disposition !== null) headers.set("content-disposition", disposition);
+  return new Response(bytes, { status: upstream.status, headers });
+}
+
+/** The whole body, read a chunk at a time and refused as soon as it passes `limit` bytes. */
+async function readAtMost(upstream: Response, limit: number): Promise<Uint8Array<ArrayBuffer>> {
+  if (upstream.body === null) return new Uint8Array(0);
+  const reader = upstream.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > limit) {
+      await reader.cancel();
+      throw upstreamRejected("the image is larger than the dashboard passes on");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/** An upstream header in the form the API writes it, or null for anything else or none. */
+function headerMatching(upstream: Response, name: string, form: RegExp): string | null {
+  const value = upstream.headers.get(name);
+  return value !== null && form.test(value) ? value : null;
+}
+
+function upstreamRejected(message: string): ProxyRefusal {
+  return new ProxyRefusal(502, "proxy_upstream_rejected", message);
 }
 
 async function reach(send: typeof fetch, target: URL, init: RequestInit): Promise<Response> {

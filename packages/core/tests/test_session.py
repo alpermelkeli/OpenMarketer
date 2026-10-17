@@ -4,12 +4,19 @@ They need PostgreSQL (see the root ``conftest.py``), except for the unreachable
 and invalid databases.
 """
 
+import psycopg
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.db.models import Workspace
-from openmarketer_core.db.session import DatabaseError, session_factory, transaction
+from openmarketer_core.db.session import (
+    DatabaseError,
+    serializable,
+    session_factory,
+    transaction,
+)
 
 # Port 1 is reserved and nothing listens on it.
 UNREACHABLE_URL = "postgresql+psycopg://nobody:secret@127.0.0.1:1/nothing?connect_timeout=2"
@@ -57,6 +64,44 @@ def test_database_error_names_the_problem_without_the_statement(sessions):
         with transaction(sessions) as session:
             session.execute(text("SELECT * FROM no_such_table"))
     assert str(raised.value) == 'relation "no_such_table" does not exist'
+
+
+def could_not_serialize() -> OperationalError:
+    return OperationalError(
+        "COMMIT", {}, psycopg.errors.SerializationFailure("could not serialize")
+    )
+
+
+def test_serializable_work_runs_at_that_isolation_level(sessions):
+    level = serializable(
+        sessions, lambda session: session.scalar(text("SHOW transaction_isolation"))
+    )
+    assert level == "serializable"
+
+
+def test_serializable_work_is_tried_again_when_it_could_not_be_serialised(sessions):
+    tries: list[int] = []
+
+    def work(session: Session) -> str:
+        session.add(Workspace(name=f"serialised-{len(tries)}"))
+        session.flush()
+        tries.append(1)
+        if len(tries) == 1:
+            raise could_not_serialize()
+        return "done"
+
+    assert serializable(sessions, work) == "done"
+    assert len(tries) == 2
+    assert workspaces_named(sessions, "serialised-0") == 0
+    assert workspaces_named(sessions, "serialised-1") == 1
+
+
+def test_serializable_work_that_never_serialises_is_a_database_error(sessions):
+    def work(session: Session) -> None:
+        raise could_not_serialize()
+
+    with pytest.raises(DatabaseError, match="could not serialize"):
+        serializable(sessions, work, attempts=3)
 
 
 def test_unreachable_database_is_a_database_error():

@@ -21,6 +21,11 @@ batches. Two kinds are made here:
   see them. ``TracedChatModel`` records each as a *generation* under the node that made it:
   its role, the messages and tools it was sent, the message it got back, the model, its
   tokens and its cost.
+- **An image call.** ``studio/openrouter_images.py`` posts outside LangChain as well.
+  ``TracedMediaProvider`` records each as a generation: its operation, the prompt or the
+  instruction, the size asked for and how many images were sent with it (not their bytes),
+  what was asked of the model and done to its answer, the model and the cost. No image's bytes
+  are sent to Langfuse.
 - **A decision call.** ``decisions.py`` posts to its own endpoint, not through LangChain
   either. ``TracedDecisionModel`` records each as a generation the same way: its role, the
   texts and the questions it was sent, the probability of each answer, the model and its
@@ -43,10 +48,11 @@ one. This is the only module that imports ``langfuse``; it decides nothing about
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -59,6 +65,13 @@ from opentelemetry.sdk.trace.export import SpanExporter
 from openmarketer_core.decision_questions import YesNoQuestion
 from openmarketer_core.decisions import DecisionModel, DecisionReply
 from openmarketer_core.llm import ChatModel, ChatReply, LLMError
+from openmarketer_core.studio.media_provider import (
+    ImageInput,
+    MediaOperation,
+    MediaProvider,
+    MediaProviderError,
+    MediaResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +163,12 @@ class Tracing:
         if self._client is None:
             return inner
         return TracedDecisionModel(inner, self._client)
+
+    def media(self, inner: MediaProvider) -> MediaProvider:
+        """``inner``, with its calls traced when tracing is on; ``inner`` itself when it is off."""
+        if self._client is None:
+            return inner
+        return TracedMediaProvider(inner, self._client)
 
     @contextmanager
     def traced(self) -> Iterator[None]:
@@ -281,3 +300,66 @@ class TracedDecisionModel:
                 cost_details={"total": reply.cost_usd},
             )
             return reply
+
+
+@dataclass(frozen=True)
+class TracedMediaProvider:
+    """A ``MediaProvider`` whose every image is a Langfuse generation, without its bytes."""
+
+    inner: MediaProvider
+    client: Langfuse
+
+    def generate(
+        self, prompt: str, *, width: int, height: int, references: Sequence[ImageInput] = ()
+    ) -> MediaResult:
+        call = {"prompt": prompt, "width": width, "height": height, "references": len(references)}
+        return self._traced(
+            "generate",
+            call,
+            lambda: self.inner.generate(prompt, width=width, height=height, references=references),
+        )
+
+    def edit(
+        self,
+        image: ImageInput,
+        instruction: str,
+        *,
+        width: int,
+        height: int,
+        references: Sequence[ImageInput] = (),
+    ) -> MediaResult:
+        call = {
+            "instruction": instruction,
+            "width": width,
+            "height": height,
+            "references": len(references),
+        }
+        return self._traced(
+            "edit",
+            call,
+            lambda: self.inner.edit(
+                image, instruction, width=width, height=height, references=references
+            ),
+        )
+
+    def estimate(self, operation: MediaOperation) -> Decimal:
+        return self.inner.estimate(operation)
+
+    def _traced(
+        self, operation: MediaOperation, call: dict[str, Any], make: Callable[[], MediaResult]
+    ) -> MediaResult:
+        with self.client.start_as_current_observation(
+            as_type="generation", name=f"image.{operation}", input=call
+        ) as generation:
+            try:
+                result = make()
+            except MediaProviderError as e:
+                # A fixed sentence: never what the provider wrote.
+                generation.update(level="ERROR", status_message=str(e))
+                raise
+            generation.update(
+                output={"mime": result.mime, "params": dict(result.params)},
+                model=result.model,
+                cost_details={"total": float(result.cost_usd)},
+            )
+            return result

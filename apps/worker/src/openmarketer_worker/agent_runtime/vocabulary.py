@@ -34,6 +34,14 @@ PREPARE_RUN = "prepare_run"
 # The activities of the policy gate, for an agent that has an action a person must approve.
 PROPOSE_ACTION = "propose_action"
 SETTLE_PROPOSAL = "settle_proposal"
+# The activities of the creative budget, for an agent that has an action that spends.
+RESERVE_SPEND = "reserve_spend"
+SETTLE_SPEND = "settle_spend"
+
+# The field of a spending action's result that says what it spent, in US dollars: a number or
+# its text ("0.04"). A result without it, or with a value that is not an amount, is taken to
+# have spent what it was estimated to cost.
+COST_USD = "cost_usd"
 
 # The action's own input is core's ``ActionRequest`` and its result an ``ActionOutcome``;
 # the step's result is a ``StepOutcome``. ``forget_run`` is given the run's ``GraphRunRef``
@@ -75,7 +83,8 @@ class ProposalInput:
     """What ``propose_action`` is given: the action the gate holds, and whose it is.
 
     ``effect`` is the value of the action's declared ``ActionEffect``, and ``wait_seconds`` how
-    long a person has to decide, both from the action's policy.
+    long a person has to decide, both from the action's policy. ``estimate_usd`` is what an action
+    that spends is estimated to cost, which the person sees; no other action has one.
     """
 
     scope: RunScope
@@ -84,6 +93,8 @@ class ProposalInput:
     request: ActionRequest
     effect: str
     wait_seconds: float
+    # What an action that spends is estimated to cost, as the ledger holds it (``SpendReserved``).
+    estimate_usd: str | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +114,48 @@ class SettleInput:
     deadline_passed: bool
 
 
+@dataclass(frozen=True)
+class SpendInput:
+    """What ``reserve_spend`` is given: the action that spends, the run that asks, and its scope.
+
+    The activity estimates the action's cost from its payload, which the history holds already as
+    the step's request, and reserves it in the scope's workspace under the action's id.
+    """
+
+    scope: RunScope
+    run: GraphRunRef
+    request: ActionRequest
+
+
+@dataclass(frozen=True)
+class SpendReserved:
+    """What ``reserve_spend`` answers: the ledger's decision, and the amount it decided on.
+
+    ``decision`` is the value of core's ``SpendDecision``; ``estimate_usd`` the amount in US
+    dollars as text, exact to the micro-dollar, which is held unless the decision refused it. A
+    retried reservation answers what the first one decided.
+    """
+
+    decision: str
+    estimate_usd: str
+
+
+@dataclass(frozen=True)
+class SpendSettlement:
+    """What ``settle_spend`` is given: the action whose spend is settled, and how.
+
+    ``spent`` says whether the action may have spent: its spend is committed, at ``reported_usd``
+    (what the handler's result said, as text) when that is an amount, at ``estimate_usd``
+    otherwise. An action that did not spend is released. It answers with what was spent, as text.
+    """
+
+    scope: RunScope
+    action_id: str
+    spent: bool
+    estimate_usd: str
+    reported_usd: str | None = None
+
+
 # Failure types of the runtime's activities and of the driver.
 DATABASE_UNAVAILABLE = "DatabaseUnavailable"  # the database refused or was unreachable
 UNEXPECTED = "Unexpected"  # an error nobody worded; its detail is in the log only
@@ -117,6 +170,8 @@ RUN_OF_ANOTHER_KIND = "RunOfAnotherKind"  # a workflow was started with another 
 PROPOSAL_REFUSED = "ProposalRefused"  # a proposal cannot be stored or found for the run's project
 ACTION_NOT_APPROVED = "ActionNotApproved"  # an action the gate holds was asked to run unapproved
 RUN_REFUSED = "RunRefused"  # an action that starts another run has no project to put it in
+SPEND_NOT_RESERVED = "SpendNotReserved"  # a spend cannot be estimated or reserved for the project
+SPEND_NOT_SETTLED = "SpendNotSettled"  # a spend has no reservation, or was settled the other way
 
 # A failure of these types ends the run instead of being told to the graph: the fault is in the
 # agent's graph, routes or handlers and not in the world, so the graph would only ask again.
@@ -149,6 +204,8 @@ WORDED_BY_THE_RUNTIME = (
     PROPOSAL_REFUSED,
     ACTION_NOT_APPROVED,
     RUN_REFUSED,
+    SPEND_NOT_RESERVED,
+    SPEND_NOT_SETTLED,
 )
 
 # What the runtime lets into the workflow history, which is stored for as long as the namespace
@@ -172,6 +229,10 @@ NOT_APPROVED_TEXTS = {
     ProposalStatus.REJECTED: "a person rejected the action",
     ProposalStatus.EXPIRED: "nobody approved the action before its deadline",
 }
+
+# What the graph is told of an action that spends whose estimate the creative budget refused:
+# it would take the month's spending past the workspace's cap, which no person can approve.
+SPEND_REFUSED_TEXT = "the creative budget for this month would be exceeded"
 
 # What the graph is told of a run action whose child did not succeed, whose child workflow id
 # was used already, or whose child reported something other than the small result its agent
@@ -279,6 +340,28 @@ FORGET_RUN_LIMITS = DatabaseWritePolicy(
 # Storing and settling a proposal: single short writes, with the waits of recording a run's
 # failure. An hour bounds how long a run keeps trying while the database is down.
 PROPOSAL_WRITE_LIMITS = DatabaseWritePolicy(
+    attempt_timeout_seconds=30,
+    retry_after_seconds=1,
+    max_retry_wait_seconds=60,
+    give_up_after_seconds=60 * 60,
+)
+
+
+# Estimating and reserving a spend: one short transaction, and an estimate that may read the
+# database or a price list, within half a minute. The action waits on it, so a database that is
+# down is given a quarter of an hour; then the graph is told the action did not run.
+RESERVE_SPEND_LIMITS = DatabaseWritePolicy(
+    attempt_timeout_seconds=30,
+    retry_after_seconds=1,
+    max_retry_wait_seconds=60,
+    give_up_after_seconds=15 * 60,
+)
+
+
+# Committing or releasing a spend: one short write that keeps the ledger true, so it is tried
+# for an hour, as a proposal is. One that is never written leaves the estimate held, which
+# counts against the cap: the safe side.
+SETTLE_SPEND_LIMITS = DatabaseWritePolicy(
     attempt_timeout_seconds=30,
     retry_after_seconds=1,
     max_retry_wait_seconds=60,

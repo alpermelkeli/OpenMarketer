@@ -42,6 +42,29 @@ export function effectNote(effect: ActionEffect): string {
   return EFFECT_NOTE[effect];
 }
 
+// A map, so that an action another agent declares later is shown by its name alone.
+const ACTION_LABELS = new Map<string, string>([
+  ["generate_image", "Generate an image"],
+  ["edit_image", "Edit an image"],
+]);
+
+/** A short name for an action the dashboard knows, or null to show the action's own name only. */
+export function actionLabel(actionName: string): string | null {
+  return ACTION_LABELS.get(actionName) ?? null;
+}
+
+const ESTIMATE = new Intl.NumberFormat("en", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+});
+
+/** "Estimated cost $0.12" for an action that spends and was estimated; null for any other. */
+export function estimateText(estimateUsd: number | null): string | null {
+  return estimateUsd === null ? null : `Estimated cost ${ESTIMATE.format(estimateUsd)}`;
+}
+
 /** The proposals that wait for a decision, and those that have one, each newest first. */
 export function splitByDecision(proposals: readonly Proposal[]): { waiting: Proposal[]; decided: Proposal[] } {
   return {

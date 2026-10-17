@@ -1,6 +1,7 @@
 """Tests for reading the model provider's catalogue. HTTP goes through a fake transport."""
 
 import httpx
+import pytest
 
 from openmarketer_core.llm_catalog import ModelCatalog, catalog_model
 from openmarketer_core.llm_config import CatalogModel
@@ -139,3 +140,16 @@ def test_last_catalogue_is_kept_when_a_later_fetch_fails():
     first = catalog.models()
     clock.now = 11 * 60
     assert catalog.models() == first
+
+
+def test_output_modalities_and_the_image_output_price_are_read():
+    model = catalog_model(
+        {
+            "id": "google/drawer",
+            "pricing": {"prompt": "0.0000005", "image_output": "0.00006"},
+            "architecture": {"input_modalities": ["text"], "output_modalities": ["image", "text"]},
+        }
+    )
+    assert model is not None
+    assert model.output_modalities == frozenset({"image", "text"})
+    assert model.image_output_price == pytest.approx(60.0)

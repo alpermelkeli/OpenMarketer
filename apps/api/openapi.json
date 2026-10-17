@@ -2,7 +2,7 @@
   "components": {
     "schemas": {
       "ActionEffect": {
-        "description": "What an action does to the world beyond the run, as its declaration says.\n\n``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it\nruns when the graph asks. ``PUBLISHES`` puts something in front of other people and\n``SPENDS`` costs money; the gate holds both for a person's approval.",
+        "description": "What an action does to the world beyond the run, as its declaration says.\n\n``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it\nruns when the graph asks. ``PUBLISHES`` puts something in front of other people, and the\ngate holds it for a person's approval. ``SPENDS`` costs money: the gate reserves its\nestimate under the creative budget, which lets it run, holds it for a person or refuses it\n(``gate.py``); its worker declares how its cost is estimated.",
         "enum": [
           "internal",
           "publishes",
@@ -280,6 +280,62 @@
         "title": "AnalysisSettingsResponse",
         "type": "object"
       },
+      "AssetRequest": {
+        "additionalProperties": false,
+        "description": "One image the studio is asked to make, for one platform, with the words it must show.",
+        "properties": {
+          "exact_copy": {
+            "items": {
+              "maxLength": 120,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 6,
+            "title": "Exact Copy",
+            "type": "array"
+          },
+          "goal": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Goal",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "reference_asset_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Reference Asset Ids",
+            "type": "array"
+          },
+          "style_notes": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Style Notes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "goal",
+          "platform"
+        ],
+        "title": "AssetRequest",
+        "type": "object"
+      },
+      "AssetTechnique": {
+        "enum": [
+          "generated",
+          "html_reference",
+          "background_overlay",
+          "composed"
+        ],
+        "title": "AssetTechnique",
+        "type": "string"
+      },
       "Audience": {
         "additionalProperties": false,
         "properties": {
@@ -414,6 +470,47 @@
         "title": "BusinessModelType",
         "type": "string"
       },
+      "CapResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "default_usd": {
+            "title": "Default Usd",
+            "type": "number"
+          },
+          "environment_variable": {
+            "description": "The variable that would set it instead.",
+            "title": "Environment Variable",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CapSource",
+            "description": "Where it comes from: environment, stored or default."
+          },
+          "value_usd": {
+            "description": "The cap in use.",
+            "title": "Value Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value_usd",
+          "source",
+          "default_usd",
+          "environment_variable"
+        ],
+        "title": "CapResponse",
+        "type": "object"
+      },
+      "CapSource": {
+        "description": "Where the value of a cap in use comes from.",
+        "enum": [
+          "environment",
+          "stored",
+          "default"
+        ],
+        "title": "CapSource",
+        "type": "string"
+      },
       "CapabilityProblem": {
         "description": "Why a model may not serve a role.",
         "enum": [
@@ -421,6 +518,7 @@
           "no_tools",
           "no_structured_output",
           "no_image_input",
+          "no_image_output",
           "rejects_temperature",
           "fallback_rejects_temperature"
         ],
@@ -457,6 +555,18 @@
             "title": "Id",
             "type": "string"
           },
+          "image_output_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "US dollars per million tokens of image output.",
+            "title": "Image Output Price"
+          },
           "input_modalities": {
             "items": {
               "type": "string"
@@ -467,6 +577,14 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "output_modalities": {
+            "description": "What the model answers with: `image` too.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Modalities",
+            "type": "array"
           },
           "prompt_price": {
             "anyOf": [
@@ -495,7 +613,9 @@
           "prompt_price",
           "completion_price",
           "supported_parameters",
-          "input_modalities"
+          "input_modalities",
+          "output_modalities",
+          "image_output_price"
         ],
         "title": "CatalogModelResponse",
         "type": "object"
@@ -902,6 +1022,39 @@
         "title": "ChosenAnalysisLimitsResponse",
         "type": "object"
       },
+      "ChosenCreativeBudgetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_per_action_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Per Action Usd"
+          },
+          "monthly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Usd"
+          }
+        },
+        "required": [
+          "monthly_usd",
+          "auto_per_action_usd"
+        ],
+        "title": "ChosenCreativeBudgetResponse",
+        "type": "object"
+      },
       "CreateChatRequest": {
         "additionalProperties": false,
         "properties": {
@@ -943,6 +1096,125 @@
           "repository_url"
         ],
         "title": "CreateProjectRequest",
+        "type": "object"
+      },
+      "CreativeBudgetBoundsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "max_auto_per_action_usd": {
+            "title": "Max Auto Per Action Usd",
+            "type": "number"
+          },
+          "max_monthly_usd": {
+            "title": "Max Monthly Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "max_monthly_usd",
+          "max_auto_per_action_usd"
+        ],
+        "title": "CreativeBudgetBoundsResponse",
+        "type": "object"
+      },
+      "CreativeBudgetRequest": {
+        "additionalProperties": false,
+        "description": "The caps the workspace chooses. A cap left out or null keeps its environment or default.",
+        "properties": {
+          "auto_per_action_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The most one action may spend without a person's approval, from 0 to 100 USD.",
+            "title": "Auto Per Action Usd"
+          },
+          "monthly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the month's generated media may cost, from 0 to 10,000 USD.",
+            "title": "Monthly Usd"
+          }
+        },
+        "title": "CreativeBudgetRequest",
+        "type": "object"
+      },
+      "CreativeBudgetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_per_action": {
+            "$ref": "#/components/schemas/CapResponse"
+          },
+          "bounds": {
+            "$ref": "#/components/schemas/CreativeBudgetBoundsResponse"
+          },
+          "chosen": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChosenCreativeBudgetResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "monthly": {
+            "$ref": "#/components/schemas/CapResponse"
+          },
+          "set_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set At"
+          },
+          "set_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set By"
+          },
+          "spent_this_month": {
+            "$ref": "#/components/schemas/MonthlySpendResponse"
+          },
+          "unreadable": {
+            "description": "A stored choice breaks a rule: the other sources are shown, and spending is refused until it is reset.",
+            "title": "Unreadable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "monthly",
+          "auto_per_action",
+          "chosen",
+          "set_at",
+          "set_by",
+          "unreadable",
+          "spent_this_month",
+          "bounds"
+        ],
+        "title": "CreativeBudgetResponse",
         "type": "object"
       },
       "CredentialListResponse": {
@@ -1022,6 +1294,9 @@
           "analysis_not_found",
           "research_not_found",
           "research_report_not_found",
+          "studio_run_not_found",
+          "media_asset_not_found",
+          "media_asset_version_not_found",
           "chat_not_found",
           "profile_not_found",
           "credential_not_found",
@@ -1031,6 +1306,8 @@
           "project_already_exists",
           "analysis_already_running",
           "research_unfinished",
+          "studio_run_unfinished",
+          "media_asset_decided",
           "profile_already_approved",
           "proposal_not_pending",
           "proposal_pending",
@@ -1039,11 +1316,14 @@
           "credential_unreadable",
           "encryption_key_missing",
           "model_set_by_environment",
+          "cap_set_by_environment",
+          "environment_setting_invalid",
           "model_key_not_set",
           "stored_setting_invalid",
           "internal_error",
           "analysis_not_started",
           "research_not_started",
+          "studio_not_started",
           "model_unavailable",
           "chat_unanswered",
           "database_unavailable",
@@ -1239,6 +1519,299 @@
         "title": "Measurement",
         "type": "object"
       },
+      "MediaAssetDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "$ref": "#/components/schemas/MediaAssetResponse"
+          },
+          "versions": {
+            "description": "Newest first; at most 100, far more than a run makes.",
+            "items": {
+              "$ref": "#/components/schemas/MediaAssetVersionResponse"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "asset",
+          "versions"
+        ],
+        "title": "MediaAssetDetailResponse",
+        "type": "object"
+      },
+      "MediaAssetListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/MediaAssetResponse"
+            },
+            "title": "Assets",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the last page; otherwise the `cursor` of the next request.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "assets",
+          "next_cursor"
+        ],
+        "title": "MediaAssetListResponse",
+        "type": "object"
+      },
+      "MediaAssetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The version the asset stands for now: the run's best candidate.",
+            "title": "Current Version Id"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MediaAssetStatus"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "run_id",
+          "platform",
+          "status",
+          "current_version_id",
+          "decided_by",
+          "decided_at",
+          "created_at"
+        ],
+        "title": "MediaAssetResponse",
+        "type": "object"
+      },
+      "MediaAssetStatus": {
+        "enum": [
+          "draft",
+          "accepted",
+          "rejected"
+        ],
+        "title": "MediaAssetStatus",
+        "type": "string"
+      },
+      "MediaAssetVersionResponse": {
+        "additionalProperties": false,
+        "description": "One candidate of an asset: how it was made and what its reviews found, not its image.",
+        "properties": {
+          "check_report": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the programmatic checks found; null until the version is reviewed.",
+            "title": "Check Report"
+          },
+          "code_chars": {
+            "description": "How long that code is; the code itself is not served.",
+            "title": "Code Chars",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "has_code": {
+            "description": "Whether the version was made by code in the sandbox.",
+            "title": "Has Code",
+            "type": "boolean"
+          },
+          "height": {
+            "title": "Height",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mime": {
+            "description": "`image/png`, `image/jpeg` or `image/webp`.",
+            "title": "Mime",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "technique": {
+            "$ref": "#/components/schemas/AssetTechnique"
+          },
+          "verifier_report": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the visual verifier found; null when it was not asked.",
+            "title": "Verifier Report"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "round",
+          "technique",
+          "mime",
+          "width",
+          "height",
+          "size_bytes",
+          "provider",
+          "model",
+          "prompt",
+          "params",
+          "has_code",
+          "code_chars",
+          "check_report",
+          "verifier_report",
+          "passed",
+          "cost_usd",
+          "created_at"
+        ],
+        "title": "MediaAssetVersionResponse",
+        "type": "object"
+      },
       "ModelCatalogResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1352,6 +1925,57 @@
         ],
         "title": "ModelSettingsResponse",
         "type": "object"
+      },
+      "MonthlySpendResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cap_usd": {
+            "title": "Cap Usd",
+            "type": "number"
+          },
+          "month_start": {
+            "description": "The start of this calendar month, in UTC.",
+            "format": "date-time",
+            "title": "Month Start",
+            "type": "string"
+          },
+          "remaining_usd": {
+            "description": "What can still be reserved; never below zero.",
+            "title": "Remaining Usd",
+            "type": "number"
+          },
+          "reserved_usd": {
+            "description": "Held for actions that have not settled yet.",
+            "title": "Reserved Usd",
+            "type": "number"
+          },
+          "spent_usd": {
+            "title": "Spent Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "month_start",
+          "spent_usd",
+          "reserved_usd",
+          "cap_usd",
+          "remaining_usd"
+        ],
+        "title": "MonthlySpendResponse",
+        "type": "object"
+      },
+      "Platform": {
+        "enum": [
+          "instagram_post",
+          "instagram_portrait",
+          "instagram_story",
+          "x_post",
+          "linkedin_post",
+          "og_image",
+          "app_store_screenshot"
+        ],
+        "title": "Platform",
+        "type": "string"
       },
       "Problem": {
         "additionalProperties": false,
@@ -1849,6 +2473,18 @@
             "$ref": "#/components/schemas/ActionEffect",
             "description": "What the action does beyond the run."
           },
+          "estimate_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What an action that spends was estimated to cost, in USD; null otherwise.",
+            "title": "Estimate Usd"
+          },
           "expires_at": {
             "description": "Undecided by then, the proposal expires and the action does not run.",
             "format": "date-time",
@@ -1897,7 +2533,8 @@
           "created_at",
           "expires_at",
           "decided_by",
-          "decided_at"
+          "decided_at",
+          "estimate_usd"
         ],
         "title": "ProposalResponse",
         "type": "object"
@@ -2464,7 +3101,7 @@
             "description": "What the role resolves to without the workspace's choice for it."
           },
           "kind": {
-            "description": "`chat`, or `embeddings` or `decisions` for a role that takes a model only.",
+            "description": "`chat`, or `embeddings`, `decisions` or `images` for a role that takes a model only.",
             "title": "Kind",
             "type": "string"
           },
@@ -2629,6 +3266,300 @@
         ],
         "title": "StoredCredentialResponse",
         "type": "object"
+      },
+      "StudioRunDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cost_usd": {
+            "description": "What the run spent, in USD, once it has ended.",
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "final_asset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The asset a run that succeeded or needs review ended with.",
+            "title": "Final Asset Id"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StudioRunRequestResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the run was asked for; null when the stored request no longer fits the request's schema, which a later version may have tightened."
+          },
+          "requested_by": {
+            "description": "Who asked for the run: `person`, `orchestrator` (the chat) or `run`.",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StudioRunStatus"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "status",
+          "platform",
+          "requested_by",
+          "error",
+          "final_asset_id",
+          "cost_usd",
+          "created_at",
+          "started_at",
+          "finished_at",
+          "request"
+        ],
+        "title": "StudioRunDetailResponse",
+        "type": "object"
+      },
+      "StudioRunListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the last page; otherwise the `cursor` of the next request.",
+            "title": "Next Cursor"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/StudioRunResponse"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "next_cursor"
+        ],
+        "title": "StudioRunListResponse",
+        "type": "object"
+      },
+      "StudioRunRequestResponse": {
+        "additionalProperties": false,
+        "description": "What a run was asked for, as it was stored.",
+        "properties": {
+          "exact_copy": {
+            "description": "The lines of text the image must show, exactly; empty for no text.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Exact Copy",
+            "type": "array"
+          },
+          "goal": {
+            "title": "Goal",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "reference_asset_ids": {
+            "description": "Assets of the project the studio was asked to look at.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Reference Asset Ids",
+            "type": "array"
+          },
+          "style_notes": {
+            "title": "Style Notes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "goal",
+          "exact_copy",
+          "platform",
+          "style_notes",
+          "reference_asset_ids"
+        ],
+        "title": "StudioRunRequestResponse",
+        "type": "object"
+      },
+      "StudioRunResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cost_usd": {
+            "description": "What the run spent, in USD, once it has ended.",
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "final_asset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The asset a run that succeeded or needs review ended with.",
+            "title": "Final Asset Id"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "requested_by": {
+            "description": "Who asked for the run: `person`, `orchestrator` (the chat) or `run`.",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StudioRunStatus"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "status",
+          "platform",
+          "requested_by",
+          "error",
+          "final_asset_id",
+          "cost_usd",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "StudioRunResponse",
+        "type": "object"
+      },
+      "StudioRunStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "needs_review",
+          "failed"
+        ],
+        "title": "StudioRunStatus",
+        "type": "string"
       },
       "TierModelSource": {
         "description": "Where the model of a tier comes from.",
@@ -2951,7 +3882,7 @@
     },
     "/v1/projects/{project_id}": {
       "delete": {
-        "description": "Delete the project with everything stored about it, for good.\n\nThat is its analyses, the evidence they found, every profile version, its\nproposals, its chats and its research runs with their reports and the pages\nthey fetched. Refused while an analysis or a research run of the project is\nqueued or running, or a proposal of it waits for a decision. 503\n`storage_unavailable` when the research pages' objects could not be removed\nfrom object storage; the project stays then. The repository is not touched.",
+        "description": "Delete the project with everything stored about it, for good.\n\nThat is its analyses, the evidence they found, every profile version, its\nproposals, its chats, its research runs with their reports and the pages\nthey fetched, and its studio runs with their assets and every version's\nimage, accepted ones included. Refused while an analysis, a research run or a\nstudio run of the project is queued or running (409 `analysis_already_running`,\n`research_unfinished`, `studio_run_unfinished`), or a proposal of it waits for\na decision. The pages and the images are in the installation's one bucket and\nare removed through the same store. 503 `storage_unavailable` when an object\ncould not be removed from object storage; the project stays then. The\nrepository is not touched, nor what its runs spent in the month's ledger.",
         "operationId": "deleteProject",
         "parameters": [
           {
@@ -4276,6 +5207,592 @@
         "summary": "Mark Read",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/media-assets": {
+      "get": {
+        "description": "The project's library: the assets its studio runs made, newest first, a page at a time.",
+        "operationId": "listMediaAssets",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The most items one response may hold.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most items one response may hold.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+              "maxLength": 200,
+              "title": "Cursor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaAssetListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Assets",
+        "tags": [
+          "studio"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/media-assets/{asset_id}": {
+      "get": {
+        "description": "One asset with its versions, each with how it was made and what its reviews found.",
+        "operationId": "getMediaAsset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaAssetDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Asset",
+        "tags": [
+          "studio"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/media-assets/{asset_id}/accept": {
+      "post": {
+        "description": "Accept a draft asset, as its current version stands, as the current user.\n\nAccepting it again changes nothing. 409 `studio_run_unfinished` while its run may still\nadd versions, and `media_asset_decided` when it was rejected. The request takes no body;\none is a 422.",
+        "operationId": "acceptMediaAsset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaAssetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Accept",
+        "tags": [
+          "studio"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/media-assets/{asset_id}/reject": {
+      "post": {
+        "description": "Reject a draft asset as the current user.\n\nRejecting it again changes nothing. 409 `studio_run_unfinished` while its run may still\nadd versions, and `media_asset_decided` when it was accepted. The request takes no body;\none is a 422.",
+        "operationId": "rejectMediaAsset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediaAssetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Reject",
+        "tags": [
+          "studio"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download": {
+      "get": {
+        "description": "The image of one version as a file to save, named after the version.",
+        "operationId": "downloadMediaAssetImage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The version's image, in the type stored with it."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Download",
+        "tags": [
+          "studio"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/image": {
+      "get": {
+        "description": "The image of one version, to show in the page.\n\n404 `media_asset_version_not_found` for a version that is not one of this asset's; 503\n`storage_unavailable` when object storage could not give it back.",
+        "operationId": "getMediaAssetImage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The version's image, in the type stored with it."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Image",
+        "tags": [
+          "studio"
         ]
       }
     },
@@ -5619,6 +7136,357 @@
         ]
       }
     },
+    "/v1/projects/{project_id}/studio-runs": {
+      "get": {
+        "description": "The project's studio runs as they are now, newest first, one page at a time.",
+        "operationId": "listStudioRuns",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The most items one response may hold.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most items one response may hold.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+              "maxLength": 200,
+              "title": "Cursor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudioRunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Runs",
+        "tags": [
+          "studio"
+        ]
+      },
+      "post": {
+        "description": "Queue a studio run for the image asked for and return the run to poll.\n\nA worker executes it later, under the workspace's budget for generated media; a project\nmay have several runs at once. A reference asset that is not the project's is a 422\nbeside `reference_asset_ids`. 503 `studio_not_started` when the run could not be handed\nto a worker: it is then stored as failed and a new one can be started.",
+        "operationId": "startStudioRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudioRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Start",
+        "tags": [
+          "studio"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/studio-runs/{run_id}": {
+      "delete": {
+        "description": "Delete a finished run with its assets and every version's image, for good.\n\nAn accepted asset goes too. 409 `studio_run_unfinished` while the run is queued or\nrunning: the worker would store images for a run that is gone. 503 `storage_unavailable`\nwhen the images could not be removed from object storage; the run stays then, and can be\ndeleted again. The request takes no body; one is a 422.",
+        "operationId": "deleteStudioRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Delete Run",
+        "tags": [
+          "studio"
+        ]
+      },
+      "get": {
+        "description": "The run as it is now, with what it was asked for.\n\nQueued, running, succeeded, needs review (with its asset) or failed.",
+        "operationId": "getStudioRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudioRunDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Run",
+        "tags": [
+          "studio"
+        ]
+      }
+    },
     "/v1/settings/analysis": {
       "delete": {
         "description": "Go back to the analyzer's defaults.",
@@ -5749,6 +7617,171 @@
           }
         },
         "summary": "Set Limits",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/v1/settings/creative-budget": {
+      "delete": {
+        "description": "Go back to the environment's caps and the defaults.",
+        "operationId": "removeCreativeBudget",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Remove Budget",
+        "tags": [
+          "settings"
+        ]
+      },
+      "get": {
+        "description": "The caps in use with where each comes from, what was chosen, and this month's spending.\n\n409 `environment_setting_invalid` when an environment variable sets a cap to a value that\nbreaks its rule.",
+        "operationId": "getCreativeBudget",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeBudgetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Budget",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "description": "Choose the caps, in place of the choice before; none chosen removes the choice.\n\nA cap out of its bounds is a 422 beside its field. 409 `cap_set_by_environment` for a cap\nan environment variable sets.",
+        "operationId": "setCreativeBudget",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreativeBudgetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeBudgetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Set Budget",
         "tags": [
           "settings"
         ]

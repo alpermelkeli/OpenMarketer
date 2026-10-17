@@ -145,7 +145,9 @@ class RoleSettingResponse(BaseModel):
 
     role: str
     kind: str = Field(
-        description="`chat`, or `embeddings` or `decisions` for a role that takes a model only."
+        description=(
+            "`chat`, or `embeddings`, `decisions` or `images` for a role that takes a model only."
+        )
     )
     tier: str | None
     requires: list[str] = Field(description="What the role's model must support.")
@@ -213,6 +215,10 @@ class CatalogModelResponse(BaseModel):
     completion_price: float | None = Field(description="US dollars per million output tokens.")
     supported_parameters: list[str]
     input_modalities: list[str]
+    output_modalities: list[str] = Field(description="What the model answers with: `image` too.")
+    image_output_price: float | None = Field(
+        description="US dollars per million tokens of image output."
+    )
 
 
 class ModelCatalogResponse(BaseModel):
@@ -462,6 +468,8 @@ def get_catalog(catalog: Catalog) -> ModelCatalogResponse:
                 completion_price=model.completion_price,
                 supported_parameters=sorted(model.supported_parameters),
                 input_modalities=sorted(model.input_modalities),
+                output_modalities=sorted(model.output_modalities),
+                image_output_price=model.image_output_price,
             )
             for model in sorted(found.values(), key=lambda model: model.id)
         ],

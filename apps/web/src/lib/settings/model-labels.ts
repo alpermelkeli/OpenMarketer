@@ -26,7 +26,14 @@ const ROLES = new Map<string, RoleLabel>([
       inUse: true,
     },
   ],
-  ["orchestrator", { label: "Orchestrator", purpose: "Answers questions and takes requests in the dashboard's chat.", inUse: false }],
+  [
+    "orchestrator",
+    {
+      label: "Orchestrator",
+      purpose: "Answers questions and takes requests in the dashboard's chat. Every chat turn uses it.",
+      inUse: true,
+    },
+  ],
   [
     "researcher",
     {
@@ -58,22 +65,28 @@ const ROLES = new Map<string, RoleLabel>([
   ["reply_drafter", { label: "Reply drafter", purpose: "Drafts replies to the project's own audience.", inUse: false }],
   [
     "creative_director",
-    { label: "Creative director", purpose: "Writes the prompts and scripts for image, video and voice.", inUse: false },
+    {
+      label: "Creative director",
+      purpose: "Turns a studio request into a brief and chooses how the image is made first. Every studio run uses it.",
+      inUse: true,
+    },
   ],
   [
     "studio",
     {
       label: "Creative studio",
-      purpose: "Produces images, video and voice, looks at the results and edits them. It must accept images.",
-      inUse: false,
+      purpose:
+        "Makes a studio run's candidates with its tools, looks at the results and plans the edits. It must accept images. Every studio run uses it.",
+      inUse: true,
     },
   ],
   [
     "asset_verifier",
     {
       label: "Asset verifier",
-      purpose: "Checks every produced asset against its brief. Keep it a different model from the studio's.",
-      inUse: false,
+      purpose:
+        "Looks at every studio candidate that passes the checks by code and judges it against the brief. Keep it a different model from the studio's.",
+      inUse: true,
     },
   ],
   ["critic", { label: "Critic", purpose: "Checks a draft against the brand voice and the facts before approval.", inUse: false }],
@@ -86,6 +99,15 @@ const ROLES = new Map<string, RoleLabel>([
       purpose:
         "Scores the analyzer in the benchmark. The benchmark runs from the command line and reads the environment only, so a choice here does not reach it.",
       inUse: false,
+    },
+  ],
+  [
+    "image_generator",
+    {
+      label: "Image generator",
+      purpose:
+        "Makes and edits the studio's images, the text in them included. It takes a model only, one that answers with images.",
+      inUse: true,
     },
   ],
   ["embeddings", { label: "Embeddings", purpose: "Turns text into vectors for the memory. It takes a model only.", inUse: false }],
@@ -139,6 +161,7 @@ const PROBLEMS: Record<CapabilityProblem, string> = {
   no_tools: "cannot call tools, which this role needs.",
   no_structured_output: "cannot answer in a set structure, which this role needs.",
   no_image_input: "does not accept images, which this role needs.",
+  no_image_output: "does not answer with images, which this role makes.",
   rejects_temperature:
     "does not accept a temperature, which this role's requests carry. Mark it below as rejecting the temperature.",
   fallback_rejects_temperature:

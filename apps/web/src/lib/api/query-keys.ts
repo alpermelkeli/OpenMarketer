@@ -15,6 +15,14 @@ export const queryKeys = {
     ["projects", "one", projectId, "researches", "run", runId] as const,
   researchReport: (projectId: string, runId: string) =>
     ["projects", "one", projectId, "researches", "run", runId, "report"] as const,
+  studioRuns: (projectId: string) => ["projects", "one", projectId, "studio-runs", "list"] as const,
+  studioRun: (projectId: string, runId: string) =>
+    ["projects", "one", projectId, "studio-runs", "run", runId] as const,
+  /** The project's library: the assets its studio runs made. */
+  mediaAssets: (projectId: string) => ["projects", "one", projectId, "media-assets", "list"] as const,
+  /** One asset with its versions. */
+  mediaAsset: (projectId: string, assetId: string) =>
+    ["projects", "one", projectId, "media-assets", "one", assetId] as const,
   profileVersions: (projectId: string) => ["projects", "one", projectId, "versions", "list"] as const,
   profileVersion: (projectId: string, version: number) =>
     ["projects", "one", projectId, "versions", "one", version] as const,
@@ -47,9 +55,36 @@ export const queryKeys = {
   /** The provider's catalogue: it does not change with the workspace's choices. */
   modelCatalog: () => ["settings", "model-catalog"] as const,
   analysisSettings: () => ["settings", "analysis"] as const,
+  /** The caps of what generated media may cost, with this month's spending. */
+  creativeBudget: () => ["settings", "creative-budget"] as const,
 };
 
 type Refresh = { queryKey: readonly unknown[]; exact?: boolean };
+
+/**
+ * What a studio run that has just ended makes out of date: the list of runs, the library, which
+ * now holds the asset it made, and this month's spending, which its images count towards.
+ */
+export function refreshedByStudioRunEnd(projectId: string): Refresh[] {
+  return [
+    { queryKey: queryKeys.studioRuns(projectId) },
+    { queryKey: queryKeys.mediaAssets(projectId) },
+    { queryKey: queryKeys.creativeBudget() },
+  ];
+}
+
+/** What a decision on an asset makes out of date: the library that lists its state. The asset itself is set from the answer. */
+export function refreshedByAssetDecision(projectId: string): Refresh[] {
+  return [{ queryKey: queryKeys.mediaAssets(projectId) }];
+}
+
+/**
+ * What deleting a studio run makes out of date: the runs and the library. The run and its asset
+ * are dropped, not read again: they are gone.
+ */
+export function refreshedByStudioRunDeleted(projectId: string): Refresh[] {
+  return [{ queryKey: queryKeys.studioRuns(projectId) }, { queryKey: queryKeys.mediaAssets(projectId) }];
+}
 
 /**
  * What a chat's event makes out of date. A turn that starts or ends changes whether the chat is

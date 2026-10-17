@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_BODY_BYTES, allowedApiTarget, apiBaseUrl, assertFromDashboard, proxyToApi } from "./api-proxy";
+import { MAX_BODY_BYTES, MAX_IMAGE_BYTES, allowedApiTarget, apiBaseUrl, assertFromDashboard, proxyToApi } from "./api-proxy";
 
 const PROJECT = "8ce5e2bb-6e54-49b4-9ddc-b96f20ec1109";
 const RUN = "0b0e6c6e-1111-4222-8333-444455556666";
@@ -278,6 +278,186 @@ describe("the routes of research", () => {
     expect(() =>
       allowedApiTarget("GET", RESEARCHES, new URLSearchParams("status=succeeded")),
     ).toThrow();
+  });
+});
+
+describe("the routes of the studio", () => {
+  const RUNS = ["projects", PROJECT, "studio-runs"];
+  const ASSETS = ["projects", PROJECT, "media-assets"];
+  const ASSET = "0b0e6c6e-3333-4444-8555-666677778888";
+  const VERSION = "0b0e6c6e-9999-4aaa-8bbb-ccccddddeeee";
+
+  it("forward the runs, starting and deleting one, and the library with its decisions", () => {
+    expect(allowedApiPath("GET", RUNS)).toBe(`/v1/projects/${PROJECT}/studio-runs`);
+    expect(allowedApiPath("POST", RUNS)).toBe(`/v1/projects/${PROJECT}/studio-runs`);
+    expect(allowedApiPath("GET", [...RUNS, RUN])).toBe(`/v1/projects/${PROJECT}/studio-runs/${RUN}`);
+    expect(allowedApiPath("DELETE", [...RUNS, RUN])).toBe(`/v1/projects/${PROJECT}/studio-runs/${RUN}`);
+    expect(allowedApiPath("GET", ASSETS)).toBe(`/v1/projects/${PROJECT}/media-assets`);
+    expect(allowedApiPath("GET", [...ASSETS, ASSET])).toBe(`/v1/projects/${PROJECT}/media-assets/${ASSET}`);
+    expect(allowedApiPath("POST", [...ASSETS, ASSET, "accept"])).toBe(
+      `/v1/projects/${PROJECT}/media-assets/${ASSET}/accept`,
+    );
+    expect(allowedApiPath("POST", [...ASSETS, ASSET, "reject"])).toBe(
+      `/v1/projects/${PROJECT}/media-assets/${ASSET}/reject`,
+    );
+  });
+
+  it("page the runs and the library", () => {
+    expect(allowedApiTarget("GET", RUNS, new URLSearchParams("limit=20"))).toBe(
+      `/v1/projects/${PROJECT}/studio-runs?limit=20`,
+    );
+    expect(allowedApiTarget("GET", ASSETS, new URLSearchParams("cursor=abc"))).toBe(
+      `/v1/projects/${PROJECT}/media-assets?cursor=abc`,
+    );
+  });
+
+  it("forward a version's image and its download as reads only, with no query", () => {
+    const image = [...ASSETS, ASSET, "versions", VERSION, "image"];
+    const download = [...ASSETS, ASSET, "versions", VERSION, "download"];
+    expect(allowedApiPath("GET", image)).toBe(`/v1/projects/${PROJECT}/media-assets/${ASSET}/versions/${VERSION}/image`);
+    expect(allowedApiPath("GET", download)).toBe(
+      `/v1/projects/${PROJECT}/media-assets/${ASSET}/versions/${VERSION}/download`,
+    );
+    for (const method of ["POST", "PUT", "DELETE"]) {
+      expect(() => allowedApiPath(method, image)).toThrow();
+      expect(() => allowedApiPath(method, download)).toThrow();
+    }
+    expect(() => allowedApiTarget("GET", image, new URLSearchParams("size=small"))).toThrow();
+  });
+
+  it("do not include a wrong method, an id of another form, or a path below one", () => {
+    expect(() => allowedApiPath("PUT", RUNS)).toThrow();
+    expect(() => allowedApiPath("POST", [...RUNS, RUN])).toThrow();
+    expect(() => allowedApiPath("GET", [...RUNS, "latest"])).toThrow();
+    expect(() => allowedApiPath("DELETE", [...ASSETS, ASSET])).toThrow();
+    expect(() => allowedApiPath("GET", [...ASSETS, ASSET, "accept"])).toThrow();
+    expect(() => allowedApiPath("GET", [...ASSETS, ASSET, "versions"])).toThrow();
+    expect(() => allowedApiPath("GET", [...ASSETS, ASSET, "versions", "1", "image"])).toThrow();
+    expect(() => allowedApiPath("GET", [...ASSETS, ASSET, "versions", VERSION, "code"])).toThrow();
+  });
+
+  it("forward reading, choosing and removing the creative budget", () => {
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      expect(allowedApiPath(method, ["settings", "creative-budget"])).toBe("/v1/settings/creative-budget");
+    }
+    expect(() => allowedApiPath("POST", ["settings", "creative-budget"])).toThrow();
+  });
+});
+
+describe("an image the API answers with", () => {
+  const ASSET = "0b0e6c6e-3333-4444-8555-666677778888";
+  const VERSION = "0b0e6c6e-9999-4aaa-8bbb-ccccddddeeee";
+  const IMAGE = ["projects", PROJECT, "media-assets", ASSET, "versions", VERSION, "image"];
+  const reading = { host: "localhost:3000", "sec-fetch-site": "same-origin" };
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+  function apiImage(body: BodyInit | null, headers: Record<string, string>, status = 200) {
+    return vi.fn<typeof fetch>(async () => new Response(body, { status, headers }));
+  }
+
+  async function read(api: typeof fetch, headers: Record<string, string> = reading) {
+    return proxyToApi(request("GET", headers), IMAGE, undefined, api);
+  }
+
+  it("is passed on as bytes, asked for as an image", async () => {
+    const api = apiImage(PNG, { "content-type": "image/png" });
+    const response = await read(api);
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(PNG);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("content-length")).toBe(String(PNG.byteLength));
+    expect(api.mock.calls[0][1]?.headers).toEqual({ accept: "image/png, image/jpeg, image/webp" });
+  });
+
+  it("is passed on for each of the three types the studio stores", async () => {
+    for (const type of ["image/png", "image/jpeg", "image/webp"]) {
+      const response = await read(apiImage(PNG, { "content-type": type }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe(type);
+    }
+  });
+
+  it("is refused when it is any other type", async () => {
+    for (const type of ["text/html", "image/svg+xml", "application/json", "application/octet-stream"]) {
+      const response = await read(apiImage("<svg onload=alert(1)>", { "content-type": type }));
+      expect(response.status).toBe(502);
+      expect(response.headers.get("content-type")).toBe("application/json");
+      expect(await response.json()).toMatchObject({ code: "proxy_upstream_rejected" });
+    }
+    const untyped = await read(apiImage(new Blob([PNG]), {}));
+    expect(untyped.status).toBe(502);
+  });
+
+  it("is refused when it is larger than the limit, declared or not", async () => {
+    const declared = await read(
+      apiImage(PNG, { "content-type": "image/png", "content-length": String(MAX_IMAGE_BYTES + 1) }),
+    );
+    expect(declared.status).toBe(502);
+    const large = new Uint8Array(MAX_IMAGE_BYTES + 1);
+    const undeclared = await read(
+      apiImage(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(large);
+            controller.close();
+          },
+        }),
+        { "content-type": "image/png" },
+      ),
+    );
+    expect(undeclared.status).toBe(502);
+    expect(await undeclared.json()).toMatchObject({ code: "proxy_upstream_rejected" });
+  });
+
+  it("comes back with the five headers an image needs and no other", async () => {
+    const response = await read(
+      apiImage(PNG, {
+        "content-type": "image/png; charset=binary",
+        "content-disposition": `attachment; filename="${VERSION}.png"`,
+        "cache-control": "private, max-age=86400, immutable",
+        "set-cookie": "session=1",
+        "x-internal": "secret",
+        link: "<https://evil.example>; rel=preload",
+      }),
+    );
+    expect([...response.headers.keys()].sort()).toEqual([
+      "cache-control",
+      "content-disposition",
+      "content-length",
+      "content-type",
+      "x-content-type-options",
+    ]);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("content-disposition")).toBe(`attachment; filename="${VERSION}.png"`);
+    expect(response.headers.get("cache-control")).toBe("private, max-age=86400, immutable");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("drops a disposition or a cache rule the API does not write", async () => {
+    const response = await read(
+      apiImage(PNG, {
+        "content-type": "image/png",
+        "content-disposition": 'attachment; filename="../../evil.html"',
+        "cache-control": 'public, no-cache="set-cookie"',
+      }),
+    );
+    expect(response.headers.get("content-disposition")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("passes the API's refusal on as JSON", async () => {
+    const problem = '{"code":"media_asset_version_not_found","message":"no such version"}';
+    const response = await read(apiImage(problem, { "content-type": "application/json" }, 404));
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(await response.text()).toBe(problem);
+  });
+
+  it("is not read for another site", async () => {
+    const api = apiImage(PNG, { "content-type": "image/png" });
+    const response = await read(api, { host: "localhost:3000", "sec-fetch-site": "cross-site" });
+    expect(response.status).toBe(403);
+    expect(api).not.toHaveBeenCalled();
   });
 });
 

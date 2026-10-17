@@ -10,6 +10,8 @@ const MODEL = {
   completion_price: 15,
   supported_parameters: ["tools"],
   input_modalities: ["text"],
+  output_modalities: ["text"],
+  image_output_price: null,
 };
 
 describe("a model in the picker", () => {

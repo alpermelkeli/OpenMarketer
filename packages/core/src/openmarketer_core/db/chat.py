@@ -58,6 +58,7 @@ from openmarketer_core.db.models import (
     Project,
     ResearchRunRecord,
     RunEventRecord,
+    StudioRunRecord,
 )
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.projects import get_project
@@ -230,8 +231,8 @@ def delete_chat(
 ) -> None:
     """Delete the chat with its turns, its messages and its turns' events, for good.
 
-    The research runs the chat asked for are records of the project of their
-    own: they stay, and stop naming the chat. Nothing is kept to restore the
+    The research and studio runs the chat asked for are records of the project
+    of their own: they stay, and stop naming the chat. Nothing is kept to restore the
     chat from. Takes the workspace lock like every write of a workspace. Raises
     ``ProjectNotFound`` when the workspace has no such project and
     ``ChatNotFound`` when the project has no such chat.
@@ -247,6 +248,14 @@ def delete_chat(
         .where(
             ResearchRunRecord.project_id == project_id,
             ResearchRunRecord.chat_thread_id == chat_id,
+        )
+        .values(chat_thread_id=None)
+    )
+    session.execute(
+        update(StudioRunRecord)
+        .where(
+            StudioRunRecord.project_id == project_id,
+            StudioRunRecord.chat_thread_id == chat_id,
         )
         .values(chat_thread_id=None)
     )
