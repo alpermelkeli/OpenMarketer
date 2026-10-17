@@ -29,7 +29,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from openmarketer_core.decisions import YesNoQuestion
+from openmarketer_core.decision_questions import YesNoQuestion
 from openmarketer_core.research.questions import MAX_QUESTIONS, ResearchRequest
 
 RESEARCHER_ROLE = "researcher"

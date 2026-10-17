@@ -6,7 +6,8 @@ OpenRouter's decisions endpoint (``provider.decisions_url``, in alpha), which an
 question with a probability and writes no text. That is the point of it: a model that reads
 untrusted text and can only answer numbers cannot be talked into a tool call or a message.
 
-Only one kind of question is asked, the yes-or-no one (the endpoint's ``noul``); the endpoint
+Only one kind of question is asked, the yes-or-no one (the endpoint's ``noul``,
+``decision_questions.py``); the endpoint
 knows others (choice, score, box), added here when something needs them. No routing
 preferences are sent (``ModelRouter.build_decision_request`` says why).
 
@@ -26,12 +27,11 @@ from typing import Any, Protocol
 
 import httpx
 
+from openmarketer_core.decision_questions import YES_OR_NO, YesNoQuestion
 from openmarketer_core.llm import LLMError, model_name_to_keep, reported_status
 from openmarketer_core.llm_config import ModelRouter
 
 logger = logging.getLogger(__name__)
-
-YES_OR_NO = "noul"
 
 
 class DecisionError(LLMError):
@@ -39,23 +39,6 @@ class DecisionError(LLMError):
 
     ``status`` and ``may_pass`` mean what they mean for a chat call (``LLMError``).
     """
-
-
-@dataclass(frozen=True)
-class YesNoQuestion:
-    """One question about the state, and what each answer means to whoever asks."""
-
-    instructions: str
-    true_means: str
-    false_means: str
-
-    def as_request(self) -> dict[str, Any]:
-        """The question in the endpoint's own form."""
-        return {
-            "type": YES_OR_NO,
-            "instructions": self.instructions,
-            "criteria": {"true": self.true_means, "false": self.false_means},
-        }
 
 
 @dataclass(frozen=True)
