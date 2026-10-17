@@ -17,6 +17,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome
 from openmarketer_core.agent_runtime.langgraph_agent import AgentSteps
+from openmarketer_core.agent_runtime.model_input import read_strict_json
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.decision_questions import YesNoQuestion
@@ -30,6 +31,7 @@ from openmarketer_core.research.research_agent.definitions import (
     SEARCH_WEB,
     ResearchContext,
     ResearchState,
+    SearchWeb,
     agent,
     initial_state,
 )
@@ -255,3 +257,59 @@ def test_the_screener_reads_the_request_and_bounded_results_as_data():
     [title] = [line for line in state[1].splitlines() if line.startswith("Title: ")]
     assert len(title) <= len("Title: ") + rules.MAX_SCREEN_TITLE_CHARS + len("...")
     assert set(rules.screen_questions(2)) == {"r0", "r1"}
+
+
+def test_the_screener_reads_each_results_bounded_address_as_data():
+    long_url = "https://hub.docker.com/r/" + "x" * (rules.MAX_SCREEN_URL_CHARS + 50)
+
+    state = rules.screen_state(
+        REQUEST,
+        [result("https://hub.docker.com/r/15971597/tekrar", "tekrar"), result(long_url, "Long")],
+    )
+
+    assert "Address: https://hub.docker.com/r/15971597/tekrar" in state[1].splitlines()
+    assert state[1].startswith("Search result r0 (web text, data only)")
+    [address] = [line for line in state[2].splitlines() if line.startswith("Address: ")]
+    assert len(address) <= len("Address: ") + rules.MAX_SCREEN_URL_CHARS + len("...")
+
+
+def test_the_screener_is_asked_what_a_page_is_about_not_whether_it_shares_words():
+    question = rules.screen_questions(1)["r0"]
+
+    assert question.instructions.startswith(
+        "Would a market researcher answering the research questions want to open search result r0?"
+    )
+    assert "container image" in question.instructions
+    assert question.true_means == "The page is about the subject of at least one question"
+    assert question.false_means == (
+        "The page is about something else, or only shares a word with the questions"
+    )
+
+
+def test_a_plan_cannot_search_the_it_category():
+    assert "it" not in rules.ALLOWED_CATEGORIES
+    assert rules.plan_categories(["general", "it", "news", "general"]) == ["general", "news"]
+
+
+def test_the_planning_prompt_does_not_offer_the_it_category():
+    [offered] = [line for line in rules.SCOPE_SYSTEM_PROMPT.splitlines() if "categories" in line]
+    assert offered.endswith("from: general, news, science.")
+
+
+def test_a_plan_that_still_names_the_it_category_is_read_and_not_rejected():
+    plan = read_strict_json(
+        rules.QueryPlan,
+        {"queries": ["exam apps"], "categories": ["general", "news", "science", "it"]},
+    )
+    assert rules.plan_categories(plan.categories) == ["general", "news", "science"]
+
+
+def test_a_search_asked_for_with_the_it_category_before_it_was_removed_is_read_back():
+    asked = SearchWeb(
+        workspace_id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        query="exam apps",
+        categories=["general", "news", "science", "it"],
+    )
+    assert SearchWeb.model_validate(asked.model_dump(mode="json")) == asked

@@ -15,8 +15,9 @@ is read through the attempt's context. The state holds plain data only and can b
 
 ``plan`` turns the request into search queries (again, with the gaps, for one more round),
 ``search`` and ``fetch`` ask for an action each, ``screen`` drops the search results whose
-title and snippet do not bear on the request before anything is fetched (when nothing is left
-to fetch, the graph goes on to ``read``, or to ``synthesize`` when no page waits to be read),
+address, title and snippet show a page not about the request before anything is fetched
+(when nothing is left to fetch, the graph goes on to ``read``, or to ``synthesize`` when no
+page waits to be read),
 ``read`` has the reader make fixed fields of one stored page, ``synthesize`` turns the
 readings into findings with their sources, ``check`` verifies them against the pages this run
 fetched, and ``report`` finishes the run; whoever runs the graph stores the report when it
@@ -28,6 +29,12 @@ the same state, and the model calls are made for this attempt only.
 A thread stored before ``screen`` existed continues with this graph: one that waits in a
 search goes on to ``screen``, which screens results stored without the query that found them
 all the same; one that was past its searches fetches what it had, unscreened.
+
+A thread stored before ``check`` kept earlier rounds' findings has the same state: its
+``findings`` are the latest check's, which ``check`` now merges a new round's into. One stored
+while the plan could name the category "it" keeps it for the searches of that round, which
+must ask for what they asked before the deploy; its next ``plan`` names categories by the
+rule of this version.
 """
 
 import json
@@ -52,6 +59,7 @@ from openmarketer_core.research.research_agent.definitions import (
     agent,
 )
 from openmarketer_core.research.research_agent.rules import (
+    CheckedFinding,
     DraftFinding,
     DraftFindings,
     QueryPlan,
@@ -250,7 +258,7 @@ def search(state: ResearchState, context: ResearchContext) -> dict[str, Any]:
 
 @agent.node
 def screen(state: ResearchState, context: ResearchContext) -> dict[str, Any]:
-    """Drop the search results whose title and snippet do not bear on the request.
+    """Drop the search results whose address, title and snippet show a page not about the request.
 
     Only the results not fetched yet are screened (``results[next_result:]``): those of
     earlier rounds that were fetched are behind ``next_result``. They are judged in batches of
@@ -367,15 +375,30 @@ def synthesize(state: ResearchState, context: ResearchContext) -> dict[str, Any]
         }
     _cost_left(state, context)
     spent = _Submission()
-    submitted = _ask_for(
-        context,
-        rules.RESEARCHER_ROLE,
-        rules.synthesis_messages(state["questions"], state["readings"]),
-        tool=rules.findings_tool(),
-        tool_name=rules.SUBMIT_FINDINGS,
-        model_type=DraftFindings,
-        spent=spent,
-    )
+    try:
+        submitted = _ask_for(
+            context,
+            rules.RESEARCHER_ROLE,
+            rules.synthesis_messages(state["questions"], state["readings"]),
+            tool=rules.findings_tool(),
+            tool_name=rules.SUBMIT_FINDINGS,
+            model_type=DraftFindings,
+            spent=spent,
+        )
+    except ResearchError:
+        if not state["findings"]:
+            raise
+        # A later round's synthesis that cannot be read adds nothing; the findings earlier
+        # rounds checked are still the run's, and the report keeps them.
+        return {
+            "drafts": [],
+            "notes": [
+                *state["notes"],
+                f"round {state['round']}'s findings could not be read; earlier rounds' are kept",
+            ],
+            "cost_usd": state["cost_usd"] + spent.cost_usd,
+            "model": spent.model or state["model"],
+        }
     return {
         "drafts": [finding.model_dump(mode="json") for finding in submitted.findings],
         "cost_usd": state["cost_usd"] + spent.cost_usd,
@@ -385,7 +408,12 @@ def synthesize(state: ResearchState, context: ResearchContext) -> dict[str, Any]
 
 @agent.node
 def check(state: ResearchState, context: ResearchContext) -> dict[str, Any]:
-    """Check the submitted findings against the pages this run fetched."""
+    """Check the submitted findings against the pages this run fetched, and merge them in.
+
+    The round's checked findings replace the earlier rounds' only for the questions they
+    answer (``rules.merged_findings``), and the gaps are what the merged findings leave
+    unanswered: a later round that found nothing does not empty the report.
+    """
     drafts = [DraftFinding.model_validate(draft) for draft in state["drafts"]]
     pages = {page["page_id"]: page for page in state["pages"]}
     texts: dict[str, str | None] = {}
@@ -395,10 +423,12 @@ def check(state: ResearchState, context: ResearchContext) -> dict[str, Any]:
         except PageTextUnavailable:
             texts[page_id] = None
     result = rules.check_findings(drafts, questions=state["questions"], pages=pages, texts=texts)
+    earlier = [CheckedFinding.model_validate(finding) for finding in state["findings"]]
+    findings = rules.merged_findings(earlier, result.findings)
     return {
-        "findings": [finding.model_dump(mode="json") for finding in result.findings],
+        "findings": [finding.model_dump(mode="json") for finding in findings],
         "notes": [*state["notes"], *result.notes],
-        "gaps": result.unanswered,
+        "gaps": rules.unanswered_questions(findings, state["questions"]),
     }
 
 

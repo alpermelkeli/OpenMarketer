@@ -137,7 +137,9 @@ class SearchWeb(BaseModel):
         str,
         StringConstraints(strip_whitespace=True, min_length=2, max_length=rules.MAX_QUERY_CHARS),
     ]
-    categories: list[str] = Field(default_factory=list, max_length=len(rules.ALLOWED_CATEGORIES))
+    # Bounded by what a plan may name, not by what it may search now: a search asked for by
+    # a thread stored while "it" was allowed is read back with the categories it was asked with.
+    categories: list[str] = Field(default_factory=list, max_length=rules.MAX_PLAN_CATEGORIES)
 
 
 @agent.action(

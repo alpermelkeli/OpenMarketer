@@ -24,6 +24,8 @@ from openmarketer_core.agent_runtime.agent import END, Agent
 from openmarketer_core.agent_runtime.langgraph_agent import AgentSteps, run_from
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.agent_runtime.threads import thread_id
+from openmarketer_core.decision_questions import YesNoQuestion
+from openmarketer_core.decisions import DecisionError, DecisionReply
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatModel, ChatReply, LLMError
 from openmarketer_core.tracing import (
@@ -103,6 +105,28 @@ class ScriptedModel:
             prompt_tokens=120,
             completion_tokens=30,
         )
+
+
+class ScriptedDecisions:
+    """A decision model that answers a probability, or refuses, and holds a key as the real one."""
+
+    api_key = PROVIDER_KEY
+
+    def __init__(self, refuses: bool = False) -> None:
+        self.refuses = refuses
+
+    def decide(self, role, state, questions) -> DecisionReply:
+        if self.refuses:
+            raise DecisionError("the decisions endpoint answered HTTP 503", status=503)
+        return DecisionReply(answers={"r0": 0.03}, model="vendor/decider", cost_usd=0.0001)
+
+
+SEARCH_RESULT = "Title: tekrar, a container image"
+QUESTION = YesNoQuestion(instructions="Is r0 about the market?", true_means="yes", false_means="no")
+
+
+def a_decision(model) -> DecisionReply:
+    return model.decide("screener", [SEARCH_RESULT], {"r0": QUESTION})
 
 
 @dataclass(frozen=True)
@@ -215,6 +239,52 @@ def test_failed_model_call_is_an_error_with_its_message_and_is_still_raised(trac
 
 def test_keys_are_never_sent(traced):
     a_call(traced.tracing.model(ScriptedModel()))
+
+    assert traced.spans()
+    assert PROVIDER_KEY not in traced.sent()
+    assert LANGFUSE_SECRET not in traced.sent()
+
+
+# ----------------------------------------------------------------- decision calls
+
+
+def test_decision_model_is_given_back_as_it_is_while_tracing_is_off():
+    model = ScriptedDecisions()
+    assert NOT_TRACING.decisions(model) is model
+
+
+def test_traced_decision_model_answers_what_the_model_answered(traced):
+    reply = a_decision(traced.tracing.decisions(ScriptedDecisions()))
+    assert (dict(reply.answers), reply.model, reply.cost_usd) == (
+        {"r0": 0.03},
+        "vendor/decider",
+        0.0001,
+    )
+
+
+def test_decision_call_is_a_generation_with_its_texts_questions_answers_model_and_cost(traced):
+    a_decision(traced.tracing.decisions(ScriptedDecisions()))
+
+    call = attributes(traced.named("screener"))
+    assert call["langfuse.observation.type"] == "generation"
+    sent = json.loads(call["langfuse.observation.input"])
+    assert sent == {"state": [SEARCH_RESULT], "questions": {"r0": QUESTION.as_request()}}
+    assert json.loads(call["langfuse.observation.output"]) == {"r0": 0.03}
+    assert call["langfuse.observation.model.name"] == "vendor/decider"
+    assert json.loads(call["langfuse.observation.cost_details"]) == {"total": 0.0001}
+
+
+def test_failed_decision_call_is_an_error_with_its_message_and_is_still_raised(traced):
+    with pytest.raises(DecisionError):
+        a_decision(traced.tracing.decisions(ScriptedDecisions(refuses=True)))
+
+    call = attributes(traced.named("screener"))
+    assert call["langfuse.observation.level"] == "ERROR"
+    assert call["langfuse.observation.status_message"] == "the decisions endpoint answered HTTP 503"
+
+
+def test_keys_are_never_sent_with_a_decision_call(traced):
+    a_decision(traced.tracing.decisions(ScriptedDecisions()))
 
     assert traced.spans()
     assert PROVIDER_KEY not in traced.sent()

@@ -108,7 +108,7 @@ def researcher(
     The configuration is read and checked now, so a mistake in it stops the
     worker at start-up instead of failing every run. The credentials are not:
     a run asks for the ones of its workspace, and one that is missing ends that
-    run. ``tracing`` is the worker's: each attempt's model is traced with it.
+    run. ``tracing`` is the worker's: each attempt's chat and decision models are traced with it.
     """
     settings = ResearcherSettings.from_env(environ)
     checkpoints = checkpoints_in(database_url)
@@ -129,9 +129,11 @@ def researcher(
                 )
             ),
             # The same key and the same workspace router: a stored choice for the screener's
-            # role applies as it does for the chat model's roles.
-            new_decisions=lambda workspace_id: _decisions_of_workspace(
-                workspace_settings.router_for(workspace_id, router), workspace_id, credentials
+            # role applies as it does for the chat model's roles. Traced like the chat model.
+            new_decisions=lambda workspace_id: tracing.decisions(
+                _decisions_of_workspace(
+                    workspace_settings.router_for(workspace_id, router), workspace_id, credentials
+                )
             ),
             search=SearxngSearch(settings.searxng_url),
             fetcher=PublicPageFetcher(renderer=CdpPageRenderer(settings.lightpanda_url)),

@@ -146,3 +146,14 @@ def test_two_unreadable_answers_end_the_run():
 
     with pytest.raises(ResearchError, match="readable Reading"):
         read(a_state(), a_context(model))
+
+
+def test_an_answer_without_a_summary_is_told_so_and_asked_once_more():
+    model = ScriptedModel(json.dumps({}), json.dumps({"summary": "Fine."}))
+
+    changes = read(a_state(), a_context(model))
+
+    assert len(model.calls) == 2
+    told = model.calls[1]["messages"][-1]["content"]
+    assert told.startswith("Rejected") and "summary" in told
+    assert changes["readings"][0]["reading"]["summary"] == "Fine."
