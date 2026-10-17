@@ -1,5 +1,6 @@
-import { CheckIcon, CircleSmallIcon, LoaderCircleIcon, XIcon } from "lucide-react";
+import { CheckIcon, CircleSmallIcon, XIcon } from "lucide-react";
 
+import { Spinner } from "@/components/common/spinner";
 import type { TurnStep } from "@/lib/chat/events";
 import { cn } from "@/lib/utils";
 
@@ -83,9 +84,4 @@ function StepMark({ ok, live }: { ok: boolean | null; live: boolean }) {
       <span className="sr-only">No answer recorded:</span>
     </>
   );
-}
-
-/** Turning while something runs; the page's reduced-motion rule stills it. */
-function Spinner({ className }: { className?: string }) {
-  return <LoaderCircleIcon aria-hidden="true" className={cn("size-3.5 shrink-0 animate-spin text-brand", className)} />;
 }
