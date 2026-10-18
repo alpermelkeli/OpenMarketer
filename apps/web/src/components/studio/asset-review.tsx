@@ -15,6 +15,8 @@ import { VersionImage } from "./version-image";
 
 type AssetReviewProps = {
   asset: MediaAsset;
+  /** What the run was asked for, for the image's alt text; undefined while it is not known. */
+  goal?: string;
   /** The version the asset stands for now; null when the API names none. */
   version: MediaAssetVersion | null;
   totalCostUsd: number;
@@ -34,6 +36,7 @@ type AssetReviewProps = {
  */
 export function AssetReview({
   asset,
+  goal,
   version,
   totalCostUsd,
   decidable,
@@ -76,7 +79,7 @@ export function AssetReview({
             projectId={asset.project_id}
             assetId={asset.id}
             versionId={version.id}
-            alt={assetImageAlt(asset.platform, { draft, round: version.round })}
+            alt={assetImageAlt(asset.platform, { draft, round: version.round, goal })}
             size={{ width: version.width, height: version.height }}
             sizes="(min-width: 768px) 38rem, 100vw"
             className="rounded-sm"

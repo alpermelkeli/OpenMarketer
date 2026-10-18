@@ -22,6 +22,7 @@ import type {
   MediaAssetDetail,
   MediaAssetList,
   StudioRun,
+  StudioRunDetail,
   StudioRunList,
 } from "./types";
 
@@ -56,11 +57,19 @@ export function useStudioRuns(projectId: string) {
 
 /**
  * One run, polled until it has ended. `listed` is the run as a list gave it, so a tile shows it
- * at once. When this screen sees the run end, the lists it changed are read again.
+ * at once; the run's own route also serves what it was asked for (`StudioRunDetail`), which a
+ * listed run lacks until that route has answered. A screen that follows the run's events instead
+ * (a chat) reads it once, without `poll`: the event that ends the run refreshes it. When this
+ * screen sees the run end, the lists it changed are read again.
  */
-export function useStudioRun(projectId: string, runId: string, listed?: StudioRun) {
+export function useStudioRun(
+  projectId: string,
+  runId: string,
+  listed?: StudioRun,
+  { poll = true }: { poll?: boolean } = {},
+) {
   const queryClient = useQueryClient();
-  const query = useQuery<StudioRun, ApiError>({
+  const query = useQuery<StudioRun | StudioRunDetail, ApiError>({
     queryKey: queryKeys.studioRun(projectId, runId),
     queryFn: async () =>
       dataOf(
@@ -71,6 +80,7 @@ export function useStudioRun(projectId: string, runId: string, listed?: StudioRu
     initialData: listed,
     enabled: listed === undefined || !isStudioRunFinished(listed),
     refetchInterval: (current) => {
+      if (!poll) return false;
       const run = current.state.data;
       return run !== undefined && isStudioRunFinished(run) ? false : POLL_INTERVAL_MS;
     },

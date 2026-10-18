@@ -21,6 +21,9 @@ export type ResearchRunStatus = Schemas["ResearchRunStatus"];
 export type ResearchReport = Schemas["ResearchReportResponse"];
 
 export type StudioRun = Schemas["StudioRunResponse"];
+/** One run as its own route serves it: the run with what it was asked for. */
+export type StudioRunDetail = Schemas["StudioRunDetailResponse"];
+export type StudioRunRequest = Schemas["StudioRunRequestResponse"];
 export type StudioRunList = Schemas["StudioRunListResponse"];
 export type StudioRunStatus = Schemas["StudioRunStatus"];
 export type AssetRequest = Schemas["AssetRequest"];

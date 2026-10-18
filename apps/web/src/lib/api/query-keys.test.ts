@@ -43,9 +43,29 @@ describe("what a chat's event refreshes", () => {
     ]);
   });
 
+  it("is the list of the kind of run a turn started", () => {
+    const started = (run_kind: string) => ({ ...event("orchestrator-chat", "run_started"), detail: { run_kind, run_id: "x" } });
+    expect(refreshed(started("research-run"))).toEqual([queryKeys.researches(PROJECT)]);
+    expect(refreshed(started("studio-run"))).toEqual([queryKeys.studioRuns(PROJECT)]);
+    expect(refreshed(started("analysis"))).toEqual([]);
+  });
+
+  it("is the run, the studio's runs, the library, the month's spending and the chat when a studio run ends", () => {
+    for (const kind of ["finished", "failed"]) {
+      expect(refreshed(event("studio-run", kind, "run-1"))).toEqual([
+        queryKeys.studioRun(PROJECT, "run-1"),
+        queryKeys.studioRuns(PROJECT),
+        queryKeys.mediaAssets(PROJECT),
+        queryKeys.creativeBudget(),
+        queryKeys.chat(PROJECT, CHAT),
+      ]);
+    }
+  });
+
   it("is nothing for a step", () => {
     expect(refreshed(event("orchestrator-chat", "tool_called"))).toEqual([]);
     expect(refreshed(event("research-run", "fetched"))).toEqual([]);
+    expect(refreshed(event("studio-run", "produced"))).toEqual([]);
   });
 });
 

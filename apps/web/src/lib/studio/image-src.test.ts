@@ -30,4 +30,11 @@ describe("the text that stands for an image", () => {
     expect(assetImageAlt("linkedin_post")).toBe("Image made for a LinkedIn post");
     expect(assetImageAlt("x_post", { round: 2 })).toBe("Image made for an X post, a candidate of round 2");
   });
+
+  it("says the goal it was asked to meet, when the screen has it", () => {
+    expect(assetImageAlt("x_post", { round: 1, goal: " Announce the 2.0 release " })).toBe(
+      "Image made for an X post, a candidate of round 1. Asked for: Announce the 2.0 release",
+    );
+    expect(assetImageAlt("x_post", { goal: "  " })).toBe("Image made for an X post");
+  });
 });

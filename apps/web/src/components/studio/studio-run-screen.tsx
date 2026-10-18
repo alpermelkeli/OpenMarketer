@@ -11,11 +11,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/error-message";
 import { useDecideOnAsset, useMediaAsset, useStudioRun } from "@/lib/api/studio";
 import { projectPageHref } from "@/lib/projects/project-navigation";
+import { briefGoal, runBrief } from "@/lib/studio/brief";
 import { versionsCost } from "@/lib/studio/reports";
 import { isStudioRunFinished } from "@/lib/studio/status";
 import { useNow } from "@/lib/use-now";
 
 import { AssetReview } from "./asset-review";
+import { RunBrief } from "./run-brief";
 import { StudioRunCard } from "./studio-run-card";
 import { VersionRounds } from "./version-rounds";
 
@@ -58,6 +60,8 @@ export function StudioRunScreen({ projectId, runId }: StudioRunScreenProps) {
   }
 
   const found = run.data;
+  const brief = runBrief(found);
+  const goal = briefGoal(brief);
   const asset = detail.data?.asset;
   const versions = detail.data?.versions ?? [];
   const current = versions.find((version) => version.id === asset?.current_version_id) ?? null;
@@ -77,10 +81,7 @@ export function StudioRunScreen({ projectId, runId }: StudioRunScreenProps) {
         onDeleted={() => router.replace(projectPageHref(projectId, "studio"))}
       />
 
-      <p className="max-w-prose text-xs text-pretty text-muted-foreground">
-        The API does not serve what the run was asked for (its goal, its copy, its notes on style), so this page cannot
-        show it. The prompts of the versions below are what the studio wrote from it.
-      </p>
+      <RunBrief brief={brief} />
 
       {assetId !== null && (
         <>
@@ -96,6 +97,7 @@ export function StudioRunScreen({ projectId, runId }: StudioRunScreenProps) {
             <>
               <AssetReview
                 asset={asset}
+                goal={goal}
                 version={current}
                 totalCostUsd={versionsCost(versions)}
                 decidable={finished}
@@ -116,6 +118,7 @@ export function StudioRunScreen({ projectId, runId }: StudioRunScreenProps) {
                 projectId={projectId}
                 assetId={asset.id}
                 platform={asset.platform}
+                goal={goal}
                 versions={versions}
                 currentVersionId={asset.current_version_id}
               />

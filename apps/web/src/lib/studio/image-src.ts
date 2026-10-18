@@ -26,14 +26,24 @@ function versionPath({ projectId, assetId, versionId }: VersionOf, last: "image"
   return `/api/v1/${segments.map(encodeURIComponent).join("/")}`;
 }
 
+type AltDetail = {
+  round?: number;
+  draft?: boolean;
+  /** What the run was asked for, where the screen has it: the asset alone does not serve it. */
+  goal?: string;
+};
+
 /**
- * What an image is, for someone who cannot see it. The request's goal is not served with the
- * asset, so it says what the image is for and which candidate it is, and no more.
+ * What an image is, for someone who cannot see it: what it is for, which candidate it is, and,
+ * where the screen has the run's request, the goal it was made to meet. The goal is what a
+ * person or a model wrote, and an alt text is text.
  */
-export function assetImageAlt(platform: string, detail: { round?: number; draft?: boolean } = {}): string {
+export function assetImageAlt(platform: string, detail: AltDetail = {}): string {
   const kind = detail.draft ? "Draft image" : "Image";
   const round = detail.round === undefined ? "" : `, a candidate of round ${detail.round}`;
-  return `${kind} made for ${articleFor(platformLabel(platform))}${round}`;
+  const goal = detail.goal?.trim() ?? "";
+  const asked = goal === "" ? "" : `. Asked for: ${goal}`;
+  return `${kind} made for ${articleFor(platformLabel(platform))}${round}${asked}`;
 }
 
 // "an X post": the letter is said "ex".

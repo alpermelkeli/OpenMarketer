@@ -1,14 +1,16 @@
 /**
  * A chat's events, folded into what its screen shows: each turn of the orchestrator with the tools
- * it called, and each research run a turn started with its stages as they arrived.
+ * it called, and each research run and studio run a turn started with its stages as they arrived.
  *
  * Events arrive from two places, the history the API pages and the live stream, and a retried step
  * of a run may record the same thing twice, so the fold is forgiving: an event is counted once by
  * its id, events are taken in the order of their ids whatever order they came in, a tool call that
- * repeats one still waiting for its answer is the same call, and a research stage identical to the
- * one before it is shown once. A detail is read defensively, a value of the wrong type being taken
- * as missing, and text in it (a tool's label, a query, a page's title or address) is kept as text
- * for the screen to show as such, never as markup or as a link it has not checked.
+ * repeats one still waiting for its answer is the same call, and a stage identical to the one
+ * before it is shown once. A detail is read defensively, a value of the wrong type being taken as
+ * missing, and text in it (a tool's label, a query, a page's title or address, a reason) is kept as
+ * text for the screen to show as such, never as markup or as a link it has not checked. An id in
+ * it (a studio run's version or asset) is kept as it came: the screen builds an image's address
+ * from it only after checking it is one (`lib/studio/image-src.ts`).
  *
  * Display only: what a run did is the server's record, and nothing here decides anything.
  */
@@ -17,6 +19,7 @@ import type { ChatEvent, ChatMessage } from "@/lib/api/types";
 
 export const CHAT_RUN = "orchestrator-chat";
 export const RESEARCH_RUN = "research-run";
+export const STUDIO_RUN = "studio-run";
 
 /** Every kind of event the API records for a chat, which a stream listens for by name. */
 export const EVENT_KINDS = [
@@ -33,15 +36,26 @@ export const EVENT_KINDS = [
   "fetch_failed",
   "read",
   "synthesized",
+  "briefed",
+  "produced",
+  "checked",
+  "verified",
+  "technique_switched",
+  "edit_planned",
+  "finalized",
+  "escalated",
   "finished",
   "failed",
 ] as const;
 
 /** The events after which what the API says of the chat, its messages or a run has changed. */
 export const TURN_ENDS: readonly string[] = ["turn_answered", "turn_failed"];
-export const RESEARCH_ENDS: readonly string[] = ["finished", "failed"];
+export const RUN_ENDS: readonly string[] = ["finished", "failed"];
 
-export type TurnTrigger = "message" | "research_finished";
+/** What a turn answers: a person's message, or the end of a run a turn of the chat started. */
+export type TurnTrigger = "message" | "research_finished" | "studio_finished";
+
+const FOLLOW_UP_TRIGGERS: readonly TurnTrigger[] = ["research_finished", "studio_finished"];
 
 export type TurnStep = {
   tool: string;
@@ -61,6 +75,8 @@ export type TurnView = {
   reason: string | null;
   /** The research runs it started, in the order it started them. */
   researchRunIds: string[];
+  /** The studio runs it started, in the order it started them. */
+  studioRunIds: string[];
   /** Whether its `turn_started` event is among those folded, so none of its steps is missing. */
   started: boolean;
   /** The id of its first event: where it begins in the chat's order. */
@@ -91,30 +107,85 @@ export type ResearchRunView = {
   startedAt: string;
 };
 
+/**
+ * What a studio run recorded, step by step. A version id is the image a step made or judged; a
+ * technique is the studio's name for how the image is made, shown by `lib/chat/studio-progress.ts`.
+ */
+export type StudioStage =
+  | { kind: "briefed"; technique: string }
+  | {
+      kind: "produced";
+      operation: string;
+      /** Null when the operation made no image. */
+      versionId: string | null;
+      technique: string;
+      round: number | null;
+      ok: boolean;
+    }
+  /** The code's checks of the image: size, format, weight, and whether its words read as asked. */
+  | { kind: "checked"; versionId: string | null; passed: boolean; failures: string[] }
+  /** The verifier model's review: the criteria it failed at a blocking severity. */
+  | { kind: "verified"; versionId: string | null; passed: boolean; failed: string[] }
+  | { kind: "technique_switched"; from: string; to: string; round: number | null }
+  | { kind: "edit_planned"; round: number | null; steps: number }
+  | { kind: "finalized"; versionId: string | null; round: number | null }
+  /** The run stopped before a candidate passed; `reason` is the code's sentence of why. */
+  | { kind: "escalated"; versionId: string | null; reason: string };
+
+export type StudioRunView = {
+  id: string;
+  /** The turn that started it, when its `run_started` event is among those folded. */
+  turnId: string | null;
+  stages: StudioStage[];
+  status: "running" | "finished" | "failed";
+  /** The asset it ended with, from its `finished` event; its steps do not name it. */
+  assetId: string | null;
+  /** The version it ended with, from its `finished` event. */
+  finalVersionId: string | null;
+  /** The newest image one of its steps made. */
+  latestVersionId: string | null;
+  /** From its `finished` event: whether it stopped at its limits with a candidate that did not pass. */
+  needsReview: boolean | null;
+  reason: string | null;
+  firstEventId: number;
+  startedAt: string;
+};
+
 export type ChatActivity = {
   /** In the order they began. */
   turns: TurnView[];
   /** In the order they began. */
   runs: ResearchRunView[];
+  /** In the order they began. */
+  studioRuns: StudioRunView[];
   /** The latest turn that has neither answered nor failed, if any. */
   runningTurn: TurnView | null;
 };
 
 type Detail = ChatEvent["detail"];
 
+type Followed = { research: Map<string, ResearchRunView>; studio: Map<string, StudioRunView> };
+
 export function foldChatEvents(events: readonly ChatEvent[]): ChatActivity {
   const turns = new Map<string, TurnView>();
-  const runs = new Map<string, ResearchRunView>();
+  const followed: Followed = { research: new Map(), studio: new Map() };
   for (const event of inOrder(events)) {
-    if (event.run_kind === CHAT_RUN) foldTurnEvent(turnOf(turns, event), event, runs);
-    else if (event.run_kind === RESEARCH_RUN) foldResearchEvent(runOf(runs, event.run_id, event), event);
+    if (event.run_kind === CHAT_RUN) foldTurnEvent(turnOf(turns, event), event, followed);
+    else if (event.run_kind === RESEARCH_RUN) foldResearchEvent(runOf(followed.research, event.run_id, event), event);
+    else if (event.run_kind === STUDIO_RUN) foldStudioEvent(studioRunOf(followed.studio, event.run_id, event), event);
   }
   const turnList = [...turns.values()];
   return {
     turns: turnList,
-    runs: [...runs.values()].sort((a, b) => a.firstEventId - b.firstEventId),
+    runs: [...followed.research.values()].sort((a, b) => a.firstEventId - b.firstEventId),
+    studioRuns: [...followed.studio.values()].sort((a, b) => a.firstEventId - b.firstEventId),
     runningTurn: turnList.findLast((turn) => turn.status === "running") ?? null,
   };
+}
+
+/** Whether a turn was started by the end of a run rather than by a person's message. */
+export function isFollowUp(turn: Pick<TurnView, "trigger">): boolean {
+  return FOLLOW_UP_TRIGGERS.includes(turn.trigger);
 }
 
 /** Each event once, by its id, oldest first. */
@@ -159,6 +230,7 @@ function turnOf(turns: Map<string, TurnView>, event: ChatEvent): TurnView {
       messageId: null,
       reason: null,
       researchRunIds: [],
+      studioRunIds: [],
       started: false,
       firstEventId: event.id,
       startedAt: event.created_at,
@@ -186,12 +258,33 @@ function runOf(runs: Map<string, ResearchRunView>, runId: string, event: ChatEve
   return run;
 }
 
-function foldTurnEvent(turn: TurnView, event: ChatEvent, runs: Map<string, ResearchRunView>): void {
+function studioRunOf(runs: Map<string, StudioRunView>, runId: string, event: ChatEvent): StudioRunView {
+  let run = runs.get(runId);
+  if (run === undefined) {
+    run = {
+      id: runId,
+      turnId: null,
+      stages: [],
+      status: "running",
+      assetId: null,
+      finalVersionId: null,
+      latestVersionId: null,
+      needsReview: null,
+      reason: null,
+      firstEventId: event.id,
+      startedAt: event.created_at,
+    };
+    runs.set(runId, run);
+  }
+  return run;
+}
+
+function foldTurnEvent(turn: TurnView, event: ChatEvent, followed: Followed): void {
   const { detail } = event;
   switch (event.kind) {
     case "turn_started":
       turn.started = true;
-      turn.trigger = textOf(detail, "trigger") === "research_finished" ? "research_finished" : "message";
+      turn.trigger = triggerOf(textOf(detail, "trigger"));
       return;
     case "tool_called": {
       const tool = textOf(detail, "tool");
@@ -209,10 +302,15 @@ function foldTurnEvent(turn: TurnView, event: ChatEvent, runs: Map<string, Resea
     }
     case "run_started": {
       const runId = textOf(detail, "run_id");
-      if (textOf(detail, "run_kind") !== RESEARCH_RUN || runId === null) return;
-      if (!turn.researchRunIds.includes(runId)) turn.researchRunIds.push(runId);
-      const run = runOf(runs, runId, event);
-      run.turnId ??= turn.id;
+      if (runId === null) return;
+      const runKind = textOf(detail, "run_kind");
+      if (runKind === RESEARCH_RUN) {
+        if (!turn.researchRunIds.includes(runId)) turn.researchRunIds.push(runId);
+        runOf(followed.research, runId, event).turnId ??= turn.id;
+      } else if (runKind === STUDIO_RUN) {
+        if (!turn.studioRunIds.includes(runId)) turn.studioRunIds.push(runId);
+        studioRunOf(followed.studio, runId, event).turnId ??= turn.id;
+      }
       return;
     }
     case "turn_answered":
@@ -276,7 +374,79 @@ function stageOf(kind: string, detail: Detail): ResearchStage | null {
   }
 }
 
-function sameStage(a: ResearchStage, b: ResearchStage): boolean {
+function triggerOf(trigger: string | null): TurnTrigger {
+  return FOLLOW_UP_TRIGGERS.find((known) => known === trigger) ?? "message";
+}
+
+function foldStudioEvent(run: StudioRunView, event: ChatEvent): void {
+  const { detail } = event;
+  if (event.kind === "finished") {
+    run.status = "finished";
+    run.assetId = textOf(detail, "asset_id");
+    run.finalVersionId = textOf(detail, "version_id");
+    run.needsReview = flagOf(detail, "needs_review");
+    return;
+  }
+  if (event.kind === "failed") {
+    run.status = "failed";
+    run.reason = textOf(detail, "reason");
+    return;
+  }
+  const stage = studioStageOf(event.kind, detail);
+  if (stage === null) return;
+  if (stage.kind === "produced" && stage.versionId !== null) run.latestVersionId = stage.versionId;
+  const previous = run.stages.at(-1);
+  if (previous !== undefined && sameStage(previous, stage)) return;
+  run.stages.push(stage);
+}
+
+function studioStageOf(kind: string, detail: Detail): StudioStage | null {
+  switch (kind) {
+    case "briefed": {
+      const technique = textOf(detail, "technique");
+      return technique === null ? null : { kind, technique };
+    }
+    case "produced": {
+      const operation = textOf(detail, "operation");
+      if (operation === null) return null;
+      const ok = flagOf(detail, "ok") ?? false;
+      return {
+        kind,
+        operation,
+        versionId: ok ? textOf(detail, "version_id") : null,
+        technique: textOf(detail, "technique") ?? "",
+        round: countOf(detail, "round"),
+        ok,
+      };
+    }
+    case "checked": {
+      const failures = textsOf(detail, "failures");
+      const passed = flagOf(detail, "passed") ?? failures.length === 0;
+      return { kind, versionId: textOf(detail, "version_id"), passed, failures };
+    }
+    case "verified": {
+      const failed = textsOf(detail, "failed");
+      const passed = flagOf(detail, "passed") ?? failed.length === 0;
+      return { kind, versionId: textOf(detail, "version_id"), passed, failed };
+    }
+    case "technique_switched": {
+      const from = textOf(detail, "from_technique");
+      const to = textOf(detail, "to_technique");
+      if (from === null || to === null) return null;
+      return { kind, from, to, round: countOf(detail, "round") };
+    }
+    case "edit_planned":
+      return { kind, round: countOf(detail, "round"), steps: countOf(detail, "steps") ?? 0 };
+    case "finalized":
+      return { kind, versionId: textOf(detail, "version_id"), round: countOf(detail, "round") };
+    case "escalated":
+      return { kind, versionId: textOf(detail, "version_id"), reason: textOf(detail, "reason") ?? "" };
+    default:
+      return null;
+  }
+}
+
+function sameStage<T>(a: T, b: T): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 

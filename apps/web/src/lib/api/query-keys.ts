@@ -1,5 +1,7 @@
 /** Query keys of the server state the dashboard holds, in one place so invalidation cannot drift. */
 
+import { CHAT_RUN, RESEARCH_RUN, RUN_ENDS, STUDIO_RUN, TURN_ENDS } from "@/lib/chat/events";
+
 import type { ChatEvent } from "./types";
 
 export const queryKeys = {
@@ -88,26 +90,38 @@ export function refreshedByStudioRunDeleted(projectId: string): Refresh[] {
 
 /**
  * What a chat's event makes out of date. A turn that starts or ends changes whether the chat is
- * busy, and one that ends has stored its messages; a research run that starts is in the project's
- * list, and one that ends has its final state and perhaps a report. The chat's own key is refreshed
- * alone (`exact`), so its events, which the stream keeps current, are not read again.
+ * busy, and one that ends has stored its messages; a run a turn starts is in the project's list of
+ * its kind. A research run that ends has its final state and perhaps a report; a studio run that
+ * ends has its final state, an asset in the library and its cost in this month's spending. Either
+ * may start a follow-up turn, which makes the chat busy. The chat's own key is refreshed alone
+ * (`exact`), so its events, which the stream keeps current, are not read again.
  */
 export function refreshedByChatEvent(projectId: string, chatId: string, event: ChatEvent): Refresh[] {
   const chat = { queryKey: queryKeys.chat(projectId, chatId), exact: true };
-  if (event.run_kind === "orchestrator-chat") {
+  if (event.run_kind === CHAT_RUN) {
     if (event.kind === "turn_started") return [chat];
-    if (event.kind === "turn_answered" || event.kind === "turn_failed") {
+    if (TURN_ENDS.includes(event.kind)) {
       return [chat, { queryKey: queryKeys.chatMessages(projectId, chatId) }, { queryKey: queryKeys.chats(projectId) }];
     }
-    if (event.kind === "run_started") return [{ queryKey: queryKeys.researches(projectId) }];
+    if (event.kind === "run_started") return refreshedByRunStarted(projectId, event.detail.run_kind);
     return [];
   }
-  if (event.run_kind === "research-run" && (event.kind === "finished" || event.kind === "failed")) {
+  if (!RUN_ENDS.includes(event.kind)) return [];
+  if (event.run_kind === RESEARCH_RUN) {
     return [
       { queryKey: queryKeys.researchRun(projectId, event.run_id) },
       { queryKey: queryKeys.researches(projectId) },
       chat,
     ];
   }
+  if (event.run_kind === STUDIO_RUN) {
+    return [{ queryKey: queryKeys.studioRun(projectId, event.run_id) }, ...refreshedByStudioRunEnd(projectId), chat];
+  }
+  return [];
+}
+
+function refreshedByRunStarted(projectId: string, runKind: unknown): Refresh[] {
+  if (runKind === RESEARCH_RUN) return [{ queryKey: queryKeys.researches(projectId) }];
+  if (runKind === STUDIO_RUN) return [{ queryKey: queryKeys.studioRuns(projectId) }];
   return [];
 }

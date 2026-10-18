@@ -11,13 +11,15 @@ type VersionRoundsProps = {
   projectId: string;
   assetId: string;
   platform: string;
+  /** What the run was asked for, for each image's alt text; undefined while it is not known. */
+  goal?: string;
   versions: readonly MediaAssetVersion[];
   /** The version the asset stands for now, marked in its round. */
   currentVersionId: string | null;
 };
 
 /** Every round of the run, the first first: each version's image, how it was made, what it cost and what its reviews found. */
-export function VersionRounds({ projectId, assetId, platform, versions, currentVersionId }: VersionRoundsProps) {
+export function VersionRounds({ projectId, assetId, platform, goal, versions, currentVersionId }: VersionRoundsProps) {
   const rounds = roundsOf(versions);
   return (
     <section aria-labelledby="rounds" className="grid gap-6 border-t pt-8">
@@ -40,6 +42,7 @@ export function VersionRounds({ projectId, assetId, platform, versions, currentV
                   projectId={projectId}
                   assetId={assetId}
                   platform={platform}
+                  goal={goal}
                   version={version}
                   current={version.id === currentVersionId}
                 />
@@ -56,11 +59,12 @@ type VersionItemProps = {
   projectId: string;
   assetId: string;
   platform: string;
+  goal?: string;
   version: MediaAssetVersion;
   current: boolean;
 };
 
-function VersionItem({ projectId, assetId, platform, version, current }: VersionItemProps) {
+function VersionItem({ projectId, assetId, platform, goal, version, current }: VersionItemProps) {
   return (
     <li className="grid gap-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-6">
       <div className="w-40 overflow-hidden rounded-sm border">
@@ -68,7 +72,7 @@ function VersionItem({ projectId, assetId, platform, version, current }: Version
           projectId={projectId}
           assetId={assetId}
           versionId={version.id}
-          alt={assetImageAlt(platform, { round: version.round })}
+          alt={assetImageAlt(platform, { round: version.round, goal })}
           size={{ width: version.width, height: version.height }}
           sizes="10rem"
         />

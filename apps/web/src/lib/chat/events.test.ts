@@ -7,6 +7,10 @@ import { awaitedTurn, foldChatEvents, inOrder, MAX_HISTORY_PAGES, needsOlderEven
 const TURN = "11111111-1111-4111-8111-111111111111";
 const LATER_TURN = "22222222-2222-4222-8222-222222222222";
 const RUN = "33333333-3333-4333-8333-333333333333";
+const STUDIO = "44444444-4444-4444-8444-444444444444";
+const ASSET = "55555555-5555-4555-8555-555555555555";
+const V1 = "66666666-6666-4666-8666-666666666666";
+const V2 = "77777777-7777-4777-8777-777777777777";
 
 let nextId = 1;
 
@@ -31,6 +35,16 @@ function onlyTurn(events: ChatEvent[]) {
   const [turn] = foldChatEvents(events).turns;
   if (turn === undefined) throw new Error("expected a turn");
   return turn;
+}
+
+function studio(kind: string, detail: ChatEvent["detail"] = {}, over: Partial<ChatEvent> = {}): ChatEvent {
+  return event(kind, detail, { run_kind: "studio-run", run_id: STUDIO, ...over });
+}
+
+function onlyStudioRun(events: ChatEvent[]) {
+  const [run] = foldChatEvents(events).studioRuns;
+  if (run === undefined) throw new Error("expected a studio run");
+  return run;
 }
 
 function onlyRun(events: ChatEvent[]) {
@@ -263,5 +277,80 @@ describe("the turn a message just sent waits for", () => {
   it("is never a follow-up the orchestrator started", () => {
     const activity = foldChatEvents([event("turn_started", { trigger: "research_finished" })]);
     expect(awaitedTurn(activity, [])).toBeNull();
+  });
+});
+
+describe("a studio run in its chat", () => {
+  it("is tied to the turn that started it", () => {
+    const activity = foldChatEvents([event("run_started", { run_kind: "studio-run", run_id: STUDIO })]);
+    expect(activity.turns[0]?.studioRunIds).toEqual([STUDIO]);
+    expect(activity.turns[0]?.researchRunIds).toEqual([]);
+    expect(activity.studioRuns).toMatchObject([{ id: STUDIO, turnId: TURN, status: "running" }]);
+    expect(activity.runs).toEqual([]);
+  });
+
+  it("folds each step it recorded into a stage", () => {
+    const run = onlyStudioRun([
+      studio("briefed", { technique: "generated" }),
+      studio("produced", { operation: "generate_image", version_id: V1, technique: "generated", round: 1, ok: true }),
+      studio("checked", { version_id: V1, passed: false, failures: ["copy"] }),
+      studio("verified", { version_id: V1, passed: false, failed: ["legibility"] }),
+      studio("technique_switched", { from_technique: "generated", to_technique: "background_overlay", round: 1 }),
+      studio("edit_planned", { round: 2, steps: 3 }),
+      studio("finalized", { version_id: V1, round: 2 }),
+    ]);
+    expect(run.stages).toEqual([
+      { kind: "briefed", technique: "generated" },
+      { kind: "produced", operation: "generate_image", versionId: V1, technique: "generated", round: 1, ok: true },
+      { kind: "checked", versionId: V1, passed: false, failures: ["copy"] },
+      { kind: "verified", versionId: V1, passed: false, failed: ["legibility"] },
+      { kind: "technique_switched", from: "generated", to: "background_overlay", round: 1 },
+      { kind: "edit_planned", round: 2, steps: 3 },
+      { kind: "finalized", versionId: V1, round: 2 },
+    ]);
+  });
+
+  it("remembers the newest image a step made, and not an operation that made none", () => {
+    const run = onlyStudioRun([
+      studio("produced", { operation: "generate_image", version_id: V1, technique: "generated", round: 1, ok: true }),
+      studio("produced", { operation: "edit_image", version_id: null, technique: "generated", round: 2, ok: false }),
+    ]);
+    expect(run.latestVersionId).toBe(V1);
+    expect(run.stages[1]).toMatchObject({ kind: "produced", ok: false, versionId: null });
+  });
+
+  it("shows a repeated step once", () => {
+    const step = { version_id: V1, passed: true, failures: [] };
+    expect(onlyStudioRun([studio("checked", step), studio("checked", step)]).stages).toHaveLength(1);
+  });
+
+  it("ends with the asset and version its finished event names", () => {
+    const run = onlyStudioRun([
+      studio("produced", { operation: "generate_image", version_id: V1, technique: "generated", round: 1, ok: true }),
+      studio("finished", { asset_id: ASSET, version_id: V2, needs_review: true }),
+    ]);
+    expect(run).toMatchObject({
+      status: "finished",
+      assetId: ASSET,
+      finalVersionId: V2,
+      latestVersionId: V1,
+      needsReview: true,
+    });
+  });
+
+  it("keeps the reason it failed", () => {
+    expect(onlyStudioRun([studio("failed", { reason: "The cost cap is spent." })])).toMatchObject({
+      status: "failed",
+      reason: "The cost cap is spent.",
+    });
+  });
+
+  it("skips a step whose detail cannot be read", () => {
+    expect(onlyStudioRun([studio("briefed", { technique: 3 }), studio("produced", {})]).stages).toEqual([]);
+  });
+
+  it("is followed up by a turn that says so", () => {
+    expect(onlyTurn([event("turn_started", { trigger: "studio_finished" })]).trigger).toBe("studio_finished");
+    expect(onlyTurn([event("turn_started", { trigger: "something_else" })]).trigger).toBe("message");
   });
 });
