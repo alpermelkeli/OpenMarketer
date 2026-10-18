@@ -6,23 +6,30 @@ import { catalogEntryText } from "@/lib/settings/model-format";
 type ModelCatalogListProps = {
   /** The `list` of every model field that suggests from the catalogue. */
   id: string;
+  /** Suggest only the models that make images, for a role of kind `images`. */
+  imagesOnly?: boolean;
 };
 
 /**
  * The provider's models as suggestions for a model field. A field still takes any model
  * typed into it: the catalogue may be out of reach, and the API checks the form.
  */
-export function ModelCatalogList({ id }: ModelCatalogListProps) {
+export function ModelCatalogList({ id, imagesOnly = false }: ModelCatalogListProps) {
   const catalog = useModelCatalog();
+  const models = catalog.data?.models ?? [];
   return (
     <datalist id={id}>
-      {catalog.data?.models.map((model) => (
+      {(imagesOnly ? models.filter(makesImages) : models).map((model) => (
         <option key={model.id} value={model.id}>
           {catalogEntryText(model)}
         </option>
       ))}
     </datalist>
   );
+}
+
+function makesImages(model: { output_modalities: readonly string[] }): boolean {
+  return model.output_modalities.includes("image");
 }
 
 /** One line under the screen's heading on whether the picker can suggest models. */

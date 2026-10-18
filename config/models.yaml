@@ -111,18 +111,20 @@ roles:
   creative_director:             # writes prompts and scripts for image, video and voice providers
     tier: balanced
     temperature: 0.7
+    max_tokens: 16384              # a brief, and the HTML of a layout the studio renders
     requires: [structured_output]
 
   # --- checking and learning ------------------------------------------
   studio:                        # creative studio agent: writes code, calls image/video/voice tools, looks at results, edits
     tier: strong
     temperature: 0.4
-    max_tokens: 8192
+    max_tokens: 32768              # programs and HTML pages it writes for the sandbox
     requires: [tools, vision]      # must see the images it produces
 
   asset_verifier:                  # checks every produced asset against the brief; keep it a different model from `studio`
     tier: balanced
     temperature: 0.0
+    max_tokens: 16384
     requires: [structured_output, vision]
 
   critic:                        # pre-approval quality check against brand voice and facts

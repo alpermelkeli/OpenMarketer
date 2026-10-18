@@ -22,7 +22,8 @@ type RoleRowProps = {
   /** What the check found wrong with this role's models. */
   problems: readonly ModelProblem[];
   bounds: ChoiceBounds;
-  /** The `id` of the list of the catalogue's models. */
+  /** The `id` of the list of the catalogue's models this role may take: those that make images, for a
+   * role of kind `images`. */
   catalogList: string;
 };
 

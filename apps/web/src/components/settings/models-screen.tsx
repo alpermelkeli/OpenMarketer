@@ -29,6 +29,7 @@ const NO_PROBLEMS: readonly ModelProblem[] = [];
  */
 export function ModelsScreen() {
   const catalogList = useId();
+  const imageCatalogList = useId();
   const settings = useModelSettings();
   const check = useModelCheck();
   const data = settings.data;
@@ -42,7 +43,7 @@ export function ModelsScreen() {
         role={role}
         problems={problemsOf(role.role)}
         bounds={data.bounds}
-        catalogList={catalogList}
+        catalogList={role.kind === "images" ? imageCatalogList : catalogList}
       />
     );
 
@@ -60,6 +61,7 @@ export function ModelsScreen() {
         <ModelCatalogStatus />
       </div>
       <ModelCatalogList id={catalogList} />
+      <ModelCatalogList id={imageCatalogList} imagesOnly />
 
       {settings.error !== null && (
         <RequestProblem
