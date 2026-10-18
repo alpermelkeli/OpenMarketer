@@ -15,11 +15,16 @@ from PIL import Image
 from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.studio.media_provider import (
     ImageInput,
+    MediaAccountLimited,
     MediaProviderError,
     MediaRefused,
     MediaUnavailable,
 )
-from openmarketer_core.studio.openrouter_images import OpenRouterImages, nearest_aspect_ratio
+from openmarketer_core.studio.openrouter_images import (
+    ACCOUNT_LIMITED,
+    OpenRouterImages,
+    nearest_aspect_ratio,
+)
 
 MODELS_YAML = Path(__file__).resolve().parents[4] / "config" / "models.yaml"
 PROVIDER_KEY = "sk-or-v1-made-up-image-key"
@@ -220,9 +225,10 @@ def test_an_error_reported_in_a_reply_is_not_quoted():
         (httpx.Response(502, text="bad gateway"), MediaUnavailable),
         (httpx.ConnectError("refused"), MediaUnavailable),
         (httpx.Response(403, text="flagged by moderation"), MediaRefused),
-        (httpx.Response(402, text="no credit"), MediaProviderError),
+        (httpx.Response(402, text="no credit"), MediaAccountLimited),
+        (httpx.Response(400, text="bad request"), MediaProviderError),
     ],
-    ids=["rate-limited", "server-error", "unreachable", "moderated", "no-credit"],
+    ids=["rate-limited", "server-error", "unreachable", "moderated", "no-credit", "other"],
 )
 def test_a_failure_is_told_by_whether_it_may_pass(answer, error):
     provider = Provider(answer)
@@ -231,6 +237,40 @@ def test_a_failure_is_told_by_whether_it_may_pass(answer, error):
         provider.images.generate("x", width=64, height=64)
     if error is MediaProviderError:
         assert not isinstance(raised.value, MediaUnavailable | MediaRefused)
+
+
+# What OpenRouter answered a live run whose key could not pay for image output.
+KEY_LIMIT_ERROR = {
+    "error": {
+        "message": "This request requires at least $1.00 in balance for image or video output",
+        "code": 402,
+        "metadata": {"limit_source": "openrouter_key_limit"},
+    }
+}
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        Provider(httpx.Response(402, json=KEY_LIMIT_ERROR)),
+        answering(KEY_LIMIT_ERROR),
+        answering({"error": {"message": "over the limit", "metadata": {"limit_source": "key"}}}),
+    ],
+    ids=["http-402", "402-in-a-reply", "a-limit-named"],
+)
+def test_a_balance_or_key_limit_too_low_is_told_in_our_own_words(provider):
+    with pytest.raises(MediaAccountLimited) as raised:
+        provider.images.generate("x", width=64, height=64)
+
+    assert str(raised.value) == ACCOUNT_LIMITED
+    assert "$1.00" not in str(raised.value)
+
+
+def test_a_rate_limit_that_names_its_limit_still_passes():
+    limited = {"error": {"code": 429, "metadata": {"limit_source": "requests_per_minute"}}}
+
+    with pytest.raises(MediaUnavailable):
+        Provider(httpx.Response(429, json=limited)).images.generate("x", width=64, height=64)
 
 
 def test_without_a_reported_cost_the_estimate_is_kept_and_said_so():

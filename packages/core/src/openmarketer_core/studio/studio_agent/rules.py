@@ -88,6 +88,20 @@ COPY_UNREAD = "copy_unread"
 VERIFIER_UNREAD = "verifier_unread"
 VERIFIER_PREFIX = "verifier:"
 
+# What the worker's handler puts before the reason of an operation that failed in a way no
+# other operation, round or edit can mend (the image provider's key cannot pay, there is no
+# sandbox): the run ends with the reason instead of spending its rounds on it.
+BLOCKED = "blocked: "
+
+
+def blocked_reason(error: str) -> str | None:
+    """The reason of an action's failure that ends the run, or ``None`` for one the graph may
+    act on."""
+    if not error.startswith(BLOCKED):
+        return None
+    return error.removeprefix(BLOCKED).strip() or "the studio cannot go on"
+
+
 MAX_PROMPT_CHARS = 3000
 MAX_HTML_CHARS = 64 * 1024
 MAX_CODE_CHARS = MAX_SOURCE_BYTES

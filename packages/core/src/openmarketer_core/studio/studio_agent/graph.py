@@ -16,13 +16,15 @@ a stored image is read through the attempt's context. The state holds plain data
 technique. ``produce`` has the studio model choose the next operation (it may read the brand
 kit and look at the run's images with tools on the way), and ``operate`` asks for it as an
 action: the choice is made in one node and asked for in the next, because a node asks for the
-same thing every time it runs and a model does not answer the same twice. ``produce`` ends the
-round when the model names a candidate, when the round's operations or the run's cost are used
-up, or when the model chooses nothing usable. ``check`` asks for the candidate's text to be read
-(when the request has copy) and measures it in code; ``verify`` shows it to the verifier, a
-different model, only when the checks passed; ``decide`` applies ``rules.decide``; ``edit_plan``
-has the studio model plan the next round; ``finalize`` and ``escalate`` set the result, which
-whoever runs the graph stores when it ends.
+same thing every time it runs and a model does not answer the same twice. An action whose
+failure nothing else could get past (``rules.BLOCKED``: the image provider's key cannot pay,
+there is no sandbox) ends the run with its reason, in ``operate`` or in ``check``. ``produce``
+ends the round when the model names a candidate, when the round's operations or the run's cost
+are used up, or when the model chooses nothing usable. ``check`` asks for the candidate's text
+to be read (when the request has copy) and measures it in code; ``verify`` shows it to the
+verifier, a different model, only when the checks passed; ``decide`` applies ``rules.decide``;
+``edit_plan`` has the studio model plan the next round; ``finalize`` and ``escalate`` set the
+result, which whoever runs the graph stores when it ends.
 
 Every node is safe to run twice: a step that died before its checkpoint is taken again from
 the same state, and the model calls are made for this attempt only.
@@ -381,6 +383,7 @@ def operate(state: StudioState, context: StudioContext) -> dict[str, Any]:
     pending = state["pending"]
     outcome = request_action(_payload_of(state, pending))
     if not outcome.succeeded:
+        _end_if_blocked(outcome.error)
         failed = {"op": pending["op"], "ok": False, "error": outcome.error[:MAX_ERROR_CHARS]}
         return {"operations": [*state["operations"], failed], "pending": {}}
     result = outcome.result
@@ -403,6 +406,14 @@ def operate(state: StudioState, context: StudioContext) -> dict[str, Any]:
         "pending": {},
         "cost_usd": state["cost_usd"] + version["cost_usd"],
     }
+
+
+def _end_if_blocked(error: str) -> None:
+    """Raise ``StudioError`` with the reason when an action's failure ends the run
+    (``rules.BLOCKED``): no other operation or round would get past it."""
+    reason = rules.blocked_reason(error)
+    if reason is not None:
+        raise StudioError(reason)
 
 
 def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
@@ -466,6 +477,7 @@ def check(state: StudioState, context: StudioContext) -> dict[str, Any]:
             copy = matched.as_data()
             failures += [] if matched.passed else [COPY]
         else:
+            _end_if_blocked(outcome.error)
             copy = {"passed": False, "unread": True}
             failures.append(rules.COPY_UNREAD)
     image = context.image_of(candidate)

@@ -12,7 +12,13 @@ from temporalio.exceptions import ApplicationError
 
 from openmarketer_core.db.media_assets import asset_version
 from openmarketer_core.db.session import transaction
-from openmarketer_core.studio.media_provider import MediaRefused, MediaUnavailable
+from openmarketer_core.studio.media_provider import (
+    MediaAccountLimited,
+    MediaRefused,
+    MediaUnavailable,
+)
+from openmarketer_core.studio.openrouter_images import ACCOUNT_LIMITED
+from openmarketer_core.studio.sandbox import SandboxUnavailable
 from openmarketer_core.studio.studio_agent.definitions import (
     EditImage,
     GenerateImage,
@@ -20,7 +26,7 @@ from openmarketer_core.studio.studio_agent.definitions import (
     RenderHtml,
     RunPython,
 )
-from openmarketer_core.studio.studio_agent.rules import Technique
+from openmarketer_core.studio.studio_agent.rules import BLOCKED, Technique
 from openmarketer_worker.agent_runtime.routes import ActionContext
 from openmarketer_worker.agent_runtime.vocabulary import DATABASE_UNAVAILABLE, MAX_ERROR_CHARACTERS
 from openmarketer_worker.creative_studio import steps
@@ -216,6 +222,16 @@ def test_provider_that_cannot_be_reached_may_pass(work, run, media):
     assert (refused.type, refused.non_retryable) == (steps.STUDIO_UNAVAILABLE, False)
 
 
+def test_key_that_cannot_pay_blocks_the_run_for_good_and_releases_its_spend(work, run, media):
+    media.failures = [MediaAccountLimited(ACCOUNT_LIMITED)]
+
+    refused = refusal(lambda: work.generate_image(generation(run), an_action()))
+
+    # A type the handler worded and that is not the budget's "may have spent": released.
+    assert (refused.type, refused.non_retryable) == (steps.OPERATION_FAILED, True)
+    assert refused.message == BLOCKED + ACCOUNT_LIMITED
+
+
 def test_paid_image_object_storage_lost_counts_against_the_budget(work, run, assets):
     assets.unavailable = True
 
@@ -265,6 +281,36 @@ def test_program_that_failed_is_told_with_a_short_reason_and_stores_nothing(
     assert refused.message.endswith("NameError: name 'y'")
     assert len(refused.message) <= MAX_ERROR_CHARACTERS
     assert assets.objects == {}
+
+
+NO_SANDBOX = "the sandbox could not be started: the docker command was not found"
+
+
+def test_sandbox_that_cannot_start_may_pass_and_blocks_the_run_if_it_does_not(
+    work, run, sandbox, assets
+):
+    sandbox.failures = [SandboxUnavailable(NO_SANDBOX)]
+
+    refused = refusal(lambda: work.run_python(a_program(run), an_action()))
+
+    assert (refused.type, refused.non_retryable) == (steps.STUDIO_UNAVAILABLE, False)
+    assert refused.message == BLOCKED + NO_SANDBOX
+    assert assets.objects == {}
+
+
+def test_text_that_cannot_be_read_for_want_of_a_sandbox_is_told_as_blocking(work, run, sandbox):
+    first = work.generate_image(generation(run), an_action())
+    sandbox.failures = [SandboxUnavailable(NO_SANDBOX)]
+    payload = ReadText(
+        workspace_id=run.workspace_id,
+        project_id=run.project_id,
+        run_id=run.run_id,
+        version_id=uuid.UUID(first["version_id"]),
+    )
+
+    refused = refusal(lambda: work.read_text(payload, an_action()))
+
+    assert (refused.type, refused.message) == (steps.STUDIO_UNAVAILABLE, BLOCKED + NO_SANDBOX)
 
 
 def test_page_is_rendered_at_the_platforms_size_and_stored(work, run, sandbox, sessions):

@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from typing import Any
 
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from PIL import Image
@@ -24,6 +25,7 @@ from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.run_events import RunEvent
 from openmarketer_core.studio.brand_kit import BrandKit
+from openmarketer_core.studio.failures import StudioError
 from openmarketer_core.studio.media_provider import ImageInput
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
@@ -158,8 +160,12 @@ def a_png(width: int, height: int) -> bytes:
 class World:
     """The actions' handlers: images stored by version id, text read back in the given order."""
 
-    def __init__(self, read_back: list[str], *, cost_usd: float = 0.04, sizes=None):
+    def __init__(self, read_back: list[str], *, cost_usd: float = 0.04, sizes=None, failing=None):
         self.read_back = list(read_back)
+        # an action's name -> the errors of its next asks, in order
+        self.failing: dict[str, list[str]] = {
+            name: list(errors) for name, errors in (failing or {}).items()
+        }
         self.cost_usd = cost_usd
         self.sizes = dict(sizes or {})  # an image action's position -> (width, height)
         self.images: dict[str, bytes] = {}
@@ -231,6 +237,11 @@ class Run:
             step = steps.advance(ref, checkpoints, resume)
             if step.action is None:
                 break
+            errors = world.failing.get(step.action.name)
+            if errors:
+                world.asked.append((step.action.name, step.action.payload))
+                resume = ActionOutcome(step.action.action_id, False, {}, errors.pop(0))
+                continue
             answer = world.answer(step.action.name, step.action.payload)
             resume = ActionOutcome(step.action.action_id, True, answer, "")
         [self.final] = finals
@@ -460,3 +471,58 @@ def test_the_cost_limit_refuses_a_generation_it_cannot_pay_for():
     refused = chat.calls[3]["messages"][-1]
     assert refused["role"] == "tool" and "cost limit" in refused["content"]
     assert run.result.cost_usd == 0.05
+
+
+KEY_TOO_LOW = "the OpenRouter key's balance or usage limit is too low for image output"
+NO_SANDBOX = "the sandbox could not be started: the docker command was not found"
+
+
+def test_an_operation_that_is_blocked_ends_the_run_with_its_reason_at_once():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready(), a_plan()],
+    )
+    world = World([], failing={GENERATE_IMAGE: [rules.BLOCKED + KEY_TOO_LOW]})
+
+    with pytest.raises(StudioError) as raised:
+        Run(chat, world)
+
+    assert str(raised.value) == KEY_TOO_LOW
+    assert world.names() == [GENERATE_IMAGE]
+    assert chat.left() == {"studio": 2}
+
+
+def test_words_that_cannot_be_read_for_want_of_a_sandbox_end_the_run_with_its_reason():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready(), a_plan()],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([], failing={READ_TEXT: [rules.BLOCKED + NO_SANDBOX]})
+
+    with pytest.raises(StudioError) as raised:
+        Run(chat, world)
+
+    assert str(raised.value) == NO_SANDBOX
+    assert world.names() == [GENERATE_IMAGE, READ_TEXT]
+    assert chat.left() == {"studio": 1, "asset_verifier": 1}
+
+
+def test_an_operation_that_failed_otherwise_is_told_to_the_studio_model_which_goes_on():
+    refused = "the image model refused to make this image"
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[
+            operation("generate_image", prompt="A desk."),
+            operation("generate_image", prompt="A calmer desk."),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK], failing={GENERATE_IMAGE: [refused]})
+
+    run = Run(chat, world)
+
+    assert world.names() == [GENERATE_IMAGE, GENERATE_IMAGE, READ_TEXT]
+    assert refused in json.dumps(chat.calls[2]["messages"])
+    assert not run.result.needs_review

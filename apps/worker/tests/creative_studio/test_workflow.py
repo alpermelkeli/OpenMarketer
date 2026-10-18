@@ -41,9 +41,10 @@ from temporalio.client import WorkflowFailureError, WorkflowHandle, WorkflowHist
 from temporalio.service import RPCError, RPCStatusCode
 
 from openmarketer_core.agent_runtime.gate import PROPOSAL_DECIDED_SIGNAL
+from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.budget.caps import SpendDecision
 from openmarketer_core.credentials.catalog import OPENROUTER_API_KEY
-from openmarketer_core.db.budget_ledger import reservation_of_action
+from openmarketer_core.db.budget_ledger import month_balance, reservation_of_action
 from openmarketer_core.db.media_assets import asset_versions, media_asset
 from openmarketer_core.db.models import LedgerEntryKind, MediaAssetStatus, StudioRunStatus
 from openmarketer_core.db.proposals import decide_proposal, list_proposals
@@ -52,6 +53,9 @@ from openmarketer_core.db.session import transaction
 from openmarketer_core.db.studio_runs import studio_run
 from openmarketer_core.llm import LLMError
 from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.studio.media_provider import MediaAccountLimited
+from openmarketer_core.studio.openrouter_images import ACCOUNT_LIMITED
+from openmarketer_core.studio.sandbox import SandboxUnavailable
 from openmarketer_core.studio.workflow_contract import (
     STUDIO_RUN_KIND,
     STUDIO_WORKFLOW,
@@ -267,6 +271,67 @@ async def test_run_without_the_model_providers_key_ends_failed_with_what_to_set(
     stored = the_run(sessions, run)
     assert stored.status is StudioRunStatus.FAILED
     assert stored.error is not None and "OPENROUTER_API_KEY" in stored.error
+
+
+async def follow_up_of(temporal, run) -> dict[str, Any]:
+    """The input of the follow-up the run started, which is then terminated."""
+    handle = temporal.get_workflow_handle(follow_up_workflow_id(STUDIO_RUN_KIND, run.run_id))
+    try:
+        started = (await handle.fetch_history()).events[0]
+    finally:
+        try:
+            await handle.terminate()
+        except RPCError:
+            pass  # it ended already: a worker of the dev stack may serve the queue
+    (argument,) = started.workflow_execution_started_event_attributes.input.payloads
+    return json.loads(argument.data)
+
+
+async def test_key_that_cannot_pay_for_images_ends_the_run_failed_at_once_and_spends_nothing(
+    serving, start, studio_database, sessions, media, temporal
+):
+    media.failures = [MediaAccountLimited(ACCOUNT_LIMITED)]
+    model = one_round_that_passes()
+    asked = studio_database.requested(from_a_chat=True)
+    run = asked.run
+    async with serving(model=model):
+        handle = await start(run)
+        with pytest.raises(WorkflowFailureError):
+            await ended(handle)
+    history = readable(await handle.fetch_history())
+
+    stored = the_run(sessions, run)
+    assert (stored.status, stored.error) == (StudioRunStatus.FAILED, ACCOUNT_LIMITED)
+    assert len(media.calls) == 1
+    assert model.calls == ["creative_director", "studio"]
+    [action_id] = set(
+        re.findall(re.escape(thread_id(STUDIO_RUN_KIND, run.run_id)) + r":[\w-]+", history)
+    )
+    with transaction(sessions) as session:
+        held = reservation_of_action(
+            session, workspace_id=run.workspace_id, run_kind=STUDIO_RUN_KIND, action_id=action_id
+        )
+        balance = month_balance(session, workspace_id=run.workspace_id)
+    assert held is not None and held.settlement is LedgerEntryKind.RELEASE
+    assert (balance.spent_usd, balance.reserved_usd) == (0, 0)
+    assert (await follow_up_of(temporal, run))["chat_id"] == str(asked.chat_id)
+
+
+async def test_sandbox_that_cannot_start_ends_the_run_failed_once_its_attempts_are_used_up(
+    serving, start, studio_database, sessions, sandbox
+):
+    no_sandbox = "the sandbox could not be started: the docker command was not found"
+    sandbox.failures = [SandboxUnavailable(no_sandbox) for _ in range(3)]
+    model = one_round_that_passes()
+    run = studio_database.requested().run
+    async with serving(model=model):
+        with pytest.raises(WorkflowFailureError):
+            await ended(await start(run))
+
+    stored = the_run(sessions, run)
+    assert (stored.status, stored.error) == (StudioRunStatus.FAILED, no_sandbox)
+    assert sandbox.failures == [] and sandbox.read == []
+    assert model.left() == {"asset_verifier": 1}
 
 
 # ------------------------------------------------------------------ telling the chat

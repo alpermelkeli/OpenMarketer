@@ -12,8 +12,10 @@ size asked for. What it cost is the provider's figure when the provider reports 
 The errors are what a caller must handle, each a ``MediaProviderError``: ``MediaRefused`` (the
 provider refused the content; asking again the same way will be refused again),
 ``MediaUnavailable`` (the provider could not be reached or was busy; the same request may pass
-later) and the class itself for anything else (no image came back, or what came back is not one).
-Their messages are fixed sentences, never what the provider wrote: that goes to the log.
+later), ``MediaAccountLimited`` (the account or the key cannot pay for the request; nothing
+passes until a person raises its balance or its limit) and the class itself for anything else
+(no image came back, or what came back is not one). Their messages are fixed sentences, never
+what the provider wrote: that goes to the log.
 
 This module is the port and its data. ``openrouter_images.py`` is the adapter.
 """
@@ -38,6 +40,12 @@ class MediaRefused(MediaProviderError):
 
 class MediaUnavailable(MediaProviderError):
     """The provider could not be reached, or was too busy; the same request may pass later."""
+
+
+class MediaAccountLimited(MediaProviderError):
+    """The provider's account or key cannot pay for the request: its balance or its usage limit
+    is too low. No request passes, whatever it asks, until a person raises it; the provider
+    charged nothing for this one."""
 
 
 @dataclass(frozen=True)

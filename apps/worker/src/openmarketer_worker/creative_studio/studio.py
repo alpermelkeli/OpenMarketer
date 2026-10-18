@@ -29,7 +29,11 @@ payload names and keyed by the action's id (``add_version``), and a handler that
 version of its action stored answers with it without asking the provider or the sandbox again,
 so a paid image is paid for once. An operation that did not make its image (the provider
 refused, the program failed, a reference is not the run's) fails for good with a short reason
-the studio's model reads and may act on; one whose service could not be reached may pass.
+the studio's model reads and may act on; one whose service could not be reached may pass. Two
+failures no other operation could get past are told as blocking (``rules.BLOCKED`` before the
+reason), and the graph ends the run with them: the image provider's key whose balance or limit
+is too low (not tried again; the provider charged nothing, so the spend is released), and a
+sandbox that cannot be started (tried again, and blocking once its attempts are used up).
 
 No credential is kept here or put in the graph's state: the chat model and the image provider
 of an attempt are asked for with the run's workspace (``new_model``, ``new_media``) each time
@@ -91,6 +95,7 @@ from openmarketer_core.studio.brand_kit import brand_kit_of
 from openmarketer_core.studio.failures import STUDIO_FAILURES
 from openmarketer_core.studio.media_provider import (
     ImageInput,
+    MediaAccountLimited,
     MediaProvider,
     MediaProviderError,
     MediaRefused,
@@ -398,6 +403,9 @@ class StudioWork:
         """The image the provider drew, fitted to the platform's size."""
         try:
             result = draw(self._new_media(run.workspace_id))
+        except MediaAccountLimited as e:
+            # No other operation the provider makes can pass until a person raises the limit.
+            raise failure(steps.OPERATION_FAILED, rules.BLOCKED + str(e)) from None
         except MediaRefused as e:
             raise failure(steps.OPERATION_FAILED, str(e)) from None
         except MediaUnavailable as e:
@@ -424,7 +432,9 @@ class StudioWork:
         try:
             return work()
         except SandboxUnavailable as e:
-            raise failure(steps.STUDIO_UNAVAILABLE, str(e)) from None
+            # Tried again as the action's declaration says; if it is still there after its last
+            # attempt, the graph ends the run with it, since nothing else reads the copy.
+            raise failure(steps.STUDIO_UNAVAILABLE, rules.BLOCKED + str(e)) from None
         except SandboxError as e:
             # Screening's reasons or a fixed sentence: never what the sandbox printed.
             raise failure(steps.OPERATION_FAILED, _cut(str(e))) from None

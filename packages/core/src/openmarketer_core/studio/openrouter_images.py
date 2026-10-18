@@ -14,7 +14,9 @@ sandbox's output. The cost is what the provider reports (``usage.cost``); withou
 estimate, and the result says which (``params["cost_source"]``).
 
 What the provider writes (an error page, a refusal's text, a reply without an image) is logged,
-cut short, and never put in an error: an error is a fixed sentence. The provider's key is
+cut short, and never put in an error: an error is a fixed sentence. An answer that the key's
+balance or usage limit is too low (HTTP 402, or an error that names the limit it hit) is
+``MediaAccountLimited``, with a sentence that says where to raise it. The provider's key is
 handed in by the caller that resolved it, or is the environment's, and is kept out of ``repr``.
 """
 
@@ -37,6 +39,7 @@ from openmarketer_core.llm import image_part, model_name_to_keep, reported_statu
 from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.studio.media_provider import (
     ImageInput,
+    MediaAccountLimited,
     MediaOperation,
     MediaProviderError,
     MediaRefused,
@@ -71,6 +74,13 @@ ASPECT_TOLERANCE = 0.01
 MAX_REPLY_BYTES = 64 * 1024 * 1024
 
 _PASSING_STATUSES = (408, 429)
+# OpenRouter answers 402 when the account's credits or the key's limit cannot pay for a request;
+# the error of a limit names it in ``metadata.limit_source``.
+_ACCOUNT_LIMITED_STATUS = 402
+ACCOUNT_LIMITED = (
+    "the OpenRouter key's balance or usage limit is too low for image output; "
+    "raise it at openrouter.ai/settings/keys"
+)
 # OpenRouter answers 403 when its moderation flags the input.
 _REFUSED_STATUSES = (403,)
 # The finish reasons a model gives when it would not draw what was asked.
@@ -194,7 +204,9 @@ class OpenRouterImages:
                 "image provider answered HTTP %s: %r", response.status_code, response.text[:300]
             )
             raise _failure(
-                response.status_code, f"the image provider answered HTTP {response.status_code}"
+                response.status_code,
+                f"the image provider answered HTTP {response.status_code}",
+                error=_error_in(response),
             )
         if len(response.content) > MAX_REPLY_BYTES:
             raise MediaProviderError(
@@ -209,7 +221,9 @@ class OpenRouterImages:
         if "error" in body or not body.get("choices"):
             error = body.get("error", body)
             logger.warning("image provider reported an error: %r", str(error)[:300])
-            raise _failure(reported_status(error), "the image provider reported an error")
+            raise _failure(
+                reported_status(error), "the image provider reported an error", error=error
+            )
         return body
 
     def _image_in(self, body: dict[str, Any]) -> bytes:
@@ -303,8 +317,30 @@ def _was_refused(choice: dict[str, Any]) -> bool:
     )
 
 
-def _failure(status: int | None, message: str) -> MediaProviderError:
-    if status is None or status in _PASSING_STATUSES or status >= 500:
+def _error_in(response: httpx.Response) -> Any:
+    """The ``error`` object of a reply that was not HTTP 200, or ``None``. Read only to tell
+    the kind of failure: nothing of it is put in the error raised."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body.get("error") if isinstance(body, dict) else None
+
+
+def _names_a_limit(error: Any) -> bool:
+    metadata = error.get("metadata") if isinstance(error, dict) else None
+    return isinstance(metadata, dict) and bool(metadata.get("limit_source"))
+
+
+def _failure(status: int | None, message: str, *, error: Any = None) -> MediaProviderError:
+    if status == _ACCOUNT_LIMITED_STATUS:
+        return MediaAccountLimited(ACCOUNT_LIMITED)
+    if status is not None and (status in _PASSING_STATUSES or status >= 500):
+        # A rate limit may name the limit it hit too, and it passes.
+        return MediaUnavailable(message)
+    if _names_a_limit(error):
+        return MediaAccountLimited(ACCOUNT_LIMITED)
+    if status is None:
         return MediaUnavailable(message)
     if status in _REFUSED_STATUSES:
         return MediaRefused(message)
