@@ -219,6 +219,7 @@ def brief(state: StudioState, context: StudioContext) -> dict[str, Any]:
         )
     return {
         "brief": submitted.model_dump(mode="json"),
+        "about_product": rules.about_product(context.brand_kit, state["exact_copy"]),
         "technique": rules.first_technique(
             submitted.technique, has_reference_assets=bool(state["reference_asset_ids"])
         ).value,
@@ -281,7 +282,7 @@ def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
 
 
 def _produce_messages(state: StudioState, context: StudioContext) -> list[dict[str, Any]]:
-    data = rules.produce_data(state, _spec(state), context.limits)
+    data = rules.produce_data(state, _spec(state), context.limits, context.brand_kit.as_data())
     content: list[dict[str, Any]] = [{"type": "text", "text": json.dumps(data, ensure_ascii=False)}]
     latest = _this_round(state)
     shown = latest[-1] if latest else state["edit_plan"].get("source_version_id", "")
@@ -430,11 +431,19 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
     def ids(name: str) -> list[uuid.UUID]:
         return [uuid.UUID(value) for value in pending[name]]
 
+    # What code adds to every prompt. A thread stored before the brief kept ``about_product``
+    # has none, and its prompts go without it.
+    added = {
+        "copy_placement": str(state["brief"].get("copy_placement", "")),
+        "about": state.get("about_product", ""),
+    }
     op = pending["op"]
     if op == rules.GENERATE_IMAGE:
         return GenerateImage(
             **common,
-            prompt=rules.generation_prompt(pending["prompt"], state["exact_copy"], technique),
+            prompt=rules.generation_prompt(
+                pending["prompt"], state["exact_copy"], technique, **added
+            ),
             reference_version_ids=ids("reference_version_ids"),
             reference_asset_ids=ids("reference_asset_ids"),
         )
@@ -443,7 +452,7 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
             **common,
             source_version_id=uuid.UUID(pending["source_version_id"]),
             instruction=rules.edit_instruction(
-                pending["instruction"], state["exact_copy"], technique
+                pending["instruction"], state["exact_copy"], technique, **added
             ),
             reference_version_ids=ids("reference_version_ids"),
             reference_asset_ids=ids("reference_asset_ids"),

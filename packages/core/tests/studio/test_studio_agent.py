@@ -24,7 +24,7 @@ from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.run_events import RunEvent
-from openmarketer_core.studio.brand_kit import BrandKit
+from openmarketer_core.studio.brand_kit import EMPTY_BRAND_KIT, BrandKit
 from openmarketer_core.studio.failures import StudioError
 from openmarketer_core.studio.media_provider import ImageInput
 from openmarketer_core.studio.platforms import Platform
@@ -41,7 +41,7 @@ from openmarketer_core.studio.studio_agent.definitions import (
     initial_state,
     result_of,
 )
-from openmarketer_core.studio.studio_agent.graph import recursion_limit
+from openmarketer_core.studio.studio_agent.graph import _payload_of, recursion_limit
 from openmarketer_core.studio.studio_agent.rules import Limits
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND, StudioRunInput
 
@@ -86,13 +86,15 @@ def call(name: str, arguments: dict[str, Any]) -> ChatReply:
     )
 
 
-def a_brief(technique: str = "generated") -> ChatReply:
+def a_brief(
+    technique: str = "generated", image_prompt: str = "A bright desk at dawn, top view."
+) -> ChatReply:
     return text(
         {
             "goal": "Announce the launch.",
             "visual_concept": "A bright desk at dawn.",
             "technique": technique,
-            "image_prompt": "A bright desk at dawn, top view.",
+            "image_prompt": image_prompt,
             "copy_placement": "Centered, upper third.",
         }
     )
@@ -150,6 +152,9 @@ def a_verdict(**failing: str) -> ChatReply:
     )
 
 
+ACME = BrandKit(name="Acme", palette=("#112233",))
+
+
 # ------------------------------------------------------------------------------- the world
 def a_png(width: int, height: int) -> bytes:
     out = io.BytesIO()
@@ -203,7 +208,14 @@ class World:
 class Run:
     """One run of the graph to its end, its actions answered by ``world``."""
 
-    def __init__(self, chat: ScriptedChat, world: World, *, limits: Limits | None = None):
+    def __init__(
+        self,
+        chat: ScriptedChat,
+        world: World,
+        *,
+        limits: Limits | None = None,
+        brand_kit: BrandKit = ACME,
+    ):
         request = AssetRequest(
             goal="Announce the launch.", exact_copy=COPY, platform=Platform.INSTAGRAM_POST
         )
@@ -212,7 +224,7 @@ class Run:
             model=chat,
             limits=limits or Limits(),
             image_of=world.image_of,
-            brand_kit=BrandKit(name="Acme", palette=("#112233",)),
+            brand_kit=brand_kit,
         )
         self.events: list[RunEvent] = []
         finals: list[dict[str, Any]] = []
@@ -270,6 +282,105 @@ def test_a_generated_image_whose_words_read_back_passes_in_one_round():
     assert '"Launch day"\n"Try it free"' in generated["prompt"]
     assert chat.left() == {}
     assert run.kinds() == ["briefed", "produced", "checked", "verified", "finalized"]
+
+
+A_KIT = BrandKit(
+    name="Acme",
+    kind="mobile app on ios",
+    audience="students",
+    features=("Syncs notes.",),
+    do_not_mention=("Rival",),
+)
+
+
+def test_a_brief_for_a_background_with_copy_does_not_forbid_the_words_it_asks_for():
+    banned = "A navy gradient, no text, no letters, no numbers, no logos."
+    chat = ScriptedChat(
+        creative_director=[a_brief("background_overlay", image_prompt=banned)],
+        studio=[operation("generate_image", prompt=banned), ready()],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    assert generated["technique"] == "generated"
+    assert generated["prompt"].startswith("A navy gradient, no logos.")
+    assert "no letters" not in generated["prompt"]
+    assert '"Launch day"\n"Try it free"' in generated["prompt"]
+    assert "Where the words go: Centered, upper third." in generated["prompt"]
+
+
+def test_every_generation_and_edit_is_told_what_the_product_is():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[
+            operation("generate_image", prompt="A desk."),
+            ready(),
+            a_plan(),
+            editing_latest(instruction="Fix it."),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World(["Lauch day", READ_BACK])
+
+    Run(chat, world, brand_kit=A_KIT)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    [edited] = world.payloads(EDIT_IMAGE)
+    about = rules.about_product(A_KIT, COPY)
+    assert about in generated["prompt"]
+    assert about in edited["instruction"]
+
+
+def test_an_empty_brand_kit_adds_no_product_block():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world, brand_kit=EMPTY_BRAND_KIT)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    assert "About the product" not in generated["prompt"]
+
+
+def test_the_creative_director_and_the_studio_are_shown_the_brand_kit():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+
+    Run(chat, World([READ_BACK]), brand_kit=A_KIT)
+
+    director, studio = chat.calls[0], chat.calls[1]
+    assert json.loads(director["messages"][1]["content"])["brand_kit"] == A_KIT.as_data()
+    shown = json.loads(studio["messages"][1]["content"][0]["text"])
+    assert shown["brand_kit"] == A_KIT.as_data()
+
+
+def test_a_thread_stored_before_the_product_block_still_asks_for_its_image():
+    run = StudioRunInput(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+    request = AssetRequest(goal="Launch.", exact_copy=COPY, platform=Platform.INSTAGRAM_POST)
+    state: dict[str, Any] = {**initial_state(run, request), "round": 1}
+    del state["about_product"]
+    pending = {
+        "op": GENERATE_IMAGE,
+        "version_id": str(uuid.uuid4()),
+        "technique": "generated",
+        "prompt": "A desk.",
+        "reference_version_ids": [],
+        "reference_asset_ids": [],
+    }
+
+    payload = _payload_of(state, pending)  # type: ignore[arg-type]
+
+    assert "About the product" not in payload.model_dump()["prompt"]
 
 
 def test_words_read_back_wrong_are_edited_in_a_second_round_that_passes():

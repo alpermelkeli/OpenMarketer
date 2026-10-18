@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 from openmarketer_core.agent_runtime.model_input import read_strict_json
+from openmarketer_core.studio.brand_kit import EMPTY_BRAND_KIT, BrandKit
 from openmarketer_core.studio.image_checks import COPY, WRONG_SIZE
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_core.studio.studio_agent.rules import (
@@ -162,6 +163,145 @@ def test_a_background_for_an_overlay_is_asked_without_any_text():
     prompt = rules.generation_prompt("A desk.", ["Launch day"], Technique.BACKGROUND_OVERLAY)
     assert "Launch day" not in prompt
     assert "no text" in prompt
+
+
+LIVE_PROMPT = (
+    "Square Instagram launch background, dark minimal aesthetic. Deep navy-teal gradient with "
+    "plenty of clean empty space. Flat modern product-launch mood, no text, no letters, no "
+    "numbers, no logos, no UI labels, no watermark."
+)
+
+
+def test_a_prompt_with_copy_loses_the_sentences_that_forbid_text():
+    prompt = rules.generation_prompt(LIVE_PROMPT, ["Sorukasam artık yayında"], Technique.GENERATED)
+    assert "no text" not in prompt
+    assert "no letters" not in prompt
+    assert "Flat modern product-launch mood, no logos, no UI labels, no watermark." in prompt
+    assert '"Sorukasam artık yayında"' in prompt
+
+
+def test_an_edit_with_copy_loses_the_sentences_that_forbid_text():
+    instruction = rules.edit_instruction(
+        "Brighten the sky. Do not include any text or letters.", ["Launch"], Technique.GENERATED
+    )
+    assert instruction.startswith("Brighten the sky.\n\n")
+    assert "Do not include" not in instruction
+
+
+def test_a_background_for_an_overlay_keeps_its_bans_of_text():
+    prompt = rules.generation_prompt(LIVE_PROMPT, ["Launch"], Technique.BACKGROUND_OVERLAY)
+    assert prompt.startswith(LIVE_PROMPT)
+
+
+def test_a_prompt_without_copy_keeps_its_bans_of_text():
+    assert rules.generation_prompt(LIVE_PROMPT, [], Technique.GENERATED).startswith(LIVE_PROMPT)
+
+
+def test_the_text_bans_taken_out_are_only_bans_of_text():
+    assert rules.without_text_bans("A clean desk with no text, no people.") == (
+        "A clean desk, no people."
+    )
+    assert rules.without_text_bans("A text-free poster, without any lettering at all.") == (
+        "A poster."
+    )
+    assert rules.without_text_bans("No characters, no text-heavy layout.") == (
+        "No characters, no text-heavy layout."
+    )
+
+
+def test_the_brief_s_placement_goes_with_the_copy():
+    prompt = rules.generation_prompt(
+        "A desk.", ["Launch"], Technique.GENERATED, copy_placement="Centered, upper third."
+    )
+    assert prompt.endswith("Where the words go: Centered, upper third.")
+
+
+def test_the_placement_is_bounded():
+    prompt = rules.generation_prompt(
+        "A desk.", ["Launch"], Technique.HTML_REFERENCE, copy_placement="x" * 2000
+    )
+    assert prompt.endswith("Where the words go: " + "x" * rules.MAX_PLACEMENT_CHARS)
+
+
+def test_a_background_for_an_overlay_leaves_space_where_the_words_go():
+    prompt = rules.generation_prompt(
+        "A desk.", ["Launch"], Technique.BACKGROUND_OVERLAY, copy_placement="Lower third."
+    )
+    assert prompt.endswith("Leave calm space where the words will go: Lower third.")
+
+
+A_KIT = BrandKit(
+    name="Sorukasam",
+    kind="mobile app on ios, android",
+    audience="high-school students preparing for exams",
+    features=("Solves questions from a photo.", "Tracks mistakes.", "Daily quizzes.", "Ranks."),
+    do_not_mention=("RivalApp",),
+)
+
+
+def test_the_product_block_tells_what_the_product_is_as_context():
+    about = rules.about_product(A_KIT, ["Sorukasam artık yayında"])
+    assert about.startswith("About the product")
+    assert "- Product: Sorukasam" in about
+    assert "- What it is: mobile app on ios, android" in about
+    assert "- For: high-school students preparing for exams" in about
+    assert "only the exact text below is written" in about
+
+
+def test_the_product_block_shows_at_most_three_features():
+    about = rules.about_product(A_KIT, [])
+    assert about.count("- Feature:") == rules.MAX_ABOUT_FEATURES
+    assert "Ranks." not in about
+    assert "do not write these words in the image" in about
+
+
+def test_the_product_block_is_bounded():
+    long = "x" * 1000
+    kit = BrandKit(name=long, kind=long, audience=long, features=(long,) * 3)
+    assert len(rules.about_product(kit, [])) <= rules.MAX_ABOUT_CHARS
+
+
+def test_the_product_block_leaves_out_every_term_not_to_mention():
+    kit = BrandKit(
+        name="Acme",
+        audience="people leaving RivalApp",
+        features=("Imports from rivalapp.", "Syncs notes."),
+        do_not_mention=("RivalApp",),
+    )
+    about = rules.about_product(kit, [])
+    assert "rivalapp" not in about.casefold()
+    assert "- Feature: Syncs notes." in about
+
+
+def test_an_empty_kit_adds_nothing_to_the_prompt():
+    assert rules.about_product(EMPTY_BRAND_KIT, ["Launch"]) == ""
+    prompt = rules.generation_prompt("A desk.", ["Launch"], Technique.GENERATED, about="")
+    assert prompt.startswith("A desk.\n\nThe image shows exactly this text")
+
+
+def test_the_product_block_goes_into_every_generation_and_edit():
+    about = rules.about_product(A_KIT, ["Launch"])
+    for technique in Technique:
+        assert about in rules.generation_prompt("A desk.", ["Launch"], technique, about=about)
+        assert about in rules.edit_instruction("Brighter.", [], technique, about=about)
+
+
+def test_the_composed_prompt_fits_its_payload():
+    prompt = rules.generation_prompt(
+        "p" * rules.MAX_PROMPT_CHARS,
+        ["c" * 120] * 6,
+        Technique.GENERATED,
+        copy_placement="x" * rules.MAX_PLACEMENT_CHARS,
+        about=rules.about_product(
+            BrandKit(name="n" * 300, kind="k" * 300, audience="a" * 300, features=("f",) * 5),
+            ["c"],
+        ),
+    )
+    assert len(prompt) <= rules.MAX_COMPOSED_PROMPT_CHARS
+
+
+def test_the_brief_asks_for_a_picture_that_does_not_forbid_the_words():
+    assert 'never says "no text"' in rules.BRIEF_SYSTEM_PROMPT
 
 
 def test_the_prompts_say_the_copy_is_never_written_or_changed():

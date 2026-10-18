@@ -82,6 +82,9 @@ class StudioState(TypedDict):
     reference_asset_ids: list[str]
     # What the graph has done.
     brief: dict[str, Any]  # the creative director's ``Brief``; {} until it is made
+    # What every generation and edit is told of the product (``rules.about_product``), taken
+    # from the brand kit with the brief so that a later attempt asks for the same prompt.
+    about_product: str
     technique: str  # a ``Technique``'s value: the one this round uses
     round: int  # 0 until the brief, then the round being made
     # This round's operations as they ended: {"op", "version_id"?, "ok", "error"?, "note"?}.
@@ -255,6 +258,7 @@ def initial_state(run: StudioRunInput, request: AssetRequest) -> StudioState:
         "style_notes": request.style_notes,
         "reference_asset_ids": [str(asset) for asset in request.reference_asset_ids],
         "brief": {},
+        "about_product": "",
         "technique": Technique.GENERATED.value,
         "round": 0,
         "operations": [],

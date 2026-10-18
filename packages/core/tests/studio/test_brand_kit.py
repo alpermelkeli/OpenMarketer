@@ -7,7 +7,7 @@ from openmarketer_core.studio.brand_kit import EMPTY_BRAND_KIT, brand_kit_of
 def a_profile() -> ProductProfile:
     return ProductProfile.model_validate(
         {
-            "product": {"name": "Acme", "type": "web_app"},
+            "product": {"name": "Acme", "type": "web_app", "platforms": ["web", "ios"]},
             "features": [
                 {"id": "sync", "description": "Syncs notes.", "status": "live"},
                 {"id": "ai", "description": "Writes notes.", "status": "unreleased"},
@@ -21,6 +21,7 @@ def a_profile() -> ProductProfile:
 def test_the_kit_takes_the_brand_and_only_live_features_from_the_profile():
     kit = brand_kit_of(a_profile())
     assert kit.name == "Acme"
+    assert kit.kind == "web app on web, ios"
     assert kit.voice == "plain"
     assert kit.palette == ("#112233",)
     assert kit.do_not_mention == ("Rival",)

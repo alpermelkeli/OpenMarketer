@@ -5,7 +5,9 @@ decides what counts: the caps a run works under, the schemas of what a model may
 prompts, the operations each technique may use, how the words of the request are put into
 every prompt, which failures a round had, and what follows a round (``decide``). The copy is
 the request's: no model writes, changes or adds a word of it, and the words a prompt asks an
-image model to render are put there by code (``generation_prompt``, ``edit_instruction``).
+image model to render are put there by code (``generation_prompt``, ``edit_instruction``),
+with where they go, what the product is (``about_product``) and none of a model's sentences
+that would forbid them (``without_text_bans``).
 
 The four techniques, in the order the decide rule falls back through:
 
@@ -23,6 +25,7 @@ functions into a graph, and the worker runs the operations as actions.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -30,6 +33,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from openmarketer_core.studio.brand_kit import BrandKit
 from openmarketer_core.studio.code_screening import MAX_REQUIREMENTS, MAX_SOURCE_BYTES
 from openmarketer_core.studio.image_checks import (
     COPY,
@@ -110,8 +114,14 @@ MAX_PACKAGES = MAX_REQUIREMENTS
 MAX_NOTE_CHARS = 300
 MAX_PLAN_STEPS = 6
 MAX_SUGGESTIONS = 6
-# What the code adds to a model's prompt: the lines of copy and a sentence around them.
-MAX_COMPOSED_PROMPT_CHARS = MAX_PROMPT_CHARS + 1200
+MAX_PLACEMENT_CHARS = 500
+# What code tells every generation and edit of the product (``about_product``).
+MAX_ABOUT_CHARS = 800
+MAX_ABOUT_LINE_CHARS = 160
+MAX_ABOUT_FEATURES = 3
+# What the code adds to a model's prompt: the lines of copy and a sentence around them, where
+# they go, and what the product is.
+MAX_COMPOSED_PROMPT_CHARS = MAX_PROMPT_CHARS + 1200 + MAX_PLACEMENT_CHARS + MAX_ABOUT_CHARS
 
 
 @dataclass(frozen=True)
@@ -147,7 +157,9 @@ class Brief(_Submission):
     composition: Annotated[str, StringConstraints(strip_whitespace=True, max_length=1000)] = ""
     technique: Technique
     image_prompt: Prompt = ""
-    copy_placement: Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)] = ""
+    copy_placement: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=MAX_PLACEMENT_CHARS)
+    ] = ""
 
 
 class Operation(_Submission):
@@ -364,28 +376,66 @@ def _unknown_images(operation: Operation, images: RunImages) -> list[str]:
     return problems
 
 
-def generation_prompt(prompt: str, exact_copy: Sequence[str], technique: Technique) -> str:
-    """The prompt an image model is sent: the model's words, then the copy as code puts it."""
+def generation_prompt(
+    prompt: str,
+    exact_copy: Sequence[str],
+    technique: Technique,
+    *,
+    copy_placement: str = "",
+    about: str = "",
+) -> str:
+    """The prompt an image model is sent: the model's picture, what the product is, then the
+    copy and where it goes, as code puts them.
+
+    With copy that the image model renders, a sentence of the model's that forbids text would
+    contradict the copy, so it is taken out first (``without_text_bans``).
+    """
     if technique == Technique.BACKGROUND_OVERLAY:
-        return f"{prompt}\n\n{_NO_TEXT_FOR_OVERLAY}"
+        return _joined(prompt, about, _no_text_for_overlay(copy_placement))
     if not exact_copy:
-        return f"{prompt}\n\nThe image shows no text, letters or numbers."
-    return f"{prompt}\n\n{_copy_sentence(exact_copy)}"
+        return _joined(prompt, about, "The image shows no text, letters or numbers.")
+    return _joined(
+        without_text_bans(prompt), about, _copy_sentence(exact_copy), _placement(copy_placement)
+    )
 
 
-def edit_instruction(instruction: str, exact_copy: Sequence[str], technique: Technique) -> str:
-    """The instruction an edit is sent with, with the copy as code puts it."""
+def edit_instruction(
+    instruction: str,
+    exact_copy: Sequence[str],
+    technique: Technique,
+    *,
+    copy_placement: str = "",
+    about: str = "",
+) -> str:
+    """The instruction an edit is sent with, with the product and the copy as code puts them."""
     if technique == Technique.BACKGROUND_OVERLAY:
-        return f"{instruction}\n\n{_NO_TEXT_FOR_OVERLAY}"
+        return _joined(instruction, about, _no_text_for_overlay(copy_placement))
     if not exact_copy:
-        return f"{instruction}\n\nKeep the image free of text, letters and numbers."
-    return f"{instruction}\n\n{_copy_sentence(exact_copy)}"
+        return _joined(instruction, about, "Keep the image free of text, letters and numbers.")
+    return _joined(
+        without_text_bans(instruction),
+        about,
+        _copy_sentence(exact_copy),
+        _placement(copy_placement),
+    )
 
 
-_NO_TEXT_FOR_OVERLAY = (
-    "The image shows no text, letters, numbers or logos: the words are added afterwards. "
-    "Leave calm space where the words will go."
-)
+def _joined(*parts: str) -> str:
+    return "\n\n".join(part for part in parts if part)
+
+
+def _no_text_for_overlay(copy_placement: str) -> str:
+    where = _bounded(copy_placement, MAX_PLACEMENT_CHARS)
+    space = "Leave calm space where the words will go" + (f": {where}" if where else ".")
+    return (
+        "The image shows no text, letters, numbers or logos: the words are added afterwards. "
+        + space
+    )
+
+
+def _placement(copy_placement: str) -> str:
+    where = _bounded(copy_placement, MAX_PLACEMENT_CHARS)
+    return f"Where the words go: {where}" if where else ""
 
 
 def _copy_sentence(exact_copy: Sequence[str]) -> str:
@@ -394,6 +444,93 @@ def _copy_sentence(exact_copy: Sequence[str]) -> str:
         "The image shows exactly this text, each line spelled exactly as written here, with "
         "no other words, letters or numbers anywhere in the image:\n" + lines
     )
+
+
+def _bounded(text: str, limit: int) -> str:
+    return " ".join(text.split())[:limit].strip()
+
+
+# A model asked for a picture with words often still writes "no text, no letters" into its
+# prompt, out of habit or from a brief made for a background; sent with the copy, the image
+# model is told both to show the words and to show none. The ban is a phrase that says *no* of
+# *text*: "no text", "without any lettering", "free of words", "do not include text", "text-free".
+# Only these are taken out: a ban of logos, watermarks, labels or characters (people) stays, and
+# so does everything else of the sentence the phrase was in.
+_TEXT_NOUN = (
+    r"(?:text|texts|letters?|lettering|words?|typography|typeface|numbers?|numerals?|digits?"
+    r"|captions?|writing|headlines?|titles?)"
+)
+_TEXT_NOUNS = (
+    rf"(?:(?:any|visible|readable|legible|written|on-image|overlaid|other)\s+)*{_TEXT_NOUN}"
+    rf"(?:\s*(?:,|/|\bor\b|\band\b|,\s*or\b|,\s*and\b)\s*{_TEXT_NOUN})*"
+)
+_BAN_LEAD = (
+    r"(?:no|without|free\s+of|zero|avoid(?:ing)?"
+    r"|(?:do\s+not|don't|never|must\s+not|should\s+not)"
+    r"\s+(?:include|add|show|render|write|use|put|contain|have|draw)"
+    r"|(?:must|should)\s+not\s+(?:include|contain|show|have))"
+)
+_TEXT_BAN = re.compile(
+    rf"(?:\b(?:with|and|but)\s+)?\b{_BAN_LEAD}\s+(?:any\s+)?{_TEXT_NOUNS}(?![-\w])"
+    r"(?:\s+(?:of\s+any\s+kind|at\s+all|anywhere|in\s+the\s+image|on\s+the\s+image))*"
+    r"|\b(?:text|letter|typography)[- ]free\b\s*|\btextless\b\s*",
+    re.IGNORECASE,
+)
+
+
+def without_text_bans(prompt: str) -> str:
+    """``prompt`` with every phrase that forbids text taken out, and its punctuation tidied.
+
+    For a prompt sent with copy the image model renders; a background for an overlay, or an
+    image with no copy, keeps its bans.
+    """
+    cut = _TEXT_BAN.sub("", prompt)
+    lines = [_tidy(line) for line in cut.split("\n")]
+    return "\n".join(lines).strip()
+
+
+def _tidy(line: str) -> str:
+    line = re.sub(r"[ \t]{2,}", " ", line)
+    line = re.sub(r"\s+([,;.!?])", r"\1", line)
+    line = re.sub(r"[,;](?:\s*[,;])+", ",", line)
+    line = re.sub(r"[,;]\s*([.!?])", r"\1", line)
+    line = re.sub(r"(^|[.!?])\s*[,;.]+", r"\1", line)
+    line = re.sub(r"([.!?])(?=\S)", r"\1 ", line)
+    return line.strip()
+
+
+def about_product(kit: BrandKit, exact_copy: Sequence[str]) -> str:
+    """What every generation and edit is told of the product, for the picture to fit it.
+
+    The kit's name, what the product is, its audience and up to ``MAX_ABOUT_FEATURES`` live
+    features, each bounded; a value that names a term of ``do_not_mention`` is left out, so the
+    image model never reads one. It is context, not words to render: the block says so, and
+    with copy that only the exact text is written. An empty kit adds nothing.
+    """
+    banned = [term.casefold() for term in kit.do_not_mention if term.strip()]
+
+    def allowed(value: str) -> str:
+        value = _bounded(value, MAX_ABOUT_LINE_CHARS)
+        return "" if any(term in value.casefold() for term in banned) else value
+
+    facts = [
+        ("Product", allowed(kit.name)),
+        ("What it is", allowed(kit.kind)),
+        ("For", allowed(kit.audience)),
+    ]
+    features = [feature for feature in map(allowed, kit.features) if feature]
+    lines = [f"- {label}: {value}" for label, value in facts if value]
+    lines += [f"- Feature: {feature}" for feature in features[:MAX_ABOUT_FEATURES]]
+    if not lines:
+        return ""
+    rule = (
+        "these are not words to write in the image: only the exact text below is written"
+        if exact_copy
+        else "do not write these words in the image"
+    )
+    return (f"About the product, so the picture fits it ({rule}):\n" + "\n".join(lines))[
+        :MAX_ABOUT_CHARS
+    ]
 
 
 # --------------------------------------------------------------------------------- reviews
@@ -616,7 +753,13 @@ with background_overlay: it is the studio's fallback when the image model gets t
 
 Answer with one JSON object and nothing else, with these fields: goal, visual_concept, \
 composition, technique, image_prompt (what to ask the image model for, without the words: \
-code adds them to the prompt), copy_placement (where each line of the copy goes)."""
+code adds them to the prompt), copy_placement (where each line of the copy goes).
+
+The image_prompt describes the picture. When the request has exact_copy and the technique is \
+generated or html_reference, the image model renders those words, so the image_prompt never \
+says "no text", "no letters" or "no words": code adds the exact words and where they go. Use \
+the brand kit for the subject, the colours and the mood: what the product is and who it is for. \
+Never name a term of its do_not_mention."""
 
 STUDIO_SYSTEM_PROMPT = f"""\
 You are the studio: you make one marketing image to a brief, one operation at a time, look at \
@@ -626,7 +769,8 @@ the result, and say when it is done.
 
 Operations (call submit_operation with one):
 - generate_image: prompt, and reference_version_ids / reference_asset_ids for images to \
-follow. Code adds the exact words to your prompt; describe the picture, not the words.
+follow. Code adds the exact words, where they go and what the product is to your prompt; \
+describe the picture, not the words, and with exact_copy never ask for no text or no letters.
 - edit_image: source_version_id and instruction, changing an image of this run.
 - render_html: html, a whole page at the image's size. Local files only: an image of this run \
 is /in/<version_id>.png when it is in input_version_ids. No network, no scripts from outside.
@@ -691,11 +835,17 @@ def brief_messages(
     ]
 
 
-def produce_data(state: Mapping[str, Any], spec: PlatformSpec, limits: Limits) -> dict[str, Any]:
-    """What the studio model is told of the round, by code, from the state."""
+def produce_data(
+    state: Mapping[str, Any],
+    spec: PlatformSpec,
+    limits: Limits,
+    brand_kit: Mapping[str, Any],
+) -> dict[str, Any]:
+    """What the studio model is told of the round, by code, from the state and the brand kit."""
     technique = Technique(state["technique"])
     return {
         "request": request_data(state, spec),
+        "brand_kit": brand_kit,
         "brief": state["brief"],
         "technique": technique.value,
         "allowed_operations": list(ALLOWED_OPERATIONS[technique]),
