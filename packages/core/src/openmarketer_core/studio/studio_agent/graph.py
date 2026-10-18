@@ -217,7 +217,9 @@ def brief(state: StudioState, context: StudioContext) -> dict[str, Any]:
         )
     return {
         "brief": submitted.model_dump(mode="json"),
-        "technique": submitted.technique.value,
+        "technique": rules.first_technique(
+            submitted.technique, has_reference_assets=bool(state["reference_asset_ids"])
+        ).value,
         "round": 1,
         **spent.update(state),
     }
@@ -236,6 +238,12 @@ def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
         run_versions=frozenset(v["version_id"] for v in state["versions"]),
         this_round=frozenset(_this_round(state)),
         reference_assets=frozenset(state["reference_asset_ids"]),
+        made_by_code=frozenset(
+            v["version_id"]
+            for v in state["versions"]
+            if v["operation"] in (rules.RUN_PYTHON, rules.RENDER_HTML)
+        ),
+        has_copy=bool(state["exact_copy"]),
     )
     spent = _Spent()
     messages = _produce_messages(state, context)

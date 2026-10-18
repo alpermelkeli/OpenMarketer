@@ -224,3 +224,53 @@ def test_the_declarations_load_no_graph_framework_database_or_pillow():
     loaded = set(json.loads(done.stdout))
     for package in ("langgraph", "sqlalchemy", "psycopg", "PIL"):
         assert not any(name == package or name.startswith(f"{package}.") for name in loaded)
+
+
+# ----------------------------------------------------------------------- first technique
+def test_a_run_never_starts_with_the_background_overlay_fallback():
+    assert (
+        rules.first_technique(Technique.BACKGROUND_OVERLAY, has_reference_assets=False)
+        == Technique.GENERATED
+    )
+
+
+def test_a_run_starts_composed_only_with_real_images_to_compose():
+    assert (
+        rules.first_technique(Technique.COMPOSED, has_reference_assets=False) == Technique.GENERATED
+    )
+    assert (
+        rules.first_technique(Technique.COMPOSED, has_reference_assets=True) == Technique.COMPOSED
+    )
+
+
+def test_the_creative_directors_layout_choice_stands():
+    assert (
+        rules.first_technique(Technique.HTML_REFERENCE, has_reference_assets=False)
+        == Technique.HTML_REFERENCE
+    )
+
+
+# --------------------------------------------------------------- the overlay's candidate
+def overlay_candidate(version: str, made_by_code: frozenset[str]) -> list:
+    return rules.operation_problems(
+        Operation.model_validate({"op": "candidate_ready", "version_id": version}),
+        technique=Technique.BACKGROUND_OVERLAY,
+        images=RunImages(
+            run_versions=frozenset({V1, V2}),
+            this_round=frozenset({V1, V2}),
+            reference_assets=frozenset(),
+            made_by_code=made_by_code,
+            has_copy=True,
+        ),
+        cost_usd=0.0,
+        limits=Limits(),
+    )
+
+
+def test_a_background_without_its_words_is_not_an_overlay_candidate():
+    [problem] = overlay_candidate(V1, made_by_code=frozenset())
+    assert "laid over in code" in problem
+
+
+def test_the_background_with_its_words_laid_over_is_a_candidate():
+    assert overlay_candidate(V2, made_by_code=frozenset({V2})) == []

@@ -252,6 +252,23 @@ class RunImages:
     run_versions: frozenset[str]
     this_round: frozenset[str]
     reference_assets: frozenset[str]
+    # The versions code made (run_python, render_html), and whether the request has words: with
+    # background_overlay, a candidate must be one whose words code laid over the background.
+    made_by_code: frozenset[str] = frozenset()
+    has_copy: bool = False
+
+
+def first_technique(chosen: Technique, *, has_reference_assets: bool) -> Technique:
+    """The technique a run starts with: the creative director's, unless it chose a fallback.
+
+    background_overlay is only ever a fallback, and composed starts a run only when the request
+    gives real images (screenshots) to compose; otherwise the image model makes the image.
+    """
+    if chosen == Technique.BACKGROUND_OVERLAY:
+        return Technique.GENERATED
+    if chosen == Technique.COMPOSED and not has_reference_assets:
+        return Technique.GENERATED
+    return chosen
 
 
 def operation_problems(
@@ -282,6 +299,16 @@ def operation_problems(
         )
     problems += _missing_fields(operation)
     problems += _unknown_images(operation, images)
+    if (
+        operation.op == CANDIDATE_READY
+        and technique == Technique.BACKGROUND_OVERLAY
+        and images.has_copy
+        and operation.version_id not in images.made_by_code
+    ):
+        problems.append(
+            "with background_overlay the words are laid over in code: run_python on the "
+            "background first, then name that image"
+        )
     if (
         operation.op == GENERATE_IMAGE
         and technique == Technique.HTML_REFERENCE
@@ -568,13 +595,14 @@ for the studio that makes the image.
 {_TECHNIQUES}
 
 Choose the first technique for this asset: generated unless the request needs a specific \
-layout (html_reference) or is made of real screenshots or exact graphics (composed).
+layout (html_reference) or is made of the real screenshots it gives (composed). Never start \
+with background_overlay: it is the studio's fallback when the image model gets the words wrong.
 
 {_COPY_RULES}
 
 Answer with one JSON object and nothing else, with these fields: goal, visual_concept, \
 composition, technique, image_prompt (what to ask the image model for, without the words: \
-code adds them), copy_placement (where each line of the copy goes)."""
+code adds them to the prompt), copy_placement (where each line of the copy goes)."""
 
 STUDIO_SYSTEM_PROMPT = f"""\
 You are the studio: you make one marketing image to a brief, one operation at a time, look at \
