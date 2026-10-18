@@ -1,8 +1,7 @@
 COMPOSE := docker compose -f deploy/compose/dev.yml
-# The dev stack with its optional Langfuse (profile `tracing`) and the studio sandbox's egress
-# proxy (profile `studio`), for the targets that stop, list or follow it, so that they reach
-# those too once `make up tracing=1 studio=1` started them.
-COMPOSE_ALL := $(COMPOSE) --profile tracing --profile studio
+# The dev stack with its optional Langfuse (profile `tracing`), for the targets that stop, list
+# or follow it, so that they reach it too once `make up tracing=1` started it.
+COMPOSE_ALL := $(COMPOSE) --profile tracing
 
 # What a target reads counts only when given on the command line: make also turns
 # environment variables into variables, and one named `live` must not spend credit.
@@ -17,8 +16,8 @@ install: ## Install Python and web dependencies
 	uv sync
 	cd apps/web && pnpm install
 
-up: ## Start PostgreSQL, Temporal, object storage, search and page rendering; tracing=1 adds Langfuse on http://localhost:3001, studio=1 the sandbox's egress proxy
-	$(COMPOSE) $(if $(filter 1,$(call given,tracing)),--profile tracing) $(if $(filter 1,$(call given,studio)),--profile studio) up -d
+up: ## Start PostgreSQL, Temporal, object storage, search and page rendering; the studio's sandbox image and egress proxy; tracing=1 adds Langfuse on http://localhost:3001
+	$(COMPOSE) $(if $(filter 1,$(call given,tracing)),--profile tracing) up -d
 
 sandbox: ## Build the creative studio's sandbox image (openmarketer/studio-sandbox:dev)
 	docker build -t openmarketer/studio-sandbox:dev deploy/sandbox/studio
