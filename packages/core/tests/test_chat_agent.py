@@ -15,34 +15,44 @@ from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.agent_runtime.langgraph_agent import compile_agent
 from openmarketer_core.db.models import (
     AnalysisRunStatus,
+    MediaAssetStatus,
     ProfileStatus,
     ProjectStatus,
     ResearchRunStatus,
+    StudioRunStatus,
 )
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContext, agent
 from openmarketer_core.orchestrator.chat_agent.graph import answer_message
 from openmarketer_core.orchestrator.chat_agent.rules import (
     SUBMIT,
+    SYSTEM_PROMPT,
     TOOL_LABELS,
     UNKNOWN_TOOL,
     ChatLimits,
     ChatTurnError,
+    follow_up_instruction,
     is_wrapping_up,
     submit_schema,
     wrap_up_tool_schemas,
 )
 from openmarketer_core.orchestrator.chat_agent.tools import (
+    get_studio_run,
     list_analysis_runs,
+    list_media_assets,
     list_pending_proposals,
     list_research_runs,
+    list_studio_runs,
     read_profile,
     read_research_report,
+    start_creative,
     start_research,
 )
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
     PROFILE_SECTIONS,
+    AssetReviewReading,
+    MediaAssetReading,
     PendingProposals,
     ProfileReading,
     ProjectStatusReading,
@@ -50,17 +60,23 @@ from openmarketer_core.orchestrator.reads import (
     ResearchReportReading,
     ResearchRunReading,
     RunReading,
+    StudioRunReading,
     UnknownProfileSection,
 )
-from openmarketer_core.orchestrator.requests import ResearchNotStarted
+from openmarketer_core.orchestrator.requests import ResearchNotStarted, StudioNotStarted
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import RUN_STARTED, TOOL_ANSWERED, TOOL_CALLED, RunEvent
+from openmarketer_core.studio.platforms import Platform
+from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 
 PROJECT_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
 PROPOSAL_ID = uuid.UUID("00000000-0000-4000-8000-000000000003")
 RESEARCH_RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000004")
+STUDIO_RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000005")
+ASSET_ID = uuid.UUID("00000000-0000-4000-8000-000000000006")
 
 
 def call(name: str, **arguments) -> dict:
@@ -118,6 +134,9 @@ class FakeReads:
         self.run_limits: list[int] = []
         self.research_limits: list[int] = []
         self.report_calls: list[uuid.UUID | None] = []
+        self.studio_limits: list[int] = []
+        self.studio_calls: list[uuid.UUID] = []
+        self.asset_limits: list[int] = []
 
     def project_status(self) -> ProjectStatusReading:
         self.status_calls += 1
@@ -185,6 +204,40 @@ class FakeReads:
         if self.empty or (run_id is not None and run_id != RESEARCH_RUN_ID):
             return None
         return self._research_report()
+
+    def recent_studio_runs(self, limit: int) -> list[StudioRunReading]:
+        self.studio_limits.append(limit)
+        return [] if self.empty else [studio_run_reading()]
+
+    def studio_run(self, run_id: uuid.UUID) -> StudioRunReading | None:
+        self.studio_calls.append(run_id)
+        if self.empty or run_id != STUDIO_RUN_ID:
+            return None
+        review = AssetReviewReading(
+            version_id=RUN_ID,
+            passed=False,
+            check_failures=["copy"],
+            failed_criteria=[{"criterion": "legibility", "severity": "major", "note": "small"}],
+        )
+        return studio_run_reading(
+            StudioRunStatus.NEEDS_REVIEW, review=review, review_reason="the round limit"
+        )
+
+    def media_assets(self, limit: int) -> list[MediaAssetReading]:
+        self.asset_limits.append(limit)
+        if self.empty:
+            return []
+        return [
+            MediaAssetReading(
+                id=ASSET_ID,
+                run_id=STUDIO_RUN_ID,
+                platform="x_post",
+                status=MediaAssetStatus.DRAFT,
+                current_version_id=RUN_ID,
+                created_at=datetime.now(UTC),
+                decided_at=None,
+            )
+        ]
 
     def _content(self, section: str | None) -> object | None:
         if section is None:
@@ -256,6 +309,32 @@ class FakeReads:
         )
 
 
+def studio_run_reading(
+    status: StudioRunStatus = StudioRunStatus.SUCCEEDED,
+    *,
+    review: AssetReviewReading | None = None,
+    review_reason: str | None = None,
+) -> StudioRunReading:
+    now = datetime.now(UTC)
+    queued = status is StudioRunStatus.QUEUED
+    return StudioRunReading(
+        id=STUDIO_RUN_ID,
+        status=status,
+        platform="x_post",
+        goal="Announce the Android launch",
+        exact_copy=["Now on Android"],
+        requested_by="orchestrator",
+        error=None,
+        final_asset_id=None if queued else ASSET_ID,
+        cost_usd=0.0 if queued else 0.08,
+        created_at=now,
+        started_at=None if queued else now,
+        finished_at=None if queued else now,
+        review=review,
+        review_reason=review_reason,
+    )
+
+
 @pytest.fixture
 def reads() -> FakeReads:
     return FakeReads()
@@ -272,6 +351,7 @@ class FakeRequests:
     def __init__(self, *, fails: Exception | None = None) -> None:
         self.fails = fails
         self.started: list[ResearchRequest] = []
+        self.creatives: list[AssetRequest] = []
 
     def start_research(self, request: ResearchRequest) -> ResearchRunReading:
         self.started.append(request)
@@ -288,6 +368,12 @@ class FakeRequests:
             started_at=None,
             finished_at=None,
         )
+
+    def start_creative(self, request: AssetRequest) -> StudioRunReading:
+        self.creatives.append(request)
+        if self.fails is not None:
+            raise self.fails
+        return studio_run_reading(StudioRunStatus.QUEUED)
 
 
 def a_context(reads: FakeReads, requests: FakeRequests | None) -> ChatTurnContext:
@@ -412,7 +498,7 @@ def test_the_turn_fails_when_the_model_never_answers(reads):
     reading = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
     wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
     assert "read_profile" in reading
-    assert wrap_up == ["start_research", SUBMIT]
+    assert wrap_up == ["start_research", "start_creative", SUBMIT]
     messages = [
         m for m in model.requests[-1]["messages"] if "You are out of reading budget" in str(m)
     ]
@@ -422,6 +508,7 @@ def test_the_turn_fails_when_the_model_never_answers(reads):
 def test_request_actions_do_not_count_against_the_reading_budget():
     limits = ChatLimits()
     assert not is_wrapping_up(1, 0.0, ["start_research"] * limits.max_tool_calls, limits)
+    assert not is_wrapping_up(1, 0.0, ["start_creative"] * limits.max_tool_calls, limits)
     assert not is_wrapping_up(1, 0.0, ["get_project_status"] * 5, limits)
     assert is_wrapping_up(1, 0.0, ["get_project_status"] * 6, limits)
 
@@ -434,7 +521,7 @@ def test_cost_limit_stops_the_turn(reads):
         )
     assert len(model.requests) == 3
     wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
-    assert wrap_up == ["start_research", SUBMIT]
+    assert wrap_up == ["start_research", "start_creative", SUBMIT]
 
 
 # ------------------------------------------------------------------- tools
@@ -608,7 +695,7 @@ def test_a_spent_reading_budget_still_lets_the_turn_start_research(reads):
     assert turn.answer == "Started it."
     assert any("out of reading budget" in str(m) for m in model.requests[1]["messages"])
     wrap_up = [schema["function"]["name"] for schema in model.requests[1]["tools"]]
-    assert wrap_up == ["start_research", SUBMIT]
+    assert wrap_up == ["start_research", "start_creative", SUBMIT]
 
 
 def test_empty_readings_are_plain_sentences():
@@ -632,6 +719,10 @@ def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
         "list_research_runs",
         "read_research_report",
         "start_research",
+        "list_studio_runs",
+        "get_studio_run",
+        "list_media_assets",
+        "start_creative",
     ]
     assert submit_schema()["function"]["name"] == SUBMIT
     by_name = {schema["function"]["name"]: schema for schema in schemas}
@@ -648,11 +739,222 @@ def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
         "max_sources",
     ]
     assert started["required"] == ["questions"]
+    creative = by_name["start_creative"]["function"]["parameters"]
+    assert list(creative["properties"]) == [
+        "goal",
+        "platform",
+        "exact_copy",
+        "style_notes",
+        "reference_asset_ids",
+    ]
+    assert creative["required"] == ["goal", "platform"]
 
 
 def test_the_wrap_up_offers_the_request_action_and_the_submission_only():
     names = [schema["function"]["name"] for schema in wrap_up_tool_schemas(agent)]
-    assert names == ["start_research", SUBMIT]
+    assert names == ["start_research", "start_creative", SUBMIT]
+
+
+# ------------------------------------------------------------ the creative studio
+def test_start_creative_asks_the_caller_for_the_copy_word_for_word():
+    requests = FakeRequests()
+    context = a_context(FakeReads(), requests)
+
+    answer = start_creative(
+        context,
+        goal="Announce the Android launch",
+        platform="instagram_story",
+        exact_copy=["Memoria is on Android", "Get it today"],
+        style_notes="dark background",
+        reference_asset_ids=[str(ASSET_ID)],
+    )
+
+    [request] = requests.creatives
+    assert request == AssetRequest(
+        goal="Announce the Android launch",
+        platform=Platform.INSTAGRAM_STORY,
+        exact_copy=["Memoria is on Android", "Get it today"],
+        style_notes="dark background",
+        reference_asset_ids=[ASSET_ID],
+    )
+    body = json.loads(answer)
+    assert body == {"run_id": str(STUDIO_RUN_ID), "status": "queued", "platform": "x_post"}
+
+
+def test_start_creative_without_copy_asks_for_an_image_without_text():
+    requests = FakeRequests()
+
+    start_creative(a_context(FakeReads(), requests), goal="A hero image", platform="og_image")
+
+    [request] = requests.creatives
+    assert (request.exact_copy, request.style_notes, request.reference_asset_ids) == ([], "", [])
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"goal": "A post", "platform": "tiktok_video"},
+        {"goal": "", "platform": "x_post"},
+        {"goal": "A post", "platform": "x_post", "exact_copy": ["line one\nline two"]},
+        {"goal": "A post", "platform": "x_post", "exact_copy": ["x" * 121]},
+        {"goal": "A post", "platform": "x_post", "exact_copy": ["a"] * 7},
+        {"goal": "A post", "platform": "x_post", "reference_asset_ids": ["not-a-uuid"]},
+    ],
+    ids=["unknown-platform", "no-goal", "line-break", "long-line", "many-lines", "bad-reference"],
+)
+def test_start_creative_refuses_what_does_not_fit_without_reaching_the_caller(arguments):
+    requests = FakeRequests()
+
+    answer = start_creative(a_context(FakeReads(), requests), **arguments)
+
+    assert answer.startswith("error: the image request does not fit")
+    assert requests.creatives == []
+    # The refusal names the fields at fault and never a value the model wrote.
+    assert "tiktok_video" not in answer
+    assert "x" * 10 not in answer
+    assert "not-a-uuid" not in answer
+
+
+def test_an_unknown_platform_is_a_tool_error_the_turn_reads_and_corrects(reads):
+    requests = FakeRequests()
+    model = ScriptedModel(
+        [call("start_creative", goal="A post", platform="tiktok")],
+        [call("start_creative", goal="A post", platform="x_post")],
+        [call(SUBMIT, answer=f"Started {STUDIO_RUN_ID}.")],
+    )
+
+    turn = answer_message(reads, model, history(), requests=requests)
+
+    first = [m for m in model.requests[1]["messages"] if m["role"] == "tool"][0]["content"]
+    assert first == "error: the image request does not fit: 'platform'"
+    assert [request.platform for request in requests.creatives] == [Platform.X_POST]
+    assert turn.answer == f"Started {STUDIO_RUN_ID}."
+
+
+def test_start_creative_without_a_caller_says_starting_runs_is_not_available():
+    answer = start_creative(a_context(FakeReads(), None), goal="A post", platform="x_post")
+
+    assert answer == "error: starting a studio run is not available here"
+
+
+def test_a_studio_run_that_could_not_be_started_is_an_error_the_turn_reads():
+    refused = StudioNotStarted("a reference image is not in this project's Studio library")
+    requests = FakeRequests(fails=refused)
+    model = ScriptedModel(
+        [call("start_creative", goal="A post", platform="x_post")],
+        [call(SUBMIT, answer="I could not start it.")],
+    )
+
+    turn = answer_message(FakeReads(), model, history(), requests=requests)
+
+    assert turn.answer == "I could not start it."
+    assert model.tool_results()[0] == f"error: {refused}"
+
+
+def test_a_turn_that_starts_a_studio_run_records_it_with_its_id(reads):
+    events = RecordedEvents()
+    model = ScriptedModel(
+        [call("start_creative", goal="A post", platform="x_post", exact_copy=["Now on Android"])],
+        [call(SUBMIT, answer=f"Started {STUDIO_RUN_ID}.")],
+    )
+
+    answer_message(reads, model, history(), requests=FakeRequests(), events=events)
+
+    assert [event.kind for event in events.events] == [TOOL_CALLED, RUN_STARTED, TOOL_ANSWERED]
+    assert events.events[0].detail["label"] == TOOL_LABELS["start_creative"]
+    assert events.events[1].detail == {"run_kind": STUDIO_RUN_KIND, "run_id": str(STUDIO_RUN_ID)}
+
+
+def test_every_platform_is_named_to_the_model():
+    by_name = {schema["function"]["name"]: schema for schema in agent.tool_schemas()}
+    description = by_name["start_creative"]["function"]["description"]
+    for platform in Platform:
+        assert platform.value in description
+        assert platform.value in SYSTEM_PROMPT
+
+
+def test_the_prompt_says_the_copy_is_the_operators_word_for_word():
+    assert "verbatim" in SYSTEM_PROMPT
+    assert "Never invent copy" in SYSTEM_PROMPT
+    assert "Approvals" in SYSTEM_PROMPT
+    assert "Studio library" in SYSTEM_PROMPT
+
+
+def test_list_studio_runs_bounds_the_limit_and_carries_the_request(reads):
+    context = a_context(reads, None)
+
+    [run] = json.loads(list_studio_runs(context, limit=500))
+
+    assert reads.studio_limits == [MAX_LISTED_RECORDS]
+    assert (run["goal"], run["exact_copy"], run["platform"]) == (
+        "Announce the Android launch",
+        ["Now on Android"],
+        "x_post",
+    )
+    assert run["final_asset_id"] == str(ASSET_ID)
+
+
+def test_get_studio_run_reads_its_review_and_why_it_needs_one(reads):
+    run = json.loads(get_studio_run(a_context(reads, None), str(STUDIO_RUN_ID)))
+
+    assert run["status"] == "needs_review"
+    assert run["review_reason"] == "the round limit"
+    assert run["review"]["check_failures"] == ["copy"]
+    assert run["review"]["failed_criteria"][0]["criterion"] == "legibility"
+
+
+def test_get_studio_run_refuses_a_non_uuid_and_names_a_missing_run(reads):
+    context = a_context(reads, None)
+
+    assert get_studio_run(context, "latest").startswith("error: run_id must be a UUID")
+    missing = uuid.uuid4()
+    assert (
+        get_studio_run(context, str(missing)) == f"error: no studio run {missing} in this project"
+    )
+
+
+def test_list_media_assets_bounds_the_limit(reads):
+    [asset] = json.loads(list_media_assets(a_context(reads, None), limit=0))
+
+    assert reads.asset_limits == [1]
+    assert (asset["id"], asset["status"]) == (str(ASSET_ID), "draft")
+
+
+def test_an_empty_studio_is_a_plain_sentence():
+    context = a_context(FakeReads(empty=True), None)
+
+    assert list_studio_runs(context) == "The project has no studio runs."
+    assert list_media_assets(context) == "The project's Studio library is empty."
+
+
+@pytest.mark.parametrize("status", ["succeeded", "needs_review", "failed"])
+def test_a_studio_follow_up_is_told_to_read_the_run_and_link_in_words_only(status):
+    instruction = follow_up_instruction(STUDIO_RUN_KIND, str(STUDIO_RUN_ID), status)
+
+    assert f"get_studio_run and run_id {STUDIO_RUN_ID}" in instruction
+    assert f"status {status}" in instruction
+    assert "write no link" in instruction
+    assert "cannot start another run" in instruction
+
+
+def test_each_studio_outcome_is_explained_its_own_way():
+    def told(status: str) -> str:
+        return follow_up_instruction(STUDIO_RUN_KIND, str(STUDIO_RUN_ID), status)
+
+    assert "accept or reject" in told("succeeded")
+    assert "review_reason" in told("needs_review")
+    assert "error" in told("failed")
+
+
+def test_a_research_follow_up_is_still_told_to_read_the_report():
+    instruction = follow_up_instruction(RESEARCH_RUN_KIND, str(RESEARCH_RUN_ID), "succeeded")
+
+    assert "read_research_report" in instruction
+
+
+def test_a_follow_up_on_another_kind_of_run_is_refused():
+    with pytest.raises(ValueError):
+        follow_up_instruction("analysis-run", str(RUN_ID), "succeeded")
 
 
 # ------------------------------------------------------------------- graph

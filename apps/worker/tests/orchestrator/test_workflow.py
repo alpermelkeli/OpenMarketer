@@ -24,6 +24,7 @@ from temporalio.worker import Worker
 
 from openmarketer_core.db.chat import TURN_ABANDONED_AFTER
 from openmarketer_core.orchestrator.chat_agent.rules import MODEL_UNAVAILABLE_REASON
+from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_worker import orchestrator
 from openmarketer_worker.orchestrator import policy, steps
 from openmarketer_worker.orchestrator.contract import (
@@ -43,8 +44,8 @@ class ScriptedFollowUp:
     asked: list[ChatFollowUpInput] = field(default_factory=list)
     told: list[FollowUpNotTaken] = field(default_factory=list)
 
-    @activity.defn(name=steps.FOLLOW_UP_ON_RESEARCH)
-    async def follow_up_on_research(self, follow_up: ChatFollowUpInput) -> None:
+    @activity.defn(name=steps.FOLLOW_UP_ON_RUN)
+    async def follow_up_on_run(self, follow_up: ChatFollowUpInput) -> None:
         self.asked.append(follow_up)
         if self.outcomes:
             raise self.outcomes.pop(0)
@@ -60,7 +61,7 @@ async def serving(client: Client, task_queue: str, follow_up: ScriptedFollowUp):
         client,
         task_queue=task_queue,
         workflows=[ChatFollowUp],
-        activities=[follow_up.follow_up_on_research, follow_up.record_follow_up_not_taken],
+        activities=[follow_up.follow_up_on_run, follow_up.record_follow_up_not_taken],
     ):
         yield
 
@@ -69,7 +70,7 @@ async def follow_up_in(client: Client, task_queue: str, asked: ChatFollowUpInput
     handle = await client.start_workflow(
         CHAT_FOLLOW_UP_WORKFLOW,
         asked,
-        id=follow_up_workflow_id(asked.run_id),
+        id=follow_up_workflow_id(asked.run_kind, asked.run_id),
         task_queue=task_queue,
     )
     await asyncio.wait_for(handle.result(), timeout=60)
@@ -81,6 +82,7 @@ def a_follow_up() -> ChatFollowUpInput:
         workspace_id=uuid.uuid4(),
         project_id=uuid.uuid4(),
         chat_id=uuid.uuid4(),
+        run_kind=RESEARCH_RUN_KIND,
         run_id=uuid.uuid4(),
     )
 
@@ -105,6 +107,7 @@ async def test_history_holds_the_identifiers_of_the_follow_up_and_nothing_else(
             "workspace_id": str(asked.workspace_id),
             "project_id": str(asked.project_id),
             "chat_id": str(asked.chat_id),
+            "run_kind": RESEARCH_RUN_KIND,
             "run_id": str(asked.run_id),
         }
     ]

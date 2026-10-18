@@ -36,7 +36,8 @@ from openmarketer_core.repository_analysis.workflow_contract import (
     AnalyzeRepositoryInput,
     analysis_workflow_id,
 )
-from openmarketer_core.tracing import TracingSettings, start_tracing
+from openmarketer_core.studio.workflow_contract import STUDIO_TASK_QUEUE
+from openmarketer_core.tracing import NOT_TRACING, TracingSettings, start_tracing
 from openmarketer_worker import main
 from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.repository_analyzer import wiring
@@ -476,10 +477,31 @@ async def test_worker_removes_leftover_checkpoints_when_it_starts(
     assert not database.has_checkpoints(never_recorded)
 
 
-@pytest.mark.parametrize("name", ["WORKER_MAX_CONCURRENT_ACTIVITIES", "ANALYSIS_MAX_ATTEMPTS"])
+@pytest.mark.parametrize(
+    "name", ["WORKER_MAX_CONCURRENT_ACTIVITIES", "ANALYSIS_MAX_ATTEMPTS", "STUDIO_MAX_ITERATIONS"]
+)
 async def test_worker_does_not_start_with_a_limit_that_is_not_a_number(name):
     with pytest.raises(main.StartupError, match=name):
         await main.serve({**DATABASE, **MODEL, name: "soon"})
+
+
+async def test_worker_does_not_start_with_a_sandbox_whose_programs_cannot_finish_in_time():
+    environ = {**DATABASE, **MODEL, "STUDIO_SANDBOX_TIMEOUT_S": "600"}
+    with pytest.raises(main.StartupError, match="STUDIO_SANDBOX_TIMEOUT_S"):
+        await main.serve(environ)
+
+
+def test_worker_serves_the_creative_studio_on_a_queue_of_its_own(engine, sessions):
+    served = main.agents(
+        MODEL,
+        sessions,
+        engine.url.render_as_string(hide_password=False),
+        WorkspaceCredentials(sessions, {}, None),
+        NOT_TRACING,
+    )
+    queues = [registration.task_queue for registration in served]
+    assert STUDIO_TASK_QUEUE in queues
+    assert len(set(queues)) == len(queues)
 
 
 async def test_worker_does_not_start_with_a_token_host_that_is_not_a_host():

@@ -240,6 +240,28 @@ def record_version_review(
     return _version(record)
 
 
+def cost_of_run_versions(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, run_id: uuid.UUID
+) -> Decimal:
+    """What the stored versions of the run's assets cost together; 0 for a run with none.
+
+    The paid operations of a run, as its handlers recorded them: what a run that failed is
+    recorded to have spent (its model calls are counted in its graph's state, which a failed
+    run does not hand back).
+    """
+    total = session.scalar(
+        select(func.coalesce(func.sum(MediaAssetVersionRecord.cost_usd), 0))
+        .join(MediaAssetRecord, MediaAssetRecord.id == MediaAssetVersionRecord.asset_id)
+        .join(Project, Project.id == MediaAssetVersionRecord.project_id)
+        .where(
+            Project.workspace_id == workspace_id,
+            MediaAssetVersionRecord.project_id == project_id,
+            MediaAssetRecord.run_id == run_id,
+        )
+    )
+    return Decimal(total or 0)
+
+
 def media_asset(
     session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, asset_id: uuid.UUID
 ) -> MediaAsset:

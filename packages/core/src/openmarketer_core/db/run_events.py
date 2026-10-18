@@ -1,10 +1,12 @@
-"""Run events: storing what runs did, and reading back those of a chat thread.
+"""Run events: storing what runs did, and reading back those of a chat thread or of one run.
 
 Any kind of run appends its events (``openmarketer_core.run_events``) here,
 named by its kind and id as a proposal names its run. A chat thread's events
 are those of its turns (kind ``CHAT_TURN_KIND``) and of the research and studio
 runs it asked for (kinds ``RESEARCH_RUN_KIND`` and ``STUDIO_RUN_KIND``, the runs
-whose ``chat_thread_id`` is the thread), in the order they were stored.
+whose ``chat_thread_id`` is the thread), in the order they were stored. The latest event
+of one kind of one run is read back by ``latest_event_of_run``, for what a run recorded
+nowhere else (the reason a studio run was handed to a person).
 
 The identifier of an event is the cursor a reader continues from: it reads the
 events after the last one it has (``events_of_chat``), so it must never find a
@@ -150,6 +152,34 @@ def latest_events_of_chat(
     records = session.scalars(query.order_by(RunEventRecord.id.desc()).limit(rows_to_fetch(limit)))
     events = [_stored(record) for record in records]
     return page_of(events, limit, lambda last: last.id)
+
+
+def latest_event_of_run(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    run_kind: str,
+    run_id: uuid.UUID,
+    kind: str,
+) -> StoredRunEvent | None:
+    """The last event of ``kind`` that run ``run_id`` of ``run_kind`` stored, or ``None``.
+
+    Raises ``ProjectNotFound`` when the workspace has no such project.
+    """
+    get_project(session, workspace_id=workspace_id, project_id=project_id)
+    record = session.scalar(
+        select(RunEventRecord)
+        .where(
+            RunEventRecord.project_id == project_id,
+            RunEventRecord.run_kind == run_kind,
+            RunEventRecord.run_id == run_id,
+            RunEventRecord.kind == kind,
+        )
+        .order_by(RunEventRecord.id.desc())
+        .limit(1)
+    )
+    return None if record is None else _stored(record)
 
 
 def _events_of_chat(project_id: uuid.UUID, chat_id: uuid.UUID) -> Select[RunEventRecord]:

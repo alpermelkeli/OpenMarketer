@@ -1,4 +1,4 @@
-"""Tests for following up in a chat on a research run it started, once the run has ended.
+"""Tests for following up in a chat on a run it started, once the run has ended.
 
 They need PostgreSQL (see the root ``conftest.py``). The use case commits its own short
 transactions, so rows are committed here too. The model is scripted (no network).
@@ -6,6 +6,8 @@ transactions, so rows are committed here too. The model is scripted (no network)
 
 import json
 import uuid
+from decimal import Decimal
+from typing import TypedDict
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
@@ -18,28 +20,49 @@ from openmarketer_core.db.chat_turns import (
     FollowUpGivenUp,
     start_turn,
 )
-from openmarketer_core.db.models import ChatRole, ChatTurnTrigger, Project, Workspace
+from openmarketer_core.db.media_assets import NewAssetVersion, add_version, record_version_review
+from openmarketer_core.db.models import (
+    AssetTechnique,
+    ChatRole,
+    ChatTurnTrigger,
+    Project,
+    Workspace,
+)
 from openmarketer_core.db.research_runs import (
     ResearchRunNotFound,
     mark_run_failed,
     request_research_run,
     research_run,
 )
-from openmarketer_core.db.run_events import events_of_chat
+from openmarketer_core.db.run_events import append_events, events_of_chat
 from openmarketer_core.db.session import session_factory, transaction
+from openmarketer_core.db.studio_runs import StudioRunNotFound, request_studio_run
+from openmarketer_core.db.studio_runs import mark_run_failed as mark_studio_failed
+from openmarketer_core.db.studio_runs import mark_run_needs_review as mark_studio_needs_review
+from openmarketer_core.db.studio_runs import mark_run_started as mark_studio_started
+from openmarketer_core.db.studio_runs import mark_run_succeeded as mark_studio_succeeded
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator import follow_up as follow_up_module
 from openmarketer_core.orchestrator.chat_agent.rules import SUBMIT, ChatTurnError
 from openmarketer_core.orchestrator.follow_up import (
     NOT_TAKEN,
-    ResearchRunNotEnded,
-    follow_up_on_research,
+    RunNotEnded,
+    follow_up_on_run,
     record_follow_up_not_taken,
 )
 from openmarketer_core.orchestrator.reads_postgres import PostgresChatReads
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.request import REQUESTED_BY_THE_CHAT
-from openmarketer_core.run_events import TURN_ANSWERED, TURN_STARTED
+from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
+from openmarketer_core.run_events import ESCALATED, TURN_ANSWERED, TURN_STARTED, RunEvent
+from openmarketer_core.studio.asset_store import asset_key
+from openmarketer_core.studio.platforms import Platform
+from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+
+ASSET_REQUEST = AssetRequest(
+    goal="Announce the Android launch", exact_copy=["Now on Android"], platform=Platform.X_POST
+)
 
 
 def call(name: str, **arguments) -> dict:
@@ -110,14 +133,23 @@ def run_id(sessions, scope, chat_id) -> uuid.UUID:
         return run.id
 
 
-def follow_up(sessions, scope: RunScope, chat_id: uuid.UUID, run_id: uuid.UUID, model):
+def follow_up(
+    sessions,
+    scope: RunScope,
+    chat_id: uuid.UUID,
+    run_id: uuid.UUID,
+    model,
+    *,
+    run_kind: str = RESEARCH_RUN_KIND,
+):
     with transaction(sessions) as reading:
-        return follow_up_on_research(
+        return follow_up_on_run(
             sessions,
             PostgresChatReads(reading, scope.workspace_id, scope.project_id),
             workspace_id=scope.workspace_id,
             project_id=scope.project_id,
             chat_id=chat_id,
+            run_kind=run_kind,
             run_id=run_id,
             model=model,
         )
@@ -257,7 +289,7 @@ def test_a_run_that_has_not_ended_has_nothing_to_follow_up_on(sessions, scope, c
         ).id
     model = ScriptedModel([call(SUBMIT, answer="unreached")])
 
-    with pytest.raises(ResearchRunNotEnded):
+    with pytest.raises(RunNotEnded):
         follow_up(sessions, scope, chat_id, queued, model)
 
     assert model.requests == []
@@ -305,6 +337,7 @@ def test_a_follow_up_not_taken_tells_the_chat_why_in_a_fixed_sentence(
         workspace_id=scope.workspace_id,
         project_id=scope.project_id,
         chat_id=chat_id,
+        run_kind=RESEARCH_RUN_KIND,
         run_id=run_id,
         cause="the chat stayed busy",
     )
@@ -319,5 +352,239 @@ def test_a_follow_up_not_taken_tells_the_chat_why_in_a_fixed_sentence(
             after=None,
             limit=100,
         )[-1]
-    assert last.detail == {"reason": NOT_TAKEN.format(cause="the chat stayed busy")}
+    assert last.detail == {
+        "reason": NOT_TAKEN[RESEARCH_RUN_KIND].format(cause="the chat stayed busy")
+    }
     assert list(history(sessions, scope, chat_id)) == []
+
+
+# -------------------------------------------------------------------- studio runs
+class ScopeIds(TypedDict):
+    """The two ids the scoped functions take, so unpacking them names ids and nothing else."""
+
+    workspace_id: uuid.UUID
+    project_id: uuid.UUID
+
+
+def studio_run_of_chat(sessions, scope: RunScope, chat_id: uuid.UUID, ending: str) -> uuid.UUID:
+    """A studio run the chat asked for, ended as ``ending`` says, with one reviewed image."""
+    ids = ScopeIds(workspace_id=scope.workspace_id, project_id=scope.project_id)
+    with transaction(sessions) as session:
+        run = request_studio_run(
+            session,
+            **ids,
+            request=ASSET_REQUEST,
+            requested_by=REQUESTED_BY_THE_CHAT,
+            chat_thread_id=chat_id,
+        )
+        if ending == "failed":
+            mark_studio_failed(session, **ids, run_id=run.id, error="the image model refused")
+            return run.id
+        mark_studio_started(session, **ids, run_id=run.id)
+        version_id = uuid.uuid4()
+        add_version(
+            session,
+            **ids,
+            run_id=run.id,
+            version_id=version_id,
+            action_id=f"studio-run:{run.id}:1",
+            version=NewAssetVersion(
+                round=1,
+                technique=AssetTechnique.GENERATED,
+                storage_key=asset_key(
+                    **ids, run_id=run.id, version_id=version_id, mime="image/png"
+                ),
+                mime="image/png",
+                width=1600,
+                height=900,
+                size_bytes=1024,
+                cost_usd=Decimal("0.04"),
+            ),
+        )
+        passed = ending == "succeeded"
+        record_version_review(
+            session,
+            **ids,
+            version_id=version_id,
+            check_report={"passed": passed, "failures": [] if passed else ["copy"]},
+            verifier_report={
+                "criteria": [
+                    {"criterion": "legibility", "passed": passed, "severity": "major", "note": ""}
+                ],
+                "edit_suggestions": [],
+            },
+            passed=passed,
+        )
+        if passed:
+            mark_studio_succeeded(
+                session, **ids, run_id=run.id, final_version_id=version_id, cost_usd=Decimal("0.04")
+            )
+            return run.id
+        mark_studio_needs_review(
+            session, **ids, run_id=run.id, final_version_id=version_id, cost_usd=Decimal("0.04")
+        )
+        append_events(
+            session,
+            **ids,
+            run_kind=STUDIO_RUN_KIND,
+            run_id=run.id,
+            events=[RunEvent(ESCALATED, {"version_id": str(version_id), "reason": "round limit"})],
+        )
+        return run.id
+
+
+def follow_up_on_studio(sessions, scope, chat_id, run_id, *turns):
+    model = ScriptedModel(
+        [call("get_studio_run", run_id=str(run_id))], *turns or [[call(SUBMIT, answer="Done.")]]
+    )
+    done = follow_up(sessions, scope, chat_id, run_id, model, run_kind=STUDIO_RUN_KIND)
+    return done, model
+
+
+@pytest.mark.parametrize("ending", ["succeeded", "needs_review", "failed"])
+def test_a_studio_follow_up_is_told_how_the_run_ended(sessions, scope, chat_id, ending):
+    run_id = studio_run_of_chat(sessions, scope, chat_id, ending)
+
+    done, model = follow_up_on_studio(sessions, scope, chat_id, run_id)
+
+    assert done is not None
+    instruction = model.requests[0]["messages"][-1]["content"]
+    assert f"studio run {run_id}" in instruction
+    assert f"status {ending}" in instruction
+    assert "get_studio_run" in instruction
+    assert [message.content for message in history(sessions, scope, chat_id)] == ["Done."]
+
+
+def test_a_studio_follow_up_reads_the_image_waiting_in_the_library(sessions, scope, chat_id):
+    run_id = studio_run_of_chat(sessions, scope, chat_id, "succeeded")
+
+    _, model = follow_up_on_studio(sessions, scope, chat_id, run_id)
+
+    [result] = [m for m in model.requests[1]["messages"] if m["role"] == "tool"]
+    run = json.loads(result["content"])
+    assert run["status"] == "succeeded"
+    assert run["final_asset_id"] is not None
+    assert run["review"]["passed"] is True
+    assert run["review_reason"] is None
+
+
+def test_a_studio_follow_up_reads_why_the_run_needs_review(sessions, scope, chat_id):
+    run_id = studio_run_of_chat(sessions, scope, chat_id, "needs_review")
+
+    _, model = follow_up_on_studio(sessions, scope, chat_id, run_id)
+
+    [result] = [m for m in model.requests[1]["messages"] if m["role"] == "tool"]
+    run = json.loads(result["content"])
+    assert run["review_reason"] == "round limit"
+    assert run["review"]["check_failures"] == ["copy"]
+    assert run["review"]["failed_criteria"] == [
+        {"criterion": "legibility", "severity": "major", "note": ""}
+    ]
+
+
+def test_a_studio_follow_up_reads_why_the_run_failed(sessions, scope, chat_id):
+    run_id = studio_run_of_chat(sessions, scope, chat_id, "failed")
+
+    _, model = follow_up_on_studio(sessions, scope, chat_id, run_id)
+
+    [result] = [m for m in model.requests[1]["messages"] if m["role"] == "tool"]
+    run = json.loads(result["content"])
+    assert (run["status"], run["error"], run["final_asset_id"]) == (
+        "failed",
+        "the image model refused",
+        None,
+    )
+
+
+def test_a_studio_follow_up_is_a_studio_finished_turn(sessions, scope, chat_id):
+    run_id = studio_run_of_chat(sessions, scope, chat_id, "succeeded")
+
+    follow_up_on_studio(sessions, scope, chat_id, run_id)
+
+    with transaction(sessions) as session:
+        recorded = events_of_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            after=None,
+            limit=100,
+        )
+    started = [event.detail for event in recorded if event.kind == TURN_STARTED]
+    assert started == [{"trigger": "studio_finished"}]
+
+
+def test_a_studio_follow_up_is_taken_once(sessions, scope, chat_id):
+    run_id = studio_run_of_chat(sessions, scope, chat_id, "succeeded")
+    follow_up_on_studio(sessions, scope, chat_id, run_id)
+    again = ScriptedModel([call(SUBMIT, answer="Twice.")])
+
+    assert follow_up(sessions, scope, chat_id, run_id, again, run_kind=STUDIO_RUN_KIND) is None
+    assert again.requests == []
+
+
+def test_a_studio_run_that_has_not_ended_has_nothing_to_follow_up_on(sessions, scope, chat_id):
+    with transaction(sessions) as session:
+        queued = request_studio_run(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            request=ASSET_REQUEST,
+            requested_by=REQUESTED_BY_THE_CHAT,
+            chat_thread_id=chat_id,
+        ).id
+    model = ScriptedModel([call(SUBMIT, answer="unreached")])
+
+    with pytest.raises(RunNotEnded):
+        follow_up(sessions, scope, chat_id, queued, model, run_kind=STUDIO_RUN_KIND)
+
+    assert model.requests == []
+
+
+def test_a_studio_follow_up_on_a_run_the_chat_did_not_ask_for_is_not_found(
+    sessions, scope, chat_id
+):
+    model = ScriptedModel([call(SUBMIT, answer="unreached")])
+
+    with pytest.raises(StudioRunNotFound):
+        follow_up(sessions, scope, chat_id, uuid.uuid4(), model, run_kind=STUDIO_RUN_KIND)
+
+
+def test_a_follow_up_on_another_kind_of_run_is_refused_before_anything_is_read(
+    sessions, scope, chat_id, run_id
+):
+    model = ScriptedModel([call(SUBMIT, answer="unreached")])
+
+    with pytest.raises(ValueError):
+        follow_up(sessions, scope, chat_id, run_id, model, run_kind="analysis-run")
+
+    assert model.requests == []
+
+
+def test_a_studio_follow_up_not_taken_tells_the_chat_why(sessions, scope, chat_id):
+    run_id = studio_run_of_chat(sessions, scope, chat_id, "failed")
+
+    recorded = record_follow_up_not_taken(
+        sessions,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        chat_id=chat_id,
+        run_kind=STUDIO_RUN_KIND,
+        run_id=run_id,
+        cause="no worker took it",
+    )
+
+    assert recorded
+    with transaction(sessions) as session:
+        recorded_events = events_of_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            after=None,
+            limit=100,
+        )
+    assert recorded_events[0].detail == {"trigger": "studio_finished"}
+    assert recorded_events[-1].detail == {
+        "reason": NOT_TAKEN[STUDIO_RUN_KIND].format(cause="no worker took it")
+    }

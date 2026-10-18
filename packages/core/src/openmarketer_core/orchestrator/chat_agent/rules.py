@@ -14,7 +14,8 @@ person watching it (``tool_called`` with a short label of ``TOOL_LABELS``, then
 ``tool_answered``) through the ``TurnEvents`` port; the model never reads those events. A
 turn whose caller gave no ``ChatRequests`` is not offered the request actions at all. The
 sentences a failed turn is recorded with (``failure_reason``) and the instruction a
-follow-up turn is given (``follow_up_instruction``) are worded here, by code.
+follow-up turn is given about a research run or a studio run (``follow_up_instruction``) are
+worded here, by code.
 
 Nothing here depends on the graph framework (``graph.py`` wires these functions into a
 graph) or on a database (reads reach the model through the ``ChatReads`` port, given to a
@@ -36,13 +37,15 @@ from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.agent_runtime.tools import InvalidToolArguments, UnknownTool
 from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.orchestrator.events import TurnEvents
+from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import TOOL_ANSWERED, TOOL_CALLED, RunEvent
+from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 
 ROLE = "orchestrator"
 SUBMIT = "submit_answer"
 # The tools that ask the turn's caller for work instead of reading the project: the reading
 # budget ignores them, and a turn out of budget keeps them.
-REQUEST_ACTIONS = frozenset({"start_research"})
+REQUEST_ACTIONS = frozenset({"start_research", "start_creative"})
 WRAP_UP_CALLS = 2  # the last model calls are reserved for finishing the turn
 WRAP_UP_TOOL_SHARE = 0.75  # of the reading budget; submitting costs no read
 WRAP_UP_COST_SHARE = 0.7  # of the cost limit; the rest pays for the submission itself
@@ -62,10 +65,16 @@ TOOL_LABELS: Mapping[str, str] = {
     "list_research_runs": "Listing the research runs",
     "read_research_report": "Reading the research report",
     "start_research": "Starting a research run",
+    "list_studio_runs": "Listing the studio runs",
+    "get_studio_run": "Reading a studio run",
+    "list_media_assets": "Listing the Studio library",
+    "start_creative": "Starting an image in the studio",
 }
 UNKNOWN_TOOL_LABEL = "Calling a tool"
 # What an event names a tool the agent does not have by: the name is what the model wrote.
 UNKNOWN_TOOL = "unknown"
+# The kinds of run a chat follows up on once they have ended.
+FOLLOWED_RUN_KINDS = (RESEARCH_RUN_KIND, STUDIO_RUN_KIND)
 
 # The sentences a failed turn is recorded with, for the operator: fixed, so that nothing a
 # model or a provider wrote reaches the screen.
@@ -132,8 +141,8 @@ keep each item concise.
 ## Grounding and accuracy
 
 - Ground every factual statement in the project's records, including project state, \
-Product Profile, analysis runs, research runs, their reports, and proposals awaiting a \
-person's decision.
+Product Profile, analysis runs, research runs, their reports, studio runs, the images of \
+the Studio library, and proposals awaiting a person's decision.
 - The Product Profile is the structured description of the product that other parts of \
 the system work from. Read the whole profile or relevant sections when needed.
 - A research run answers questions using public pages. Its report contains findings and \
@@ -154,8 +163,25 @@ sentence.
 stores a report with its sources once complete.
 - When you start a research run, include its exact run ID in your answer and state that \
 it is queued. Explain that its report can be reviewed once it finishes.
-- You cannot approve or reject proposals, publish content, change settings, or start any \
-other kind of run.
+- You may start **a studio run** when the operator asks for an image, such as a post \
+visual, a story, an Open Graph image or an App Store screenshot. A studio run makes one \
+image for one platform and picks how to make it by itself; you do not choose the technique.
+- The platforms are: `instagram_post`, `instagram_portrait`, `instagram_story`, `x_post`, \
+`linkedin_post`, `og_image` and `app_store_screenshot`. If the operator's wish does not \
+name one clearly, ask which one before starting.
+- The image shows its text exactly as given in `exact_copy`, one line per entry. Take \
+those words **verbatim** from the operator's message, never translated, shortened, \
+corrected or improved. Never invent copy. If the operator wants text on the image but has \
+not given the exact words, ask for them before starting. Propose wording only when the \
+operator explicitly asks for suggestions, and start the run only after they have confirmed \
+the exact words. An image without text has an empty `exact_copy`.
+- A studio run spends money under the workspace's creative budget: a small image runs at \
+once, a bigger one waits in the project's Approvals until a person approves it. Say so when \
+you start one.
+- When you start a studio run, include its exact run ID and state that it is queued. Its \
+image lands in the project's Studio library, where a person accepts or rejects it.
+- You cannot approve or reject proposals or images, publish content, change settings, or \
+start any other kind of run.
 - If the operator requests an action you cannot perform, explain the limitation briefly \
 and offer relevant information you can show instead.
 
@@ -406,12 +432,50 @@ def failure_reason(error: Exception) -> str:
     return UNEXPECTED_FAILURE_REASON
 
 
-def follow_up_instruction(run_id: str, status: str) -> str:
-    """What a follow-up turn is told when a research run the chat started has ended.
+# What the instruction of a studio follow-up says of each way a studio run can end.
+_STUDIO_OUTCOMES: Mapping[str, str] = {
+    "succeeded": (
+        "It made an image that passed every check. The image is in the project's Studio "
+        "library as a draft: tell the operator it waits there for them to accept or reject it."
+    ),
+    "needs_review": (
+        "It reached a limit before an image passed every check, and its best image is in the "
+        "project's Studio library for a person to accept or reject. Explain why it needs "
+        "review, as the run's review_reason and the failures of its review say."
+    ),
+    "failed": (
+        "It made no image. Say why, as the run's error says, and what the operator can do "
+        "next, such as asking for the image again."
+    ),
+}
 
-    It is given to the model in the operator's place and never stored as a message of the
-    chat. ``run_id`` and ``status`` are the run's, read from its record by code.
+
+def follow_up_instruction(run_kind: str, run_id: str, status: str) -> str:
+    """What a follow-up turn is told when a run of ``run_kind`` the chat started has ended.
+
+    ``run_kind`` is one of ``FOLLOWED_RUN_KINDS``. The instruction is
+    given to the model in the operator's place and never stored as a message of the chat.
+    ``run_id`` and ``status`` are the run's, read from its record by code. Raises
+    ``ValueError`` for a kind of run a chat does not follow up on.
     """
+    if run_kind == RESEARCH_RUN_KIND:
+        return _research_follow_up(run_id, status)
+    if run_kind == STUDIO_RUN_KIND:
+        return _studio_follow_up(run_id, status)
+    raise ValueError(f"a chat does not follow up on runs of kind {run_kind!r}")
+
+
+def _studio_follow_up(run_id: str, status: str) -> str:
+    return (
+        f"[Written by OpenMarketer, not by the operator.] The studio run {run_id} that you "
+        f"started in this chat has ended with status {status}. Read it with get_studio_run "
+        f"and run_id {run_id}. {_STUDIO_OUTCOMES.get(status, '')} Name the Studio library in "
+        "words and write no link or address: the dashboard links it. Do not repeat the "
+        "image's copy as if it were your own words. You cannot start another run in this turn."
+    )
+
+
+def _research_follow_up(run_id: str, status: str) -> str:
     return (
         f"[Written by OpenMarketer, not by the operator.] The research run {run_id} that you "
         f"started in this chat has ended with status {status}. Read it with "

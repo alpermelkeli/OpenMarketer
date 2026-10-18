@@ -10,8 +10,9 @@ This module imports SQLAlchemy and the stores; the graph reaches it only through
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,14 @@ from openmarketer_core.db.analysis_runs import (
     analysis_run,
     list_analysis_runs,
 )
+from openmarketer_core.db.media_assets import (
+    MediaAsset,
+    MediaAssetVersion,
+    asset_version,
+    list_media_assets,
+    media_asset,
+)
+from openmarketer_core.db.models import StudioRunStatus
 from openmarketer_core.db.profile_versions import (
     ProfileVersion,
     latest_approved_profile,
@@ -47,9 +56,19 @@ from openmarketer_core.db.research_store import (
 from openmarketer_core.db.research_store import (
     research_report as stored_research_report,
 )
+from openmarketer_core.db.run_events import latest_event_of_run
+from openmarketer_core.db.studio_runs import (
+    StudioRun,
+    StudioRunNotFound,
+    list_studio_runs,
+    requested_asset,
+)
+from openmarketer_core.db.studio_runs import studio_run as stored_studio_run
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
     PROFILE_SECTIONS,
+    AssetReviewReading,
+    MediaAssetReading,
     PendingProposals,
     ProfileReading,
     ProjectStatusReading,
@@ -57,8 +76,12 @@ from openmarketer_core.orchestrator.reads import (
     ResearchReportReading,
     ResearchRunReading,
     RunReading,
+    StudioRunReading,
     UnknownProfileSection,
 )
+from openmarketer_core.run_events import ESCALATED
+from openmarketer_core.studio.requests import AssetRequest, StoredAssetRequestInvalid
+from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 
 
 @dataclass
@@ -181,6 +204,152 @@ class PostgresChatReads:
         except (ResearchRunNotFound, ResearchReportNotFound):
             return None
         return _research_report(stored)
+
+    def recent_studio_runs(self, limit: int) -> Sequence[StudioRunReading]:
+        page = list_studio_runs(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            limit=min(limit, MAX_LISTED_RECORDS),
+        )
+        return [studio_run_reading(run, self._request_of(run.id)) for run in page.items]
+
+    def studio_run(self, run_id: uuid.UUID) -> StudioRunReading | None:
+        try:
+            run = stored_studio_run(
+                self.session,
+                workspace_id=self.workspace_id,
+                project_id=self.project_id,
+                run_id=run_id,
+            )
+        except StudioRunNotFound:
+            return None
+        return studio_run_reading(
+            run,
+            self._request_of(run.id),
+            review=self._review_of(run),
+            review_reason=self._review_reason_of(run),
+        )
+
+    def media_assets(self, limit: int) -> Sequence[MediaAssetReading]:
+        page = list_media_assets(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            limit=min(limit, MAX_LISTED_RECORDS),
+        )
+        return [_media_asset(item) for item in page.items]
+
+    def _request_of(self, run_id: uuid.UUID) -> AssetRequest | None:
+        try:
+            return requested_asset(
+                self.session,
+                workspace_id=self.workspace_id,
+                project_id=self.project_id,
+                run_id=run_id,
+            )
+        except StoredAssetRequestInvalid:
+            return None
+
+    def _review_of(self, run: StudioRun) -> AssetReviewReading | None:
+        if run.final_asset_id is None:
+            return None
+        asset = media_asset(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            asset_id=run.final_asset_id,
+        )
+        if asset.current_version_id is None:
+            return None
+        version = asset_version(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            version_id=asset.current_version_id,
+        )
+        return _review(version)
+
+    def _review_reason_of(self, run: StudioRun) -> str | None:
+        if run.status is not StudioRunStatus.NEEDS_REVIEW:
+            return None
+        escalated = latest_event_of_run(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            run_kind=STUDIO_RUN_KIND,
+            run_id=run.id,
+            kind=ESCALATED,
+        )
+        reason = None if escalated is None else escalated.detail.get("reason")
+        return reason if isinstance(reason, str) else None
+
+
+def studio_run_reading(
+    run: StudioRun,
+    request: AssetRequest | None,
+    *,
+    review: AssetReviewReading | None = None,
+    review_reason: str | None = None,
+) -> StudioRunReading:
+    """A studio run as the chat reads it, with the request it was stored with, if it fits."""
+    return StudioRunReading(
+        id=run.id,
+        status=run.status,
+        platform=run.platform.value,
+        goal=None if request is None else request.goal,
+        exact_copy=[] if request is None else list(request.exact_copy),
+        requested_by=run.requested_by,
+        error=run.error,
+        final_asset_id=run.final_asset_id,
+        cost_usd=float(run.cost_usd),
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        review=review,
+        review_reason=review_reason,
+    )
+
+
+def _review(version: MediaAssetVersion) -> AssetReviewReading:
+    """The failures of a version's two reviews, read from what the studio stored."""
+    check = version.check_report or {}
+    failures = check.get("failures")
+    return AssetReviewReading(
+        version_id=version.id,
+        passed=version.passed,
+        check_failures=[f for f in failures if isinstance(f, str)]
+        if isinstance(failures, list)
+        else [],
+        failed_criteria=_failed_criteria(version.verifier_report),
+    )
+
+
+def _failed_criteria(report: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    criteria = (report or {}).get("criteria")
+    if not isinstance(criteria, list):
+        return []
+    return [
+        {
+            "criterion": item.get("criterion"),
+            "severity": item.get("severity"),
+            "note": item.get("note", ""),
+        }
+        for item in criteria
+        if isinstance(item, dict) and item.get("passed") is False
+    ]
+
+
+def _media_asset(asset: MediaAsset) -> MediaAssetReading:
+    return MediaAssetReading(
+        id=asset.id,
+        run_id=asset.run_id,
+        platform=asset.platform.value,
+        status=asset.status,
+        current_version_id=asset.current_version_id,
+        created_at=asset.created_at,
+        decided_at=asset.decided_at,
+    )
 
 
 def _profile(stored: ProfileVersion, section: str | None) -> ProfileReading:

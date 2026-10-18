@@ -57,6 +57,7 @@ def _produced(state: Mapping[str, Any], update: Mapping[str, Any]) -> list[RunEv
     detail = {
         "operation": pending["op"],
         "version_id": pending["version_id"] if made else None,
+        "asset_id": update.get("asset_id", state["asset_id"]) if made else None,
         "technique": pending["technique"],
         "round": state["round"],
         "ok": made,

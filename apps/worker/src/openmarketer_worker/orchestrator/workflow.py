@@ -1,10 +1,11 @@
-"""``ChatFollowUp``: the orchestrator's own turn in a chat once a research run it started ended.
+"""``ChatFollowUp``: the orchestrator's own turn in a chat once a run it started ended.
 
-The ``Research`` workflow starts it as a child it abandons, with an id derived from the run
-(``contract.follow_up_workflow_id``), so a run follows up once. It is one activity
-(``follow_up_on_research``), which takes the turn: the turn's rows, its events and its
-answer are core's to store. The workflow adds what Temporal owns: the activity's time
-limits, its heartbeats and which failures are tried again (``policy.py``, ``steps.py``).
+The ``Research`` and the ``CreativeStudio`` workflows start it as a child they abandon, with
+an id derived from the run's kind and id (``contract.follow_up_workflow_id``), so a run
+follows up once. It is one activity (``follow_up_on_run``), which takes the turn: the
+turn's rows, its events and its answer are core's to store. The workflow adds what Temporal
+owns: the activity's time limits, its heartbeats and which failures are tried again
+(``policy.py``, ``steps.py``).
 
 A follow-up that does not answer in the end leaves its turn recorded failed in the chat
 (core does that at each attempt). One that never got to a turn (the chat stayed busy, the
@@ -13,13 +14,13 @@ there, so the workflow then has the chat told why, in a fixed sentence chosen by
 the failure (``steps.NOT_TAKEN_BECAUSE``), by a second short activity; core records nothing
 when a turn was started. A follow-up with nothing to follow up on tells nobody. The workflow
 then completes: it logs why, in words that may be shown, and does not fail. A failed
-workflow would tell nobody more than the chat already shows, and the research run it follows
+workflow would tell nobody more than the chat already shows, and the run it follows
 up on ended long before.
 
 This is workflow code: deterministic, and it imports no database, model or activity code.
-Its history holds the four identifiers of its input and short sentences. The annotation of
-``run`` is a real type, not text, because Temporal decodes the input from it: hence no
-``from __future__ import annotations``.
+Its history holds the identifiers and the run kind of its input and short sentences. The
+annotation of ``run`` is a real type, not text, because Temporal decodes the input from it:
+hence no ``from __future__ import annotations``.
 """
 
 from datetime import timedelta
@@ -51,7 +52,7 @@ class ChatFollowUp:
         limits = policy.FOLLOW_UP
         try:
             await workflow.execute_activity(
-                steps.FOLLOW_UP_ON_RESEARCH,
+                steps.FOLLOW_UP_ON_RUN,
                 follow_up,
                 start_to_close_timeout=timedelta(seconds=limits.attempt_timeout_seconds),
                 heartbeat_timeout=timedelta(seconds=limits.heartbeat_timeout_seconds),
@@ -65,8 +66,9 @@ class ChatFollowUp:
             )
         except ActivityError as failure:
             workflow.logger.warning(
-                "chat %s did not follow up on research run %s: %s",
+                "chat %s did not follow up on %s %s: %s",
                 follow_up.chat_id,
+                follow_up.run_kind,
                 follow_up.run_id,
                 reason_shown(
                     failure, steps.FOLLOW_UP_TEXTS, worded_types=steps.WORDED_BY_THE_ACTIVITY
@@ -90,8 +92,9 @@ class ChatFollowUp:
             )
         except ActivityError as failure:
             workflow.logger.warning(
-                "chat %s was not told it will not hear about research run %s: %s",
+                "chat %s was not told it will not hear about %s %s: %s",
                 not_taken.follow_up.chat_id,
+                not_taken.follow_up.run_kind,
                 not_taken.follow_up.run_id,
                 reason_shown(
                     failure, steps.FOLLOW_UP_TEXTS, worded_types=steps.WORDED_BY_THE_ACTIVITY
