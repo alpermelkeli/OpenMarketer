@@ -7,9 +7,10 @@ object storage, and its row in the test's database; skipped when PostgreSQL is n
 import uuid
 
 import pytest
-from studio_fakes import ESTIMATE, IMAGE_COST, a_failed_program, size_of
+from studio_fakes import ESTIMATE, IMAGE_COST, a_failed_program, a_png, size_of
 from temporalio.exceptions import ApplicationError
 
+from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.media_assets import asset_version
 from openmarketer_core.db.session import transaction
 from openmarketer_core.studio.media_provider import (
@@ -27,6 +28,7 @@ from openmarketer_core.studio.studio_agent.definitions import (
     RunPython,
 )
 from openmarketer_core.studio.studio_agent.rules import BLOCKED, Technique
+from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 from openmarketer_worker.agent_runtime.routes import ActionContext
 from openmarketer_worker.agent_runtime.vocabulary import DATABASE_UNAVAILABLE, MAX_ERROR_CHARACTERS
 from openmarketer_worker.creative_studio import steps
@@ -342,3 +344,81 @@ def test_text_of_a_version_is_what_ocr_read(work, run, sandbox):
     )
 
     assert work.read_text(payload, an_action()) == {"text": "Launch day"}
+
+
+# ------------------------------------------------------------ the product's own images
+ICON = a_png(256, 256, colour=(10, 10, 200))
+SCREENSHOT = a_png(300, 600, colour=(10, 200, 10))
+
+
+def test_an_attempts_context_lists_the_projects_repository_images_without_their_bytes(
+    work, run, studio_database, assets, checkpoints
+):
+    icon, shot = studio_database.repository_images(
+        run, assets, ("icon", ICON), ("screenshot", SCREENSHOT)
+    )
+
+    context = work.context(GraphRunRef(STUDIO_RUN_KIND, run.run_id), checkpoints)
+
+    shown = {
+        (image.id, image.kind, image.width, image.height) for image in context.repository_images
+    }
+    assert shown == {(str(icon), "icon", 256, 256), (str(shot), "screenshot", 300, 600)}
+    found = context.repository_image_of(str(icon))
+    assert found is not None and found.data == ICON
+    assert context.repository_image_of(str(uuid.uuid4())) is None
+
+
+def test_a_run_whose_project_has_no_repository_images_has_an_empty_list(work, run, checkpoints):
+    context = work.context(GraphRunRef(STUDIO_RUN_KIND, run.run_id), checkpoints)
+
+    assert list(context.repository_images) == []
+
+
+def test_repository_images_are_sent_to_the_image_model_after_the_other_references(
+    work, run, studio_database, media, assets, sessions
+):
+    [icon] = studio_database.repository_images(run, assets, ("icon", ICON))
+    first = work.generate_image(generation(run), an_action())
+    first_image = assets.objects[
+        stored_version(sessions, run, uuid.UUID(first["version_id"])).storage_key
+    ]
+
+    work.generate_image(
+        generation(
+            run,
+            asset_id=uuid.UUID(first["asset_id"]),
+            reference_version_ids=[uuid.UUID(first["version_id"])],
+            reference_repository_image_ids=[icon],
+        ),
+        an_action(),
+    )
+
+    assert media.calls[-1]["references"] == [first_image, ICON]
+
+
+def test_repository_image_of_another_project_is_refused_before_paying(
+    work, run, studio_database, media, assets
+):
+    elsewhere = studio_database.requested(started=True).run
+    [theirs] = studio_database.repository_images(elsewhere, assets, ("icon", ICON))
+
+    refused = refusal(
+        lambda: work.generate_image(
+            generation(run, reference_repository_image_ids=[theirs]), an_action()
+        )
+    )
+
+    assert (refused.type, refused.non_retryable) == (steps.OPERATION_FAILED, True)
+    assert refused.message == f"{theirs} is not a repository image of this project"
+    assert media.calls == []
+
+
+def test_program_is_given_the_repository_images_it_names_beside_it(
+    work, run, studio_database, sandbox, assets
+):
+    [shot] = studio_database.repository_images(run, assets, ("screenshot", SCREENSHOT))
+
+    work.run_python(a_program(run, input_repository_image_ids=[shot]), an_action())
+
+    assert sandbox.runs[0]["inputs"] == {f"{shot}.png": SCREENSHOT}

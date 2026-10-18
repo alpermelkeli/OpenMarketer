@@ -17,11 +17,22 @@ from typing import Any
 from PIL import Image
 from sqlalchemy.orm import Session, sessionmaker
 
+from openmarketer_core.db.analysis_runs import mark_run_started as mark_analysis_started
+from openmarketer_core.db.analysis_runs import request_analysis_run
 from openmarketer_core.db.chat import create_chat
 from openmarketer_core.db.models import Project, Workspace
+from openmarketer_core.db.repository_images import (
+    NewRepositoryImage,
+    keep_repository_images,
+    list_repository_images,
+    repository_image_key,
+)
 from openmarketer_core.db.session import transaction
 from openmarketer_core.db.studio_runs import mark_run_started, request_studio_run
 from openmarketer_core.llm import ChatReply
+from openmarketer_core.repository_analysis.repository_images.selection import (
+    RepositoryImageKind,
+)
 from openmarketer_core.studio.asset_store import AssetStoreUnavailable
 from openmarketer_core.studio.media_provider import ImageInput, MediaResult
 from openmarketer_core.studio.platforms import Platform
@@ -333,3 +344,38 @@ class StudioDatabase:
             run=StudioRunInput(workspace_id=workspace_id, project_id=project_id, run_id=run.id),
             chat_id=chat_id,
         )
+
+    def repository_images(
+        self, run: StudioRunInput, assets: MemoryAssets, *images: tuple[str, bytes]
+    ) -> list[uuid.UUID]:
+        """Keep ``images`` (a kind and the bytes of each) as the project's repository images,
+        as an analysis of it would, their bytes in ``assets``; their ids, in the given order."""
+        scope = {"workspace_id": run.workspace_id, "project_id": run.project_id}
+        with transaction(self.sessions) as session:
+            analysis = request_analysis_run(session, **scope)
+            mark_analysis_started(session, **scope, run_id=analysis.id)
+            kept = []
+            for n, (kind, data) in enumerate(images):
+                sha256 = f"{n:064x}"
+                key = repository_image_key(
+                    **scope, analysis_run_id=analysis.id, sha256=sha256, mime="image/png"
+                )
+                assets.objects[key] = data
+                kept.append(
+                    NewRepositoryImage(
+                        path=f"assets/{kind}-{n}.png",
+                        kind=RepositoryImageKind(kind),
+                        mime="image/png",
+                        width=size_of(data)[0],
+                        height=size_of(data)[1],
+                        size_bytes=len(data),
+                        sha256=sha256,
+                        storage_key=key,
+                    )
+                )
+            keep_repository_images(session, **scope, analysis_run_id=analysis.id, images=kept)
+            listed = list_repository_images(
+                session, workspace_id=run.workspace_id, project_id=run.project_id, limit=50
+            ).items
+        by_path = {image.path: image.id for image in listed}
+        return [by_path[image.path] for image in kept]

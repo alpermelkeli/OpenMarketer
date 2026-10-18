@@ -9,7 +9,10 @@ graph imports; importing it is what puts them on ``agent``.
   as a version of the run's asset, and the graph carries its id and its size; a node that
   shows one to a model reads it through its context (``image_of``).
 - ``StudioContext`` is what a node needs that is not state: the model of the attempt, the
-  limits, the stored image of a version of the run, and the brand kit.
+  limits, the stored image of a version of the run, the brand kit, and the product's images
+  an analysis kept from its repository (their list, and the bytes of one by its id). The
+  brief keeps the list in the state, ids, paths, kinds and sizes only, so that every later
+  step of the run names the same images.
 - The actions: ``generate_image`` and ``edit_image`` spend (the image provider is paid), and
   the gate weighs them against the creative budget; ``render_html``, ``run_python`` and
   ``read_text`` run in the installation's sandbox and are internal. Each of the four that make
@@ -21,8 +24,8 @@ graph imports; importing it is what puts them on ``agent``.
 """
 
 import uuid
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Annotated, Any, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -36,6 +39,7 @@ from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_core.studio.studio_agent.rules import (
     Limits,
+    RepositoryImageInfo,
     StudioResult,
     Technique,
     VersionReview,
@@ -82,6 +86,10 @@ class StudioState(TypedDict):
     reference_asset_ids: list[str]
     # What the graph has done.
     brief: dict[str, Any]  # the creative director's ``Brief``; {} until it is made
+    # The product's repository images, as the brief was shown them
+    # (``rules.repository_images_data``): never their bytes. A thread stored before this key
+    # was kept has none, and its run goes on without them.
+    repository_images: list[dict[str, Any]]
     # What every generation and edit is told of the product (``rules.about_product``), taken
     # from the brand kit with the brief so that a later attempt asks for the same prompt.
     about_product: str
@@ -119,13 +127,18 @@ class StudioContext:
     ``image_of`` gives the stored image of a version of this run, by its id, from object
     storage; it raises when the image cannot be read, which fails the step and lets it be
     tried again. ``brand_kit`` is taken from the project's approved profile for the attempt.
-    A context serves one attempt, in one thread.
+    ``repository_images`` are the project's images of its latest analysis that kept any, read
+    for the attempt, and ``repository_image_of`` gives one of them by its id, or ``None`` when
+    it is no longer the project's (a later analysis replaced it); it raises as ``image_of``
+    does when object storage cannot be read. A context serves one attempt, in one thread.
     """
 
     model: ChatModel
     limits: Limits
     image_of: Callable[[str], ImageInput]
     brand_kit: BrandKit
+    repository_images: Sequence[RepositoryImageInfo] = ()
+    repository_image_of: Callable[[str], ImageInput | None] = field(default=lambda image_id: None)
 
 
 agent = Agent(STUDIO_RUN_KIND, state=StudioState, context=StudioContext)
@@ -162,13 +175,15 @@ class _ImagePayload(BaseModel):
 class GenerateImage(_ImagePayload):
     """Make an image at the run's platform size from a prompt, following reference images.
 
-    ``prompt`` holds the exact copy as code put it (``rules.generation_prompt``). References
-    are versions of this run and assets of the project the request named.
+    ``prompt`` holds the exact copy as code put it (``rules.generation_prompt``), and a line of
+    what each reference is for. References are versions of this run, assets of the project
+    the request named and the project's repository images, sent in that order.
     """
 
     prompt: Prompt
     reference_version_ids: VersionIds = Field(default_factory=list)
     reference_asset_ids: VersionIds = Field(default_factory=list)
+    reference_repository_image_ids: VersionIds = Field(default_factory=list)
 
 
 @agent.action(
@@ -178,12 +193,16 @@ class GenerateImage(_ImagePayload):
     effect=ActionEffect.SPENDS,
 )
 class EditImage(_ImagePayload):
-    """Change the version ``source_version_id`` of this run as the instruction says."""
+    """Change the version ``source_version_id`` of this run as the instruction says.
+
+    It is sent first, then the references in the order ``GenerateImage`` sends them.
+    """
 
     source_version_id: uuid.UUID
     instruction: Prompt
     reference_version_ids: VersionIds = Field(default_factory=list)
     reference_asset_ids: VersionIds = Field(default_factory=list)
+    reference_repository_image_ids: VersionIds = Field(default_factory=list)
 
 
 @agent.action(
@@ -197,11 +216,13 @@ class EditImage(_ImagePayload):
 class RenderHtml(_ImagePayload):
     """Render a page to a PNG at the run's platform size, in the sandbox's browser.
 
-    The images ``input_version_ids`` name are beside the page as ``<version_id>.png``.
+    The images ``input_version_ids`` and ``input_repository_image_ids`` name are beside the
+    page as ``<id>.png``.
     """
 
     html: Annotated[str, StringConstraints(min_length=1, max_length=rules.MAX_HTML_CHARS)]
     input_version_ids: VersionIds = Field(default_factory=list)
+    input_repository_image_ids: VersionIds = Field(default_factory=list)
 
 
 @agent.action(
@@ -215,9 +236,10 @@ class RenderHtml(_ImagePayload):
 class RunPython(_ImagePayload):
     """Run a program the studio's model wrote in the sandbox, and keep the image it leaves.
 
-    The images ``input_version_ids`` name are in ``/in`` as ``<version_id>.png``; the
-    handler screens the code and the packages before anything runs (``code_screening.py``).
-    A program that fails in its own terms is a failed outcome whose error says why.
+    The images ``input_version_ids`` and ``input_repository_image_ids`` name are in ``/in`` as
+    ``<id>.png``; the handler screens the code and the packages before anything runs
+    (``code_screening.py``). A program that fails in its own terms is a failed outcome whose
+    error says why.
     """
 
     code: Annotated[str, StringConstraints(min_length=1, max_length=rules.MAX_CODE_CHARS)]
@@ -226,6 +248,7 @@ class RunPython(_ImagePayload):
         Field(max_length=rules.MAX_PACKAGES),
     ] = Field(default_factory=list)
     input_version_ids: VersionIds = Field(default_factory=list)
+    input_repository_image_ids: VersionIds = Field(default_factory=list)
 
 
 @agent.action(
@@ -258,6 +281,7 @@ def initial_state(run: StudioRunInput, request: AssetRequest) -> StudioState:
         "style_notes": request.style_notes,
         "reference_asset_ids": [str(asset) for asset in request.reference_asset_ids],
         "brief": {},
+        "repository_images": [],
         "about_product": "",
         "technique": Technique.GENERATED.value,
         "round": 0,

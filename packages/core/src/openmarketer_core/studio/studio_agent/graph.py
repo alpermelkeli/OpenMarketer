@@ -13,18 +13,20 @@ a stored image is read through the attempt's context. The state holds plain data
                 (no candidate)  (checks failed)  +--> escalate -> END
 
 ``brief`` has the creative director turn the request into a brief and choose the first
-technique. ``produce`` has the studio model choose the next operation (it may read the brand
-kit and look at the run's images with tools on the way), and ``operate`` asks for it as an
-action: the choice is made in one node and asked for in the next, because a node asks for the
-same thing every time it runs and a model does not answer the same twice. An action whose
-failure nothing else could get past (``rules.BLOCKED``: the image provider's key cannot pay,
-there is no sandbox) ends the run with its reason, in ``operate`` or in ``check``. ``produce``
-ends the round when the model names a candidate, when the round's operations or the run's cost
-are used up, or when the model chooses nothing usable. ``check`` asks for the candidate's text
-to be read (when the request has copy) and measures it in code; ``verify`` shows it to the
-verifier, a different model, only when the checks passed; ``decide`` applies ``rules.decide``;
-``edit_plan`` has the studio model plan the next round; ``finalize`` and ``escalate`` set the
-result, which whoever runs the graph stores when it ends.
+technique; it is shown the product's repository images on one contact sheet
+(``contact_sheet.py``) and may choose some for the asset, and it keeps their list in the state
+for the rest of the run. ``produce`` has the studio model choose the next operation (it may read
+the brand kit and look at the run's images and the product's with tools on the way), and
+``operate`` asks for it as an action: the choice is made in one node and asked for in the next,
+because a node asks for the same thing every time it runs and a model does not answer the same
+twice. An action whose failure nothing else could get past (``rules.BLOCKED``: the image
+provider's key cannot pay, there is no sandbox) ends the run with its reason, in ``operate`` or
+in ``check``. ``produce`` ends the round when the model names a candidate, when the round's
+operations or the run's cost are used up, or when the model chooses nothing usable. ``check``
+asks for the candidate's text to be read (when the request has copy) and measures it in code;
+``verify`` shows it to the verifier, a different model, only when the checks passed; ``decide``
+applies ``rules.decide``; ``edit_plan`` has the studio model plan the next round; ``finalize``
+and ``escalate`` set the result, which whoever runs the graph stores when it ends.
 
 Every node is safe to run twice: a step that died before its checkpoint is taken again from
 the same state, and the model calls are made for this attempt only.
@@ -42,6 +44,7 @@ from openmarketer_core.agent_runtime.agent import END
 from openmarketer_core.agent_runtime.langgraph_steps import request_action
 from openmarketer_core.agent_runtime.model_input import DoesNotFit, read_strict_json
 from openmarketer_core.llm import ChatReply, image_part
+from openmarketer_core.studio.contact_sheet import SheetImage, contact_sheet
 from openmarketer_core.studio.failures import StudioError
 from openmarketer_core.studio.image_checks import COPY, check_image, copy_matches
 from openmarketer_core.studio.platforms import Platform, PlatformSpec, platform_spec
@@ -60,6 +63,7 @@ from openmarketer_core.studio.studio_agent.rules import (
     Brief,
     EditPlan,
     Operation,
+    References,
     RunImages,
     Technique,
     VerifierReport,
@@ -197,6 +201,33 @@ def _run_ids(state: StudioState) -> dict[str, uuid.UUID]:
     }
 
 
+def _repository_images(state: StudioState) -> list[dict[str, Any]]:
+    # A thread stored before the run kept its repository images has none.
+    return state.get("repository_images", [])
+
+
+def _shown_repository_image(context: StudioContext, image_id: str) -> dict[str, Any] | None:
+    image = context.repository_image_of(image_id)
+    return None if image is None else image_part(image.data, image.mime)
+
+
+def _sheet_of(context: StudioContext, listed: list[dict[str, Any]]) -> dict[str, Any]:
+    """The contact sheet of ``listed``, as a part of a message; an image no longer there is
+    drawn as unreadable."""
+    images = []
+    for shown in listed:
+        found = context.repository_image_of(shown["id"])
+        images.append(
+            SheetImage(
+                number=shown["number"],
+                kind=shown["kind"],
+                path=shown["path"],
+                data=None if found is None else found.data,
+            )
+        )
+    return image_part(contact_sheet(images), "image/png")
+
+
 def _this_round(state: StudioState) -> list[str]:
     return [v["version_id"] for v in state["versions"] if v["round"] == state["round"]]
 
@@ -204,24 +235,40 @@ def _this_round(state: StudioState) -> list[str]:
 # ----------------------------------------------------------------------------------- brief
 @agent.node(start=True)
 def brief(state: StudioState, context: StudioContext) -> dict[str, Any]:
-    """Have the creative director turn the request into a brief and choose the technique."""
+    """Have the creative director turn the request into a brief and choose the technique.
+
+    The product's repository images are listed for this attempt; the list the director was
+    shown is kept, so that the brief's choices and every later step name the same images.
+    """
+    listed = rules.repository_images_data(context.repository_images)
+    messages = rules.brief_messages(
+        state,
+        _spec(state),
+        context.brand_kit.as_data(),
+        repository_images=listed,
+        contact_sheet=_sheet_of(context, listed) if listed else None,
+    )
     spent = _Spent()
     submitted = _ask_in_text(
         context,
         rules.CREATIVE_DIRECTOR_ROLE,
-        rules.brief_messages(state, _spec(state), context.brand_kit.as_data()),
+        messages,
         model_type=Brief,
         spent=spent,
+        problems=lambda brief: rules.brief_problems(brief, listed),
     )
     if submitted is None:
         raise StudioError(
             "the creative director did not answer a readable brief after two attempts"
         )
+    made = rules.numbered_as_ids(submitted, listed).model_dump(mode="json")
+    real_images = bool(state["reference_asset_ids"]) or rules.chosen_screenshots(made, listed)
     return {
-        "brief": submitted.model_dump(mode="json"),
+        "brief": made,
+        "repository_images": listed,
         "about_product": rules.about_product(context.brand_kit, state["exact_copy"]),
         "technique": rules.first_technique(
-            submitted.technique, has_reference_assets=bool(state["reference_asset_ids"])
+            submitted.technique, has_reference_assets=real_images
         ).value,
         "round": 1,
         **spent.update(state),
@@ -247,6 +294,7 @@ def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
             if v["operation"] in (rules.RUN_PYTHON, rules.RENDER_HTML)
         ),
         has_copy=bool(state["exact_copy"]),
+        repository_images=frozenset(image["id"] for image in _repository_images(state)),
     )
     spent = _Spent()
     messages = _produce_messages(state, context)
@@ -265,16 +313,8 @@ def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
             if chosen is not None:
                 return {**_chosen(state, chosen), **spent.update(state)}
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": answer})
-        for version_id in shown:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": f"Image {version_id}:"},
-                        _shown_image(context, version_id),
-                    ],
-                }
-            )
+        for image_id in shown:
+            messages.append({"role": "user", "content": _viewed(context, images, image_id)})
     ended = _round_ends(
         state, f"round {state['round']}: the studio model chose no usable operation"
     )
@@ -291,10 +331,36 @@ def _produce_messages(state: StudioState, context: StudioContext) -> list[dict[s
             {"type": "text", "text": f"The latest image, {shown}:"},
             _shown_image(context, shown),
         ]
+    content += _chosen_repository_images(state, context)
     return [
         {"role": "system", "content": rules.STUDIO_SYSTEM_PROMPT},
         {"role": "user", "content": content},
     ]
+
+
+def _chosen_repository_images(state: StudioState, context: StudioContext) -> list[dict[str, Any]]:
+    """The repository images the brief chose, shown with what each is for."""
+    listed = {image["id"] for image in _repository_images(state)}
+    content: list[dict[str, Any]] = []
+    for reference in state["brief"].get("reference_images", []):
+        if reference["id"] not in listed:
+            continue
+        part = _shown_repository_image(context, reference["id"])
+        if part is None:
+            continue
+        caption = f"Repository image {reference['id']}, chosen for: {reference['use']}"
+        content += [{"type": "text", "text": caption}, part]
+    return content
+
+
+def _viewed(context: StudioContext, images: RunImages, image_id: str) -> list[dict[str, Any]]:
+    """What a model that asked to see ``image_id`` is shown."""
+    if image_id in images.run_versions:
+        return [{"type": "text", "text": f"Image {image_id}:"}, _shown_image(context, image_id)]
+    part = _shown_repository_image(context, image_id)
+    if part is None:
+        return [{"type": "text", "text": f"Repository image {image_id} is no longer there."}]
+    return [{"type": "text", "text": f"Repository image {image_id}:"}, part]
 
 
 def _answer_call(
@@ -310,10 +376,12 @@ def _answer_call(
     if name == rules.BRAND_KIT_TOOL:
         return json.dumps(context.brand_kit.as_data(), ensure_ascii=False), None
     if name == rules.VIEW_IMAGE_TOOL:
-        version_id = arguments.get("version_id") if isinstance(arguments, dict) else None
-        if version_id not in images.run_versions:
-            return "error: that is not an image of this run", None
-        shown.append(version_id)
+        image_id = arguments.get("version_id") if isinstance(arguments, dict) else None
+        if not isinstance(image_id, str) or (
+            image_id not in images.run_versions | images.repository_images
+        ):
+            return "error: that is not an image of this run nor a repository image", None
+        shown.append(image_id)
         return "The image follows.", None
     if name != rules.SUBMIT_OPERATION:
         return f"error: there is no tool of that name; call {rules.SUBMIT_OPERATION}", None
@@ -347,15 +415,26 @@ def _chosen(state: StudioState, operation: Operation) -> dict[str, Any]:
             "notes": notes,
         }
     fields = {
-        rules.GENERATE_IMAGE: ("prompt", "reference_version_ids", "reference_asset_ids"),
+        rules.GENERATE_IMAGE: (
+            "prompt",
+            "reference_version_ids",
+            "reference_asset_ids",
+            "reference_repository_image_ids",
+        ),
         rules.EDIT_IMAGE: (
             "source_version_id",
             "instruction",
             "reference_version_ids",
             "reference_asset_ids",
+            "reference_repository_image_ids",
         ),
-        rules.RENDER_HTML: ("html", "input_version_ids"),
-        rules.RUN_PYTHON: ("code", "requirements", "input_version_ids"),
+        rules.RENDER_HTML: ("html", "input_version_ids", "input_repository_image_ids"),
+        rules.RUN_PYTHON: (
+            "code",
+            "requirements",
+            "input_version_ids",
+            "input_repository_image_ids",
+        ),
     }[operation.op]
     pending = {
         "op": operation.op,
@@ -429,7 +508,22 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
     }
 
     def ids(name: str) -> list[uuid.UUID]:
-        return [uuid.UUID(value) for value in pending[name]]
+        # A pending operation stored before repository images were kept names none.
+        return [uuid.UUID(value) for value in pending.get(name, [])]
+
+    def lines(first_number: int) -> str:
+        references = References(
+            version_ids=pending["reference_version_ids"],
+            asset_ids=pending["reference_asset_ids"],
+            repository_image_ids=pending.get("reference_repository_image_ids", []),
+        )
+        return rules.reference_lines(
+            references,
+            technique=technique,
+            brief=state["brief"],
+            listed=_repository_images(state),
+            first_number=first_number,
+        )
 
     # What code adds to every prompt. A thread stored before the brief kept ``about_product``
     # has none, and its prompts go without it.
@@ -442,30 +536,41 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
         return GenerateImage(
             **common,
             prompt=rules.generation_prompt(
-                pending["prompt"], state["exact_copy"], technique, **added
+                pending["prompt"], state["exact_copy"], technique, **added, references=lines(1)
             ),
             reference_version_ids=ids("reference_version_ids"),
             reference_asset_ids=ids("reference_asset_ids"),
+            reference_repository_image_ids=ids("reference_repository_image_ids"),
         )
     if op == rules.EDIT_IMAGE:
+        # The image it changes is sent first, so the references are numbered from 2.
         return EditImage(
             **common,
             source_version_id=uuid.UUID(pending["source_version_id"]),
             instruction=rules.edit_instruction(
-                pending["instruction"], state["exact_copy"], technique, **added
+                pending["instruction"],
+                state["exact_copy"],
+                technique,
+                **added,
+                references=lines(2),
             ),
             reference_version_ids=ids("reference_version_ids"),
             reference_asset_ids=ids("reference_asset_ids"),
+            reference_repository_image_ids=ids("reference_repository_image_ids"),
         )
     if op == rules.RENDER_HTML:
         return RenderHtml(
-            **common, html=pending["html"], input_version_ids=ids("input_version_ids")
+            **common,
+            html=pending["html"],
+            input_version_ids=ids("input_version_ids"),
+            input_repository_image_ids=ids("input_repository_image_ids"),
         )
     return RunPython(
         **common,
         code=pending["code"],
         requirements=list(pending["requirements"]),
         input_version_ids=ids("input_version_ids"),
+        input_repository_image_ids=ids("input_repository_image_ids"),
     )
 
 

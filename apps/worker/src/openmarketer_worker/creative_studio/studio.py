@@ -7,8 +7,9 @@ the agent runtime asks an agent for:
 - ``initial_state``: what a run starts from, which is the run's own request;
 - ``context``: what the nodes of one attempt are given: a chat model of the attempt's own,
   the run's limits (with what one paid image is reckoned to cost under the workspace's
-  models), the stored image of a version of the run, and the brand kit of the project's
-  approved profile;
+  models), the stored image of a version of the run, the brand kit of the project's
+  approved profile, and the project's repository images (their list, read for the attempt,
+  and the bytes of one);
 - ``record_progress``: storing the events of each node as it ends, for the chat that asked
   for the run (``progress.py`` in core says which);
 - the handlers of the five actions: ``generate_image`` and ``edit_image`` (the image
@@ -72,6 +73,12 @@ from openmarketer_core.db.media_assets import (
 from openmarketer_core.db.models import AssetTechnique, StudioRunStatus
 from openmarketer_core.db.profile_versions import latest_approved_profile
 from openmarketer_core.db.projects import ProjectNotFound
+from openmarketer_core.db.repository_images import (
+    RepositoryImage,
+    RepositoryImageNotFound,
+    list_repository_images,
+    repository_image,
+)
 from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.session import DatabaseError, transaction
 from openmarketer_core.db.studio_runs import (
@@ -215,15 +222,26 @@ class StudioWork:
         def image_of(version_id: str) -> ImageInput:
             return self._image_for_a_node(scope, version_id)
 
+        def repository_image_of(image_id: str) -> ImageInput | None:
+            return self._repository_image_for_a_node(scope, image_id)
+
         with transaction(self._sessions) as session:
             approved = latest_approved_profile(
                 session, workspace_id=found.workspace_id, project_id=found.project_id
+            )
+            listed = list_repository_images(
+                session,
+                workspace_id=found.workspace_id,
+                project_id=found.project_id,
+                limit=rules.MAX_REPOSITORY_IMAGES,
             )
         return StudioContext(
             model=self._new_model(found.workspace_id),
             limits=self.limits_of(found.workspace_id),
             image_of=image_of,
             brand_kit=brand_kit_of(None if approved is None else approved.profile),
+            repository_images=[_shown(image) for image in listed.items],
+            repository_image_of=repository_image_of,
         )
 
     def limits_of(self, workspace_id: uuid.UUID) -> rules.Limits:
@@ -313,7 +331,10 @@ class StudioWork:
             return stored
         spec = self._spec_of(run)
         references = self._references(
-            run, payload.reference_version_ids, payload.reference_asset_ids
+            run,
+            payload.reference_version_ids,
+            payload.reference_asset_ids,
+            payload.reference_repository_image_ids,
         )
         made = self._drawn(
             run,
@@ -334,7 +355,10 @@ class StudioWork:
         spec = self._spec_of(run)
         source = self._image_of_the_run(run, payload.source_version_id)
         references = self._references(
-            run, payload.reference_version_ids, payload.reference_asset_ids
+            run,
+            payload.reference_version_ids,
+            payload.reference_asset_ids,
+            payload.reference_repository_image_ids,
         )
         made = self._drawn(
             run,
@@ -357,7 +381,9 @@ class StudioWork:
         if stored is not None:
             return stored
         spec = self._spec_of(run)
-        inputs = self._sandbox_inputs(run, payload.input_version_ids)
+        inputs = self._sandbox_inputs(
+            run, payload.input_version_ids, payload.input_repository_image_ids
+        )
         result = self._in_the_sandbox(
             lambda: self._sandbox.render_html(payload.html, inputs, spec.width, spec.height)
         )
@@ -371,7 +397,9 @@ class StudioWork:
         if stored is not None:
             return stored
         spec = self._spec_of(run)
-        inputs = self._sandbox_inputs(run, payload.input_version_ids)
+        inputs = self._sandbox_inputs(
+            run, payload.input_version_ids, payload.input_repository_image_ids
+        )
         result = self._in_the_sandbox(
             lambda: self._sandbox.run_python(
                 payload.code, inputs, payload.requirements, CanvasSize(spec.width, spec.height)
@@ -561,11 +589,51 @@ class StudioWork:
         run: StudioRunInput,
         version_ids: Sequence[uuid.UUID],
         asset_ids: Sequence[uuid.UUID],
+        repository_image_ids: Sequence[uuid.UUID],
     ) -> list[ImageInput]:
-        """The images an operation follows: versions of this run, and the current image of
-        each asset of the project it names."""
+        """The images an operation follows, in the order the graph numbered them: versions of
+        this run, the current image of each asset of the project it names, and the project's
+        repository images it names."""
         images = [self._image_of_the_run(run, version_id) for version_id in version_ids]
-        return images + [self._current_image_of(run, asset_id) for asset_id in asset_ids]
+        images += [self._current_image_of(run, asset_id) for asset_id in asset_ids]
+        return images + [
+            self._repository_image_of_the_project(run, image_id)
+            for image_id in repository_image_ids
+        ]
+
+    def _repository_image(self, run: StudioRunInput, image_id: uuid.UUID) -> RepositoryImage | None:
+        """The repository image ``image_id`` when it is one of the project's, else ``None``."""
+        with transaction(self._sessions) as session:
+            try:
+                return repository_image(
+                    session,
+                    workspace_id=run.workspace_id,
+                    project_id=run.project_id,
+                    image_id=image_id,
+                )
+            except (RepositoryImageNotFound, ProjectNotFound):
+                return None
+
+    def _repository_image_of_the_project(
+        self, run: StudioRunInput, image_id: uuid.UUID
+    ) -> ImageInput:
+        """The bytes of a repository image of the run's project; refused for any other id."""
+        found = self._repository_image(run, image_id)
+        if found is None:
+            raise failure(
+                steps.OPERATION_FAILED, f"{image_id} is not a repository image of this project"
+            )
+        return self._stored_bytes(found.storage_key, found.mime)
+
+    def _repository_image_for_a_node(self, run: StudioRunInput, image_id: str) -> ImageInput | None:
+        """What ``StudioContext.repository_image_of`` gives a node: ``None`` for an image that
+        is not the project's (any more); object storage that cannot be read fails the step."""
+        try:
+            parsed = uuid.UUID(image_id)
+        except ValueError:
+            return None
+        found = self._repository_image(run, parsed)
+        return None if found is None else self._stored_bytes(found.storage_key, found.mime)
 
     def _current_image_of(self, run: StudioRunInput, asset_id: uuid.UUID) -> ImageInput:
         not_there = failure(
@@ -592,20 +660,30 @@ class StudioWork:
         return self._bytes_of(version)
 
     def _sandbox_inputs(
-        self, run: StudioRunInput, version_ids: Sequence[uuid.UUID]
+        self,
+        run: StudioRunInput,
+        version_ids: Sequence[uuid.UUID],
+        repository_image_ids: Sequence[uuid.UUID],
     ) -> dict[str, bytes]:
-        """The versions a program or a page is given, as ``<version_id>.png`` beside it."""
-        return {
+        """The versions and the repository images a program or a page is given, as
+        ``<id>.png`` beside it."""
+        inputs = {
             f"{version_id}.png": self._image_of_the_run(run, version_id).data
             for version_id in version_ids
         }
+        for image_id in repository_image_ids:
+            inputs[f"{image_id}.png"] = self._repository_image_of_the_project(run, image_id).data
+        return inputs
 
     def _bytes_of(self, version: MediaAssetVersion) -> ImageInput:
+        return self._stored_bytes(version.storage_key, version.mime)
+
+    def _stored_bytes(self, key: str, mime: ImageMime) -> ImageInput:
         try:
-            data = self._assets.get(version.storage_key)
+            data = self._assets.get(key)
         except AssetStoreUnavailable as e:
             raise failure(steps.STUDIO_UNAVAILABLE, str(e)) from None
-        return ImageInput(data=data, mime=version.mime)
+        return ImageInput(data=data, mime=mime)
 
     def _spec_of(self, run: StudioRunInput) -> PlatformSpec:
         """What the run's platform asks of an image; the run must still be the workspace's."""
@@ -691,6 +769,17 @@ class WordedSteps:
             passing = isinstance(e, LLMError) and e.may_pass
             kind = steps.MODEL_UNAVAILABLE if passing else steps.STUDIO_FAILED
             raise failure(kind, str(e)) from None
+
+
+def _shown(image: RepositoryImage) -> rules.RepositoryImageInfo:
+    """A repository image as the graph is given it: no key, no bytes."""
+    return rules.RepositoryImageInfo(
+        id=str(image.id),
+        path=image.path,
+        kind=str(image.kind),
+        width=image.width,
+        height=image.height,
+    )
 
 
 def _run_of(payload: GenerateImage | EditImage | RenderHtml | RunPython) -> StudioRunInput:

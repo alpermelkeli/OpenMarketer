@@ -27,7 +27,7 @@ from openmarketer_core.run_events import RunEvent
 from openmarketer_core.studio.brand_kit import EMPTY_BRAND_KIT, BrandKit
 from openmarketer_core.studio.failures import StudioError
 from openmarketer_core.studio.media_provider import ImageInput
-from openmarketer_core.studio.platforms import Platform
+from openmarketer_core.studio.platforms import Platform, platform_spec
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_core.studio.studio_agent.definitions import (
@@ -42,7 +42,7 @@ from openmarketer_core.studio.studio_agent.definitions import (
     result_of,
 )
 from openmarketer_core.studio.studio_agent.graph import _payload_of, recursion_limit
-from openmarketer_core.studio.studio_agent.rules import Limits
+from openmarketer_core.studio.studio_agent.rules import Limits, RepositoryImageInfo
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND, StudioRunInput
 
 COPY = ["Launch day", "Try it free"]
@@ -87,17 +87,20 @@ def call(name: str, arguments: dict[str, Any]) -> ChatReply:
 
 
 def a_brief(
-    technique: str = "generated", image_prompt: str = "A bright desk at dawn, top view."
+    technique: str = "generated",
+    image_prompt: str = "A bright desk at dawn, top view.",
+    reference_images: list[dict[str, str]] | None = None,
 ) -> ChatReply:
-    return text(
-        {
-            "goal": "Announce the launch.",
-            "visual_concept": "A bright desk at dawn.",
-            "technique": technique,
-            "image_prompt": image_prompt,
-            "copy_placement": "Centered, upper third.",
-        }
-    )
+    brief: dict[str, Any] = {
+        "goal": "Announce the launch.",
+        "visual_concept": "A bright desk at dawn.",
+        "technique": technique,
+        "image_prompt": image_prompt,
+        "copy_placement": "Centered, upper third.",
+    }
+    if reference_images is not None:
+        brief["reference_images"] = reference_images
+    return text(brief)
 
 
 def operation(op: str, **fields: Any) -> ChatReply:
@@ -215,16 +218,22 @@ class Run:
         *,
         limits: Limits | None = None,
         brand_kit: BrandKit = ACME,
+        repository: tuple[RepositoryImageInfo, ...] = (),
     ):
         request = AssetRequest(
             goal="Announce the launch.", exact_copy=COPY, platform=Platform.INSTAGRAM_POST
         )
         run = StudioRunInput(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+        known = {image.id for image in repository}
         context = StudioContext(
             model=chat,
             limits=limits or Limits(),
             image_of=world.image_of,
             brand_kit=brand_kit,
+            repository_images=repository,
+            repository_image_of=lambda image_id: (
+                ImageInput(REPOSITORY_PNG, "image/png") if image_id in known else None
+            ),
         )
         self.events: list[RunEvent] = []
         finals: list[dict[str, Any]] = []
@@ -261,6 +270,9 @@ class Run:
 
     def kinds(self) -> list[str]:
         return [event.kind for event in self.events]
+
+
+REPOSITORY_PNG = a_png(256, 256)
 
 
 # ------------------------------------------------------------------------------- the runs
@@ -637,3 +649,254 @@ def test_an_operation_that_failed_otherwise_is_told_to_the_studio_model_which_go
     assert world.names() == [GENERATE_IMAGE, GENERATE_IMAGE, READ_TEXT]
     assert refused in json.dumps(chat.calls[2]["messages"])
     assert not run.result.needs_review
+
+
+# --------------------------------------------------------------- the product's own images
+ICON = RepositoryImageInfo(
+    id="11111111-1111-4111-8111-111111111111",
+    path="ios/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+    kind="icon",
+    width=1024,
+    height=1024,
+)
+SCREENSHOT = RepositoryImageInfo(
+    id="22222222-2222-4222-8222-222222222222",
+    path="fastlane/metadata/en-US/images/iphone/1.png",
+    kind="screenshot",
+    width=1290,
+    height=2796,
+)
+REPOSITORY = (SCREENSHOT, ICON)
+CORNER = {"id": ICON.id, "use": "app icon for the corner"}
+
+
+def test_the_creative_director_is_shown_the_repository_images_on_one_contact_sheet():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+
+    Run(chat, World([READ_BACK]), repository=REPOSITORY)
+
+    parts = chat.calls[0]["messages"][1]["content"]
+    listed = json.loads(parts[0]["text"])["repository_images"]
+    assert [(image["number"], image["id"], image["kind"]) for image in listed] == [
+        (1, ICON.id, "icon"),
+        (2, SCREENSHOT.id, "screenshot"),
+    ]
+    [sheet] = [part for part in parts if part["type"] == "image_url"]
+    assert sheet["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_a_run_whose_repository_has_no_images_briefs_as_before():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    run = Run(chat, world)
+
+    director, studio = chat.calls[0], chat.calls[1]
+    assert "repository_images" not in json.loads(director["messages"][1]["content"])
+    assert "repository_images" not in json.loads(studio["messages"][1]["content"][0]["text"])
+    [generated] = world.payloads(GENERATE_IMAGE)
+    assert generated["reference_repository_image_ids"] == []
+    assert "Reference image" not in generated["prompt"]
+    assert run.final["repository_images"] == []
+
+
+def test_a_brief_that_names_an_image_not_of_the_list_is_asked_again():
+    chat = ScriptedChat(
+        creative_director=[
+            a_brief(reference_images=[{"id": str(uuid.uuid4()), "use": "a logo"}]),
+            a_brief(reference_images=[CORNER]),
+        ],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+
+    run = Run(chat, World([READ_BACK]), repository=REPOSITORY)
+
+    retried = chat.calls[1]["messages"][-1]["content"]
+    assert "reference_images names an id that is not of repository_images" in retried
+    assert run.final["brief"]["reference_images"] == [CORNER]
+
+
+def test_a_brief_that_names_an_image_by_its_number_on_the_sheet_names_it_by_its_id():
+    chat = ScriptedChat(
+        creative_director=[a_brief(reference_images=[{"id": "1", "use": "the icon"}])],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+
+    run = Run(chat, World([READ_BACK]), repository=REPOSITORY)
+
+    assert run.final["brief"]["reference_images"] == [{"id": ICON.id, "use": "the icon"}]
+
+
+def test_repository_references_are_asked_for_by_id_with_a_line_saying_what_each_is_for():
+    chat = ScriptedChat(
+        creative_director=[a_brief(reference_images=[CORNER])],
+        studio=[
+            operation(
+                "generate_image",
+                prompt="A desk with the app open.",
+                reference_repository_image_ids=[ICON.id, SCREENSHOT.id],
+            ),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world, repository=REPOSITORY)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    assert generated["reference_repository_image_ids"] == [ICON.id, SCREENSHOT.id]
+    assert "Reference image 1: app icon for the corner" in generated["prompt"]
+    assert "Reference image 2: a real screenshot of the product" in generated["prompt"]
+
+
+def test_an_edits_references_are_numbered_after_the_image_it_changes():
+    chat = ScriptedChat(
+        creative_director=[a_brief(reference_images=[CORNER])],
+        studio=[
+            operation("generate_image", prompt="A desk."),
+            ready(),
+            a_plan(),
+            editing_latest(
+                instruction="Put the icon in the corner.",
+                **{"reference_repository_image_ids": [ICON.id]},
+            ),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World(["Lauch day", READ_BACK])
+
+    Run(chat, world, repository=REPOSITORY)
+
+    [edited] = world.payloads(EDIT_IMAGE)
+    assert edited["reference_repository_image_ids"] == [ICON.id]
+    assert "Reference image 2: app icon for the corner" in edited["instruction"]
+
+
+def test_a_program_is_given_the_repository_images_it_names():
+    chat = ScriptedChat(
+        creative_director=[
+            a_brief(
+                "composed",
+                reference_images=[{"id": SCREENSHOT.id, "use": "screenshot inside a phone frame"}],
+            )
+        ],
+        studio=[
+            operation(
+                "run_python",
+                code="print('frame')",
+                input_repository_image_ids=[SCREENSHOT.id],
+            ),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world, repository=REPOSITORY)
+
+    [program] = world.payloads(RUN_PYTHON)
+    # A chosen screenshot is a real image to compose: the run starts composed.
+    assert program["technique"] == "composed"
+    assert program["input_repository_image_ids"] == [SCREENSHOT.id]
+
+
+def test_an_operation_that_names_an_image_not_of_the_repository_is_refused():
+    unknown = str(uuid.uuid4())
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[
+            operation("generate_image", prompt="A desk.", reference_repository_image_ids=[unknown]),
+            operation("generate_image", prompt="A desk."),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world, repository=REPOSITORY)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    assert generated["reference_repository_image_ids"] == []
+    assert "a repository image is named by an id that is not of repository_images" in json.dumps(
+        chat.calls[2]["messages"]
+    )
+
+
+def test_the_studio_is_shown_the_images_the_brief_chose_and_may_view_the_others():
+    chat = ScriptedChat(
+        creative_director=[a_brief(reference_images=[CORNER])],
+        studio=[
+            call(rules.VIEW_IMAGE_TOOL, {"version_id": SCREENSHOT.id}),
+            operation("generate_image", prompt="A desk."),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+
+    Run(chat, World([READ_BACK]), repository=REPOSITORY)
+
+    first = chat.calls[1]["messages"][1]["content"]
+    captions = [part["text"] for part in first if part["type"] == "text"]
+    assert f"Repository image {ICON.id}, chosen for: app icon for the corner" in captions
+    viewed = chat.calls[2]["messages"][-1]["content"]
+    assert viewed[0]["text"] == f"Repository image {SCREENSHOT.id}:"
+    assert viewed[1]["type"] == "image_url"
+
+
+def test_the_state_and_the_payloads_hold_the_repository_images_ids_never_their_bytes():
+    chat = ScriptedChat(
+        creative_director=[a_brief(reference_images=[CORNER])],
+        studio=[
+            operation("generate_image", prompt="A desk.", reference_repository_image_ids=[ICON.id]),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    run = Run(chat, world, repository=REPOSITORY)
+
+    assert {key for image in run.final["repository_images"] for key in image} == {
+        "number",
+        "id",
+        "kind",
+        "path",
+        "width",
+        "height",
+    }
+    for written in [json.dumps(run.final), *(json.dumps(p) for _, p in world.asked)]:
+        assert "base64" not in written and "data:image" not in written
+
+
+def test_a_thread_stored_before_repository_images_were_kept_still_asks_for_its_image():
+    run = StudioRunInput(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+    request = AssetRequest(goal="Launch.", exact_copy=COPY, platform=Platform.INSTAGRAM_POST)
+    state: dict[str, Any] = {**initial_state(run, request), "round": 1}
+    del state["repository_images"]
+    pending = {
+        "op": RUN_PYTHON,
+        "version_id": str(uuid.uuid4()),
+        "technique": "composed",
+        "code": "print(1)",
+        "requirements": [],
+        "input_version_ids": [],
+    }
+
+    payload = _payload_of(state, pending)  # type: ignore[arg-type]
+
+    assert payload.model_dump()["input_repository_image_ids"] == []
+    assert "repository_images" not in rules.produce_data(
+        state, platform_spec(Platform.INSTAGRAM_POST), Limits(), {}
+    )

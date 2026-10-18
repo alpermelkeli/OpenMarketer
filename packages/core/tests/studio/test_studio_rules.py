@@ -414,3 +414,104 @@ def test_a_background_without_its_words_is_not_an_overlay_candidate():
 
 def test_the_background_with_its_words_laid_over_is_a_candidate():
     assert overlay_candidate(V2, made_by_code=frozenset({V2})) == []
+
+
+# ----------------------------------------------------------------- repository images
+def info(image_id: str, kind: str, path: str) -> rules.RepositoryImageInfo:
+    return rules.RepositoryImageInfo(id=image_id, path=path, kind=kind, width=512, height=512)
+
+
+def test_repository_images_are_shown_icons_first_numbered_and_bounded():
+    images = [info(f"id-{n}", "screenshot", f"shots/{n:02}.png") for n in range(30)]
+    images.append(info("the-icon", "icon", "icon.png"))
+
+    listed = rules.repository_images_data(images)
+
+    assert len(listed) == rules.MAX_REPOSITORY_IMAGES
+    assert listed[0] == {
+        "number": 1,
+        "id": "the-icon",
+        "kind": "icon",
+        "path": "icon.png",
+        "width": 512,
+        "height": 512,
+    }
+    assert [image["number"] for image in listed] == list(range(1, 25))
+
+
+def test_a_briefs_references_must_be_of_the_list_and_named_once():
+    listed = rules.repository_images_data([info(V1, "icon", "icon.png")])
+    brief = rules.Brief(
+        goal="g",
+        visual_concept="v",
+        technique=Technique.GENERATED,
+        reference_images=[
+            rules.ReferenceImage(id=V1, use="corner"),
+            rules.ReferenceImage(id="1", use="again"),
+            rules.ReferenceImage(id=V2, use="unknown"),
+        ],
+    )
+
+    assert rules.brief_problems(brief, listed) == [
+        "reference_images names an id that is not of repository_images",
+        "reference_images names an image more than once",
+    ]
+
+
+def test_a_brief_may_name_no_image_when_the_repository_has_none():
+    brief = rules.Brief(
+        goal="g",
+        visual_concept="v",
+        technique=Technique.GENERATED,
+        reference_images=[rules.ReferenceImage(id=V1, use="corner")],
+    )
+
+    assert rules.brief_problems(brief, []) == [
+        "reference_images must be empty: the product's repository has no images"
+    ]
+
+
+def test_reference_lines_say_what_each_reference_is_for_in_the_order_they_are_sent():
+    listed = rules.repository_images_data(
+        [info(V1, "icon", "icon.png"), info(V2, "screenshot", "shot.png")]
+    )
+    brief = {"reference_images": [{"id": V2, "use": "screenshot inside a phone frame"}]}
+
+    lines = rules.reference_lines(
+        rules.References(version_ids=["v"], asset_ids=["a"], repository_image_ids=[V1, V2]),
+        technique=Technique.GENERATED,
+        brief=brief,
+        listed=listed,
+    )
+
+    assert lines.splitlines()[:4] == [
+        "Reference image 1: an earlier image of this run",
+        "Reference image 2: an image the request gave to follow",
+        "Reference image 3: the product's real app icon",
+        "Reference image 4: screenshot inside a phone frame",
+    ]
+    assert "do not redraw" in lines
+
+
+def test_no_reference_adds_no_line():
+    lines = rules.reference_lines(
+        rules.References(), technique=Technique.GENERATED, brief={}, listed=[]
+    )
+
+    assert lines == ""
+
+
+def test_an_operation_may_name_only_the_runs_repository_images():
+    images = RunImages(
+        run_versions=frozenset(),
+        this_round=frozenset(),
+        reference_assets=frozenset(),
+        repository_images=frozenset({V1}),
+    )
+    named = Operation(op="run_python", code="print(1)", input_repository_image_ids=[V2])
+
+    problems = rules.operation_problems(
+        named, technique=Technique.COMPOSED, images=images, cost_usd=0.0, limits=Limits()
+    )
+
+    assert problems == ["a repository image is named by an id that is not of repository_images"]

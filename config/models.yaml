@@ -112,7 +112,7 @@ roles:
     tier: balanced
     temperature: 0.7
     max_tokens: 16384              # a brief, and the HTML of a layout the studio renders
-    requires: [structured_output]
+    requires: [structured_output, vision]   # vision: the product's repository images, on a contact sheet
 
   # --- checking and learning ------------------------------------------
   studio:                        # creative studio agent: writes code, calls image/video/voice tools, looks at results, edits
