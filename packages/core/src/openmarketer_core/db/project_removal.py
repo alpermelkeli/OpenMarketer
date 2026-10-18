@@ -5,8 +5,9 @@ in them, every Product Profile version, approved ones included, the proposals
 of its runs, decided or expired, its chat threads with their turns and
 messages, its research runs with their reports and the pages they fetched, its
 studio runs with the media assets they made and every version of each, accepted
-ones included, and the events its runs recorded. Nothing is kept to restore it from: deleting is
-final, and a project made again for the same repository starts with no history.
+ones included, the product images its analyses found in the repository, and the
+events its runs recorded. Nothing is kept to restore it from: deleting is final,
+and a project made again for the same repository starts with no history.
 
 A project with an unfinished run is not deleted (``ProjectHasUnfinishedRun``):
 the worker that runs it would store a profile for a project that is gone, and
@@ -23,8 +24,8 @@ them makes one exception, a deletion made while the transaction names their
 project in ``openmarketer.deleted_project``. This module is the only code that
 sets it, for the statements that delete the versions and no longer.
 
-The function answers the storage keys of the research pages and of the asset
-versions' images it removed as rows; both live in the installation's one
+The function answers the storage keys of the research pages, of the asset
+versions' images and of the repository images it removed as rows; all live in the installation's one
 bucket, and the caller removes each key's object from object storage before its
 transaction commits, as deleting one research or studio run does.
 
@@ -58,6 +59,7 @@ from openmarketer_core.db.models import (
     ProductProfileRecord,
     Project,
     ProposalRecord,
+    RepositoryImageRecord,
     RepoSnapshot,
     ResearchPageRecord,
     ResearchReportRecord,
@@ -154,6 +156,9 @@ def delete_project(
                 select(MediaAssetVersionRecord.storage_key).where(
                     MediaAssetVersionRecord.project_id == project_id
                 ),
+                select(RepositoryImageRecord.storage_key).where(
+                    RepositoryImageRecord.project_id == project_id
+                ),
             )
         )
     )
@@ -170,6 +175,9 @@ def delete_project(
     )
     remove_studio_rows(session, project_id=project_id)
     session.execute(delete(ChatThreadRecord).where(ChatThreadRecord.project_id == project_id))
+    session.execute(
+        delete(RepositoryImageRecord).where(RepositoryImageRecord.project_id == project_id)
+    )
     session.execute(delete(AnalysisRunRecord).where(AnalysisRunRecord.project_id == project_id))
     session.execute(delete(Evidence).where(Evidence.project_id == project_id))
     _delete_profile_versions(session, project_id)

@@ -35,6 +35,7 @@ from openmarketer_core.db.models import (
     ProductProfileRecord,
     Project,
     ProposalRecord,
+    RepositoryImageRecord,
     RepoSnapshot,
     ResearchPageRecord,
     ResearchReportRecord,
@@ -53,6 +54,11 @@ from openmarketer_core.db.project_removal import (
 )
 from openmarketer_core.db.projects import ProjectNotFound, create_project
 from openmarketer_core.db.proposals import decide_proposal, propose_action
+from openmarketer_core.db.repository_images import (
+    NewRepositoryImage,
+    keep_repository_images,
+    repository_image_key,
+)
 from openmarketer_core.db.research_pages import NewPage, store_page
 from openmarketer_core.db.research_runs import (
     mark_run_failed as mark_research_failed,
@@ -80,6 +86,9 @@ from openmarketer_core.db.studio_runs import (
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.extraction import ExtractedFact
 from openmarketer_core.repository_analysis.intake import Snapshot
+from openmarketer_core.repository_analysis.repository_images.selection import (
+    RepositoryImageKind,
+)
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import Report
 from openmarketer_core.run_events import TURN_ANSWERED, TURN_STARTED, RunEvent
@@ -115,11 +124,38 @@ def new_project(session: Session, workspace_id: uuid.UUID) -> uuid.UUID:
     ).id
 
 
-def analysed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -> None:
-    """Run an analysis of the project to success, storing a snapshot, its evidence and a version."""
+def analysed(
+    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID, *, images: int = 0
+) -> tuple[str, ...]:
+    """Run an analysis of the project to success, storing a snapshot, its evidence and a version.
+
+    With ``images``, the run keeps that many repository images first; their keys are answered.
+    """
     scope = {"workspace_id": workspace_id, "project_id": project_id}
     run = request_analysis_run(session, **scope)
     mark_run_started(session, **scope, run_id=run.id)
+    keys = tuple(
+        repository_image_key(**scope, analysis_run_id=run.id, sha256=f"{n:064x}", mime="image/png")
+        for n in range(images)
+    )
+    keep_repository_images(
+        session,
+        **scope,
+        analysis_run_id=run.id,
+        images=[
+            NewRepositoryImage(
+                path=f"assets/logo-{n}.png",
+                kind=RepositoryImageKind.LOGO,
+                mime="image/png",
+                width=512,
+                height=512,
+                size_bytes=4096,
+                sha256=f"{n:064x}",
+                storage_key=key,
+            )
+            for n, key in enumerate(keys)
+        ],
+    )
     snapshot = Snapshot(
         root=Path("/unused"), source_url="https://unused", commit_sha="a" * 40, ref="main"
     )
@@ -127,6 +163,7 @@ def analysed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -
         session, **scope, snapshot=snapshot, facts=[FACT], profile=PROFILE
     )
     mark_run_succeeded(session, **scope, run_id=run.id, profile_id=saved.profile_id)
+    return keys
 
 
 def researched(
@@ -265,6 +302,7 @@ def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
         "studio_run": StudioRunRecord.project_id,
         "media_asset": MediaAssetRecord.project_id,
         "media_asset_version": MediaAssetVersionRecord.project_id,
+        "repository_image": RepositoryImageRecord.project_id,
     }
     return {
         name: session.scalar(select(func.count()).where(column == project_id)) or 0
@@ -289,6 +327,7 @@ NOTHING = {
     "studio_run": 0,
     "media_asset": 0,
     "media_asset_version": 0,
+    "repository_image": 0,
 }
 
 WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message", "chat_turn", "run_event") + (
@@ -298,6 +337,7 @@ WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message", "chat_turn", "run_
     "studio_run",
     "media_asset",
     "media_asset_version",
+    "repository_image",
 )
 
 
@@ -423,6 +463,17 @@ def test_project_is_deleted_with_its_studio_runs_and_accepted_assets(session, wo
     answered = delete_project(session, workspace_id=workspace_id, project_id=project_id)
 
     assert sorted(answered) == sorted([*page_keys, *asset_keys])
+    assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_is_deleted_with_its_repository_images(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    image_keys = analysed(session, workspace_id, project_id, images=2)
+    assert rows_of(session, project_id)["repository_image"] == 2
+
+    answered = delete_project(session, workspace_id=workspace_id, project_id=project_id)
+
+    assert sorted(answered) == sorted(image_keys)
     assert rows_of(session, project_id) == NOTHING
 
 

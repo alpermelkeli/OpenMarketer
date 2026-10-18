@@ -23,6 +23,7 @@ const API_ERROR_CODES: Record<ErrorCode, true> = {
   studio_run_not_found: true,
   media_asset_not_found: true,
   media_asset_version_not_found: true,
+  repository_image_not_found: true,
   chat_not_found: true,
   profile_not_found: true,
   credential_not_found: true,

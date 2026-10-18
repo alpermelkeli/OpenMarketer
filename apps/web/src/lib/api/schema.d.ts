@@ -652,6 +652,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/repository-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Images
+         * @description The images of the project's latest analysis that found any, a page at a time.
+         */
+        get: operations["listRepositoryImages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/repository-images/{image_id}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Image
+         * @description One image, to show in the page.
+         *
+         *     404 `repository_image_not_found` for an image that is not one of this project's; 503
+         *     `storage_unavailable` when object storage could not give it back.
+         */
+        get: operations["getRepositoryImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{project_id}/researches": {
         parameters: {
             query?: never;
@@ -1568,7 +1611,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "media_asset_decided" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
+        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "media_asset_decided" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
         EventDetailScalar: string | number | boolean | null;
         EventDetailValue: components["schemas"]["EventDetailScalar"] | components["schemas"]["EventDetailScalar"][];
         /**
@@ -2082,6 +2125,58 @@ export interface components {
             from_file: "temperature"[];
             /** Model */
             model: string;
+        };
+        /**
+         * RepositoryImageKind
+         * @enum {string}
+         */
+        RepositoryImageKind: "icon" | "logo" | "screenshot" | "marketing" | "other";
+        /** RepositoryImageListResponse */
+        RepositoryImageListResponse: {
+            /** Images */
+            images: components["schemas"]["RepositoryImageResponse"][];
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+        };
+        /** RepositoryImageResponse */
+        RepositoryImageResponse: {
+            /**
+             * Analysis Run Id
+             * Format: uuid
+             * @description The analysis that found the image.
+             */
+            analysis_run_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Height */
+            height: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** @description What the image's path suggests it is; a hint, not a reading of the image. */
+            kind: components["schemas"]["RepositoryImageKind"];
+            /**
+             * Mime
+             * @description `image/png` or `image/webp`.
+             */
+            mime: string;
+            /**
+             * Path
+             * @description Where the image was in the repository, relative to its root.
+             */
+            path: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Width */
+            width: number;
         };
         /**
          * ResearchReportResponse
@@ -4640,6 +4735,129 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listRepositoryImages: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryImageListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getRepositoryImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image, in the type stored with it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

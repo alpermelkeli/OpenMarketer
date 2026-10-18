@@ -1248,6 +1248,7 @@
           "studio_run_not_found",
           "media_asset_not_found",
           "media_asset_version_not_found",
+          "repository_image_not_found",
           "chat_not_found",
           "profile_not_found",
           "credential_not_found",
@@ -2542,6 +2543,107 @@
           "changed"
         ],
         "title": "RejectedParametersResponse",
+        "type": "object"
+      },
+      "RepositoryImageKind": {
+        "enum": [
+          "icon",
+          "logo",
+          "screenshot",
+          "marketing",
+          "other"
+        ],
+        "title": "RepositoryImageKind",
+        "type": "string"
+      },
+      "RepositoryImageListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/RepositoryImageResponse"
+            },
+            "title": "Images",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the last page; otherwise the `cursor` of the next request.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "images",
+          "next_cursor"
+        ],
+        "title": "RepositoryImageListResponse",
+        "type": "object"
+      },
+      "RepositoryImageResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis_run_id": {
+            "description": "The analysis that found the image.",
+            "format": "uuid",
+            "title": "Analysis Run Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "height": {
+            "title": "Height",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RepositoryImageKind",
+            "description": "What the image's path suggests it is; a hint, not a reading of the image."
+          },
+          "mime": {
+            "description": "`image/png` or `image/webp`.",
+            "title": "Mime",
+            "type": "string"
+          },
+          "path": {
+            "description": "Where the image was in the repository, relative to its root.",
+            "title": "Path",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "analysis_run_id",
+          "path",
+          "kind",
+          "mime",
+          "width",
+          "height",
+          "size_bytes",
+          "created_at"
+        ],
+        "title": "RepositoryImageResponse",
         "type": "object"
       },
       "ResearchReportResponse": {
@@ -6819,6 +6921,197 @@
         "summary": "Reject",
         "tags": [
           "proposals"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/repository-images": {
+      "get": {
+        "description": "The images of the project's latest analysis that found any, a page at a time.",
+        "operationId": "listRepositoryImages",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The most items one response may hold.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most items one response may hold.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+              "maxLength": 200,
+              "title": "Cursor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryImageListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Images",
+        "tags": [
+          "repository images"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/repository-images/{image_id}/image": {
+      "get": {
+        "description": "One image, to show in the page.\n\n404 `repository_image_not_found` for an image that is not one of this project's; 503\n`storage_unavailable` when object storage could not give it back.",
+        "operationId": "getRepositoryImage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "image_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Image Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The image, in the type stored with it."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Image",
+        "tags": [
+          "repository images"
         ]
       }
     },

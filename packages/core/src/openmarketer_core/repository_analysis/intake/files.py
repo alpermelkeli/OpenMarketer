@@ -85,11 +85,19 @@ class RepoFiles:
                 if self.exclusion(rel) is None:
                     yield rel
 
+    def size_of(self, rel_path: str) -> int:
+        """How many bytes ``rel_path`` has, so a caller can refuse a large file unread."""
+        self._refuse_excluded(rel_path)
+        return (self.root / rel_path).stat().st_size
+
     def read_bytes(self, rel_path: str) -> bytes:
+        self._refuse_excluded(rel_path)
+        return (self.root / rel_path).read_bytes()
+
+    def _refuse_excluded(self, rel_path: str) -> None:
         reason = self.exclusion(rel_path)
         if reason is not None:
             raise ExcludedFileError(f"{rel_path}: excluded ({reason.value})")
-        return (self.root / rel_path).read_bytes()
 
     def read_text(self, rel_path: str) -> str:
         return self.read_bytes(rel_path).decode("utf-8", errors="replace")

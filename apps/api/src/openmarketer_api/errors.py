@@ -58,6 +58,7 @@ from openmarketer_core.db.project_removal import (
 )
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.proposals import ProposalNotFound, ProposalNotPending
+from openmarketer_core.db.repository_images import RepositoryImageNotFound
 from openmarketer_core.db.research_runs import ResearchRunNotFound, ResearchRunUnfinished
 from openmarketer_core.db.research_store import ResearchReportNotFound
 from openmarketer_core.db.session import DatabaseError
@@ -101,6 +102,7 @@ class ErrorCode(StrEnum):
     STUDIO_RUN_NOT_FOUND = "studio_run_not_found"
     MEDIA_ASSET_NOT_FOUND = "media_asset_not_found"
     MEDIA_ASSET_VERSION_NOT_FOUND = "media_asset_version_not_found"
+    REPOSITORY_IMAGE_NOT_FOUND = "repository_image_not_found"
     CHAT_NOT_FOUND = "chat_not_found"
     PROFILE_NOT_FOUND = "profile_not_found"
     CREDENTIAL_NOT_FOUND = "credential_not_found"
@@ -166,6 +168,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     StudioRunNotFound: (404, ErrorCode.STUDIO_RUN_NOT_FOUND),
     MediaAssetNotFound: (404, ErrorCode.MEDIA_ASSET_NOT_FOUND),
     MediaAssetVersionNotFound: (404, ErrorCode.MEDIA_ASSET_VERSION_NOT_FOUND),
+    RepositoryImageNotFound: (404, ErrorCode.REPOSITORY_IMAGE_NOT_FOUND),
     ChatNotFound: (404, ErrorCode.CHAT_NOT_FOUND),
     ProfileVersionNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
     ProfileNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),

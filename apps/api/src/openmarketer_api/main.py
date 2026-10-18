@@ -40,6 +40,7 @@ from openmarketer_api.routes import (
     profiles,
     projects,
     proposals,
+    repository_images,
     research,
     studio,
 )
@@ -73,6 +74,7 @@ def create_app() -> FastAPI:
         analyses,
         research,
         studio,
+        repository_images,
         profiles,
         proposals,
         events,

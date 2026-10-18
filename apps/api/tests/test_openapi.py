@@ -65,6 +65,11 @@ OPERATIONS = {
         "get",
         "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download",
     ),
+    "listRepositoryImages": ("get", "/v1/projects/{project_id}/repository-images"),
+    "getRepositoryImage": (
+        "get",
+        "/v1/projects/{project_id}/repository-images/{image_id}/image",
+    ),
     "getCreativeBudget": ("get", "/v1/settings/creative-budget"),
     "setCreativeBudget": ("put", "/v1/settings/creative-budget"),
     "removeCreativeBudget": ("delete", "/v1/settings/creative-budget"),

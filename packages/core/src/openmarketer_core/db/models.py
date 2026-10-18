@@ -1,8 +1,9 @@
-"""Tables for projects, repository evidence, Product Profile versions, analysis runs, research
-runs and their reports and pages, studio runs and the media assets they made, stored
-credentials, the settings a workspace chose from the dashboard, the proposals of actions that
-wait for a person, the operator's chat threads about a project with their turns, the events
-runs record for the person watching them, and the budget ledger of what runs spend.
+"""Tables for projects, repository evidence, Product Profile versions, analysis runs and the
+product images they found in the repository, research runs and their reports and pages, studio
+runs and the media assets they made, stored credentials, the settings a workspace chose from
+the dashboard, the proposals of actions that wait for a person, the operator's chat threads
+about a project with their turns, the events runs record for the person watching them, and the
+budget ledger of what runs spend.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project; ``credential`` and
@@ -44,6 +45,10 @@ from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.budget.caps import SpendDecision
 from openmarketer_core.db.base import Base
+from openmarketer_core.repository_analysis.repository_images.selection import (
+    MAX_PATH_LENGTH,
+    RepositoryImageKind,
+)
 from openmarketer_core.research.questions import MAX_SOURCES
 from openmarketer_core.studio.platforms import PLATFORMS
 
@@ -310,6 +315,45 @@ class AnalysisRunRecord(Base):
     created_at: Mapped[datetime] = _created_at()
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ------------------------------------------------------- repository images
+class RepositoryImageRecord(Base):
+    """One of the product's own images, found in its repository by an analysis run.
+
+    The image is in object storage under ``storage_key``, decoded and written again from its
+    pixels (``repository_analysis/repository_images``); the row keeps where it was in the
+    repository, the kind its path suggests, its type, size and hash. A project keeps the
+    images of one analysis: a run that collects any replaces those of the runs before it.
+    A run keeps a path once and identical bytes once.
+    """
+
+    __tablename__ = "repository_image"
+    __table_args__ = (
+        UniqueConstraint("analysis_run_id", "path"),
+        UniqueConstraint("analysis_run_id", "sha256"),
+        CheckConstraint(f"char_length(path) BETWEEN 1 AND {MAX_PATH_LENGTH}", name="path"),
+        CheckConstraint("mime IN ('image/png', 'image/webp')", name="mime"),
+        CheckConstraint("width > 0 AND height > 0", name="size"),
+        CheckConstraint("size_bytes > 0", name="size_bytes"),
+        CheckConstraint("sha256 ~ '^[0-9a-f]{64}$'", name="sha256"),
+        Index(
+            "ix_repository_image_analysis_run_id_created_at", "analysis_run_id", "created_at", "id"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    analysis_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("analysis_run.id"))
+    path: Mapped[str] = mapped_column(Text)
+    kind: Mapped[RepositoryImageKind] = mapped_column(_enum(RepositoryImageKind, "kind"))
+    mime: Mapped[str] = mapped_column(Text)
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(Text)
+    storage_key: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
 
 
 # ----------------------------------------------------------------- research
