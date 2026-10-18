@@ -6,17 +6,19 @@ import {
   refreshedByChatEvent,
   refreshedByStudioRunDeleted,
   refreshedByStudioRunEnd,
+  refreshedByWorkspaceEvent,
 } from "./query-keys";
-import type { ChatEvent } from "./types";
+import type { RunEvent } from "./types";
 
 const PROJECT = "p";
 const CHAT = "c";
+const PROPOSAL_KINDS = ["proposal_waiting", "proposal_decided", "proposal_expired"];
 
-function event(run_kind: string, kind: string, run_id = "r"): ChatEvent {
+function event(run_kind: string, kind: string, run_id = "r"): RunEvent {
   return { id: 1, run_kind, run_id, kind, detail: {}, created_at: "2026-10-17T12:00:00Z" };
 }
 
-const refreshed = (e: ChatEvent) => refreshedByChatEvent(PROJECT, CHAT, e).map((r) => r.queryKey);
+const refreshed = (e: RunEvent) => refreshedByChatEvent(PROJECT, CHAT, e).map((r) => r.queryKey);
 
 describe("what a chat's event refreshes", () => {
   it("is the chat alone when a turn starts, not its events", () => {
@@ -59,6 +61,14 @@ describe("what a chat's event refreshes", () => {
         queryKeys.creativeBudget(),
         queryKeys.chat(PROJECT, CHAT),
       ]);
+    }
+  });
+
+  it("is the project's proposals when the gate held an action of a run or it was released", () => {
+    for (const runKind of ["research-run", "studio-run"]) {
+      for (const kind of PROPOSAL_KINDS) {
+        expect(refreshed(event(runKind, kind, "run-1"))).toEqual([queryKeys.proposals(PROJECT)]);
+      }
     }
   });
 
@@ -106,5 +116,20 @@ describe("what a change in the studio refreshes", () => {
       queryKeys.studioRuns(PROJECT),
       queryKeys.mediaAssets(PROJECT),
     ]);
+  });
+});
+
+describe("what a workspace event refreshes", () => {
+  const refreshedAnywhere = (e: RunEvent) => refreshedByWorkspaceEvent(e).map((r) => r.queryKey);
+
+  it("is the waiting list when a proposal is stored, decided or expires", () => {
+    for (const kind of PROPOSAL_KINDS) {
+      expect(refreshedAnywhere(event("research-run", kind))).toEqual([queryKeys.waitingProposals()]);
+    }
+  });
+
+  it("is nothing for anything else", () => {
+    expect(refreshedAnywhere(event("research-run", "searched"))).toEqual([]);
+    expect(refreshedAnywhere(event("orchestrator-chat", "turn_started"))).toEqual([]);
   });
 });

@@ -60,7 +60,8 @@ export type ChatList = Schemas["ChatThreadListResponse"];
 export type ChatMessage = Schemas["ChatMessageResponse"];
 export type ChatMessageList = Schemas["ChatMessageListResponse"];
 export type ChatTurn = Schemas["ChatTurnResponse"];
-export type ChatEvent = Schemas["ChatEventResponse"];
+/** One event a run recorded, as every stream and list answers with it. */
+export type RunEvent = Schemas["RunEventResponse"];
 export type ChatEventList = Schemas["ChatEventListResponse"];
 
 export type CredentialStatus = Schemas["CredentialStatusResponse"];

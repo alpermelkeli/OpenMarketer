@@ -73,3 +73,17 @@ export function useWaitingProposalCount(projectId: string) {
     select: (page) => page.proposals.filter((proposal) => proposal.status === "pending").length,
   });
 }
+
+/**
+ * Every proposal of the workspace that waits for a person right now, across projects, newest first:
+ * what the notifications show wherever the person is. The API answers pending ones only.
+ */
+export function useWaitingProposals() {
+  return useQuery<ProposalList, ApiError, Proposal[]>({
+    queryKey: queryKeys.waitingProposals(),
+    queryFn: async () =>
+      dataOf(await api.GET("/v1/proposals", { params: { query: { limit: PAGE_SIZE } } })),
+    select: (page) => page.proposals,
+    retry: false,
+  });
+}

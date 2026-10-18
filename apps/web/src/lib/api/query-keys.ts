@@ -1,8 +1,8 @@
 /** Query keys of the server state the dashboard holds, in one place so invalidation cannot drift. */
 
-import { CHAT_RUN, RESEARCH_RUN, RUN_ENDS, STUDIO_RUN, TURN_ENDS } from "@/lib/chat/events";
+import { CHAT_RUN, PROPOSAL_KINDS, RESEARCH_RUN, RUN_ENDS, STUDIO_RUN, TURN_ENDS } from "@/lib/chat/events";
 
-import type { ChatEvent } from "./types";
+import type { RunEvent } from "./types";
 
 export const queryKeys = {
   projects: () => ["projects", "list"] as const,
@@ -29,6 +29,8 @@ export const queryKeys = {
   profileVersion: (projectId: string, version: number) =>
     ["projects", "one", projectId, "versions", "one", version] as const,
   proposals: (projectId: string) => ["projects", "one", projectId, "proposals", "list"] as const,
+  /** Every proposal of the workspace that waits for a person, wherever it is: the notifications. */
+  waitingProposals: () => ["proposals", "waiting"] as const,
   /** Everything held about a project's chats: the list, each chat and its messages. */
   chatScope: (projectId: string) => ["projects", "one", projectId, "chats"] as const,
   chats: (projectId: string) => ["projects", "one", projectId, "chats", "list"] as const,
@@ -93,10 +95,12 @@ export function refreshedByStudioRunDeleted(projectId: string): Refresh[] {
  * busy, and one that ends has stored its messages; a run a turn starts is in the project's list of
  * its kind. A research run that ends has its final state and perhaps a report; a studio run that
  * ends has its final state, an asset in the library and its cost in this month's spending. Either
- * may start a follow-up turn, which makes the chat busy. The chat's own key is refreshed alone
- * (`exact`), so its events, which the stream keeps current, are not read again.
+ * may start a follow-up turn, which makes the chat busy. A proposal event of either kind of run
+ * changes the project's proposals, which the approvals screen and the sidebar's count read. The
+ * chat's own key is refreshed alone (`exact`), so its events, which the stream keeps current, are
+ * not read again.
  */
-export function refreshedByChatEvent(projectId: string, chatId: string, event: ChatEvent): Refresh[] {
+export function refreshedByChatEvent(projectId: string, chatId: string, event: RunEvent): Refresh[] {
   const chat = { queryKey: queryKeys.chat(projectId, chatId), exact: true };
   if (event.run_kind === CHAT_RUN) {
     if (event.kind === "turn_started") return [chat];
@@ -106,6 +110,8 @@ export function refreshedByChatEvent(projectId: string, chatId: string, event: C
     if (event.kind === "run_started") return refreshedByRunStarted(projectId, event.detail.run_kind);
     return [];
   }
+  if (event.run_kind !== RESEARCH_RUN && event.run_kind !== STUDIO_RUN) return [];
+  if (PROPOSAL_KINDS.includes(event.kind)) return [{ queryKey: queryKeys.proposals(projectId) }];
   if (!RUN_ENDS.includes(event.kind)) return [];
   if (event.run_kind === RESEARCH_RUN) {
     return [
@@ -114,14 +120,23 @@ export function refreshedByChatEvent(projectId: string, chatId: string, event: C
       chat,
     ];
   }
-  if (event.run_kind === STUDIO_RUN) {
-    return [{ queryKey: queryKeys.studioRun(projectId, event.run_id) }, ...refreshedByStudioRunEnd(projectId), chat];
-  }
-  return [];
+  return [{ queryKey: queryKeys.studioRun(projectId, event.run_id) }, ...refreshedByStudioRunEnd(projectId), chat];
 }
 
 function refreshedByRunStarted(projectId: string, runKind: unknown): Refresh[] {
   if (runKind === RESEARCH_RUN) return [{ queryKey: queryKeys.researches(projectId) }];
   if (runKind === STUDIO_RUN) return [{ queryKey: queryKeys.studioRuns(projectId) }];
+  return [];
+}
+
+/**
+ * What a workspace event makes out of date: whether an action waits for a person changes the
+ * workspace's list of what waits, which is what the notifications show. A project's own screens
+ * are kept current by its chat streams' events (`refreshedByChatEvent`).
+ */
+export function refreshedByWorkspaceEvent(event: RunEvent): Refresh[] {
+  if (PROPOSAL_KINDS.includes(event.kind)) {
+    return [{ queryKey: queryKeys.waitingProposals() }];
+  }
   return [];
 }

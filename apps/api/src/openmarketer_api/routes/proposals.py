@@ -4,6 +4,9 @@ An agent's run that asks to publish or to spend stores a proposal and waits. The
 project's proposals, read one, and approve or reject one as the current user; the run is then
 told, and runs the action or hears that it was refused. No request field names a decider, and
 no route decides on behalf of a model. Editing what a proposal asks for is not here.
+
+``workspace_router`` adds the workspace's own view, beside the project's: every pending proposal
+of every project, which the dashboard tells a person about wherever they are.
 """
 
 from __future__ import annotations
@@ -23,9 +26,15 @@ from openmarketer_api.pagination import DEFAULT_PAGE_SIZE, CreatedBefore, PageLi
 from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.approvals.decision import decide_on_proposal
-from openmarketer_core.db.proposals import ActionProposal, get_proposal, list_proposals
+from openmarketer_core.db.proposals import (
+    ActionProposal,
+    get_proposal,
+    list_proposals,
+    list_waiting_proposals,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/proposals", tags=["proposals"])
+workspace_router = APIRouter(prefix="/proposals", tags=["proposals"])
 
 StatusFilter = Annotated[
     ProposalStatus | SkipJsonSchema[None],
@@ -199,3 +208,26 @@ def _decide(
         tell_run=tell_run,
     )
     return _response(proposal)
+
+
+@workspace_router.get(
+    "",
+    operation_id="listWaitingProposals",
+    response_model=ProposalListResponse,
+)
+def list_waiting(
+    session: DbSession,
+    workspace_id: CurrentWorkspaceId,
+    before: CreatedBefore,
+    limit: PageLimit = DEFAULT_PAGE_SIZE,
+) -> ProposalListResponse:
+    """Every pending proposal of the workspace's projects, newest first, one page at a time.
+
+    What waits for a person across projects; the dashboard reads it to tell them wherever they
+    are, and refreshes it as the workspace's event stream announces proposals.
+    """
+    page = list_waiting_proposals(session, workspace_id=workspace_id, limit=limit, before=before)
+    return ProposalListResponse(
+        proposals=[_response(proposal) for proposal in page.items],
+        next_cursor=created_cursor(page.next_before),
+    )

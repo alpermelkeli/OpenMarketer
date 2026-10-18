@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { ChatEvent, ChatMessage } from "@/lib/api/types";
+import type { ChatMessage, RunEvent } from "@/lib/api/types";
 
-import { awaitedTurn, foldChatEvents, inOrder, MAX_HISTORY_PAGES, needsOlderEvents, newestEventId, parseChatEvent } from "./events";
+import { awaitedTurn, foldChatEvents, inOrder, MAX_HISTORY_PAGES, needsOlderEvents, newestEventId, parseRunEvent } from "./events";
 
 const TURN = "11111111-1111-4111-8111-111111111111";
 const LATER_TURN = "22222222-2222-4222-8222-222222222222";
@@ -14,7 +14,7 @@ const V2 = "77777777-7777-4777-8777-777777777777";
 
 let nextId = 1;
 
-function event(kind: string, detail: ChatEvent["detail"] = {}, over: Partial<ChatEvent> = {}): ChatEvent {
+function event(kind: string, detail: RunEvent["detail"] = {}, over: Partial<RunEvent> = {}): RunEvent {
   const id = over.id ?? nextId++;
   return {
     id,
@@ -27,27 +27,27 @@ function event(kind: string, detail: ChatEvent["detail"] = {}, over: Partial<Cha
   };
 }
 
-function research(kind: string, detail: ChatEvent["detail"] = {}, over: Partial<ChatEvent> = {}): ChatEvent {
+function research(kind: string, detail: RunEvent["detail"] = {}, over: Partial<RunEvent> = {}): RunEvent {
   return event(kind, detail, { run_kind: "research-run", run_id: RUN, ...over });
 }
 
-function onlyTurn(events: ChatEvent[]) {
+function onlyTurn(events: RunEvent[]) {
   const [turn] = foldChatEvents(events).turns;
   if (turn === undefined) throw new Error("expected a turn");
   return turn;
 }
 
-function studio(kind: string, detail: ChatEvent["detail"] = {}, over: Partial<ChatEvent> = {}): ChatEvent {
+function studio(kind: string, detail: RunEvent["detail"] = {}, over: Partial<RunEvent> = {}): RunEvent {
   return event(kind, detail, { run_kind: "studio-run", run_id: STUDIO, ...over });
 }
 
-function onlyStudioRun(events: ChatEvent[]) {
+function onlyStudioRun(events: RunEvent[]) {
   const [run] = foldChatEvents(events).studioRuns;
   if (run === undefined) throw new Error("expected a studio run");
   return run;
 }
 
-function onlyRun(events: ChatEvent[]) {
+function onlyRun(events: RunEvent[]) {
   const [run] = foldChatEvents(events).runs;
   if (run === undefined) throw new Error("expected a run");
   return run;
@@ -196,6 +196,57 @@ describe("a research run", () => {
       { kind: "planned", round: null, queries: [] },
     ]);
   });
+
+  it("holds the action the policy gate waited on", () => {
+    const run = onlyRun([
+      research("proposal_waiting", { proposal_id: "p-1", action_name: "search_web", effect: "spends" }),
+    ]);
+    expect(run.proposal).toEqual({
+      id: "p-1",
+      actionName: "search_web",
+      effect: "spends",
+      status: "waiting",
+    });
+    expect(run.stages).toEqual([]);
+  });
+
+  it("shows where the held action stands once the person decided or it expired", () => {
+    const waiting = research("proposal_waiting", {
+      proposal_id: "p-1",
+      action_name: "search_web",
+      effect: "spends",
+    });
+    const decided = (approved: boolean) =>
+      onlyRun([waiting, research("proposal_decided", { proposal_id: "p-1", approved })]).proposal;
+    expect(decided(true)).toMatchObject({ id: "p-1", status: "approved" });
+    expect(decided(false)).toMatchObject({ id: "p-1", status: "rejected" });
+    expect(onlyRun([waiting, research("proposal_expired", { proposal_id: "p-1" })]).proposal).toMatchObject({
+      id: "p-1",
+      status: "expired",
+    });
+  });
+
+  it("counts a decision on another proposal as nothing", () => {
+    const run = onlyRun([
+      research("proposal_waiting", { proposal_id: "p-1", action_name: "search_web", effect: "spends" }),
+      research("proposal_decided", { proposal_id: "p-2", approved: true }),
+    ]);
+    expect(run.proposal).toMatchObject({ id: "p-1", status: "waiting" });
+  });
+
+  it("takes the last action the gate waited on", () => {
+    const run = onlyRun([
+      research("proposal_waiting", { proposal_id: "p-1", action_name: "search_web", effect: "spends" }),
+      research("proposal_decided", { proposal_id: "p-1", approved: true }),
+      research("proposal_waiting", { proposal_id: "p-2", action_name: "fetch_page", effect: "spends" }),
+    ]);
+    expect(run.proposal).toEqual({
+      id: "p-2",
+      actionName: "fetch_page",
+      effect: "spends",
+      status: "waiting",
+    });
+  });
 });
 
 describe("events from the history and the stream", () => {
@@ -222,12 +273,12 @@ describe("events from the history and the stream", () => {
 describe("an event the stream sends", () => {
   it("is read from its data line", () => {
     const sent = event("tool_called", { tool: "read_profile", label: "Reading" });
-    expect(parseChatEvent(JSON.stringify(sent))).toEqual(sent);
+    expect(parseRunEvent(JSON.stringify(sent))).toEqual(sent);
   });
 
   it("is skipped when it is not one", () => {
     for (const data of ["", "not json", "[]", '{"id":"1"}', JSON.stringify({ ...event("x"), detail: [] })]) {
-      expect(parseChatEvent(data)).toBeNull();
+      expect(parseRunEvent(data)).toBeNull();
     }
   });
 });
@@ -310,13 +361,26 @@ describe("a studio run in its chat", () => {
     ]);
   });
 
-  it("remembers the newest image a step made, and not an operation that made none", () => {
+  it("remembers the newest image a step made and its asset, and not an operation that made none", () => {
     const run = onlyStudioRun([
-      studio("produced", { operation: "generate_image", version_id: V1, technique: "generated", round: 1, ok: true }),
-      studio("produced", { operation: "edit_image", version_id: null, technique: "generated", round: 2, ok: false }),
+      studio("produced", { operation: "generate_image", version_id: V1, asset_id: ASSET, technique: "generated", round: 1, ok: true }),
+      studio("produced", { operation: "edit_image", version_id: null, asset_id: null, technique: "generated", round: 2, ok: false }),
     ]);
-    expect(run.latestVersionId).toBe(V1);
+    expect(run).toMatchObject({ status: "running", assetId: ASSET, latestVersionId: V1 });
     expect(run.stages[1]).toMatchObject({ kind: "produced", ok: false, versionId: null });
+  });
+
+  it("holds a spend the policy gate waited on, and where it stands", () => {
+    const waiting = studio("proposal_waiting", { proposal_id: "p-1", action_name: "generate_image", effect: "spends" });
+    expect(onlyStudioRun([waiting]).proposal).toEqual({
+      id: "p-1",
+      actionName: "generate_image",
+      effect: "spends",
+      status: "waiting",
+    });
+    const decided = onlyStudioRun([waiting, studio("proposal_decided", { proposal_id: "p-1", approved: false })]);
+    expect(decided.proposal).toMatchObject({ id: "p-1", status: "rejected" });
+    expect(decided.stages).toEqual([]);
   });
 
   it("shows a repeated step once", () => {

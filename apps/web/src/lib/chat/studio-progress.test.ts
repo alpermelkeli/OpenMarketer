@@ -26,6 +26,7 @@ function view(over: Partial<StudioRunView> = {}): StudioRunView {
     latestVersionId: null,
     needsReview: null,
     reason: null,
+    proposal: null,
     firstEventId: 1,
     startedAt: "2026-10-17T12:00:00Z",
     ...over,
@@ -84,6 +85,15 @@ describe("the image a studio run's card shows", () => {
   it("is the newest a step made when the record names the asset but no event the final version", () => {
     const seen = view({ latestVersionId: V1 });
     expect(latestCandidate(seen, studioProgressStatus(seen, stored("succeeded", { final_asset_id: ASSET })))).toEqual({
+      assetId: ASSET,
+      versionId: V1,
+      final: false,
+    });
+  });
+
+  it("is the newest a step made while the run is going, once a step named its asset", () => {
+    const running = view({ assetId: ASSET, latestVersionId: V1 });
+    expect(latestCandidate(running, studioProgressStatus(running, stored("running")))).toEqual({
       assetId: ASSET,
       versionId: V1,
       final: false,

@@ -34,6 +34,7 @@ from openmarketer_api.routes import (
     chat,
     creative_budget,
     credentials,
+    events,
     health,
     model_settings,
     profiles,
@@ -74,6 +75,7 @@ def create_app() -> FastAPI:
         studio,
         profiles,
         proposals,
+        events,
         chat,
         credentials,
         model_settings,
@@ -81,6 +83,9 @@ def create_app() -> FastAPI:
         creative_budget,
     ):
         workspace_routes.include_router(resource.router)
+    # Beside the per-project views: every pending proposal of the workspace, for the
+    # dashboard's notifications wherever the person is.
+    workspace_routes.include_router(proposals.workspace_router)
     app.include_router(workspace_routes)
     return app
 

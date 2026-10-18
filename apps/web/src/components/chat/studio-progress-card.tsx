@@ -16,6 +16,8 @@ import { shortId } from "@/lib/format";
 import { studioHref } from "@/lib/projects/project-navigation";
 import { isStudioRunFinished, studioRunStatusDisplay } from "@/lib/studio/status";
 
+import { RunProposalDecision } from "./run-proposal-decision";
+
 type StudioProgressCardProps = {
   projectId: string;
   view: StudioRunView;
@@ -30,6 +32,7 @@ type StudioProgressCardProps = {
  * it ended with, and the way to its own page, where its rounds and the decision on its image are.
  * The steps are open while the run is going and folded once it has ended, and the person can fold
  * them either way: folded, the line shows the step the run is on, turning, or how many it recorded.
+ * A spend the policy gate held for a person is shown with the buttons to decide it.
  */
 export function StudioProgressCard({ projectId, view, status, candidate, alt }: StudioProgressCardProps) {
   const display = studioRunStatusDisplay(status.state);
@@ -55,6 +58,8 @@ export function StudioProgressCard({ projectId, view, status, candidate, alt }: 
           <ArrowRightIcon aria-hidden="true" className="size-3.5" />
         </Link>
       </header>
+
+      {view.proposal !== null && <RunProposalDecision projectId={projectId} proposal={view.proposal} />}
 
       {/* Polite, so a screen reader hears the run move on without being interrupted. */}
       <div aria-live="polite" className="grid gap-2">

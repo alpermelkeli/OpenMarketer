@@ -1,4 +1,4 @@
-"""Run events: storing what runs did, and reading back those of a chat thread or of one run.
+"""Run events: storing what runs did, and reading them back for a chat, a run or a workspace.
 
 Any kind of run appends its events (``openmarketer_core.run_events``) here,
 named by its kind and id as a proposal names its run. A chat thread's events
@@ -6,7 +6,10 @@ are those of its turns (kind ``CHAT_TURN_KIND``) and of the research and studio
 runs it asked for (kinds ``RESEARCH_RUN_KIND`` and ``STUDIO_RUN_KIND``, the runs
 whose ``chat_thread_id`` is the thread), in the order they were stored. The latest event
 of one kind of one run is read back by ``latest_event_of_run``, for what a run recorded
-nowhere else (the reason a studio run was handed to a person).
+nowhere else (the reason a studio run was handed to a person). A workspace reads every
+event of every one of its projects (``events_of_workspace``): the dashboard follows that
+stream to tell the person wherever they are that something of a run happened, such as an
+action the policy gate held for them.
 
 The identifier of an event is the cursor a reader continues from: it reads the
 events after the last one it has (``events_of_chat``), so it must never find a
@@ -33,13 +36,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from openmarketer_core.agent_runtime.threads import validate_kind
 from openmarketer_core.db.chat import require_chat
 from openmarketer_core.db.models import (
     ChatTurnRecord,
+    Project,
     ResearchRunRecord,
     RunEventRecord,
     StudioRunRecord,
@@ -180,6 +184,50 @@ def latest_event_of_run(
         .limit(1)
     )
     return None if record is None else _stored(record)
+
+
+def events_of_workspace(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    after: int | None,
+    limit: int,
+) -> list[StoredRunEvent]:
+    """Every event of the workspace's projects stored after the event ``after``, oldest first.
+
+    At most ``limit`` of them; from the first event when ``after`` is ``None``. A reader passes
+    the identifier of the last event it got to read on. This is the workspace's own stream: a
+    run of any kind, in any of its projects, records here what the person watching may need to
+    hear about.
+    """
+    if not 1 <= limit <= MAX_PAGE_SIZE:
+        raise ValueError(f"a page holds between 1 and {MAX_PAGE_SIZE} rows, not {limit}")
+    query = _events_of_workspace(workspace_id)
+    if after is not None:
+        query = query.where(RunEventRecord.id > after)
+    records = session.scalars(query.order_by(RunEventRecord.id).limit(limit))
+    return [_stored(record) for record in records]
+
+
+def latest_event_id_of_workspace(session: Session, *, workspace_id: uuid.UUID) -> int | None:
+    """The workspace's newest event id, or ``None`` when it has none.
+
+    What a workspace stream that was given no cursor starts after, so a new reader follows what
+    is stored from now on and not the whole of the workspace's history.
+    """
+    return session.scalar(
+        select(func.max(RunEventRecord.id))
+        .join(Project, Project.id == RunEventRecord.project_id)
+        .where(Project.workspace_id == workspace_id)
+    )
+
+
+def _events_of_workspace(workspace_id: uuid.UUID) -> Select[RunEventRecord]:
+    return (
+        select(RunEventRecord)
+        .join(Project, Project.id == RunEventRecord.project_id)
+        .where(Project.workspace_id == workspace_id)
+    )
 
 
 def _events_of_chat(project_id: uuid.UUID, chat_id: uuid.UUID) -> Select[RunEventRecord]:

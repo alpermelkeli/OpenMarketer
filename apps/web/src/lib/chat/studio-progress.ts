@@ -4,9 +4,9 @@
  *
  * The run's own record wins over its events once it has ended: a run whose workflow could not be
  * started is recorded as failed without ever recording an event. The image is named by ids only,
- * from the events or the record, and its address is built by `lib/studio/image-src.ts`. The steps
- * do not name the asset their images belong to, so an image is shown once the run has ended and
- * named it. A reason is the code's sentence; the screen shows it as text.
+ * from the events or the record, and its address is built by `lib/studio/image-src.ts`. The first
+ * step that makes an image names its asset, so the newest image is shown while the run is going. A
+ * reason is the code's sentence; the screen shows it as text.
  *
  * Display only.
  */
@@ -18,7 +18,7 @@ import type { StudioRunView, StudioStage } from "./events";
 
 export type StudioProgressStatus = {
   state: StudioRunStatus;
-  /** The asset it ended with, once it has. */
+  /** The asset its images belong to, once a step or its record named it; none for a run that failed. */
   assetId: string | null;
   reason: string | null;
 };
@@ -33,7 +33,7 @@ export function studioProgressStatus(view: StudioRunView, run: StudioRun | undef
   }
   if (view.status === "failed") return { state: "failed", assetId: null, reason: view.reason };
   const queued = run?.status === "queued" && view.stages.length === 0;
-  return { state: queued ? "queued" : "running", assetId: null, reason: null };
+  return { state: queued ? "queued" : "running", assetId: view.assetId, reason: null };
 }
 
 export type Candidate = {

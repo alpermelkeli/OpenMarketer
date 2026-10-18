@@ -626,7 +626,7 @@
           "events": {
             "description": "Newest first.",
             "items": {
-              "$ref": "#/components/schemas/ChatEventResponse"
+              "$ref": "#/components/schemas/RunEventResponse"
             },
             "title": "Events",
             "type": "array"
@@ -649,55 +649,6 @@
           "next_cursor"
         ],
         "title": "ChatEventListResponse",
-        "type": "object"
-      },
-      "ChatEventResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "detail": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/EventDetailValue"
-            },
-            "description": "What the screen shows of it: names, counts, identifiers, short texts; one flat level of values and lists of values.",
-            "title": "Detail",
-            "type": "object"
-          },
-          "id": {
-            "description": "The event's place in the order events were stored: larger for a later event. It is the cursor a stream continues from (`after`, `Last-Event-ID`).",
-            "title": "Id",
-            "type": "integer"
-          },
-          "kind": {
-            "description": "What happened, such as `tool_called` or `fetched`.",
-            "title": "Kind",
-            "type": "string"
-          },
-          "run_id": {
-            "description": "The turn or the research run that recorded it.",
-            "format": "uuid",
-            "title": "Run Id",
-            "type": "string"
-          },
-          "run_kind": {
-            "description": "The kind of run that recorded it: `orchestrator-chat` for a turn of the chat, `research-run` for a research run the chat started.",
-            "title": "Run Kind",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "run_kind",
-          "run_id",
-          "kind",
-          "detail",
-          "created_at"
-        ],
-        "title": "ChatEventResponse",
         "type": "object"
       },
       "ChatMessageListResponse": {
@@ -3153,6 +3104,55 @@
         "title": "RoleSettingResponse",
         "type": "object"
       },
+      "RunEventResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EventDetailValue"
+            },
+            "description": "What the screen shows of it: names, counts, identifiers, short texts; one flat level of values and lists of values.",
+            "title": "Detail",
+            "type": "object"
+          },
+          "id": {
+            "description": "The event's place in the order events were stored: larger for a later event. It is the cursor a stream continues from (`after`, `Last-Event-ID`).",
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "description": "What happened, such as `tool_called`, `fetched` or `proposal_waiting`.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "The turn or the research run that recorded it.",
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "run_kind": {
+            "description": "The kind of run that recorded it: `orchestrator-chat` for a turn of a chat, `research-run` for a research run.",
+            "title": "Run Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_kind",
+          "run_id",
+          "kind",
+          "detail",
+          "created_at"
+        ],
+        "title": "RunEventResponse",
+        "type": "object"
+      },
       "SaveProfileEditRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3717,6 +3717,127 @@
         "summary": "Get Health",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/v1/events/stream": {
+      "get": {
+        "description": "The workspace's run events from a cursor, as server-sent events.\n\n`after` (or the `Last-Event-ID` header, which wins) is the `id` of the last event the client\nhas; left out, the stream starts after the newest event, so a new client follows what happens\nfrom now on and not the whole history. 503 `too_many_streams` when the server has as many\nstreams open as it keeps (the client tries again after a while). The stream ends after a few\nminutes, whether or not anything happened.",
+        "operationId": "streamWorkspaceEvents",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "description": "The `id` of the last event the client got, which a browser sends when it reconnects. It wins over `after`, which the reconnecting URL still holds.",
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The `id` of the last event the client got, which a browser sends when it reconnects. It wins over `after`, which the reconnecting URL still holds.",
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "properties": {
+                    "data": {
+                      "contentMediaType": "application/json",
+                      "contentSchema": {
+                        "$ref": "#/components/schemas/RunEventResponse"
+                      },
+                      "type": "string"
+                    },
+                    "event": {
+                      "description": "The event's `kind`.",
+                      "type": "string"
+                    },
+                    "id": {
+                      "description": "The event's `id`.",
+                      "type": "string"
+                    },
+                    "retry": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "event",
+                    "data"
+                  ],
+                  "type": "object"
+                },
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent events, oldest first: every run event of the workspace's projects, each one `id: <id>`, `event: <kind>` and `data: <RunEventResponse as JSON>`; a `: keep-alive` comment is sent when nothing happened for a while, and the stream ends after a few minutes with a `retry:` hint sent at its start, so the client reconnects with `Last-Event-ID`."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Stream Events",
+        "tags": [
+          "events"
         ]
       }
     },
@@ -4836,7 +4957,7 @@
                     "data": {
                       "contentMediaType": "application/json",
                       "contentSchema": {
-                        "$ref": "#/components/schemas/ChatEventResponse"
+                        "$ref": "#/components/schemas/RunEventResponse"
                       },
                       "type": "string"
                     },
@@ -4865,7 +4986,7 @@
                 }
               }
             },
-            "description": "Server-sent events, oldest first. Each event is `id: <id>`, `event: <kind>` and `data: <ChatEventResponse as JSON>`; a `: keep-alive` comment is sent when nothing happened for a while, and the stream ends after a few minutes with a `retry:` hint sent at its start, so the client reconnects with `Last-Event-ID`."
+            "description": "Server-sent events, oldest first. Each event is `id: <id>`, `event: <kind>` and `data: <RunEventResponse as JSON>`; a `: keep-alive` comment is sent when nothing happened for a while, and the stream ends after a few minutes with a `retry:` hint sent at its start, so the client reconnects with `Last-Event-ID`."
           },
           "403": {
             "content": {
@@ -7484,6 +7605,86 @@
         "summary": "Get Run",
         "tags": [
           "studio"
+        ]
+      }
+    },
+    "/v1/proposals": {
+      "get": {
+        "description": "Every pending proposal of the workspace's projects, newest first, one page at a time.\n\nWhat waits for a person across projects; the dashboard reads it to tell them wherever they\nare, and refreshes it as the workspace's event stream announces proposals.",
+        "operationId": "listWaitingProposals",
+        "parameters": [
+          {
+            "description": "The most items one response may hold.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most items one response may hold.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+              "maxLength": 200,
+              "title": "Cursor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Waiting",
+        "tags": [
+          "proposals"
         ]
       }
     },

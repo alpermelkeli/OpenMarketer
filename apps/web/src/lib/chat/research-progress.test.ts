@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { ResearchRun } from "@/lib/api/types";
 
-import type { ResearchRunView } from "./events";
-import { outcomeText, pageHost, progressStatus, stageText } from "./research-progress";
+import type { RunProposal, ResearchRunView } from "./events";
+import { outcomeText, pageHost, progressStatus, proposalText, stageText } from "./research-progress";
 
 function view(over: Partial<ResearchRunView> = {}): ResearchRunView {
   return {
@@ -13,6 +13,7 @@ function view(over: Partial<ResearchRunView> = {}): ResearchRunView {
     status: "running",
     findings: null,
     reason: null,
+    proposal: null,
     firstEventId: 1,
     startedAt: "2026-10-17T12:00:00Z",
     ...over,
@@ -82,5 +83,25 @@ describe("the end of a run's card", () => {
     expect(outcomeText({ state: "finished", findings: 3, reason: null })).toBe("Finished with 3 checked findings.");
     expect(outcomeText({ state: "finished", findings: 0, reason: null })).toBe("Finished without a checked finding.");
     expect(outcomeText({ state: "running", findings: 3, reason: null })).toBeNull();
+  });
+});
+
+describe("the action the gate held for a run", () => {
+  const proposal = (status: RunProposal["status"]): RunProposal => ({
+    id: "p-1",
+    actionName: "search_web",
+    effect: "spends",
+    status,
+  });
+
+  it("reads as a sentence for where it stands", () => {
+    expect(proposalText(proposal("waiting"))).toBe(
+      "The run asked to run search_web and waits for your decision. Nothing runs until you decide.",
+    );
+    expect(proposalText(proposal("approved"))).toBe("You approved search_web; the run carries it out.");
+    expect(proposalText(proposal("rejected"))).toBe("You rejected search_web; it did not run.");
+    expect(proposalText(proposal("expired"))).toBe(
+      "Nobody decided on search_web before its deadline, or the run stopped waiting; it did not run.",
+    );
   });
 });

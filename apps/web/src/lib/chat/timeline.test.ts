@@ -42,6 +42,7 @@ function run(id: string, turnId: string | null, minute: number, firstEventId: nu
     status: "running",
     findings: null,
     reason: null,
+    proposal: null,
     firstEventId,
     startedAt: `2026-10-17T12:${String(minute).padStart(2, "0")}:30Z`,
   };
@@ -58,6 +59,7 @@ function studioRun(id: string, turnId: string | null, minute: number, firstEvent
     latestVersionId: null,
     needsReview: null,
     reason: null,
+    proposal: null,
     firstEventId,
     startedAt: `2026-10-17T12:${String(minute).padStart(2, "0")}:30Z`,
   };

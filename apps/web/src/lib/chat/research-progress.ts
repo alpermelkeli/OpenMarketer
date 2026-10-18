@@ -13,7 +13,7 @@
 import type { Tone } from "@/lib/analysis/run-status";
 import type { ResearchRun } from "@/lib/api/types";
 
-import type { ResearchRunView, ResearchStage } from "./events";
+import type { RunProposal, ResearchRunView, ResearchStage } from "./events";
 
 export type ProgressStatus = {
   state: "running" | "finished" | "failed";
@@ -48,6 +48,20 @@ export function outcomeText(status: ProgressStatus): string | null {
   return status.findings === 0
     ? "Finished without a checked finding."
     : `Finished with ${count(status.findings, "checked finding", "checked findings")}.`;
+}
+
+/** Where the action the policy gate held stands, as a sentence of the run's card. */
+export function proposalText(proposal: RunProposal): string {
+  switch (proposal.status) {
+    case "waiting":
+      return `The run asked to run ${proposal.actionName} and waits for your decision. Nothing runs until you decide.`;
+    case "approved":
+      return `You approved ${proposal.actionName}; the run carries it out.`;
+    case "rejected":
+      return `You rejected ${proposal.actionName}; it did not run.`;
+    case "expired":
+      return `Nobody decided on ${proposal.actionName} before its deadline, or the run stopped waiting; it did not run.`;
+  }
 }
 
 /** What one stage did, as a line of the run's card. */

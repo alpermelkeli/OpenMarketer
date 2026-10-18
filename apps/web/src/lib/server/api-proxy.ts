@@ -9,13 +9,14 @@
  * This module decides and builds; it does no I/O except through the `fetch` it is
  * given. It deliberately is not a general proxy: only the routes listed in
  * `ALLOWED_ROUTES` exist, the only query parameters are the two that page a list
- * and the one that resumes the chat's event stream, and the upstream URL is built
+ * and the one that resumes an event stream, and the upstream URL is built
  * from validated parts, never from the incoming URL.
  *
- * One route streams: a chat's events, as server-sent events. Its answer is passed
- * through as it arrives instead of being read whole, it is the only route that takes
- * a browser header (`Last-Event-ID`, which `EventSource` sends when it reconnects,
- * checked to be an event id), and the upstream request ends when the browser leaves.
+ * Two routes stream: a chat's events and the workspace's, as server-sent events.
+ * Their answers are passed through as they arrive instead of being read whole, they
+ * are the only routes that take a browser header (`Last-Event-ID`, which `EventSource`
+ * sends when it reconnects, checked to be an event id), and the upstream request ends
+ * when the browser leaves.
  *
  * Two routes answer with an image: a studio version's, to show in the page or to save.
  * They are reads only. Their body is passed on as bytes, but only when the API says it is
@@ -127,6 +128,8 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/projects/{project_id}/proposals", PAGED),
   route("POST", "/v1/projects/{project_id}/proposals/{proposal_id}/approval"),
   route("POST", "/v1/projects/{project_id}/proposals/{proposal_id}/rejection"),
+  route("GET", "/v1/proposals", PAGED),
+  route("GET", "/v1/events/stream", STREAM),
   route("GET", "/v1/settings/credentials"),
   route("PUT", "/v1/settings/credentials/{name}"),
   route("DELETE", "/v1/settings/credentials/{name}"),
@@ -373,10 +376,10 @@ async function forward(
 }
 
 /**
- * Forward the event stream: its events are passed on as the API sends them, never read
+ * Forward an event stream: its events are passed on as the API sends them, never read
  * whole, and the upstream request is aborted when the browser goes away (`signal`). An
- * answer that is not an event stream (the API's 404 for a chat it does not have) is
- * passed on as JSON, like any other.
+ * answer that is not an event stream (the API's 404 for a chat it does not have, or its
+ * 503 when it has too many streams open) is passed on as JSON, like any other.
  */
 async function forwardStream(
   send: typeof fetch,

@@ -1,5 +1,7 @@
 import { Suspense, type ReactNode } from "react";
 
+import { NotificationBell } from "@/components/notifications/notification-bell";
+
 import { SidebarNav } from "./sidebar-nav";
 import { Wordmark } from "./wordmark";
 
@@ -29,6 +31,11 @@ export function AppShell({ children }: AppShellProps) {
       <main id="main" className="min-w-0 flex-1">
         <div className="mx-auto max-w-content px-gutter pt-10 pb-24 lg:px-gutter-wide lg:pt-14">{children}</div>
       </main>
+      {/* Fixed at the top right of the viewport, over the sidebar's row on narrow screens
+          and in the page's margin on wide ones, so it shows on every screen. */}
+      <div className="fixed top-2 right-4 z-40 lg:top-3 lg:right-6">
+        <NotificationBell />
+      </div>
     </div>
   );
 }

@@ -21,6 +21,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/events/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Events
+         * @description The workspace's run events from a cursor, as server-sent events.
+         *
+         *     `after` (or the `Last-Event-ID` header, which wins) is the `id` of the last event the client
+         *     has; left out, the stream starts after the newest event, so a new client follows what happens
+         *     from now on and not the whole history. 503 `too_many_streams` when the server has as many
+         *     streams open as it keeps (the client tries again after a while). The stream ends after a few
+         *     minutes, whether or not anything happened.
+         */
+        get: operations["streamWorkspaceEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects": {
         parameters: {
             query?: never;
@@ -767,6 +793,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Waiting
+         * @description Every pending proposal of the workspace's projects, newest first, one page at a time.
+         *
+         *     What waits for a person across projects; the dashboard reads it to tell them wherever they
+         *     are, and refreshes it as the workspace's event stream announces proposals.
+         */
+        get: operations["listWaitingProposals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/settings/analysis": {
         parameters: {
             query?: never;
@@ -1268,48 +1317,12 @@ export interface components {
              * Events
              * @description Newest first.
              */
-            events: components["schemas"]["ChatEventResponse"][];
+            events: components["schemas"]["RunEventResponse"][];
             /**
              * Next Cursor
              * @description Null on the last page; otherwise the `cursor` of the next request.
              */
             next_cursor: string | null;
-        };
-        /** ChatEventResponse */
-        ChatEventResponse: {
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Detail
-             * @description What the screen shows of it: names, counts, identifiers, short texts; one flat level of values and lists of values.
-             */
-            detail: {
-                [key: string]: components["schemas"]["EventDetailValue"];
-            };
-            /**
-             * Id
-             * @description The event's place in the order events were stored: larger for a later event. It is the cursor a stream continues from (`after`, `Last-Event-ID`).
-             */
-            id: number;
-            /**
-             * Kind
-             * @description What happened, such as `tool_called` or `fetched`.
-             */
-            kind: string;
-            /**
-             * Run Id
-             * Format: uuid
-             * @description The turn or the research run that recorded it.
-             */
-            run_id: string;
-            /**
-             * Run Kind
-             * @description The kind of run that recorded it: `orchestrator-chat` for a turn of the chat, `research-run` for a research run the chat started.
-             */
-            run_kind: string;
         };
         /** ChatMessageListResponse */
         ChatMessageListResponse: {
@@ -2276,6 +2289,42 @@ export interface components {
             /** Tier */
             tier: string | null;
         };
+        /** RunEventResponse */
+        RunEventResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Detail
+             * @description What the screen shows of it: names, counts, identifiers, short texts; one flat level of values and lists of values.
+             */
+            detail: {
+                [key: string]: components["schemas"]["EventDetailValue"];
+            };
+            /**
+             * Id
+             * @description The event's place in the order events were stored: larger for a later event. It is the cursor a stream continues from (`after`, `Last-Event-ID`).
+             */
+            id: number;
+            /**
+             * Kind
+             * @description What happened, such as `tool_called`, `fetched` or `proposal_waiting`.
+             */
+            kind: string;
+            /**
+             * Run Id
+             * Format: uuid
+             * @description The turn or the research run that recorded it.
+             */
+            run_id: string;
+            /**
+             * Run Kind
+             * @description The kind of run that recorded it: `orchestrator-chat` for a turn of a chat, `research-run` for a research run.
+             */
+            run_kind: string;
+        };
         /** SaveProfileEditRequest */
         SaveProfileEditRequest: {
             profile: components["schemas"]["ProductProfile"];
@@ -2545,6 +2594,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+        };
+    };
+    streamWorkspaceEvents: {
+        parameters: {
+            query?: {
+                after?: number | null;
+            };
+            header?: {
+                /** @description The `id` of the last event the client got, which a browser sends when it reconnects. It wins over `after`, which the reconnecting URL still holds. */
+                "Last-Event-ID"?: number | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent events, oldest first: every run event of the workspace's projects, each one `id: <id>`, `event: <kind>` and `data: <RunEventResponse as JSON>`; a `: keep-alive` comment is sent when nothing happened for a while, and the stream ends after a few minutes with a `retry:` hint sent at its start, so the client reconnects with `Last-Event-ID`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -3313,7 +3414,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Server-sent events, oldest first. Each event is `id: <id>`, `event: <kind>` and `data: <ChatEventResponse as JSON>`; a `: keep-alive` comment is sent when nothing happened for a while, and the stream ends after a few minutes with a `retry:` hint sent at its start, so the client reconnects with `Last-Event-ID`. */
+            /** @description Server-sent events, oldest first. Each event is `id: <id>`, `event: <kind>` and `data: <RunEventResponse as JSON>`; a `: keep-alive` comment is sent when nothing happened for a while, and the stream ends after a few minutes with a `retry:` hint sent at its start, so the client reconnects with `Last-Event-ID`. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5098,6 +5199,58 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listWaitingProposals: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
