@@ -6,11 +6,14 @@ is already cloned. A run that a workflow takes step by step, with checkpoints, i
 """
 
 import json
+from pathlib import Path
 
+import httpx
 import pytest
 
 from openmarketer_core.agent_runtime.langgraph_agent import compile_agent
-from openmarketer_core.llm import ChatReply
+from openmarketer_core.llm import ChatReply, ForcedChoiceRefusals, RouterChatModel
+from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError, Limits
 from openmarketer_core.repository_analysis.analyzer_agent.definitions import agent
@@ -258,6 +261,31 @@ def test_agent_is_forced_to_submit_when_steps_run_out(files):
     assert all(c == {"type": "function", "function": {"name": SUBMIT}} for c in choices[4:])
     wrap_up = [m for m in model.requests[-1]["messages"] if "Submit the profile now" in str(m)]
     assert len(wrap_up) == 1
+
+
+def test_wrap_up_completes_with_a_model_that_refuses_a_forced_choice(files):
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if "tool_choice" in body:
+            message = "No endpoints found that support the provided 'tool_choice' value."
+            return httpx.Response(404, json={"error": {"message": message, "code": 404}})
+        submitted = {"role": "assistant", "tool_calls": [call(SUBMIT, **profile())]}
+        return httpx.Response(200, json={"choices": [{"message": submitted}]})
+
+    config = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
+    model = RouterChatModel(
+        router=ModelRouter.from_file(config, env={"OPENROUTER_API_KEY": "test-key"}),
+        transport=httpx.MockTransport(handler),
+        forced_choice_refusals=ForcedChoiceRefusals(),
+    )
+    result = analyze(files, model, limits=Limits(max_steps=2))
+
+    assert result.profile == ProductProfile.model_validate(profile())
+    assert [("tool_choice" in body) for body in sent] == [True, False]
+    assert f"calling the tool `{SUBMIT}`" in sent[1]["messages"][-1]["content"]
 
 
 def test_cost_limit_stops_the_run(files):
