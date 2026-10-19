@@ -12,7 +12,8 @@ anything is decoded, and then chooses among the decoded ones:
   ``.github``);
 - its ``kind`` is a hint read from the path: ``icon`` (an iOS app icon set, Android's
   ``mipmap-*/ic_launcher*``, a favicon, a file named ``icon*``), ``logo``, ``screenshot``
-  (``screenshots/``, fastlane's ``metadata/**/images``, a store folder), ``marketing``
+  (``screenshots/``, fastlane's ``metadata/**/images``, a store folder, a device's ``ipad-ss/``,
+  a file named for a store), ``marketing``
   (marketing, press and branding folders, documentation images) or ``other``;
 - the files of one icon set are the same icon in several sizes: only the largest is kept;
 - a decoded image is kept when its short side has at least ``min_short_side`` pixels and
@@ -69,8 +70,13 @@ KEPT_HIDDEN_DIRS = frozenset({".github"})
 
 SCREENSHOT_DIRS = frozenset({
     "screenshots", "screenshot", "screens", "store", "appstore", "app-store", "app_store",
-    "playstore", "play-store", "play_store", "store-assets", "store_assets",
+    "playstore", "play-store", "play_store", "store-assets", "store_assets", "ss",
 })  # fmt: skip
+# A folder of screenshots named for a device: ``ipad-ss``, ``iphone_ss``.
+_DEVICE_SCREENSHOT_DIR = re.compile(r".+[-_]ss")
+# What a screenshot's own name says, as store tools and people name them.
+SCREENSHOT_NAMES = ("screenshot", "app store", "appstore", "app-store", "play store", "playstore")
+ICON_DIRS = frozenset({"icon", "icons", "app-icon", "app_icon", "appicon"})
 MARKETING_DIRS = frozenset({
     "marketing", "press", "press-kit", "presskit", "press_kit", "branding", "brand",
     "media-kit", "mediakit", "promo", "promotional",
@@ -171,7 +177,7 @@ def kind_of(rel: PurePosixPath) -> tuple[RepositoryImageKind, str | None]:
         return RepositoryImageKind.ICON, f"{resources}:mipmap:{stem}"
     if stem.startswith("favicon"):
         return RepositoryImageKind.ICON, f"{parent}:favicon"
-    if stem.startswith(ICON_NAMES):
+    if stem.startswith(ICON_NAMES) or (dirs and dirs[-1] in ICON_DIRS):
         return RepositoryImageKind.ICON, None
     if "logo" in stem or any(d in ("logo", "logos") for d in dirs):
         return RepositoryImageKind.LOGO, None
@@ -179,7 +185,9 @@ def kind_of(rel: PurePosixPath) -> tuple[RepositoryImageKind, str | None]:
         if any(marker in name for marker in MARKETING_NAMES):
             return RepositoryImageKind.MARKETING, None
         return RepositoryImageKind.SCREENSHOT, None
-    if "screenshot" in stem or any(d in SCREENSHOT_DIRS for d in dirs):
+    if any(marker in stem for marker in SCREENSHOT_NAMES) or any(
+        d in SCREENSHOT_DIRS or _DEVICE_SCREENSHOT_DIR.fullmatch(d) for d in dirs
+    ):
         return RepositoryImageKind.SCREENSHOT, None
     if any(d in MARKETING_DIRS for d in dirs) or _is_documentation_image(dirs):
         return RepositoryImageKind.MARKETING, None
