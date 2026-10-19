@@ -454,6 +454,7 @@ def test_the_same_wrong_words_twice_switch_to_a_background_with_the_words_in_cod
                 input_version_ids=[latest_image(messages)],
             ),
             ready(),
+            ready(),
         ],
         asset_verifier=[reading("Lauch day"), reading("Lanch day"), a_verdict()],
     )
@@ -814,6 +815,7 @@ def test_a_program_is_given_the_repository_images_it_names():
                 input_repository_image_ids=[SCREENSHOT.id],
             ),
             ready(),
+            ready(),
         ],
         asset_verifier=[a_verdict()],
     )
@@ -1032,6 +1034,7 @@ def test_the_real_icon_is_composited_on_the_image_models_image_and_that_is_the_c
                 input_repository_image_ids=[ICON.id],
             ),
             ready(),
+            ready(),
         ],
         asset_verifier=[a_verdict()],
     )
@@ -1045,7 +1048,8 @@ def test_the_real_icon_is_composited_on_the_image_models_image_and_that_is_the_c
     assert program["input_repository_image_ids"] == [ICON.id]
     assert run.result.final_version_id == program["version_id"]
     after_generation = json.loads(chat.calls[3]["messages"][1]["content"][0]["text"])
-    assert "paste the real images over it" in after_generation["next_step"]
+    assert "compare it with the real images" in after_generation["next_step"]
+    assert "do not paste" in after_generation["next_step"]
 
 
 def test_the_verifier_is_shown_the_real_images_the_brief_chose():
@@ -1077,6 +1081,7 @@ def test_an_invented_icon_the_verifier_fails_as_major_is_mended_by_pasting_the_r
                 input_version_ids=[latest_image(messages)],
                 input_repository_image_ids=[ICON.id],
             ),
+            ready(),
             ready(),
         ],
         asset_verifier=[a_verdict(brand_fit="major"), a_verdict()],
@@ -1243,3 +1248,117 @@ def test_a_verifier_that_never_reads_an_unconfirmed_line_fails_the_image():
 
     assert run.final["candidates"][0]["failures"] == [rules.VERIFIER_UNREAD]
     assert not run.result.reviews[0].passed
+
+
+# ------------------------------------------------------------- what a program opens and makes
+def a_program_opening(*image_ids: str) -> str:
+    opened = "\n".join(f"Image.open('/in/{image_id}.png')" for image_id in image_ids)
+    return f"from PIL import Image\n{opened}\n"
+
+
+def test_the_images_a_program_opens_without_listing_them_are_given_to_it():
+    chat = ScriptedChat(
+        creative_director=[a_brief(reference_images=[CORNER])],
+        studio=[
+            operation("generate_image", prompt="A desk."),
+            lambda messages: operation(
+                "run_python", code=a_program_opening(latest_image(messages), ICON.id)
+            ),
+            ready(),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world, repository=REPOSITORY)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    [program] = world.payloads(RUN_PYTHON)
+    assert program["input_version_ids"] == [generated["version_id"]]
+    assert program["input_repository_image_ids"] == [ICON.id]
+
+
+def test_a_program_that_opens_an_image_not_of_the_run_is_refused_naming_its_id():
+    unknown = str(uuid.uuid4())
+    chat = ScriptedChat(
+        creative_director=[a_brief("composed")],
+        studio=[
+            operation("run_python", code=a_program_opening(unknown)),
+            operation("run_python", code="from PIL import Image\n"),
+            ready(),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world)
+
+    refused = chat.calls[2]["messages"][-1]["content"]
+    assert f"{unknown} is not an image of this run" in refused
+    [program] = world.payloads(RUN_PYTHON)
+    assert program["input_version_ids"] == []
+
+
+def test_a_program_that_failed_for_an_image_it_was_not_given_is_told_how_to_mend_it():
+    missing = (
+        "the program exited with status 1: FileNotFoundError: [Errno 2] No such file or "
+        "directory: '/in/icon.png'"
+    )
+    chat = ScriptedChat(
+        creative_director=[a_brief("composed")],
+        studio=[
+            operation("run_python", code="from PIL import Image\n"),
+            operation("run_python", code="from PIL import Image\n"),
+            ready(),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK], failing={RUN_PYTHON: [missing]})
+
+    Run(chat, world)
+
+    told = json.loads(chat.calls[2]["messages"][1]["content"][0]["text"])
+    [failed] = told["this_round"]
+    assert failed["error"].endswith(rules.MISSING_INPUT_HINT)
+
+
+def test_the_image_a_program_made_is_shown_in_the_next_produce_call():
+    chat = ScriptedChat(
+        creative_director=[a_brief("composed")],
+        studio=[operation("run_python", code="from PIL import Image\n"), ready(), ready()],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world)
+
+    [program] = world.payloads(RUN_PYTHON)
+    content = chat.calls[2]["messages"][1]["content"]
+    caption = next(
+        i
+        for i, part in enumerate(content)
+        if part.get("text") == (f"The latest image, {program['version_id']}:")
+    )
+    assert content[caption + 1]["type"] == "image_url"
+
+
+def test_a_candidate_a_program_just_made_is_refused_once_and_shown_again():
+    chat = ScriptedChat(
+        creative_director=[a_brief("composed")],
+        studio=[operation("run_python", code="from PIL import Image\n"), ready(), ready()],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    run = Run(chat, world)
+
+    [program] = world.payloads(RUN_PYTHON)
+    looked_again = chat.calls[3]["messages"]
+    assert looked_again[-2]["content"] == rules.LOOK_FIRST
+    assert looked_again[-1]["content"][0]["text"] == f"Image {program['version_id']}:"
+    assert looked_again[-1]["content"][1]["type"] == "image_url"
+    assert run.result.final_version_id == program["version_id"]
+    assert chat.left() == {}

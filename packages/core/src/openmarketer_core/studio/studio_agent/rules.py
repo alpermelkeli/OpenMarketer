@@ -602,7 +602,7 @@ def next_step(state: Mapping[str, Any]) -> str:
             return "generate_image the background, with no text"
         if not any(op["op"] == RUN_PYTHON for op in made):
             return "run_python to lay the exact words over the background"
-        return "look at the image; run_python to fix it, or candidate_ready with its version_id"
+        return f"{_look(made, state)}; run_python to fix it, or candidate_ready with its version_id"
     if technique == Technique.GENERATED and any(
         op["op"] in (GENERATE_IMAGE, EDIT_IMAGE) for op in made
     ):
@@ -611,17 +611,55 @@ def next_step(state: Mapping[str, Any]) -> str:
 
 
 def _look_then(made: Sequence[Mapping[str, Any]], state: Mapping[str, Any], fix: str) -> str:
-    """Look at the latest image, then fix it or name it; with the brief's real assets, paste
-    them with run_python where the image model drew an imitation."""
+    """Look at the latest image, then fix it or name it.
+
+    With the brief's real assets, pasting them with run_python is offered only as what follows
+    a comparison: an image model often draws the real icon well, and a paste found by colour
+    lands misplaced and covers the words. It is asked for outright only when the verifier
+    failed the last round's brand_fit (an imitation it saw), and never again right after a
+    program made the latest image.
+    """
+    look = _look(made, state)
     real = chosen_real_assets(state)
-    if not real:
-        return f"look at the image; {fix}, or candidate_ready with its version_id"
+    if not real or made[-1]["op"] == RUN_PYTHON:
+        return f"{look}; {fix}, or candidate_ready with its version_id"
     latest = made[-1]["version_id"]
+    paste = (
+        f"run_python with input_version_ids [{latest}] and input_repository_image_ids "
+        f"[{', '.join(real)}] to paste the real images over the imitation only, exactly, "
+        "never over the words"
+    )
+    if _verifier_saw_an_imitation(state):
+        return (
+            f"{look}; the verifier found an imitation of the product's real icon, logo or "
+            f"screenshot: {paste}; otherwise {fix}, or candidate_ready with its version_id"
+        )
     return (
-        f"look at the image; where it shows an imitation of the product's real icon, logo or "
-        f"screenshot instead of the real one, run_python with input_version_ids [{latest}] and "
-        f"input_repository_image_ids [{', '.join(real)}] to paste the real images over it, "
-        f"exactly; otherwise {fix}, or candidate_ready with its version_id"
+        f"{look} and compare it with the real images you are shown: if it already shows the "
+        "real icon, logo or screenshot, do not paste; only where it shows a different or "
+        f"invented one, {paste}; otherwise {fix}, or candidate_ready with its version_id"
+    )
+
+
+def _look(made: Sequence[Mapping[str, Any]], state: Mapping[str, Any]) -> str:
+    """What to look at in the latest image: with copy, after a program, that every line shows."""
+    if state["exact_copy"] and made and made[-1]["op"] in (RUN_PYTHON, RENDER_HTML):
+        return (
+            "look at the image and confirm every line of the copy is visible, whole and "
+            "unbroken: a program that draws or covers words can hide or cut one"
+        )
+    return "look at the image"
+
+
+def _verifier_saw_an_imitation(state: Mapping[str, Any]) -> bool:
+    """Whether the round before this one failed brand_fit at the verifier."""
+    earlier = state.get("failures") or []
+    if not earlier:
+        return False
+    last = earlier[-1]
+    return (
+        last["round"] == state.get("round", 0) - 1
+        and f"{VERIFIER_PREFIX}brand_fit" in last["failures"]
     )
 
 
@@ -738,6 +776,98 @@ def _unknown_images(operation: Operation, images: RunImages) -> list[str]:
                 + ("" if images.this_round else ": make one first")
             )
     return problems
+
+
+# --------------------------------------------------------------- the images code opens
+# An id of the run (a version, a repository image) is a UUID; only one of that shape is read
+# out of a program or a page, so a refusal that repeats it repeats no text of the model's.
+_UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+# A program opens its inputs at /in/<id>.png; a page may name one beside it as <id>.png.
+_PROGRAM_INPUT = re.compile(rf"/in/({_UUID})\.png")
+_PAGE_INPUT = re.compile(rf"(?<![\w-])({_UUID})\.png")
+
+
+@dataclass(frozen=True)
+class CompletedInputs:
+    """An operation with the inputs its code opens added, or why it cannot be given them."""
+
+    operation: Operation
+    problems: list[str]
+
+
+def with_opened_inputs(operation: Operation, images: RunImages) -> CompletedInputs:
+    """``operation`` with every image its code or page opens listed among its inputs.
+
+    A weak model opens ``/in/<id>.png`` and forgets to list the id, and the program fails for
+    want of the file. An id of a version of the run goes to ``input_version_ids``, one of the
+    run's repository images to ``input_repository_image_ids``, so the payload (and the
+    workflow's history) carries what is used; an id that is neither is refused, as is a list
+    the additions would take past ``MAX_REFERENCES``.
+    """
+    if operation.op == RUN_PYTHON:
+        opened = _PROGRAM_INPUT.findall(operation.code)
+    elif operation.op == RENDER_HTML:
+        opened = _PAGE_INPUT.findall(operation.html)
+    else:
+        return CompletedInputs(operation, [])
+    versions = list(operation.input_version_ids)
+    repository = list(operation.input_repository_image_ids)
+    problems: list[str] = []
+    for image_id in dict.fromkeys(found.lower() for found in opened):
+        if image_id in images.run_versions:
+            versions += [] if image_id in versions else [image_id]
+        elif image_id in images.repository_images:
+            repository += [] if image_id in repository else [image_id]
+        else:
+            problems.append(f"{image_id} is not an image of this run")
+    for name, listed in (
+        ("input_version_ids", versions),
+        ("input_repository_image_ids", repository),
+    ):
+        if len(listed) > MAX_REFERENCES:
+            problems.append(
+                f"{name} would hold more than {MAX_REFERENCES} images with those the code "
+                "opens: open fewer"
+            )
+    completed = operation.model_copy(
+        update={"input_version_ids": versions, "input_repository_image_ids": repository}
+    )
+    return CompletedInputs(completed, problems)
+
+
+# A program that opened an image it was not given fails with this, the path under /in.
+_MISSING_INPUT = re.compile(r"FileNotFoundError[^\n]*/in/")
+MISSING_INPUT_HINT = "list that image's id in input_version_ids or input_repository_image_ids"
+
+
+def with_failure_hint(error: str, limit: int) -> str:
+    """An operation's error as the studio model is shown it, at most ``limit`` characters,
+    ending with how to mend it when a program opened an image under /in it was not given."""
+    if not _MISSING_INPUT.search(error):
+        return error[:limit]
+    hint = f"; {MISSING_INPUT_HINT}"
+    return error[: limit - len(hint)] + hint
+
+
+LOOK_FIRST = (
+    "Rejected once: look at the result first. The image the program made is shown below: "
+    "confirm every line of the copy is visible, whole and unbroken, then submit candidate_ready "
+    "again, or fix it."
+)
+
+
+def needs_a_look(operation: Operation, state: Mapping[str, Any]) -> bool:
+    """Whether ``operation`` names, with copy, the image a program made in the operation just
+    before: it is refused once (``LOOK_FIRST``) and the image shown again, since a program
+    that draws or covers words can hide one, and OCR reads the words only after
+    candidate_ready."""
+    done = state["operations"]
+    if operation.op != CANDIDATE_READY or not state["exact_copy"] or not done:
+        return False
+    last = done[-1]
+    return bool(
+        last.get("ok") and last["op"] == RUN_PYTHON and last["version_id"] == operation.version_id
+    )
 
 
 def generation_prompt(
@@ -1123,7 +1253,8 @@ def edit_strategies(
     brand_fix = (
         "Paste the product's real icon, logo or screenshot with run_python: the image in "
         "input_version_ids, the real ones in input_repository_image_ids "
-        f"[{', '.join(real_assets)}], placed over the imitation, exactly; then bring the colours "
+        f"[{', '.join(real_assets)}], placed over the imitation only, exactly, never over the "
+        "words; then bring the colours "
         "and the tone closer to the brand kit."
         if real_assets
         else "Bring the colours and the tone closer to the brand kit."
@@ -1306,16 +1437,22 @@ references.
 is /in/<version_id>.png when it is in input_version_ids, and a repository image is \
 /in/<id>.png when it is in input_repository_image_ids. No network, no scripts from outside.
 - run_python: code (Pillow and numpy are installed; requirements for more), with the images \
-of input_version_ids and input_repository_image_ids at /in/<id>.png. Write the image to \
+of input_version_ids and input_repository_image_ids at /in/<id>.png: list every image the code \
+opens. Write the image to \
 /out/image.png at exactly the asked size. It is of every technique, on top of images of this \
 run (input_version_ids) or the product's repository images (input_repository_image_ids), and \
-what it does is exact: composite the product's real icon, logo or screenshots (when the brief \
-chose them and the image model drew an imitation, paste the real ones over it), fix or redraw \
+what it does is exact: composite the product's real icon, logo or screenshots, fix or redraw \
 a line of text the image model got wrong, crop or frame the image, put a screenshot in a device \
 frame, raise the contrast behind the words with a panel or a gradient, and compose a layout. \
+Paste a real image only where it is needed: compare the image with the real ones you are \
+shown first; if it already shows the real icon, logo or screenshot, do not paste. A paste \
+covers what is under it: place it over the imitation only, never over the words. \
 The technique's rule of a candidate still holds: with html_reference the candidate is the image \
 model's image or a program's on top of it, never the bare render; with background_overlay it \
 is the background with the words laid over by code.
+- After a program draws, moves or covers words, look at the image it made (you are shown it) \
+before candidate_ready: every line of the copy must be visible, whole and unbroken, with \
+nothing pasted over it. The words are read back only after candidate_ready.
 - candidate_ready: version_id of the image of this round that is done.
 Each field holds its own content: what an edit changes goes in instruction, the page in html, \
 the program in code, the picture in prompt; note is only a short remark for the log.

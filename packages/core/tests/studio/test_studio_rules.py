@@ -803,3 +803,104 @@ def test_a_long_verifier_note_is_cut_not_refused():
     assert len(report.criteria[0].note) == rules.MAX_NOTE_CHARS
     assert report.criteria[0].note.endswith("…")
     assert len(report.edit_suggestions[0]) == rules.MAX_NOTE_CHARS
+
+
+# ------------------------------------------------------- the paste of the real assets
+def test_without_a_verifier_failure_the_real_icon_is_pasted_only_after_a_comparison():
+    state = with_the_real_icon(
+        round_state(Technique.GENERATED, [{"op": "generate_image", "version_id": V1, "ok": True}])
+    )
+    step = rules.next_step(state)
+    assert "compare it with the real images" in step
+    assert "if it already shows the real icon, logo or screenshot, do not paste" in step
+
+
+def test_after_the_verifier_failed_brand_fit_the_real_icon_is_pasted():
+    state = with_the_real_icon(
+        {
+            **round_state(
+                Technique.GENERATED, [{"op": "generate_image", "version_id": V1, "ok": True}]
+            ),
+            "round": 2,
+            "failures": [failed(Technique.GENERATED, "verifier:brand_fit")],
+        }
+    )
+    step = rules.next_step(state)
+    assert "the verifier found an imitation" in step
+    assert "do not paste" not in step
+
+
+def test_after_a_program_made_the_latest_image_no_paste_is_offered_again():
+    operations = [
+        {"op": "generate_image", "version_id": V1, "ok": True},
+        {"op": "run_python", "version_id": V2, "ok": True},
+    ]
+    step = rules.next_step(with_the_real_icon(round_state(Technique.GENERATED, operations)))
+    assert "paste" not in step
+    assert "confirm every line of the copy is visible" in step
+
+
+def test_the_studio_is_told_to_compare_before_it_pastes_a_real_image():
+    assert "if it already shows the real icon, logo or screenshot, do not paste" in (
+        " ".join(rules.STUDIO_SYSTEM_PROMPT.split())
+    )
+
+
+# ------------------------------------------------------------- the images code opens
+REPOSITORY_ID = "44444444-4444-4444-8444-444444444444"
+RUN_IMAGES = RunImages(
+    run_versions=frozenset({V1, V2}),
+    this_round=frozenset({V1, V2}),
+    reference_assets=frozenset(),
+    repository_images=frozenset({REPOSITORY_ID}),
+)
+
+
+def test_a_page_that_names_an_image_beside_it_is_given_it():
+    page = Operation(
+        op="render_html", html=f'<img src="{V1}.png"><img src="/in/{REPOSITORY_ID}.png">'
+    )
+    completed = rules.with_opened_inputs(page, RUN_IMAGES)
+    assert completed.problems == []
+    assert completed.operation.input_version_ids == [V1]
+    assert completed.operation.input_repository_image_ids == [REPOSITORY_ID]
+
+
+def test_an_image_a_program_lists_and_opens_is_listed_once():
+    program = Operation(op="run_python", code=f"open('/in/{V1}.png')", input_version_ids=[V1])
+    assert rules.with_opened_inputs(program, RUN_IMAGES).operation.input_version_ids == [V1]
+
+
+def test_a_program_that_opens_more_images_than_an_operation_takes_is_refused_by_field():
+    listed = [V2, V2, V2, V2]
+    program = Operation(op="run_python", code=f"open('/in/{V1}.png')", input_version_ids=listed)
+    [problem] = rules.with_opened_inputs(program, RUN_IMAGES).problems
+    assert problem.startswith("input_version_ids would hold more than")
+
+
+def test_an_operation_without_code_opens_no_image():
+    generation = Operation(op="generate_image", prompt=f"/in/{V1}.png")
+    assert rules.with_opened_inputs(generation, RUN_IMAGES).operation == generation
+
+
+def test_a_program_that_failed_for_a_file_under_in_ends_with_how_to_mend_it():
+    error = "exited with status 1: FileNotFoundError: [Errno 2] No such file: '/in/x.png'" * 20
+    told = rules.with_failure_hint(error, 500)
+    assert told.endswith(rules.MISSING_INPUT_HINT) and len(told) <= 500
+
+
+def test_any_other_failure_is_shown_as_it_was():
+    assert rules.with_failure_hint("the page did not finish", 500) == "the page did not finish"
+
+
+# ------------------------------------------------------- a program's candidate looked at
+def test_a_program_just_made_with_copy_is_looked_at_before_it_is_a_candidate():
+    state = round_state(Technique.COMPOSED, [{"op": "run_python", "version_id": V1, "ok": True}])
+    assert rules.needs_a_look(Operation(op="candidate_ready", version_id=V1), state)
+
+
+def test_a_program_without_copy_is_a_candidate_at_once():
+    state = round_state(
+        Technique.COMPOSED, [{"op": "run_python", "version_id": V1, "ok": True}], exact_copy=()
+    )
+    assert not rules.needs_a_look(Operation(op="candidate_ready", version_id=V1), state)

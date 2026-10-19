@@ -280,7 +280,12 @@ def brief(state: StudioState, context: StudioContext) -> dict[str, Any]:
 # --------------------------------------------------------------------------------- produce
 @agent.node
 def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
-    """Have the studio model choose the round's next operation, or the round's candidate."""
+    """Have the studio model choose the round's next operation, or the round's candidate.
+
+    The images a program or a page opens are added to its inputs (``rules.with_opened_inputs``),
+    and a candidate a program made in the operation just before is refused once and shown
+    again (``rules.needs_a_look``), for the model to check its words before they are read.
+    """
     limits = context.limits
     images = _run_images(state)
     if len(state["operations"]) >= limits.max_operations_per_round:
@@ -293,6 +298,8 @@ def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
         )
     spent = _Spent()
     messages = _produce_messages(state, context)
+    # A candidate a program just made is refused once, for the model to look at it again.
+    looked_again = False
     for _ in range(rules.MAX_PRODUCE_CALLS):
         reply = context.model.chat(rules.STUDIO_ROLE, messages, tools=rules.produce_tools())
         spent.add(reply)
@@ -305,6 +312,11 @@ def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
         shown: list[str] = []
         for call in reply.tool_calls:
             answer, chosen = _answer_call(call, state, context, images, shown)
+            if chosen is not None and not looked_again and rules.needs_a_look(chosen, state):
+                looked_again = True
+                answer = rules.LOOK_FIRST
+                shown.append(chosen.version_id)
+                chosen = None
             if chosen is not None:
                 return {**_chosen(state, chosen), **spent.update(state)}
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": answer})
@@ -419,8 +431,11 @@ def _answer_call(
         return f"error: there is no tool of that name; call {rules.SUBMIT_OPERATION}", None
 
     def problems(operation: Operation) -> list[str]:
+        completed = rules.with_opened_inputs(operation, images)
+        if completed.problems:
+            return completed.problems
         return rules.operation_problems(
-            operation,
+            completed.operation,
             technique=operation.technique or Technique(state["technique"]),
             images=images,
             cost_usd=state["cost_usd"],
@@ -430,7 +445,8 @@ def _answer_call(
     submitted = _read(arguments, Operation, problems)
     if isinstance(submitted, str):
         return submitted, None
-    return "", submitted
+    # The images its code opens are its inputs, listed or not (``rules.with_opened_inputs``).
+    return "", rules.with_opened_inputs(submitted, images).operation
 
 
 def _chosen(state: StudioState, operation: Operation) -> dict[str, Any]:
@@ -521,7 +537,8 @@ def operate(state: StudioState, context: StudioContext) -> dict[str, Any]:
     outcome = request_action(_payload_of(state, pending))
     if not outcome.succeeded:
         _end_if_blocked(outcome.error)
-        failed = {"op": pending["op"], "ok": False, "error": outcome.error[:MAX_ERROR_CHARS]}
+        error = rules.with_failure_hint(outcome.error, MAX_ERROR_CHARS)
+        failed = {"op": pending["op"], "ok": False, "error": error}
         return {"operations": [*state["operations"], failed], "pending": {}}
     result = outcome.result
     version = {
