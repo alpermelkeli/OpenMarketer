@@ -119,20 +119,42 @@ def normalized(text: str) -> str:
     return " ".join(_NOT_WORD.sub(" ", folded).split())
 
 
+# Letters that carry their mark in their shape, not as a combining mark NFKD would split off.
+_UNMARKED = str.maketrans({"ı": "i", "ł": "l", "ø": "o", "đ": "d", "ß": "ss", "æ": "ae", "œ": "oe"})
+
+
+def without_marks(text: str) -> str:
+    """``text`` (already normalised) with its accents and special letters taken to plain ones:
+    ç to c, ğ to g, ı to i, ş to s, é to e."""
+    decomposed = unicodedata.normalize("NFKD", text.translate(_UNMARKED))
+    return "".join(char for char in decomposed if not unicodedata.combining(char))
+
+
+def _read_in(read: str, read_words: list[str], wanted: str) -> bool:
+    return _contains(read, wanted) or _contains_through_noise(read_words, wanted)
+
+
 def copy_matches(ocr_text: str, exact_copy: Sequence[str]) -> CopyCheck:
     """Whether each line of ``exact_copy`` is in ``ocr_text``, compared normalised.
 
     The read text is taken as one run of words, because OCR breaks lines where the image does
-    and not where the copy does. A line that is not in it is misspelled when a stretch of as
-    many words reads close to it, and missing otherwise.
+    and not where the copy does. A line read right but for its accents and special letters
+    passes: OCR misses them in large and bold type, and the verifier judges them. A line that
+    is not in it is misspelled when a stretch of as many words reads close to it, and missing
+    otherwise.
     """
     read = normalized(ocr_text)
     read_words = read.split()
+    read_unmarked = without_marks(read)
     missing: list[str] = []
     misspelled: list[Misspelled] = []
     for line in exact_copy:
         wanted = normalized(line)
-        if not wanted or _contains(read, wanted) or _contains_through_noise(read_words, wanted):
+        if not wanted or _read_in(read, read_words, wanted):
+            continue
+        if _read_in(read_unmarked, read_unmarked.split(), without_marks(wanted)):
+            # OCR often drops the mark of a large or bold letter (ç read as c); the line reads
+            # right but for its marks, which the verifier, looking at the image, judges.
             continue
         closest, ratio = _closest_stretch(read_words, wanted)
         if ratio >= MISSPELLED_AT:

@@ -78,10 +78,26 @@ def test_a_line_read_with_short_noise_between_its_words_matches():
 
 
 def test_noise_does_not_excuse_a_misread_word():
-    check = copy_matches("Soruyu cek, o\nkasana at.", ["Soruyu çek, kasana at."])
+    check = copy_matches("Soruyu cek, o\nkasanna at.", ["Soruyu çek, kasana at."])
     assert check.missing or check.misspelled
 
 
 def test_a_long_word_between_the_words_of_a_line_is_not_noise():
     check = copy_matches("Soruyu çek, hemen kasana at.", ["Soruyu çek, kasana at."])
+    assert check.missing or check.misspelled
+
+
+def test_a_line_read_without_its_marks_passes_for_the_verifier_to_judge():
+    check = copy_matches(
+        "Soruyu cek,\nkasana at.\nSinavdan once tekrar et",
+        [
+            "Soruyu çek, kasana at.",
+            "Sınavdan önce tekrar et",
+        ],
+    )
+    assert (check.missing, check.misspelled) == ((), ())
+
+
+def test_letters_out_of_order_are_still_misspelled_without_marks():
+    check = copy_matches("Soryuu cek, kasana at.", ["Soruyu çek, kasana at."])
     assert check.missing or check.misspelled
