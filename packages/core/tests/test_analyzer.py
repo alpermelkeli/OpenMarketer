@@ -233,6 +233,16 @@ def test_sections_sent_as_json_text_are_decoded(files):
     assert result.profile == ProductProfile.model_validate(profile())
 
 
+def test_lists_inside_a_section_sent_as_json_text_are_decoded(files):
+    nested = profile()
+    nested["product"]["evidence"] = json.dumps(nested["product"]["evidence"])
+    nested["product"]["platforms"] = json.dumps(nested["product"]["platforms"])
+    for feature in nested["features"]:
+        feature["evidence"] = json.dumps(feature["evidence"])
+    result = analyze(files, ScriptedModel([call(SUBMIT, **nested)]))
+    assert result.profile == ProductProfile.model_validate(profile())
+
+
 def test_last_attempt_is_repaired_in_code(files):
     bad = profile()
     bad["features"][0]["evidence"] = [{"file": "nope.kt"}]

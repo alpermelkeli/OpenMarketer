@@ -290,14 +290,48 @@ def _unwrap_json(arguments: dict[str, Any]) -> dict[str, Any]:
     """Decode sections sent as JSON text; some models stringify nested objects."""
     unwrapped = dict(arguments)
     for key, value in arguments.items():
-        if isinstance(value, str) and value.lstrip()[:1] in ("{", "["):
-            try:
-                decoded = json.loads(value)
-            except ValueError:
-                continue
-            if isinstance(decoded, dict | list):
-                unwrapped[key] = decoded
+        decoded = _decoded(value)
+        if decoded is not None:
+            unwrapped[key] = decoded
     return unwrapped
+
+
+def _unwrap_json_deeply(value: Any) -> Any:
+    """``value`` with every list or object sent as JSON text decoded, at any depth.
+
+    Some models stringify the lists inside a section too (``"evidence": "[...]"``). This is
+    tried only after the submission failed the schema as sent, so a text field that happens to
+    read as JSON is never decoded in a profile that fits.
+    """
+    decoded = _decoded(value)
+    if decoded is not None:
+        value = decoded
+    if isinstance(value, dict):
+        return {key: _unwrap_json_deeply(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_unwrap_json_deeply(item) for item in value]
+    return value
+
+
+def _decoded(value: Any) -> dict[str, Any] | list[Any] | None:
+    if not isinstance(value, str) or value.lstrip()[:1] not in ("{", "["):
+        return None
+    try:
+        decoded = json.loads(value)
+    except ValueError:
+        return None
+    return decoded if isinstance(decoded, dict | list) else None
+
+
+def _validated_profile(arguments: dict[str, Any]) -> ProductProfile:
+    """The submission as a profile: as sent, or else with its stringified lists decoded."""
+    try:
+        return ProductProfile.model_validate(_unwrap_json(arguments))
+    except ValidationError:
+        deeply = _unwrap_json_deeply(arguments)
+        if deeply == _unwrap_json(arguments):
+            raise
+        return ProductProfile.model_validate(deeply)
 
 
 def _submit(
@@ -305,7 +339,7 @@ def _submit(
 ) -> str:
     """Check a submission. Sets ``outcome.profile`` if accepted, else returns the rejection."""
     try:
-        profile = ProductProfile.model_validate(_unwrap_json(arguments))
+        profile = _validated_profile(arguments)
     except ValidationError as e:
         problems = _schema_problems(e)
         if last_attempt:
