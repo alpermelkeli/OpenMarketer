@@ -789,3 +789,17 @@ def test_an_unconfirmed_line_alone_has_no_edit_strategy():
         )
         == []
     )
+
+
+def test_a_long_verifier_note_is_cut_not_refused():
+    report = VerifierReport.model_validate(
+        {
+            "criteria": [
+                {"criterion": "composition", "passed": True, "severity": "none", "note": "x" * 900}
+            ],
+            "edit_suggestions": ["y" * 900],
+        }
+    )
+    assert len(report.criteria[0].note) == rules.MAX_NOTE_CHARS
+    assert report.criteria[0].note.endswith("…")
+    assert len(report.edit_suggestions[0]) == rules.MAX_NOTE_CHARS

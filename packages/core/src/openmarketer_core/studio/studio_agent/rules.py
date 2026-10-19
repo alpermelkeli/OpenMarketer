@@ -174,6 +174,22 @@ class _Submission(BaseModel):
 
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_NOTE_CHARS)]
+
+
+def _cut_to_a_note(value: Any) -> Any:
+    """A long explanation cut to a note's length: it is shown to people and to the edit plan,
+    and refusing a whole verdict for a wordy note would fail an image that passed."""
+    if isinstance(value, str) and len(value.strip()) > MAX_NOTE_CHARS:
+        return value.strip()[: MAX_NOTE_CHARS - 1].rstrip() + "…"
+    return value
+
+
+# A note of the verifier's: cut, never refused, when it runs long.
+CutText = Annotated[
+    str,
+    BeforeValidator(_cut_to_a_note),
+    StringConstraints(strip_whitespace=True, max_length=MAX_NOTE_CHARS),
+]
 Prompt = Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_PROMPT_CHARS)]
 
 
@@ -314,7 +330,7 @@ class CriterionResult(_Submission):
     criterion: Criterion
     passed: bool
     severity: Severity
-    note: Text = ""
+    note: CutText = ""
 
 
 class CopyTranscription(_Submission):
@@ -332,7 +348,7 @@ class VerifierReport(_Submission):
     it reads of each line of the copy."""
 
     criteria: list[CriterionResult] = Field(max_length=len(CRITERIA) * 2)
-    edit_suggestions: list[Text] = Field(default_factory=list, max_length=MAX_SUGGESTIONS)
+    edit_suggestions: list[CutText] = Field(default_factory=list, max_length=MAX_SUGGESTIONS)
     copy_transcription: list[CopyTranscription] = Field(
         default_factory=list, max_length=MAX_COPY_LINES * 2
     )
