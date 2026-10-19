@@ -70,3 +70,18 @@ def test_no_copy_asked_for_passes_whatever_was_read():
 
 def test_a_line_is_not_found_inside_a_longer_word():
     assert not copy_matches("relaunched", ["launch"]).passed
+
+
+def test_a_line_read_with_short_noise_between_its_words_matches():
+    check = copy_matches("Soruyu çek, o\nkasana at. üne\n\nSoruKasam", ["Soruyu çek, kasana at."])
+    assert (check.missing, check.misspelled) == ((), ())
+
+
+def test_noise_does_not_excuse_a_misread_word():
+    check = copy_matches("Soruyu cek, o\nkasana at.", ["Soruyu çek, kasana at."])
+    assert check.missing or check.misspelled
+
+
+def test_a_long_word_between_the_words_of_a_line_is_not_noise():
+    check = copy_matches("Soruyu çek, hemen kasana at.", ["Soruyu çek, kasana at."])
+    assert check.missing or check.misspelled

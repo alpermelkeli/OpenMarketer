@@ -46,6 +46,11 @@ CHROMIUM_FLAGS = [
 ]
 
 
+# The languages a reading knows, so that the letters of the copy beyond English (ç, ğ, ı, ş, é,
+# ß...) are read as they are written and a right image is not failed for them.
+OCR_LANGUAGES = "eng+tur+deu+fra+spa+ita+por"
+
+
 def main() -> int:
     arguments = parse()
     LOGS.mkdir(parents=True, exist_ok=True)
@@ -60,7 +65,7 @@ def main() -> int:
             "file:///in/page.html",
         ]
     else:
-        command = ["tesseract", arguments.image, "stdout", "-l", "eng"]
+        command = ["tesseract", arguments.image, "stdout", "-l", OCR_LANGUAGES]
     exit_code, timed_out = run(command, arguments.timeout)
     if arguments.mode == "render" and exit_code == 0:
         fit_to(OUT / "render.png", arguments.width, arguments.height)

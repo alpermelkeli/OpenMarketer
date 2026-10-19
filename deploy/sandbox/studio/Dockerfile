@@ -11,6 +11,12 @@ RUN apt-get update \
         chromium \
         tesseract-ocr \
         tesseract-ocr-eng \
+        tesseract-ocr-tur \
+        tesseract-ocr-deu \
+        tesseract-ocr-fra \
+        tesseract-ocr-spa \
+        tesseract-ocr-ita \
+        tesseract-ocr-por \
         libcairo2 \
         fonts-dejavu-core \
         fonts-inter \

@@ -132,7 +132,7 @@ def copy_matches(ocr_text: str, exact_copy: Sequence[str]) -> CopyCheck:
     misspelled: list[Misspelled] = []
     for line in exact_copy:
         wanted = normalized(line)
-        if not wanted or _contains(read, wanted):
+        if not wanted or _contains(read, wanted) or _contains_through_noise(read_words, wanted):
             continue
         closest, ratio = _closest_stretch(read_words, wanted)
         if ratio >= MISSPELLED_AT:
@@ -144,6 +144,38 @@ def copy_matches(ocr_text: str, exact_copy: Sequence[str]) -> CopyCheck:
 
 def _contains(read: str, wanted: str) -> bool:
     return f" {wanted} " in f" {read} "
+
+
+# OCR reads specks, scribbles and textures as short tokens ("o", "ae") that land between the
+# words of a line. Between two words of a line, up to this many such tokens are passed over;
+# a word of the line itself must still be read exactly.
+NOISE_TOKENS_BETWEEN_WORDS = 2
+NOISE_TOKEN_MAX_CHARS = 3
+
+
+def _contains_through_noise(read_words: list[str], wanted: str) -> bool:
+    """Whether the words of ``wanted`` are read in order, with at most a few short tokens of
+    noise between two of them."""
+    words = wanted.split()
+    for start, word in enumerate(read_words):
+        if word != words[0]:
+            continue
+        position, matched = start + 1, 1
+        while matched < len(words):
+            skipped = 0
+            while (
+                position < len(read_words)
+                and read_words[position] != words[matched]
+                and len(read_words[position]) <= NOISE_TOKEN_MAX_CHARS
+                and skipped < NOISE_TOKENS_BETWEEN_WORDS
+            ):
+                position, skipped = position + 1, skipped + 1
+            if position >= len(read_words) or read_words[position] != words[matched]:
+                break
+            position, matched = position + 1, matched + 1
+        if matched == len(words):
+            return True
+    return False
 
 
 def _closest_stretch(read_words: list[str], wanted: str) -> tuple[str, float]:
