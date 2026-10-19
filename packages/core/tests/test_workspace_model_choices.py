@@ -140,7 +140,7 @@ def test_images_role_takes_fallbacks_under_the_same_rules_as_a_chat_role():
     assert refused_field(lambda: acceptable_role_choice(twice, IMAGES)) == "fallbacks"
 
 
-def test_images_role_fallbacks_chosen_by_the_workspace_are_sent():
+def test_images_role_fallbacks_chosen_by_the_workspace_are_tried():
     config = Config(
         tiers={"fast": "a/fast", "balanced": "a/balanced", "strong": "a/strong"},
         defaults={"model": "a/default"},  # type: ignore[arg-type]
@@ -148,4 +148,4 @@ def test_images_role_fallbacks_chosen_by_the_workspace_are_sent():
     )
     choices = WorkspaceModelChoices(roles={"drawer": RoleChoice(fallbacks=("vendor/d3",))})
     chosen = choices.router_for(ModelRouter(config, env={}))
-    assert chosen.build_image_request("drawer", [])["models"] == ["vendor/draw", "vendor/d3"]
+    assert chosen.image_models("drawer") == ["vendor/draw", "vendor/d3"]

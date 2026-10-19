@@ -54,19 +54,25 @@ def reply_with(url: str | None, *, cost: Any = 0.039, **choice: Any) -> dict[str
     }
 
 
+Answer = httpx.Response | Exception
+
+
 class Provider:
-    """The adapter with a transport that answers once and keeps what it was sent."""
+    """The adapter with a transport that keeps what it was sent and answers each request with
+    the next of ``answers`` (one answer: every request), the last one again when they run out."""
 
     def __init__(
-        self, answer: httpx.Response | Exception, api_key: str | None = None, catalog: Any = None
+        self, answer: Answer | list[Answer], api_key: str | None = None, catalog: Any = None
     ) -> None:
         self.requests: list[httpx.Request] = []
+        answers = answer if isinstance(answer, list) else [answer]
 
         def handler(request: httpx.Request) -> httpx.Response:
             self.requests.append(request)
-            if isinstance(answer, Exception):
-                raise answer
-            return answer
+            given = answers[min(len(self.requests), len(answers)) - 1]
+            if isinstance(given, Exception):
+                raise given
+            return given
 
         router = ModelRouter.from_file(MODELS_YAML, env={"OPENROUTER_API_KEY": "env-key"})
         self.images = OpenRouterImages(
@@ -79,6 +85,9 @@ class Provider:
     @property
     def body(self) -> dict[str, Any]:
         return json.loads(self.requests[0].content)
+
+    def bodies(self) -> list[dict[str, Any]]:
+        return [json.loads(request.content) for request in self.requests]
 
 
 def answering(body: dict[str, Any], status: int = 200) -> Provider:
@@ -120,13 +129,145 @@ def test_request_asks_the_roles_model_for_an_image_of_the_sizes_shape():
     assert part["type"] == "text" and "1080x1350 pixels" in part["text"]
 
 
-def test_request_offers_the_roles_fallbacks_after_its_model():
+IMAGES_ENDPOINT_404 = {
+    "error": {
+        "code": 404,
+        "message": "qwen/qwen-image-3 is an image generation model and cannot be used with the "
+        "chat/completions endpoint. Use the /api/v1/images endpoint instead.",
+    }
+}
+
+
+ROLE = ModelRouter.from_file(MODELS_YAML, env={}).resolve("image_generator")
+FIRST, FALLBACK = ROLE.model, ROLE.fallbacks[0]
+
+
+def drawn_by(model: str) -> httpx.Response:
+    return httpx.Response(200, json={**reply_with(data_url(image_bytes((64, 64)))), "model": model})
+
+
+def test_a_request_names_the_roles_model_alone_and_no_list_of_models():
     provider = answering(reply_with(data_url(image_bytes((64, 64)))))
 
     provider.images.generate("x", width=64, height=64)
 
-    resolved = provider.images.router.resolve("image_generator")
-    assert provider.body["models"] == [resolved.model, *resolved.fallbacks]
+    assert len(provider.requests) == 1
+    assert provider.body["model"] == FIRST
+    assert "models" not in provider.body
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.Response(429, text="slow down"),
+        httpx.Response(503, text="unavailable"),
+        httpx.ConnectError("refused"),
+        httpx.Response(404, json={"error": {"code": 404, "message": "No endpoints found"}}),
+        httpx.Response(404, json=IMAGES_ENDPOINT_404),
+    ],
+    ids=["rate-limited", "unavailable", "unreachable", "no-endpoints", "images-endpoint-only"],
+)
+def test_a_failure_another_model_may_pass_is_asked_of_the_fallback(failure):
+    provider = Provider([failure, drawn_by(FALLBACK)])
+
+    result = provider.images.generate("x", width=64, height=64)
+
+    assert [body["model"] for body in provider.bodies()] == [FIRST, FALLBACK]
+    assert all("models" not in body for body in provider.bodies())
+    assert result.model == FALLBACK
+    assert result.params["models_failed"] == [FIRST]
+
+
+@pytest.mark.parametrize(
+    ("failure", "error"),
+    [
+        (httpx.Response(403, text="flagged by moderation"), MediaRefused),
+        (httpx.Response(402, text="no credit"), MediaAccountLimited),
+        (httpx.Response(400, text="bad request"), MediaProviderError),
+    ],
+    ids=["refused", "no-credit", "other"],
+)
+def test_a_refusal_or_an_account_that_cannot_pay_is_not_asked_of_another_model(failure, error):
+    provider = Provider([failure, drawn_by(FALLBACK)])
+
+    with pytest.raises(error):
+        provider.images.generate("x", width=64, height=64)
+    assert len(provider.requests) == 1
+
+
+def test_a_refused_drawing_is_not_asked_of_another_model():
+    refused = httpx.Response(200, json=reply_with(None, native_finish_reason="IMAGE_SAFETY"))
+    provider = Provider([refused, drawn_by(FALLBACK)])
+
+    with pytest.raises(MediaRefused):
+        provider.images.generate("x", width=64, height=64)
+    assert len(provider.requests) == 1
+
+
+def test_when_every_model_failed_and_one_was_busy_the_failure_may_pass_later():
+    provider = Provider(
+        [httpx.Response(404, json=IMAGES_ENDPOINT_404), httpx.Response(429, text="slow down")]
+    )
+
+    with pytest.raises(MediaUnavailable):
+        provider.images.generate("x", width=64, height=64)
+    assert len(provider.requests) == 2
+
+
+def test_each_model_is_asked_with_its_own_modalities():
+    models = {FIRST: listed(FIRST, "image"), FALLBACK: listed(FALLBACK, "image", "text")}
+    provider = Provider(
+        [httpx.Response(503, text="busy"), drawn_by(FALLBACK)], catalog=lambda: models
+    )
+
+    provider.images.generate("x", width=64, height=64)
+
+    assert [body["modalities"] for body in provider.bodies()] == [["image"], ["image", "text"]]
+
+
+# What OpenRouter answered Seedream asked for an image and text.
+NO_ENDPOINT_FOR_THE_OUTPUTS = {
+    "error": {
+        "code": 404,
+        "message": "No endpoints found that support the requested output modalities: image, text",
+    }
+}
+
+
+def test_a_model_with_no_endpoint_for_an_image_and_text_is_asked_once_more_for_an_image():
+    provider = Provider(
+        [httpx.Response(404, json=NO_ENDPOINT_FOR_THE_OUTPUTS), drawn_by(FIRST)],
+        catalog=lambda: None,
+    )
+
+    result = provider.images.generate("x", width=64, height=64)
+
+    assert [(body["model"], body["modalities"]) for body in provider.bodies()] == [
+        (FIRST, ["image", "text"]),
+        (FIRST, ["image"]),
+    ]
+    assert result.model == FIRST
+    assert result.params["modalities"] == ["image"]
+    assert result.params["models_failed"] == []
+
+
+def test_a_model_asked_for_an_image_only_with_no_endpoint_for_it_goes_to_the_fallback():
+    provider = Provider(
+        [
+            httpx.Response(404, json=NO_ENDPOINT_FOR_THE_OUTPUTS),
+            httpx.Response(404, json=NO_ENDPOINT_FOR_THE_OUTPUTS),
+            drawn_by(FALLBACK),
+        ]
+    )
+
+    result = provider.images.generate("x", width=64, height=64)
+
+    assert [(body["model"], body["modalities"]) for body in provider.bodies()] == [
+        (FIRST, ["image", "text"]),
+        (FIRST, ["image"]),
+        (FALLBACK, ["image", "text"]),
+    ]
+    assert result.model == FALLBACK
 
 
 def test_the_model_that_answered_is_the_one_kept_when_a_fallback_drew_it():
@@ -429,15 +570,6 @@ def test_an_image_in_the_messages_content_parts_is_read_when_images_has_none():
     ]
 
     assert answering(reply).images.generate("x", width=64, height=64).data == drawn
-
-
-IMAGES_ENDPOINT_404 = {
-    "error": {
-        "code": 404,
-        "message": "qwen/qwen-image-3 is an image generation model and cannot be used with the "
-        "chat/completions endpoint. Use the /api/v1/images endpoint instead.",
-    }
-}
 
 
 def test_a_model_served_on_the_images_endpoint_only_is_told_in_our_own_words():

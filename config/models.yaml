@@ -153,8 +153,8 @@ roles:
   # --- drawing (chat endpoint, image output) ----------------------------
   # An images role names its model (the tiers are chat models) and takes no temperature, length
   # limit or reasoning effort. Its fallbacks are its own (defaults.fallbacks are chat models) and
-  # are tried in order when its model fails, as a chat role's are; the version keeps the model
-  # that answered. Each of its models must answer with images (the catalogue's
+  # are tried in order by the studio's adapter, one request each with the model's own modalities,
+  # when its model fails in a way another may pass; the version keeps the model that answered. Each of its models must answer with images (the catalogue's
   # output_modalities). estimate_usd_per_image is what one image is reckoned to cost before it is
   # made, for a budget to hold, whichever model answers; the catalogue prices image output per
   # token only, and how many tokens an image is depends on the model. The cost the provider

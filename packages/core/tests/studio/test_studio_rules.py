@@ -7,6 +7,7 @@ import sys
 from openmarketer_core.agent_runtime.model_input import read_strict_json
 from openmarketer_core.studio.brand_kit import EMPTY_BRAND_KIT, BrandKit
 from openmarketer_core.studio.image_checks import COPY, WRONG_SIZE
+from openmarketer_core.studio.platforms import Platform, platform_spec
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_core.studio.studio_agent.rules import (
     Limits,
@@ -107,8 +108,13 @@ def problems(operation: dict, technique=Technique.GENERATED, cost=0.0, this_roun
 
 
 def test_an_operation_of_another_technique_is_refused():
-    [problem] = problems({"op": "run_python", "code": "pass"})
+    [problem] = problems({"op": "render_html", "html": "<p>x</p>"})
     assert "not an operation of the technique generated" in problem
+
+
+def test_a_program_is_an_operation_of_every_technique():
+    for technique in Technique:
+        assert problems({"op": "run_python", "code": "pass"}, technique) == []
 
 
 def test_an_html_reference_generation_must_name_its_rendered_layout():
@@ -132,11 +138,49 @@ def test_a_generation_the_cost_limit_cannot_pay_for_is_refused():
     assert "cost limit" in problem
 
 
-def test_an_operation_without_its_fields_is_told_which():
+def test_an_operation_without_its_fields_is_told_which_and_where_they_go():
     assert problems({"op": "edit_image"}) == [
-        "edit_image needs source_version_id",
-        "edit_image needs instruction",
+        "edit_image needs source_version_id: the version id of the image of this run to change",
+        "edit_image needs instruction: put what to change in `instruction`, not in `note`",
     ]
+
+
+def test_a_page_put_in_the_note_is_refused_with_where_the_page_goes():
+    [problem] = problems(
+        {"op": "render_html", "note": "A page with the headline on top."}, Technique.COMPOSED
+    )
+    assert problem == (
+        "render_html needs html: the whole page goes in `html`, not in `note` or a description"
+    )
+
+
+def test_an_edit_whose_instruction_is_in_its_note_is_read_with_the_note_as_its_instruction():
+    sent = {
+        "op": "edit_image",
+        "source_version_id": V1,
+        "note": "Erase all lettering so code can print the exact words.",
+    }
+    operation = read_strict_json(Operation, sent)
+    assert operation.instruction == "Erase all lettering so code can print the exact words."
+    assert operation.note == ""
+    assert problems(sent) == []
+
+
+def test_a_note_is_never_read_as_a_page_a_program_or_a_prompt():
+    for op in ("render_html", "run_python", "generate_image"):
+        operation = read_strict_json(Operation, {"op": op, "note": "the content"})
+        assert (operation.html, operation.code, operation.prompt) == ("", "", "")
+
+
+def test_the_operation_tool_tells_the_fields_each_operation_needs():
+    tool = rules.operation_tool()["function"]
+    needed = "edit_image: source_version_id, instruction; render_html: html; run_python: code"
+    assert needed in tool["description"]
+    assert needed in tool["parameters"]["properties"]["op"]["description"]
+    assert (
+        "Never the content of another field"
+        in (tool["parameters"]["properties"]["note"]["description"])
+    )
 
 
 def test_lists_a_weak_model_sends_as_json_text_are_read_as_lists():
@@ -186,6 +230,36 @@ def test_an_edit_with_copy_loses_the_sentences_that_forbid_text():
     )
     assert instruction.startswith("Brighten the sky.\n\n")
     assert "Do not include" not in instruction
+
+
+def test_a_backgrounds_placement_names_the_lines_by_number_and_quotes_none_of_the_words():
+    placement = (
+        'Leave the top half calm: "ÖNCE" goes top left, SONRA top right, and the tagline '
+        "“Her gün daha iyi” runs along the bottom."
+    )
+
+    prompt = rules.generation_prompt(
+        "A split frame.",
+        ["ÖNCE", "SONRA"],
+        Technique.BACKGROUND_OVERLAY,
+        copy_placement=placement,
+    )
+
+    assert "ÖNCE" not in prompt and "SONRA" not in prompt and "Her gün" not in prompt
+    assert "line 1 goes top left, line 2 top right" in prompt
+    assert "the tagline the words runs along the bottom" in prompt
+
+
+def test_a_placement_given_line_by_line_keeps_only_the_positions_for_a_background():
+    where = rules.positions_only("ÖNCE: top left\nSONRA: top right", ["ÖNCE", "SONRA"])
+    assert where == "line 1: top left\nline 2: top right"
+
+
+def test_a_generated_image_keeps_the_words_of_its_placement():
+    prompt = rules.generation_prompt(
+        "A frame.", ["ÖNCE"], Technique.GENERATED, copy_placement='"ÖNCE" top left'
+    )
+    assert 'Where the words go: "ÖNCE" top left' in prompt
 
 
 def test_a_background_for_an_overlay_keeps_its_bans_of_text():
@@ -553,6 +627,29 @@ def test_what_the_image_model_made_from_the_layout_is_a_candidate():
     assert layout_problems(candidate, by_image_model=frozenset({V2})) == []
 
 
+def test_the_studio_is_told_what_a_program_is_good_for_in_any_technique():
+    prompt = rules.STUDIO_SYSTEM_PROMPT
+    for use in ("composite the product's real icon", "redraw", "device", "contrast", "layout"):
+        assert use in prompt
+
+
+def test_a_program_made_on_the_image_models_image_is_a_layouts_candidate():
+    problems_of = rules.operation_problems(
+        Operation(op="candidate_ready", version_id=V2),
+        technique=Technique.HTML_REFERENCE,
+        images=RunImages(
+            run_versions=frozenset({V1, V2}),
+            this_round=frozenset({V1, V2}),
+            reference_assets=frozenset(),
+            made_by_image_model=frozenset({V1}),
+            composited_on_image_model=frozenset({V2}),
+        ),
+        cost_usd=0.0,
+        limits=Limits(),
+    )
+    assert problems_of == []
+
+
 def round_state(technique: Technique, operations: list, exact_copy=("Hello",)) -> dict:
     return {"technique": technique.value, "operations": operations, "exact_copy": list(exact_copy)}
 
@@ -574,6 +671,50 @@ def test_the_next_step_of_an_overlay_after_its_background_is_the_words_in_code()
 
 def test_a_generated_image_has_no_fixed_next_step():
     assert rules.next_step(round_state(Technique.GENERATED, [])) == ""
+
+
+ICON_ID = "33333333-3333-4333-8333-333333333333"
+
+
+def with_the_real_icon(state: dict) -> dict:
+    return {
+        **state,
+        "repository_images": [{"id": ICON_ID, "kind": "icon"}],
+        "brief": {"reference_images": [{"id": ICON_ID, "use": "app icon in the corner"}]},
+    }
+
+
+def test_after_an_image_models_image_the_briefs_real_icon_is_pasted_in_code():
+    state = with_the_real_icon(
+        round_state(Technique.GENERATED, [{"op": "generate_image", "version_id": V1, "ok": True}])
+    )
+    step = rules.next_step(state)
+    assert "run_python" in step
+    assert f"input_version_ids [{V1}]" in step
+    assert f"input_repository_image_ids [{ICON_ID}]" in step
+
+
+def test_a_brand_failure_with_the_real_icon_chosen_is_mended_by_pasting_it_in_code():
+    spec = platform_spec(Platform.INSTAGRAM_POST)
+    state = with_the_real_icon({})
+    [strategy] = rules.edit_strategies(
+        ["verifier:brand_fit"],
+        Technique.GENERATED,
+        spec,
+        real_assets=rules.chosen_real_assets(state),
+    )
+    assert strategy.startswith("Paste the product's real icon")
+    assert ICON_ID in strategy
+
+
+def test_an_overlay_round_without_a_candidate_is_told_to_lay_the_words_over_in_code():
+    spec = platform_spec(Platform.INSTAGRAM_POST)
+    [strategy] = rules.edit_strategies([rules.NO_CANDIDATE], Technique.BACKGROUND_OVERLAY, spec)
+    assert strategy.startswith("Lay the exact words over the background with run_python")
+
+
+def test_the_verifier_fails_an_invented_icon_in_place_of_the_real_one_as_major():
+    assert "brand_fit fails with severity major" in rules.VERIFIER_SYSTEM_PROMPT
 
 
 # --------------------------------------------------------------------- the brief's words

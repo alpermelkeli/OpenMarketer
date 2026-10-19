@@ -102,7 +102,8 @@ class StudioState(TypedDict):
     pending: dict[str, Any]
     asset_id: str  # the run's asset, "" until its first version is stored
     # Every image the run made: {"version_id", "operation", "technique", "round", "width",
-    # "height", "mime", "size_bytes", "cost_usd"}.
+    # "height", "mime", "size_bytes", "cost_usd", "input_version_ids"}; a version stored before
+    # its inputs were kept has no "input_version_ids", and is read as made on top of none.
     versions: list[dict[str, Any]]
     candidate: str  # this round's candidate version, "" until one is chosen
     # Every candidate with its reviews: {"version_id", "round", "technique", "check",

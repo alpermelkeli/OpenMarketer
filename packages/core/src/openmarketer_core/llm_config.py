@@ -19,7 +19,8 @@ answered with a probability each by OpenRouter's decisions endpoint
 that asks for an image back (``build_image_request``). A decisions role names
 its model and takes nothing else: none of a chat request's parameters applies
 to it. An images role names its model, requires image output, may give
-``fallbacks`` (models that also draw, tried in order when the first fails; the
+``fallbacks`` (models that also draw, which the caller tries in order, one
+request each, when the first fails in a way another model may pass; the
 defaults' chat fallbacks never apply to it) and ``estimate_usd_per_image``, what
 one image is reckoned to cost when the catalogue gives no price per image.
 
@@ -301,28 +302,27 @@ class ModelProblem:
     problem: CapabilityProblem
 
 
-def image_modalities(
-    models: Sequence[str], catalog: Mapping[str, CatalogModel] | None
-) -> list[str]:
-    """What an image request to ``models`` (its model, then its fallbacks) asks back.
+IMAGE_ONLY = ["image"]
+IMAGE_AND_TEXT = ["image", "text"]
+
+
+def image_modalities(model: str, catalog: Mapping[str, CatalogModel] | None) -> list[str]:
+    """What an image request to ``model`` asks back: its own outputs, as the catalogue gives them.
 
     OpenRouter's image-generation guide asks for ``["image", "text"]`` from a model that
     answers with both (Gemini, GPT-5 Image) and ``["image"]`` from one that makes images only
-    (FLUX, Seedream, Recraft). It does not say that a model of both accepts ``["image"]``, so
-    ``["image"]`` is asked only when the catalogue says one of the request's models makes
-    images and no text. ``models`` is one request, so a fallback of images only makes it
-    ``["image"]`` for the models before it too. A model the catalogue does not list, or one
-    whose outputs it does not give, or no catalogue at all, leaves the request as it was
-    before the catalogue was read: ``["image", "text"]``.
+    (FLUX, Seedream, Recraft), and a model of images only refuses the first. It does not say
+    that a model of both accepts ``["image"]``, so ``["image"]`` is asked only when the
+    catalogue says the model makes images and no text. A model the catalogue does not list, or
+    one whose outputs it does not give, or no catalogue at all: ``["image", "text"]``, which
+    the caller may ask again as ``["image"]`` when the provider says no endpoint gives those
+    outputs.
     """
-    if catalog is None:
-        return ["image", "text"]
-    for slug in models:
-        entry = catalog.get(slug)
-        outputs = entry.output_modalities if entry is not None else frozenset()
-        if "image" in outputs and "text" not in outputs:
-            return ["image"]
-    return ["image", "text"]
+    entry = catalog.get(model) if catalog is not None else None
+    outputs = entry.output_modalities if entry is not None else frozenset()
+    if "image" in outputs and "text" not in outputs:
+        return list(IMAGE_ONLY)
+    return list(IMAGE_AND_TEXT)
 
 
 # ----------------------------------------------------------------- router
@@ -582,36 +582,51 @@ class ModelRouter:
             payload.update(extra)
         return payload
 
+    def image_models(self, role: str) -> list[str]:
+        """The models an image request of ``role`` tries, in order: its model, its fallbacks."""
+        r = self.resolve(role)
+        return [r.model, *r.fallbacks]
+
     def build_image_request(
         self,
         role: str,
         messages: list[dict[str, Any]],
         *,
+        model: str | None = None,
         image_config: Mapping[str, Any] | None = None,
         catalog: Mapping[str, CatalogModel] | None = None,
+        modalities: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """The body of a chat-completions request for ``role`` that asks for an image back.
+        """The body of a chat-completions request to one model of ``role`` that asks for an
+        image back.
 
-        ``image_config`` is OpenRouter's description of the image (its ``aspect_ratio``); a
-        model that does not read it ignores it, and the caller fits what comes back. The
-        provider routing is the chat requests', and so are the fallbacks (``models``, tried
-        in order) and the cost the reply reports (``usage``); the reply's ``model`` names the
-        one that answered. ``catalog`` is the provider's, when the caller could read it: the
-        ``modalities`` asked for are the request's models' (``image_modalities``). Raises
-        ``ConfigError`` for a role that is not of kind ``images``.
+        ``model`` is the role's model (the default) or one of its fallbacks: a request names
+        one model and no ``models`` list, because OpenRouter, given the list, answered from the
+        fallback although the first model answers alone, and a list is sent one ``modalities``
+        that a model of images only refuses. The caller tries the fallbacks itself
+        (``image_models``). ``image_config`` is OpenRouter's description of the image (its
+        ``aspect_ratio``); a model that does not read it ignores it, and the caller fits what
+        comes back. The provider routing is the chat requests', and so is the cost the reply
+        reports (``usage``). ``modalities`` are the model's own (``image_modalities`` of
+        ``catalog``, the provider's when the caller could read it) unless given. Raises
+        ``ConfigError`` for a role that is not of kind ``images`` and for a model that is not
+        the role's.
         """
         r = self.resolve(role)
         if r.kind != "images":
             raise ConfigError(f"role '{role}' is of kind '{r.kind}', not 'images'")
+        chosen = r.model if model is None else model
+        if chosen not in (r.model, *r.fallbacks):
+            raise ConfigError(f"role '{role}' does not name that model")
         payload: dict[str, Any] = {
-            "model": r.model,
+            "model": chosen,
             "messages": messages,
-            "modalities": image_modalities([r.model, *r.fallbacks], catalog),
+            "modalities": list(modalities)
+            if modalities is not None
+            else image_modalities(chosen, catalog),
             "provider": self.config.provider.routing.model_dump(),
             "usage": {"include": True},
         }
-        if r.fallbacks:
-            payload["models"] = [r.model, *r.fallbacks]  # OpenRouter tries these in order
         if image_config:
             payload["image_config"] = dict(image_config)
         return payload

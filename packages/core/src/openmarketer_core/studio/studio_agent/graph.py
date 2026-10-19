@@ -280,30 +280,15 @@ def brief(state: StudioState, context: StudioContext) -> dict[str, Any]:
 def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
     """Have the studio model choose the round's next operation, or the round's candidate."""
     limits = context.limits
+    images = _run_images(state)
     if len(state["operations"]) >= limits.max_operations_per_round:
-        return _round_ends(state, f"round {state['round']} used all its operations")
+        return _round_ends(
+            state, context, images, f"round {state['round']} used all its operations"
+        )
     if state["cost_usd"] >= limits.max_cost_usd:
-        return _round_ends(state, f"round {state['round']} ended at the cost limit")
-    images = RunImages(
-        run_versions=frozenset(v["version_id"] for v in state["versions"]),
-        this_round=frozenset(_this_round(state)),
-        reference_assets=frozenset(state["reference_asset_ids"]),
-        made_by_code=frozenset(
-            v["version_id"]
-            for v in state["versions"]
-            if v["operation"] in (rules.RUN_PYTHON, rules.RENDER_HTML)
-        ),
-        has_copy=bool(state["exact_copy"]),
-        repository_images=frozenset(image["id"] for image in _repository_images(state)),
-        renders_this_round=sum(
-            1 for op in state["operations"] if op.get("ok") and op["op"] == rules.RENDER_HTML
-        ),
-        made_by_image_model=frozenset(
-            v["version_id"]
-            for v in state["versions"]
-            if v["operation"] in (rules.GENERATE_IMAGE, rules.EDIT_IMAGE)
-        ),
-    )
+        return _round_ends(
+            state, context, images, f"round {state['round']} ended at the cost limit"
+        )
     spent = _Spent()
     messages = _produce_messages(state, context)
     for _ in range(rules.MAX_PRODUCE_CALLS):
@@ -324,9 +309,46 @@ def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
         for image_id in shown:
             messages.append({"role": "user", "content": _viewed(context, images, image_id)})
     ended = _round_ends(
-        state, f"round {state['round']}: the studio model chose no usable operation"
+        state,
+        context,
+        images,
+        f"round {state['round']}: the studio model chose no usable operation",
     )
     return {**ended, **spent.update(state)}
+
+
+def _run_images(state: StudioState) -> RunImages:
+    """The facts of the run's images an operation is checked against."""
+    versions = state["versions"]
+    by_image_model = frozenset(
+        v["version_id"]
+        for v in versions
+        if v["operation"] in (rules.GENERATE_IMAGE, rules.EDIT_IMAGE)
+    )
+    # In the order they were made, so that a composite of a composite counts too. A version
+    # stored before its inputs were kept names none.
+    on_image_model: set[str] = set()
+    for v in versions:
+        inputs = set(v.get("input_version_ids", []))
+        if v["operation"] == rules.RUN_PYTHON and inputs & (by_image_model | on_image_model):
+            on_image_model.add(v["version_id"])
+    return RunImages(
+        run_versions=frozenset(v["version_id"] for v in versions),
+        this_round=frozenset(_this_round(state)),
+        reference_assets=frozenset(state["reference_asset_ids"]),
+        made_by_code=frozenset(
+            v["version_id"]
+            for v in versions
+            if v["operation"] in (rules.RUN_PYTHON, rules.RENDER_HTML)
+        ),
+        has_copy=bool(state["exact_copy"]),
+        repository_images=frozenset(image["id"] for image in _repository_images(state)),
+        renders_this_round=sum(
+            1 for op in state["operations"] if op.get("ok") and op["op"] == rules.RENDER_HTML
+        ),
+        made_by_image_model=by_image_model,
+        composited_on_image_model=frozenset(on_image_model),
+    )
 
 
 def _produce_messages(state: StudioState, context: StudioContext) -> list[dict[str, Any]]:
@@ -454,13 +476,38 @@ def _chosen(state: StudioState, operation: Operation) -> dict[str, Any]:
     return {"pending": pending, "technique": technique, "notes": notes}
 
 
-def _round_ends(state: StudioState, note: str) -> dict[str, Any]:
-    """The round ends without a choice: its latest image is the candidate, if it has one."""
+def _round_ends(
+    state: StudioState, context: StudioContext, images: RunImages, note: str
+) -> dict[str, Any]:
+    """The round ends without a choice: its latest image is the candidate when the model could
+    have named it with candidate_ready, under the same rules (``rules.operation_problems``).
+
+    Otherwise the round has no candidate (``rules.NO_CANDIDATE``), and the check and the note
+    say why, for the edit plan to mend it: a background without its words, or a rendered
+    layout, is never a candidate by default.
+    """
     latest = _this_round(state)
     notes = [*state["notes"], note]
+    problems = ["the round made no image"]
     if latest:
-        return {"candidate": latest[-1], "pending": {}, "notes": notes}
-    check = {"version_id": "", "passed": False, "failures": [rules.NO_CANDIDATE]}
+        problems = rules.operation_problems(
+            Operation(op=rules.CANDIDATE_READY, version_id=latest[-1]),
+            technique=Technique(state["technique"]),
+            images=images,
+            cost_usd=state["cost_usd"],
+            limits=context.limits,
+        )
+        if not problems:
+            return {"candidate": latest[-1], "pending": {}, "notes": notes}
+        notes.append(
+            f"round {state['round']}: its latest image is not a candidate: " + "; ".join(problems)
+        )
+    check = {
+        "version_id": "",
+        "passed": False,
+        "failures": [rules.NO_CANDIDATE],
+        "why": "; ".join(problems),
+    }
     return {"candidate": "", "pending": {}, "check": check, "verification": {}, "notes": notes}
 
 
@@ -485,6 +532,8 @@ def operate(state: StudioState, context: StudioContext) -> dict[str, Any]:
         "mime": str(result.get("mime", "")),
         "size_bytes": int(result.get("size_bytes", 0)),
         "cost_usd": float(result.get("cost_usd", 0.0)),
+        # What code made it on top of: a composite of the image model's image is its candidate.
+        "input_version_ids": list(pending.get("input_version_ids", [])),
     }
     done = {"op": pending["op"], "version_id": pending["version_id"], "ok": True}
     return {
@@ -643,6 +692,8 @@ def verify(state: StudioState, context: StudioContext) -> dict[str, Any]:
             "content": [
                 {"type": "text", "text": json.dumps(data, ensure_ascii=False)},
                 _shown_image(context, state["candidate"]),
+                # The product's real images the brief chose, to tell an imitation from them.
+                *_chosen_repository_images(state, context),
             ],
         },
     ]
@@ -744,9 +795,12 @@ def edit_plan(state: StudioState, context: StudioContext) -> dict[str, Any]:
     notes = state["notes"]
     if submitted is None:
         # The table of edit strategies is a plan of its own; the run goes on with it.
-        steps = rules.edit_strategies(failures, Technique(state["technique"]), spec) or [
-            "Make the image again, closer to the brief."
-        ]
+        steps = rules.edit_strategies(
+            failures,
+            Technique(state["technique"]),
+            spec,
+            real_assets=rules.chosen_real_assets(state),
+        ) or ["Make the image again, closer to the brief."]
         plan = {
             "summary": "Mend the failures of the last round.",
             "steps": steps[: rules.MAX_PLAN_STEPS],

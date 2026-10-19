@@ -41,7 +41,7 @@ from openmarketer_core.studio.studio_agent.definitions import (
     initial_state,
     result_of,
 )
-from openmarketer_core.studio.studio_agent.graph import _payload_of, recursion_limit
+from openmarketer_core.studio.studio_agent.graph import _payload_of, _run_images, recursion_limit
 from openmarketer_core.studio.studio_agent.rules import Limits, RepositoryImageInfo
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND, StudioRunInput
 
@@ -900,3 +900,228 @@ def test_a_thread_stored_before_repository_images_were_kept_still_asks_for_its_i
     assert "repository_images" not in rules.produce_data(
         state, platform_spec(Platform.INSTAGRAM_POST), Limits(), {}
     )
+
+
+# ------------------------------------------------------------- what a weak model submits
+def test_an_edit_whose_instruction_a_weak_model_put_in_its_note_is_made():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[
+            operation("generate_image", prompt="A desk."),
+            ready(),
+            a_plan(),
+            editing_latest(note="Erase all lettering so code can print the exact words."),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World(["Lauch day", READ_BACK])
+
+    run = Run(chat, world)
+
+    [edited] = world.payloads(EDIT_IMAGE)
+    assert edited["instruction"].startswith("Erase all lettering so code can print")
+    assert run.result.final_version_id == edited["version_id"]
+
+
+def test_a_page_a_weak_model_put_in_its_note_is_refused_with_where_the_page_goes():
+    chat = ScriptedChat(
+        creative_director=[a_brief("html_reference")],
+        studio=[
+            operation("render_html", note="A page with the headline at the top."),
+            operation("render_html", html="<html><body><h1>Launch day</h1></body></html>"),
+            lambda messages: operation(
+                "generate_image",
+                prompt="From the layout.",
+                reference_version_ids=[latest_image(messages)],
+            ),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world)
+
+    refused = chat.calls[2]["messages"][-1]["content"]
+    assert "render_html needs html: the whole page goes in `html`" in refused
+    assert world.names() == [RENDER_HTML, GENERATE_IMAGE, READ_TEXT]
+
+
+# ------------------------------------------------------------ the round's default candidate
+def test_a_background_without_its_words_is_not_taken_as_the_rounds_candidate():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[
+            operation(
+                "generate_image", prompt="A calm navy field.", technique="background_overlay"
+            ),
+            a_plan(),
+            lambda messages: operation(
+                "run_python",
+                code="from PIL import Image\n",
+                input_version_ids=[latest_image(messages)],
+            ),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    run = Run(chat, world, limits=Limits(max_operations_per_round=1))
+
+    [background] = world.payloads(GENERATE_IMAGE)
+    [program] = world.payloads(RUN_PYTHON)
+    assert world.names() == [GENERATE_IMAGE, RUN_PYTHON, READ_TEXT]
+    assert run.final["failures"][0]["failures"] == [rules.NO_CANDIDATE]
+    assert any(
+        "is not a candidate" in note and "laid over in code" in note for note in run.final["notes"]
+    )
+    plan_data = json.loads(chat.calls[2]["messages"][1]["content"][0]["text"])
+    assert "laid over in code" in plan_data["check"]["why"]
+    assert plan_data["edit_strategies"][0].startswith("Lay the exact words over the background")
+    assert [c["version_id"] for c in run.final["candidates"]] == [program["version_id"]]
+    assert background["version_id"] != run.result.final_version_id
+
+
+def test_a_rendered_layout_alone_is_not_taken_as_the_rounds_candidate():
+    chat = ScriptedChat(
+        creative_director=[a_brief("html_reference")],
+        studio=[operation("render_html", html="<html></html>")],
+        asset_verifier=[],
+    )
+    world = World([])
+
+    run = Run(chat, world, limits=Limits(max_rounds=1, max_operations_per_round=1))
+
+    assert world.names() == [RENDER_HTML]
+    assert run.final["candidates"] == []
+    assert run.final["failures"][0]["failures"] == [rules.NO_CANDIDATE]
+    assert run.result.needs_review
+
+
+# ------------------------------------------------------------- the product's real images
+def test_the_real_icon_is_composited_on_the_image_models_image_and_that_is_the_candidate():
+    chat = ScriptedChat(
+        creative_director=[a_brief("html_reference", reference_images=[CORNER])],
+        studio=[
+            operation("render_html", html="<html></html>"),
+            lambda messages: operation(
+                "generate_image",
+                prompt="From the layout.",
+                reference_version_ids=[latest_image(messages)],
+            ),
+            lambda messages: operation(
+                "run_python",
+                code="from PIL import Image\n",
+                input_version_ids=[latest_image(messages)],
+                input_repository_image_ids=[ICON.id],
+            ),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    run = Run(chat, world, repository=REPOSITORY)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    [program] = world.payloads(RUN_PYTHON)
+    assert program["input_version_ids"] == [generated["version_id"]]
+    assert program["input_repository_image_ids"] == [ICON.id]
+    assert run.result.final_version_id == program["version_id"]
+    after_generation = json.loads(chat.calls[3]["messages"][1]["content"][0]["text"])
+    assert "paste the real images over it" in after_generation["next_step"]
+
+
+def test_the_verifier_is_shown_the_real_images_the_brief_chose():
+    chat = ScriptedChat(
+        creative_director=[a_brief(reference_images=[CORNER])],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+
+    Run(chat, World([READ_BACK]), repository=REPOSITORY)
+
+    [asked] = [c for c in chat.calls if c["role"] == rules.VERIFIER_ROLE]
+    parts = asked["messages"][1]["content"]
+    captions = [part["text"] for part in parts if part["type"] == "text"]
+    assert f"Repository image {ICON.id}, chosen for: app icon for the corner" in captions
+    assert sum(1 for part in parts if part["type"] == "image_url") == 2
+
+
+def test_an_invented_icon_the_verifier_fails_as_major_is_mended_by_pasting_the_real_one():
+    chat = ScriptedChat(
+        creative_director=[a_brief(reference_images=[CORNER])],
+        studio=[
+            operation("generate_image", prompt="A desk."),
+            ready(),
+            a_plan(),
+            lambda messages: operation(
+                "run_python",
+                code="from PIL import Image\n",
+                input_version_ids=[latest_image(messages)],
+                input_repository_image_ids=[ICON.id],
+            ),
+            ready(),
+        ],
+        asset_verifier=[a_verdict(brand_fit="major"), a_verdict()],
+    )
+    world = World([READ_BACK, READ_BACK])
+
+    run = Run(chat, world, repository=REPOSITORY)
+
+    assert run.final["failures"][0]["failures"] == ["verifier:brand_fit"]
+    [planned] = [c for c in chat.calls if c["tools"] == [rules.edit_plan_tool()]]
+    plan_data = json.loads(planned["messages"][1]["content"][0]["text"])
+    assert plan_data["edit_strategies"][0].startswith("Paste the product's real icon")
+    [program] = world.payloads(RUN_PYTHON)
+    assert program["technique"] == "generated"
+    assert run.result.final_version_id == program["version_id"]
+
+
+def test_a_version_stored_before_its_inputs_were_kept_is_read_as_made_on_none():
+    version = {
+        "version_id": str(uuid.uuid4()),
+        "operation": RUN_PYTHON,
+        "technique": "html_reference",
+        "round": 1,
+    }
+    state: dict[str, Any] = {
+        "versions": [version],
+        "round": 1,
+        "reference_asset_ids": [],
+        "exact_copy": COPY,
+        "operations": [],
+    }
+
+    images = _run_images(state)  # type: ignore[arg-type]
+
+    assert images.composited_on_image_model == frozenset()
+
+
+def test_a_program_on_a_render_is_not_composited_on_the_image_models_image_but_on_it_is():
+    def version(operation: str, *inputs: str) -> dict[str, Any]:
+        return {
+            "version_id": str(uuid.uuid4()),
+            "operation": operation,
+            "technique": "html_reference",
+            "round": 1,
+            "input_version_ids": list(inputs),
+        }
+
+    render = version(RENDER_HTML)
+    on_render = version(RUN_PYTHON, render["version_id"])
+    generated = version(GENERATE_IMAGE)
+    on_generated = version(RUN_PYTHON, generated["version_id"])
+    on_that = version(RUN_PYTHON, on_generated["version_id"])
+    state: dict[str, Any] = {
+        "versions": [render, on_render, generated, on_generated, on_that],
+        "round": 1,
+        "reference_asset_ids": [],
+        "exact_copy": COPY,
+        "operations": [],
+    }
+
+    images = _run_images(state)  # type: ignore[arg-type]
+
+    assert images.composited_on_image_model == {on_generated["version_id"], on_that["version_id"]}

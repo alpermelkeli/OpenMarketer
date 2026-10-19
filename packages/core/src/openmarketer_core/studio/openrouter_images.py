@@ -1,11 +1,24 @@
 """The ``MediaProvider`` port answered by an image model on OpenRouter's chat endpoint.
 
-One request per image: the role's model (``image_generator`` by default, resolved by
+One request per model: the role's model (``image_generator`` by default, resolved by
 ``ModelRouter``) is sent the prompt, or the image to edit and the instruction, and any
-references as image parts (``llm.image_part``), and asked for an image back (``modalities``:
-``["image"]`` when the provider's catalogue says one of the request's models makes images only,
-``["image", "text"]`` otherwise or when the catalogue cannot be read,
-``llm_config.image_modalities``). The shape is asked for with OpenRouter's
+references as image parts (``llm.image_part``), and asked for an image back with its own
+``modalities``: ``["image"]`` when the provider's catalogue says it makes images only,
+``["image", "text"]`` otherwise or when the catalogue cannot be read
+(``llm_config.image_modalities``); a model asked for both that OpenRouter answers has no
+endpoint for those outputs (HTTP 404) is asked once more for ``["image"]``.
+
+The role's fallbacks are tried here, one request each, in order, and never sent as
+OpenRouter's ``models`` list: given one, OpenRouter answered from the fallback although the
+first model answers alone. The next model is tried only after a failure another model may
+pass (``_another_model_may_pass``): the provider unreachable or busy, a rate limit, a model
+with no endpoint (HTTP 404) or served on the images endpoint only. A refusal of the content
+and an account that cannot pay end it, since every model would answer the same. When every
+model failed, the failure raised is ``MediaUnavailable`` if one of them was (it may pass
+later), and the first model's otherwise. The result names the model that answered and the
+ones tried before it (``params["models_failed"]``).
+
+The shape is asked for with OpenRouter's
 ``image_config.aspect_ratio``, the supported ratio nearest the size; a model that ignores it is
 still held to the size, since what comes back is fitted to it here: cropped about its centre to
 the size's proportions and resized, and the result says so (``params["fitted"]``).
@@ -44,7 +57,7 @@ import httpx
 from PIL import Image, ImageOps
 
 from openmarketer_core.llm import image_part, model_name_to_keep, reported_status
-from openmarketer_core.llm_config import CatalogModel, ModelRouter
+from openmarketer_core.llm_config import IMAGE_ONLY, CatalogModel, ModelRouter
 from openmarketer_core.studio.media_provider import (
     ImageInput,
     MediaAccountLimited,
@@ -96,6 +109,9 @@ IMAGES_ENDPOINT_ONLY = (
     "this image model is served by OpenRouter's images endpoint, which the studio does not use "
     "yet; choose another image model for the image_generator role in Settings"
 )
+# OpenRouter answers 404 "No endpoints found that support the requested output modalities" to a
+# model of images only that is asked for an image and text.
+_OUTPUTS_MARK = "output modalities"
 # OpenRouter answers 403 when its moderation flags the input.
 _REFUSED_STATUSES = (403,)
 # The finish reasons a model gives when it would not draw what was asked.
@@ -168,14 +184,75 @@ class OpenRouterImages:
     ) -> MediaResult:
         self._check_size(width, height)
         aspect_ratio = nearest_aspect_ratio(width, height)
-        payload = self.router.build_image_request(
-            self.role,
-            [{"role": "user", "content": content}],
-            image_config={"aspect_ratio": aspect_ratio},
-            catalog=self._catalogue(),
-        )
-        body = self._post(payload)
-        drawn = self._image_in(body)
+        catalogue = self._catalogue()
+        failures: list[MediaProviderError] = []
+        failed: list[str] = []
+        for model in self.router.image_models(self.role):
+            try:
+                body, modalities = self._ask(model, content, aspect_ratio, catalogue)
+                drawn = self._image_in(body)
+            except MediaProviderError as e:
+                if not _another_model_may_pass(e):
+                    raise
+                logger.warning("image model %s failed (%s); trying the next one", model, e)
+                failures.append(e)
+                failed.append(model)
+                continue
+            return self._result(
+                operation,
+                body,
+                drawn,
+                asked_for=model,
+                width=width,
+                height=height,
+                params={
+                    "aspect_ratio": aspect_ratio,
+                    "modalities": modalities,
+                    "models_failed": failed,
+                },
+            )
+        raise _of_all(failures)
+
+    def _ask(
+        self,
+        model: str,
+        content: list[dict[str, Any]],
+        aspect_ratio: str,
+        catalogue: Mapping[str, CatalogModel] | None,
+    ) -> tuple[dict[str, Any], list[str]]:
+        """The reply of ``model``, and the modalities it was asked for; asked once more for an
+        image only when it has no endpoint for an image and text."""
+
+        def payload(modalities: Sequence[str] | None) -> dict[str, Any]:
+            return self.router.build_image_request(
+                self.role,
+                [{"role": "user", "content": content}],
+                model=model,
+                image_config={"aspect_ratio": aspect_ratio},
+                catalog=catalogue,
+                modalities=modalities,
+            )
+
+        first = payload(None)
+        try:
+            return self._post(first), first["modalities"]
+        except _NoEndpointForOutputs:
+            if first["modalities"] == IMAGE_ONLY:
+                raise
+            logger.warning("image model %s has no endpoint for an image and text", model)
+        return self._post(payload(IMAGE_ONLY)), list(IMAGE_ONLY)
+
+    def _result(
+        self,
+        operation: MediaOperation,
+        body: dict[str, Any],
+        drawn: bytes,
+        *,
+        asked_for: str,
+        width: int,
+        height: int,
+        params: Mapping[str, Any],
+    ) -> MediaResult:
         checked, reason = check_image(RawOutput("image", drawn), self.limits)
         if checked is None:
             logger.warning("image model's image refused: %s", reason)
@@ -189,11 +266,11 @@ class OpenRouterImages:
             height=height,
             cost_usd=cost,
             provider=self.router.config.provider.name,
-            model=model_name_to_keep(body.get("model"), asked_for=payload["model"]),
+            model=model_name_to_keep(body.get("model"), asked_for=asked_for),
             params={
                 "role": self.role,
                 "operation": operation,
-                "aspect_ratio": aspect_ratio,
+                **params,
                 "returned_width": checked.width,
                 "returned_height": checked.height,
                 "fitted": fitted,
@@ -235,7 +312,13 @@ class OpenRouterImages:
                 "image provider answered HTTP %s: %r", response.status_code, response.text[:300]
             )
             if _wants_the_images_endpoint(response):
-                raise MediaProviderError(IMAGES_ENDPOINT_ONLY)
+                raise _ModelNotServed(IMAGES_ENDPOINT_ONLY)
+            if _has_no_endpoint_for_the_outputs(response):
+                raise _NoEndpointForOutputs(
+                    f"the image provider answered HTTP {response.status_code}"
+                )
+            if response.status_code == _NOT_ON_THIS_ENDPOINT_STATUS:
+                raise _ModelNotServed(f"the image provider answered HTTP {response.status_code}")
             raise _failure(
                 response.status_code,
                 f"the image provider answered HTTP {response.status_code}",
@@ -366,14 +449,49 @@ def _error_in(response: httpx.Response) -> Any:
     return body.get("error") if isinstance(body, dict) else None
 
 
+class _ModelNotServed(MediaProviderError):
+    """OpenRouter serves this model no endpoint for the request (HTTP 404): another may."""
+
+
+class _NoEndpointForOutputs(_ModelNotServed):
+    """The model has no endpoint for the modalities asked: it may answer for an image only."""
+
+
+def _another_model_may_pass(failure: MediaProviderError) -> bool:
+    """Whether the next of the role's models is worth asking after ``failure``: not after a
+    refusal of the content or an account that cannot pay, which every model would share."""
+    return isinstance(failure, MediaUnavailable | _ModelNotServed)
+
+
+def _of_all(failures: Sequence[MediaProviderError]) -> MediaProviderError:
+    """What is raised when every model failed: one that may pass later, else the first model's,
+    as the public error it is (never the module's own kinds)."""
+    for failure in failures:
+        if isinstance(failure, MediaUnavailable):
+            return failure
+    return MediaProviderError(str(failures[0]))
+
+
+def _error_message(response: httpx.Response) -> str:
+    error = _error_in(response)
+    message = error.get("message") if isinstance(error, dict) else None
+    return (message if isinstance(message, str) else response.text[:2000]).lower()
+
+
+def _has_no_endpoint_for_the_outputs(response: httpx.Response) -> bool:
+    """Whether a reply says no endpoint of the model gives the modalities asked. Read only to
+    tell the kind of failure: nothing of it is put in the error raised."""
+    if response.status_code != _NOT_ON_THIS_ENDPOINT_STATUS:
+        return False
+    return _OUTPUTS_MARK in _error_message(response)
+
+
 def _wants_the_images_endpoint(response: httpx.Response) -> bool:
     """Whether a reply says the model is served on the images endpoint, not the chat one. Read
     only to tell the kind of failure: nothing of it is put in the error raised."""
     if response.status_code != _NOT_ON_THIS_ENDPOINT_STATUS:
         return False
-    error = _error_in(response)
-    message = error.get("message") if isinstance(error, dict) else None
-    text = (message if isinstance(message, str) else response.text[:2000]).lower()
+    text = _error_message(response)
     return any(mark in text for mark in _IMAGES_ENDPOINT_MARKS)
 
 

@@ -31,7 +31,14 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from openmarketer_core.studio.brand_kit import BrandKit
 from openmarketer_core.studio.code_screening import MAX_REQUIREMENTS, MAX_SOURCE_BYTES
@@ -79,9 +86,18 @@ OperationName = Literal[
 ]
 SPENDING_OPERATIONS = frozenset({GENERATE_IMAGE, EDIT_IMAGE})
 
+# run_python is of every technique: what code does is exact, so it composites the product's
+# real images (icon, logo, screenshots), fixes a line of text, frames, crops or raises the
+# contrast behind the words on top of what the image model made, whatever the technique.
 ALLOWED_OPERATIONS: Mapping[Technique, tuple[str, ...]] = {
-    Technique.GENERATED: (GENERATE_IMAGE, EDIT_IMAGE, CANDIDATE_READY),
-    Technique.HTML_REFERENCE: (RENDER_HTML, GENERATE_IMAGE, EDIT_IMAGE, CANDIDATE_READY),
+    Technique.GENERATED: (GENERATE_IMAGE, EDIT_IMAGE, RUN_PYTHON, CANDIDATE_READY),
+    Technique.HTML_REFERENCE: (
+        RENDER_HTML,
+        GENERATE_IMAGE,
+        EDIT_IMAGE,
+        RUN_PYTHON,
+        CANDIDATE_READY,
+    ),
     Technique.BACKGROUND_OVERLAY: (GENERATE_IMAGE, EDIT_IMAGE, RUN_PYTHON, CANDIDATE_READY),
     Technique.COMPOSED: (RENDER_HTML, RUN_PYTHON, CANDIDATE_READY),
 }
@@ -199,10 +215,41 @@ class Brief(_Submission):
     reference_images: list[ReferenceImage] = Field(default_factory=list, max_length=MAX_REFERENCES)
 
 
-class Operation(_Submission):
-    """The studio model's next operation. Only the fields of the chosen ``op`` are read."""
+# The fields each operation needs, and what a model that left one empty is told: a weak model
+# puts the content of a required field into ``note``, so the refusal says where it goes.
+REQUIRED_FIELDS: Mapping[str, tuple[str, ...]] = {
+    GENERATE_IMAGE: ("prompt",),
+    EDIT_IMAGE: ("source_version_id", "instruction"),
+    RENDER_HTML: ("html",),
+    RUN_PYTHON: ("code",),
+    CANDIDATE_READY: ("version_id",),
+}
+_WHERE_IT_GOES: Mapping[tuple[str, str], str] = {
+    (GENERATE_IMAGE, "prompt"): "describe the picture in `prompt`, not in `note`",
+    (EDIT_IMAGE, "source_version_id"): "the version id of the image of this run to change",
+    (EDIT_IMAGE, "instruction"): "put what to change in `instruction`, not in `note`",
+    (RENDER_HTML, "html"): "the whole page goes in `html`, not in `note` or a description",
+    (RUN_PYTHON, "code"): "the whole program goes in `code`, not in `note` or a description",
+    (CANDIDATE_READY, "version_id"): "the version id of the image of this round that is done",
+}
 
-    op: OperationName
+
+def _required_fields_text() -> str:
+    return "; ".join(f"{op}: {', '.join(names)}" for op, names in REQUIRED_FIELDS.items())
+
+
+class Operation(_Submission):
+    """The studio model's next operation. Only the fields of the chosen ``op`` are read.
+
+    An ``edit_image`` with no ``instruction`` and a ``note`` is read with the note as its
+    instruction (``_note_as_instruction``): a weak model puts what to change there. Only for an
+    edit, whose instruction is a sentence as a note is; a page, a program or a prompt is never
+    taken from a note.
+    """
+
+    op: OperationName = Field(
+        description="The operation. The fields each one needs: " + _required_fields_text()
+    )
     technique: Technique | None = None  # a switch of technique, from this operation on
     prompt: Prompt = ""
     instruction: Prompt = ""
@@ -228,7 +275,18 @@ class Operation(_Submission):
         default_factory=list, max_length=MAX_REFERENCES
     )
     version_id: Annotated[str, StringConstraints(max_length=64)] = ""
-    note: Text = ""
+    note: Text = Field(
+        default="",
+        description="A short remark for the log. Never the content of another field: the "
+        "instruction, the page, the program and the prompt go in their own fields.",
+    )
+
+    @model_validator(mode="after")
+    def _note_as_instruction(self) -> Operation:
+        if self.op == EDIT_IMAGE and not self.instruction and self.note:
+            self.instruction = self.note
+            self.note = ""
+        return self
 
 
 Criterion = Literal[
@@ -460,6 +518,9 @@ class RunImages:
     # (generate_image, edit_image). A render is the reference, never the candidate.
     renders_this_round: int = 0
     made_by_image_model: frozenset[str] = frozenset()
+    # The versions run_python made on top of one of the image model's (the product's real images
+    # composited onto it): with html_reference they are candidates as the image model's are.
+    composited_on_image_model: frozenset[str] = frozenset()
     # The product's repository images the run was shown, by their ids.
     repository_images: frozenset[str] = frozenset()
 
@@ -469,8 +530,24 @@ class RunImages:
 MAX_LAYOUT_RENDERS_PER_ROUND = 2
 
 
+# The kinds of repository image whose real pixels an image must show, not an imitation.
+REAL_ASSET_KINDS = frozenset({"icon", "logo", "screenshot"})
+
+
+def chosen_real_assets(state: Mapping[str, Any]) -> list[str]:
+    """The ids of the product's real icon, logo or screenshots the brief chose, in its order."""
+    kinds = {image["id"]: image["kind"] for image in state.get("repository_images", [])}
+    brief = state.get("brief") or {}
+    return [
+        reference["id"]
+        for reference in brief.get("reference_images", [])
+        if kinds.get(reference["id"]) in REAL_ASSET_KINDS
+    ]
+
+
 def next_step(state: Mapping[str, Any]) -> str:
-    """What code says the round should do next, for the techniques with a fixed order of steps."""
+    """What code says the round should do next, for the techniques with a fixed order of steps,
+    and, after an image model's image, how to make the product's real images exact."""
     technique = Technique(state["technique"])
     made = [op for op in state["operations"] if op.get("ok")]
     if technique == Technique.HTML_REFERENCE:
@@ -484,14 +561,33 @@ def next_step(state: Mapping[str, Any]) -> str:
                 f"generate_image with reference_version_ids [{last_render}]: the image model "
                 "makes the final image from the layout"
             )
-        return "look at the image; edit_image to fix it, or candidate_ready with its version_id"
+        return _look_then(made, state, "edit_image to fix it")
     if technique == Technique.BACKGROUND_OVERLAY and state["exact_copy"]:
         if not any(op["op"] == GENERATE_IMAGE for op in made):
             return "generate_image the background, with no text"
         if not any(op["op"] == RUN_PYTHON for op in made):
             return "run_python to lay the exact words over the background"
         return "look at the image; run_python to fix it, or candidate_ready with its version_id"
+    if technique == Technique.GENERATED and any(
+        op["op"] in (GENERATE_IMAGE, EDIT_IMAGE) for op in made
+    ):
+        return _look_then(made, state, "edit_image to fix it")
     return ""
+
+
+def _look_then(made: Sequence[Mapping[str, Any]], state: Mapping[str, Any], fix: str) -> str:
+    """Look at the latest image, then fix it or name it; with the brief's real assets, paste
+    them with run_python where the image model drew an imitation."""
+    real = chosen_real_assets(state)
+    if not real:
+        return f"look at the image; {fix}, or candidate_ready with its version_id"
+    latest = made[-1]["version_id"]
+    return (
+        f"look at the image; where it shows an imitation of the product's real icon, logo or "
+        f"screenshot instead of the real one, run_python with input_version_ids [{latest}] and "
+        f"input_repository_image_ids [{', '.join(real)}] to paste the real images over it, "
+        f"exactly; otherwise {fix}, or candidate_ready with its version_id"
+    )
 
 
 def first_technique(chosen: Technique, *, has_reference_assets: bool) -> Technique:
@@ -558,11 +654,12 @@ def operation_problems(
     if (
         technique == Technique.HTML_REFERENCE
         and operation.op == CANDIDATE_READY
-        and operation.version_id not in images.made_by_image_model
+        and operation.version_id
+        not in images.made_by_image_model | images.composited_on_image_model
     ):
         problems.append(
             "with html_reference a rendered layout is only the reference: name an image "
-            "generate_image or edit_image made from it"
+            "generate_image or edit_image made from it, or run_python made on top of one"
         )
     if (
         operation.op == GENERATE_IMAGE
@@ -576,14 +673,11 @@ def operation_problems(
 
 
 def _missing_fields(operation: Operation) -> list[str]:
-    needed = {
-        GENERATE_IMAGE: ("prompt",),
-        EDIT_IMAGE: ("source_version_id", "instruction"),
-        RENDER_HTML: ("html",),
-        RUN_PYTHON: ("code",),
-        CANDIDATE_READY: ("version_id",),
-    }[operation.op]
-    return [f"{operation.op} needs {name}" for name in needed if not getattr(operation, name)]
+    return [
+        f"{operation.op} needs {name}: {_WHERE_IT_GOES[(operation.op, name)]}"
+        for name in REQUIRED_FIELDS[operation.op]
+        if not getattr(operation, name)
+    ]
 
 
 def _unknown_images(operation: Operation, images: RunImages) -> list[str]:
@@ -627,7 +721,12 @@ def generation_prompt(
     contradict the copy, so it is taken out first (``without_text_bans``).
     """
     if technique == Technique.BACKGROUND_OVERLAY:
-        return _joined(prompt, about, references, _no_text_for_overlay(copy_placement))
+        return _joined(
+            prompt,
+            about,
+            references,
+            _no_text_for_overlay(copy_placement, exact_copy),
+        )
     if not exact_copy:
         return _joined(prompt, about, references, "The image shows no text, letters or numbers.")
     return _joined(
@@ -651,7 +750,12 @@ def edit_instruction(
     """The instruction an edit is sent with, with the product, the references and the copy as
     code puts them."""
     if technique == Technique.BACKGROUND_OVERLAY:
-        return _joined(instruction, about, references, _no_text_for_overlay(copy_placement))
+        return _joined(
+            instruction,
+            about,
+            references,
+            _no_text_for_overlay(copy_placement, exact_copy),
+        )
     if not exact_copy:
         return _joined(
             instruction, about, references, "Keep the image free of text, letters and numbers."
@@ -669,13 +773,45 @@ def _joined(*parts: str) -> str:
     return "\n\n".join(part for part in parts if part)
 
 
-def _no_text_for_overlay(copy_placement: str) -> str:
-    where = _bounded(copy_placement, MAX_PLACEMENT_CHARS)
+def _no_text_for_overlay(copy_placement: str, exact_copy: Sequence[str]) -> str:
+    where = _bounded(positions_only(copy_placement, exact_copy), MAX_PLACEMENT_CHARS)
     space = "Leave calm space where the words will go" + (f": {where}" if where else ".")
     return (
         "The image shows no text, letters, numbers or logos: the words are added afterwards. "
         + space
     )
+
+
+# Quoted text in a placement: what a director quotes there is the copy, or words like it.
+_QUOTED = re.compile(
+    r"\"[^\"\n]{0,300}\"|“[^”\n]{0,300}”|„[^“”\n]{0,300}[“”]|«[^»\n]{0,300}»"
+    r"|‘[^’\n]{0,300}’|(?<!\w)'[^'\n]{0,300}'(?!\w)"
+)
+
+
+def _copy_line_pattern(line: str) -> re.Pattern[str]:
+    words = r"\s+".join(re.escape(word) for word in line.split())
+    return re.compile(rf"(?<!\w){words}(?!\w)", re.IGNORECASE)
+
+
+def positions_only(copy_placement: str, exact_copy: Sequence[str]) -> str:
+    """Where the words go, without the words: for a background the words are laid over later.
+
+    An image model told of a line it must leave room for draws it, so each line of the copy is
+    named by its number (``line 1``), longest first, and any other quoted text is taken out;
+    the positions stay ("line 1: top left").
+    """
+    out = copy_placement
+    numbered = sorted(enumerate(exact_copy, start=1), key=lambda item: -len(item[1]))
+    for number, line in numbered:
+        if not line.split():
+            continue
+        pattern = _copy_line_pattern(line)
+        quoted = re.compile(rf"[\"“„«‘']\s*{pattern.pattern}\s*[\"”“»’']", re.IGNORECASE)
+        out = quoted.sub(f"line {number}", out)
+        out = pattern.sub(f"line {number}", out)
+    out = _QUOTED.sub("the words", out)
+    return "\n".join(_tidy(line) for line in out.split("\n")).strip()
 
 
 def _placement(copy_placement: str) -> str:
@@ -869,9 +1005,34 @@ def decide(
     )
 
 
-def edit_strategies(failures: Sequence[str], technique: Technique, spec: PlatformSpec) -> list[str]:
-    """The edits that mend each failure, as the design's table of edit strategies says."""
+def edit_strategies(
+    failures: Sequence[str],
+    technique: Technique,
+    spec: PlatformSpec,
+    *,
+    real_assets: Sequence[str] = (),
+) -> list[str]:
+    """The edits that mend each failure, as the design's table of edit strategies says.
+
+    ``real_assets`` are the product's real icon, logo or screenshots the brief chose
+    (``chosen_real_assets``): a brand failure then is mended by pasting them in code.
+    """
     by_code = technique in (Technique.BACKGROUND_OVERLAY, Technique.COMPOSED)
+    brand_fix = (
+        "Paste the product's real icon, logo or screenshot with run_python: the image in "
+        "input_version_ids, the real ones in input_repository_image_ids "
+        f"[{', '.join(real_assets)}], placed over the imitation, exactly; then bring the colours "
+        "and the tone closer to the brand kit."
+        if real_assets
+        else "Bring the colours and the tone closer to the brand kit."
+    )
+    no_candidate = {
+        Technique.BACKGROUND_OVERLAY: "Lay the exact words over the background with run_python, "
+        "then end the round with candidate_ready naming that image.",
+        Technique.HTML_REFERENCE: "Have the image model make the image from the rendered layout "
+        "(generate_image with the render in reference_version_ids), then candidate_ready "
+        "naming that image.",
+    }.get(technique, "End the round with candidate_ready naming an image made in it.")
     copy_fix = (
         "Fix the code that places the words: they are given exactly; check the font size, "
         "the wrapping and that every line fits."
@@ -889,12 +1050,12 @@ def edit_strategies(failures: Sequence[str], technique: Technique, spec: Platfor
         WRONG_FORMAT: "Save the image as PNG or JPEG.",
         TOO_MANY_BYTES: f"Keep the file under {spec.max_bytes} bytes (JPEG, or fewer colours).",
         UNREADABLE: "Make the image again: the file did not read as an image.",
-        NO_CANDIDATE: "End the round with candidate_ready naming an image made in it.",
+        NO_CANDIDATE: no_candidate,
         VERIFIER_UNREAD: "The verifier's report could not be read: keep the image simple and "
         "the words clear.",
         f"{VERIFIER_PREFIX}legibility": "Make the words larger, put a panel or a gradient behind "
         "them, or raise their contrast within the palette.",
-        f"{VERIFIER_PREFIX}brand_fit": "Bring the colours and the tone closer to the brand kit.",
+        f"{VERIFIER_PREFIX}brand_fit": brand_fix,
         f"{VERIFIER_PREFIX}artifacts": "Edit the region with the defect, or generate again with "
         "a revised prompt.",
         f"{VERIFIER_PREFIX}composition": f"Recompose: keep the words and the subject "
@@ -925,7 +1086,8 @@ def operation_tool() -> dict[str, Any]:
     return _function(
         SUBMIT_OPERATION,
         "Submit the next operation of this round, or candidate_ready with the image that is "
-        "done. One operation per call.",
+        "done. One operation per call. Fill the fields the op needs, each in its own field "
+        f"(never in note): {_required_fields_text()}.",
         Operation.model_json_schema(),
     )
 
@@ -1043,8 +1205,18 @@ is /in/<version_id>.png when it is in input_version_ids, and a repository image 
 /in/<id>.png when it is in input_repository_image_ids. No network, no scripts from outside.
 - run_python: code (Pillow and numpy are installed; requirements for more), with the images \
 of input_version_ids and input_repository_image_ids at /in/<id>.png. Write the image to \
-/out/image.png at exactly the asked size.
+/out/image.png at exactly the asked size. It is of every technique, on top of images of this \
+run (input_version_ids) or the product's repository images (input_repository_image_ids), and \
+what it does is exact: composite the product's real icon, logo or screenshots (when the brief \
+chose them and the image model drew an imitation, paste the real ones over it), fix or redraw \
+a line of text the image model got wrong, crop or frame the image, put a screenshot in a device \
+frame, raise the contrast behind the words with a panel or a gradient, and compose a layout. \
+The technique's rule of a candidate still holds: with html_reference the candidate is the image \
+model's image or a program's on top of it, never the bare render; with background_overlay it \
+is the background with the words laid over by code.
 - candidate_ready: version_id of the image of this round that is done.
+Each field holds its own content: what an edit changes goes in instruction, the page in html, \
+the program in code, the picture in prompt; note is only a short remark for the log.
 Set technique on an operation to switch technique from it on. Tools: brand_kit reads the brand \
 kit, view_image shows an image of this run or a repository image.
 
@@ -1066,6 +1238,10 @@ image shows exactly the given lines and no other text), brand_fit, artifacts (ma
 hands or objects), composition (cropping, balance, words clear of the edges), risky_content \
 (claims the brief does not make, anything misleading). Severity is none, minor, major or \
 critical; a major or critical failure sends the image back.
+
+When the brief's reference_images chose the product's real icon, logo or screenshot (you are \
+shown them after the image) and the image shows a different or invented one in its place, \
+brand_fit fails with severity major: the product's own images are shown as they are.
 
 {_COPY_RULES}
 
@@ -1174,7 +1350,9 @@ def edit_plan_data(
         "technique": state["technique"],
         "round_done": state["round"],
         "failures": list(failures),
-        "edit_strategies": edit_strategies(failures, Technique(state["technique"]), spec),
+        "edit_strategies": edit_strategies(
+            failures, Technique(state["technique"]), spec, real_assets=chosen_real_assets(state)
+        ),
         "check": state["check"],
         "verification": state["verification"],
         "candidate": state["candidate"],
