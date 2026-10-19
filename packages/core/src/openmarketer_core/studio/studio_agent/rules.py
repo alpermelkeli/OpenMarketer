@@ -677,7 +677,10 @@ def _copy_sentence(exact_copy: Sequence[str]) -> str:
     lines = "\n".join(json.dumps(line, ensure_ascii=False) for line in exact_copy)
     return (
         "The image shows exactly this text, each line spelled exactly as written here, with "
-        "no other words, letters or numbers anywhere in the image:\n" + lines
+        "no other words, letters or numbers anywhere in the image:\n" + lines + "\n"
+        "Copy every word letter by letter, with its accents and special letters (such as ç, ğ, "
+        "ı, İ, ö, ş, ü, é, ß) exactly as given; do not reorder letters, translate or correct "
+        "anything. Set the text in a clean, legible typeface, large enough to read at a glance."
     )
 
 
