@@ -23,6 +23,7 @@ CONFIG = Config(
         "repo_analyzer": RoleConfig(tier="fast", temperature=0.1, requires=["tools"]),
         "embeddings": RoleConfig(kind="embeddings", model="file/embed"),
         "screener": RoleConfig(kind="decisions", model="file/decide"),
+        "drawer": RoleConfig(kind="images", model="file/draw", requires=["image_output"]),
     },
     unsupported_parameters={"file/strong": ["temperature"]},
 )
@@ -81,7 +82,12 @@ def tier_of(body: dict, name: str) -> dict:
 def test_settings_list_every_tier_and_role_of_the_configuration(client):
     body = client.get(URL).json()
     assert [tier["tier"] for tier in body["tiers"]] == ["fast", "balanced", "strong"]
-    assert [role["role"] for role in body["roles"]] == ["repo_analyzer", "embeddings", "screener"]
+    assert [role["role"] for role in body["roles"]] == [
+        "repo_analyzer",
+        "embeddings",
+        "screener",
+        "drawer",
+    ]
     assert tier_of(body, "fast") == {
         "tier": "fast",
         "model": "file/fast",
@@ -215,6 +221,15 @@ def test_decisions_role_takes_a_model_only(client):
     assert client.put(f"{URL}/roles/screener", json={"model": "a/b"}).status_code == 200
 
 
+def test_images_role_takes_fallbacks_and_nothing_else_of_a_chat(client):
+    response = client.put(f"{URL}/roles/drawer", json={"fallbacks": ["file/draw-2"]})
+    assert response.status_code == 200
+    assert role_of(client.get(URL).json(), "drawer")["effective"]["fallbacks"] == ["file/draw-2"]
+    response = client.put(f"{URL}/roles/drawer", json={"temperature": 0.2})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "temperature"]
+
+
 def test_role_choice_takes_no_unknown_part(client):
     response = client.put(f"{URL}/roles/repo_analyzer", json={"api_key": "x"})
     assert response.status_code == 422
@@ -302,5 +317,12 @@ def test_check_reports_what_a_roles_model_lacks(client):
         "problems": [
             {"role": "repo_analyzer", "model": "openai/unlisted", "problem": "not_in_catalog"},
             {"role": "embeddings", "model": "file/embed", "problem": "not_in_catalog"},
+            {"role": "drawer", "model": "file/draw", "problem": "not_in_catalog"},
         ],
     }
+
+
+def test_check_holds_an_images_roles_fallbacks_to_making_images(client):
+    client.put(f"{URL}/roles/drawer", json={"fallbacks": ["file/fast"]})
+    problems = client.get(f"{URL}/check").json()["problems"]
+    assert {"role": "drawer", "model": "file/fast", "problem": "no_image_output"} in problems

@@ -265,7 +265,22 @@ def test_images_request_asks_the_roles_model_for_an_image_and_nothing_of_a_chat(
     assert payload["modalities"] == ["image", "text"]
     assert payload["image_config"] == {"aspect_ratio": "16:9"}
     assert payload["usage"] == {"include": True}
-    assert not {"temperature", "max_tokens", "models", "reasoning"} & set(payload)
+    assert not {"temperature", "max_tokens", "reasoning"} & set(payload)
+
+
+def test_images_request_offers_the_fallbacks_after_the_model_in_order():
+    r = router()
+    resolved = r.resolve("image_generator")
+    payload = r.build_image_request("image_generator", [])
+    assert resolved.fallbacks
+    assert payload["models"] == [resolved.model, *resolved.fallbacks]
+
+
+def test_images_request_without_fallbacks_names_one_model():
+    r = router().with_workspace(
+        overrides={"image_generator": {"fallbacks": []}}, tiers={}, rejected_parameters={}
+    )
+    assert "models" not in r.build_image_request("image_generator", [])
 
 
 def test_images_and_chat_roles_do_not_build_each_others_requests():
@@ -275,10 +290,23 @@ def test_images_and_chat_roles_do_not_build_each_others_requests():
         router().build_image_request("writer", [])
 
 
-def test_images_role_has_no_fallbacks_and_keeps_its_estimate():
+def test_images_role_has_its_own_fallbacks_and_keeps_its_estimate():
     resolved = router().resolve("image_generator")
-    assert resolved.kind == "images" and resolved.fallbacks == []
+    assert resolved.kind == "images" and resolved.fallbacks == ["google/gemini-3.1-flash-image"]
     assert resolved.estimate_usd_per_image is not None
+
+
+def test_images_role_never_takes_the_defaults_chat_fallbacks():
+    config = Config.model_validate(
+        {
+            "tiers": {"fast": "a/f", "balanced": "a/b", "strong": "a/s"},
+            "defaults": {"model": "a/d", "fallbacks": ["a/chat"]},
+            "roles": {
+                "drawer": {"kind": "images", "model": "v/draw", "requires": ["image_output"]}
+            },
+        }
+    )
+    assert ModelRouter(config, env=BASE_ENV).resolve("drawer").fallbacks == []
 
 
 def test_capability_check_reports_a_model_that_does_not_make_images():
@@ -299,6 +327,12 @@ def test_capability_check_reports_a_model_that_does_not_make_images():
     assert r.check_capabilities(only(r, "image_generator", "google/talker"), catalog) == [
         ModelProblem("google/talker", CapabilityProblem.NO_IMAGE_OUTPUT)
     ]
+    with_fallback = r.resolve("image_generator").model_copy(
+        update={"model": "google/drawer", "fallbacks": ["google/talker"]}
+    )
+    assert r.check_capabilities(with_fallback, catalog) == [
+        ModelProblem("google/talker", CapabilityProblem.NO_IMAGE_OUTPUT)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -308,7 +342,7 @@ def test_capability_check_reports_a_model_that_does_not_make_images():
         {"kind": "images", "model": "vendor/draw"},
         {"kind": "images", "model": "vendor/draw", "requires": ["image_output"], "tier": "fast"},
         {"kind": "images", "model": "vendor/draw", "requires": ["image_output"], "temperature": 1},
-        {"kind": "images", "model": "vendor/draw", "requires": ["image_output"], "fallbacks": ["v/o"]},
+        {"kind": "images", "model": "vendor/draw", "requires": ["image_output"], "fallbacks": ["?"]},
         {"kind": "chat", "requires": ["image_output"]},
         {"kind": "chat", "estimate_usd_per_image": 0.1},
         {"kind": "images", "model": "v/d", "requires": ["image_output"], "estimate_usd_per_image": -1},
@@ -318,7 +352,7 @@ def test_capability_check_reports_a_model_that_does_not_make_images():
         "no-image-output",
         "tier",
         "temperature",
-        "fallbacks",
+        "fallback-not-a-model",
         "chat-with-image-output",
         "chat-with-estimate",
         "negative-estimate",

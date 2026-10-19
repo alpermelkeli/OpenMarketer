@@ -146,7 +146,8 @@ class RoleSettingResponse(BaseModel):
     role: str
     kind: str = Field(
         description=(
-            "`chat`, or `embeddings`, `decisions` or `images` for a role that takes a model only."
+            "`chat`; `images` for a role that takes a model and fallbacks only; `embeddings` or"
+            " `decisions` for one that takes a model only."
         )
     )
     tier: str | None

@@ -18,9 +18,10 @@ answered with a probability each by OpenRouter's decisions endpoint
 (``provider.decisions_url``), or ``images``: a request to the chat endpoint
 that asks for an image back (``build_image_request``). A decisions role names
 its model and takes nothing else: none of a chat request's parameters applies
-to it. An images role names its model, requires image output and may give
-``estimate_usd_per_image``, what one image is reckoned to cost when the
-catalogue gives no price per image.
+to it. An images role names its model, requires image output, may give
+``fallbacks`` (models that also draw, tried in order when the first fails; the
+defaults' chat fallbacks never apply to it) and ``estimate_usd_per_image``, what
+one image is reckoned to cost when the catalogue gives no price per image.
 
 It also builds OpenRouter chat-completion requests and decision requests.
 OpenRouter exposes an OpenAI-compatible chat API, so the same chat payload also
@@ -146,12 +147,11 @@ DECISIONS_ROLE_REFUSES = (
     "dimensions",
 )
 # What an images role may not set: the parts of a chat request it does not send. A model of its
-# own is required too, since the tiers are chat models.
+# own is required too, since the tiers are chat models. Its fallbacks are sent as a chat's are.
 IMAGES_ROLE_REFUSES = (
     "tier",
     "temperature",
     "max_tokens",
-    "fallbacks",
     "reasoning_effort",
     "dimensions",
 )
@@ -194,7 +194,7 @@ class RoleConfig(BaseModel):
 
     @model_validator(mode="after")
     def _images_name_a_model_that_draws(self) -> RoleConfig:
-        """An images request carries a model, messages and the shape, nothing of a chat's."""
+        """An images request carries its models, messages and the shape; nothing else of a chat."""
         if self.kind != "images":
             if self.estimate_usd_per_image is not None or "image_output" in self.requires:
                 raise ValueError("only an images role makes images")
@@ -418,13 +418,13 @@ class ModelRouter:
             value = getattr(rc, key, None)
             return default if value is None else value
 
-        # A decisions request has no fallbacks: the endpoint takes one model. An images role
-        # names one model, whose output the adapter checks and fits to the size asked for.
-        fallbacks = (
-            []
-            if rc.kind in ("decisions", "images")
-            else [m for m in pick("fallbacks", d.fallbacks) if m != model]
-        )
+        # A decisions request has no fallbacks: the endpoint takes one model. An images role's
+        # are its own or its workspace's only: the defaults' are chat models, which do not draw.
+        if rc.kind == "decisions":
+            fallbacks: list[str] = []
+        else:
+            chosen = pick("fallbacks", [] if rc.kind == "images" else d.fallbacks)
+            fallbacks = [m for m in chosen if m != model]
         return Resolved(
             role=role,
             kind=rc.kind,
@@ -565,8 +565,9 @@ class ModelRouter:
 
         ``image_config`` is OpenRouter's description of the image (its ``aspect_ratio``); a
         model that does not read it ignores it, and the caller fits what comes back. The
-        provider routing is the chat requests', and so is the cost the reply reports
-        (``usage``). Raises ``ConfigError`` for a role that is not of kind ``images``.
+        provider routing is the chat requests', and so are the fallbacks (``models``, tried
+        in order) and the cost the reply reports (``usage``); the reply's ``model`` names the
+        one that answered. Raises ``ConfigError`` for a role that is not of kind ``images``.
         """
         r = self.resolve(role)
         if r.kind != "images":
@@ -578,6 +579,8 @@ class ModelRouter:
             "provider": self.config.provider.routing.model_dump(),
             "usage": {"include": True},
         }
+        if r.fallbacks:
+            payload["models"] = [r.model, *r.fallbacks]  # OpenRouter tries these in order
         if image_config:
             payload["image_config"] = dict(image_config)
         return payload

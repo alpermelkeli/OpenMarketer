@@ -3154,7 +3154,7 @@
             "description": "What the role resolves to without the workspace's choice for it."
           },
           "kind": {
-            "description": "`chat`, or `embeddings`, `decisions` or `images` for a role that takes a model only.",
+            "description": "`chat`; `images` for a role that takes a model and fallbacks only; `embeddings` or `decisions` for one that takes a model only.",
             "title": "Kind",
             "type": "string"
           },

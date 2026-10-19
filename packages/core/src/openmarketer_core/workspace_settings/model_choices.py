@@ -117,12 +117,13 @@ def acceptable_role_choice(choice: RoleChoice, role: RoleConfig) -> RoleChoice:
     """``choice`` with its models trimmed, if every part of it is valid for ``role``.
 
     A role that is not a chat role (one that makes embeddings, answers decisions or makes
-    images) takes a model only: the other parts are those of a chat request.
+    images) takes a model only, the other parts being those of a chat request; an images
+    role takes fallbacks too, which are sent as a chat role's are.
     """
-    if role.kind != "chat":
-        for part in ("fallbacks", "temperature", "max_tokens", "reasoning_effort"):
-            if getattr(choice, part) is not None:
-                raise ModelChoiceRefused(part, "this role takes a model only")
+    if role.kind == "images":
+        _refuse_parts(choice, CHAT_ONLY_PARTS, "this role takes a model and fallbacks only")
+    elif role.kind != "chat":
+        _refuse_parts(choice, ("fallbacks", *CHAT_ONLY_PARTS), "this role takes a model only")
     model = None if choice.model is None else acceptable_model(choice.model, "model")
     return RoleChoice(
         model=model,
@@ -165,6 +166,16 @@ def acceptable_rejected_parameters(parameters: Collection[Any]) -> frozenset[str
             )
         accepted.add(parameter)
     return frozenset(accepted)
+
+
+# The parts of a role's choice that only a chat request carries.
+CHAT_ONLY_PARTS = ("temperature", "max_tokens", "reasoning_effort")
+
+
+def _refuse_parts(choice: RoleChoice, parts: tuple[str, ...], rule: str) -> None:
+    for part in parts:
+        if getattr(choice, part) is not None:
+            raise ModelChoiceRefused(part, rule)
 
 
 def _acceptable_fallbacks(fallbacks: tuple[Any, ...] | None) -> tuple[str, ...] | None:

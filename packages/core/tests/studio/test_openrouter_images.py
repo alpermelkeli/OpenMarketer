@@ -114,6 +114,24 @@ def test_request_asks_the_roles_model_for_an_image_of_the_sizes_shape():
     assert part["type"] == "text" and "1080x1350 pixels" in part["text"]
 
 
+def test_request_offers_the_roles_fallbacks_after_its_model():
+    provider = answering(reply_with(data_url(image_bytes((64, 64)))))
+
+    provider.images.generate("x", width=64, height=64)
+
+    resolved = provider.images.router.resolve("image_generator")
+    assert provider.body["models"] == [resolved.model, *resolved.fallbacks]
+
+
+def test_the_model_that_answered_is_the_one_kept_when_a_fallback_drew_it():
+    fallback = ModelRouter.from_file(MODELS_YAML, env={}).resolve("image_generator").fallbacks[0]
+    reply = {**reply_with(data_url(image_bytes((64, 64)))), "model": fallback}
+
+    result = answering(reply).images.generate("x", width=64, height=64)
+
+    assert result.model == fallback
+
+
 def test_references_are_sent_as_image_parts_after_the_prompt():
     reference = image_bytes((8, 8), "JPEG")
     provider = answering(reply_with(data_url(image_bytes((64, 64)))))
