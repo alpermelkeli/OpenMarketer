@@ -292,7 +292,7 @@ def test_images_and_chat_roles_do_not_build_each_others_requests():
 
 def test_images_role_has_its_own_fallbacks_and_keeps_its_estimate():
     resolved = router().resolve("image_generator")
-    assert resolved.kind == "images" and resolved.fallbacks == ["google/gemini-3.1-flash-image"]
+    assert resolved.kind == "images" and resolved.fallbacks == ["google/gemini-3.1-flash-lite-image"]
     assert resolved.estimate_usd_per_image is not None
 
 

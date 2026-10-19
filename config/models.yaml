@@ -161,13 +161,14 @@ roles:
   # reports is what is kept.
   image_generator:               # makes and edits the studio's images, the text in them included
     kind: images
-    model: google/gemini-3-pro-image   # the best at the words in an image; 120 USD/M image tokens
-    fallbacks: [google/gemini-3.1-flash-image]   # half the price, when the first is busy
+    model: bytedance-seed/seedream-5-0-flash   # image only; Turkish copy right 2/2 at 0.018 USD
+    fallbacks: [google/gemini-3.1-flash-lite-image]   # 0.034 USD, fast; when the first is busy
     requires: [image_output, vision]   # vision: an image to edit and references are sent as images
     # One figure for whichever model answers, held in the budget before each image; the actual
-    # cost is committed afterwards. Gemini 2.5 Flash Image cost about 0.04 in live runs, but
-    # misspelt Turkish words; GPT Image 2 (openai/gpt-5.4-image-2) cost about 0.24.
-    estimate_usd_per_image: 0.16
+    # cost is committed afterwards. Measured on one Turkish feature announcement: Seedream 5 Flash
+    # 0.018, Gemini 3.1 Flash Lite Image 0.034, Recraft v4.1 0.035, Seedream 5 Pro 0.09, Gemini 3
+    # Pro Image 0.14, GPT Image 2 (openai/gpt-5.4-image-2) 0.24; Gemini 2.5 Flash Image misspelt.
+    estimate_usd_per_image: 0.04
 
   # --- retrieval (separate endpoint kind) -------------------------------
   embeddings:                    # memory embeddings; switch provider if your OpenRouter plan lacks this endpoint
