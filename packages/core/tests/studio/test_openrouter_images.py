@@ -60,6 +60,13 @@ def reply_with(url: str | None, *, cost: Any = 0.039, **choice: Any) -> dict[str
 Answer = httpx.Response | Exception
 
 
+def with_squares(router: ModelRouter, models: list[str]) -> ModelRouter:
+    """``router`` whose configuration names ``models`` as returning squares."""
+    provider = router.config.provider.model_copy(update={"image_models_returning_squares": models})
+    config = router.config.model_copy(update={"provider": provider})
+    return ModelRouter(config, env=router.env)
+
+
 class Provider:
     """The adapter with a transport that keeps what it was sent and answers each request with
     the next of ``answers`` (one answer: every request), the last one again when they run out."""
@@ -70,6 +77,7 @@ class Provider:
         api_key: str | None = None,
         catalog: Any = None,
         square_only: SquareOnlyModels | None = None,
+        configured_squares: list[str] | None = None,
     ) -> None:
         self.requests: list[httpx.Request] = []
         answers = answer if isinstance(answer, list) else [answer]
@@ -81,7 +89,11 @@ class Provider:
                 raise given
             return given
 
-        router = ModelRouter.from_file(MODELS_YAML, env={"OPENROUTER_API_KEY": "env-key"})
+        router = with_squares(
+            ModelRouter.from_file(MODELS_YAML, env={"OPENROUTER_API_KEY": "env-key"}),
+            # None of the file's unless a test asks, so that what a test learns is its own.
+            configured_squares or [],
+        )
         self.images = OpenRouterImages(
             router=router,
             transport=httpx.MockTransport(handler),
@@ -741,3 +753,34 @@ def test_the_models_remembered_as_returning_squares_are_bounded():
 
     assert not known.returns_squares("a")
     assert known.returns_squares("b") and known.returns_squares("c")
+
+
+def test_a_configured_square_only_model_is_sent_padded_references_on_its_first_image():
+    provider = Provider(SQUARE_REPLY, configured_squares=[FIRST])
+
+    result = provider.images.generate(
+        "a poster", width=1080, height=1350, references=[PORTRAIT_REFERENCE]
+    )
+
+    [sent] = sent_images(provider.body)
+    assert sent.size == (1350, 1350)
+    assert result.params["images_padded"] == 1
+
+
+def test_the_file_names_the_role_model_as_returning_squares():
+    router = ModelRouter.from_file(MODELS_YAML, env={})
+
+    assert FIRST in router.config.provider.image_models_returning_squares
+
+
+def test_an_unconfigured_model_still_learns_that_it_returns_squares():
+    known = SquareOnlyModels()
+    provider = Provider(SQUARE_REPLY, square_only=known, configured_squares=["other/drawer"])
+
+    provider.images.generate("a poster", width=1080, height=1350, references=[PORTRAIT_REFERENCE])
+    provider.images.generate("a poster", width=1080, height=1350, references=[PORTRAIT_REFERENCE])
+
+    first, second = provider.bodies()
+    assert [image.size for image in sent_images(first)] == [(1080, 1350)]
+    assert [image.size for image in sent_images(second)] == [(1350, 1350)]
+    assert known.returns_squares("other/drawer") and known.returns_squares(FIRST)

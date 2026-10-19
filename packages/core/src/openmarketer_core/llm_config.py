@@ -93,6 +93,10 @@ def _interpolate(obj: Any, env: Mapping[str, str]) -> Any:
     return obj
 
 
+# How many image models the configuration may name as returning squares.
+MAX_IMAGE_MODELS_RETURNING_SQUARES = 32
+
+
 # ----------------------------------------------------------------- schema
 class Routing(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -111,6 +115,16 @@ class Provider(BaseModel):
     app_url: str = ""
     app_name: str = "OpenMarketer"
     routing: Routing = Routing()
+    # Image models known to return a square whatever shape is asked; the studio's adapter
+    # starts with them (``studio.openrouter_images.SquareOnlyModels``) and learns others.
+    image_models_returning_squares: list[str] = Field(
+        default_factory=list, max_length=MAX_IMAGE_MODELS_RETURNING_SQUARES
+    )
+
+    @field_validator("image_models_returning_squares")
+    @classmethod
+    def _square_slugs(cls, v: list[str]) -> list[str]:
+        return [_check_slug(x, "provider.image_models_returning_squares") for x in v]
 
 
 class Defaults(BaseModel):

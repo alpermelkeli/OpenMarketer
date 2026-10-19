@@ -23,8 +23,10 @@ The shape is asked for with OpenRouter's
 still held to the size, since what comes back is fitted to it here: cropped about its centre to
 the size's proportions and resized, and the result says so (``params["fitted"]``). Some models
 (Seedream on OpenRouter) return a square whatever they are asked: a model whose reply is square
-when the size is not is remembered for the life of the process (``SquareOnlyModels``, learnt from
-its first such reply, which is still cropped), and is then sent the images of the size's shape
+when the size is not is remembered for the life of the process (``SquareOnlyModels``: seeded with
+the configuration's ``provider.image_models_returning_squares`` when the adapter is built, so that a
+model listed there is padded for from its first image, and learnt from a model's first such reply,
+which is still cropped), and is then sent the images of the size's shape
 padded to a square about their centre (``padded_to_a_square``), so that the layout it follows is
 the region the crop keeps; the prompt says what that region is (``square_crop.crop_safe_note``,
 put there by the studio's rules). The result says whether the prompt had that sentence and how
@@ -121,7 +123,8 @@ class SquareOnlyModels:
     """The image models known, in this process, to return a square whatever shape is asked.
 
     Bounded and safe across threads; a model forgotten costs one cropped image again, and a
-    model that returns the shape it was asked for is forgotten at once.
+    model that returns the shape it was asked for is forgotten at once (a configured one until
+    the next adapter is built, which remembers it again).
     """
 
     def __init__(self, limit: int = MAX_REMEMBERED_SQUARE_MODELS) -> None:
@@ -199,6 +202,11 @@ class OpenRouterImages:
     square_only: SquareOnlyModels = field(
         default_factory=lambda: _SQUARE_ONLY_OF_THIS_PROCESS, repr=False
     )
+
+    def __post_init__(self) -> None:
+        # Again for each adapter: a listed model that once returned its shape was forgotten.
+        for model in self.router.config.provider.image_models_returning_squares:
+            self.square_only.remember(model)
 
     def generate(
         self, prompt: str, *, width: int, height: int, references: Sequence[ImageInput] = ()

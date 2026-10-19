@@ -40,6 +40,14 @@ provider:
     allow_fallbacks: true
     require_parameters: true     # only use upstream providers that support the requested features (tools, structured output)
     data_collection: deny        # ask OpenRouter to avoid providers that may retain or train on prompts
+  # Image models that return a square whatever shape is asked. OpenRouter's chat endpoint takes
+  # no size, only image_config.aspect_ratio, and these ignore it: Seedream 5 Flash was measured
+  # returning 2048x2048 for every ratio asked. The studio sends such a model the references of
+  # the asset's shape padded to a square, so that the layout it follows is what the centre crop
+  # keeps. A model missing here is learnt from its first square reply, for the life of the
+  # process only, and that first image is drawn from unpadded references. At most 32 slugs.
+  image_models_returning_squares:
+    - bytedance-seed/seedream-5-0-flash
 
 # Three reusable model classes. Change a tier and every role that uses it follows.
 tiers:

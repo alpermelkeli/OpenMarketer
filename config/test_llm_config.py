@@ -268,12 +268,12 @@ def test_images_request_asks_the_roles_model_for_an_image_and_nothing_of_a_chat(
     assert not {"temperature", "max_tokens", "reasoning"} & set(payload)
 
 
-def test_images_request_offers_the_fallbacks_after_the_model_in_order():
+def test_images_request_names_one_model_even_when_the_role_has_fallbacks():
     r = router()
     resolved = r.resolve("image_generator")
     payload = r.build_image_request("image_generator", [])
     assert resolved.fallbacks
-    assert payload["models"] == [resolved.model, *resolved.fallbacks]
+    assert payload["model"] == resolved.model and "models" not in payload
 
 
 def test_images_request_without_fallbacks_names_one_model():
@@ -367,3 +367,23 @@ def test_images_role_names_a_model_that_draws_and_takes_nothing_of_a_chat(role):
                 "roles": {"drawer": role},
             }
         )
+
+
+def test_image_models_returning_squares_are_slugs():
+    raw = router().config.model_dump()
+    raw["provider"]["image_models_returning_squares"] = ["not-a-slug"]
+    with pytest.raises(ValueError, match="image_models_returning_squares"):
+        Config.model_validate(raw)
+
+
+def test_image_models_returning_squares_are_bounded():
+    raw = router().config.model_dump()
+    raw["provider"]["image_models_returning_squares"] = [f"vendor/drawer-{i}" for i in range(33)]
+    with pytest.raises(ValueError):
+        Config.model_validate(raw)
+
+
+def test_image_models_returning_squares_default_to_none():
+    raw = router().config.model_dump()
+    del raw["provider"]["image_models_returning_squares"]
+    assert Config.model_validate(raw).provider.image_models_returning_squares == []
