@@ -295,6 +295,14 @@ def produce(state: StudioState, context: StudioContext) -> dict[str, Any]:
         ),
         has_copy=bool(state["exact_copy"]),
         repository_images=frozenset(image["id"] for image in _repository_images(state)),
+        renders_this_round=sum(
+            1 for op in state["operations"] if op.get("ok") and op["op"] == rules.RENDER_HTML
+        ),
+        made_by_image_model=frozenset(
+            v["version_id"]
+            for v in state["versions"]
+            if v["operation"] in (rules.GENERATE_IMAGE, rules.EDIT_IMAGE)
+        ),
     )
     spent = _Spent()
     messages = _produce_messages(state, context)

@@ -446,8 +446,42 @@ class RunImages:
     # background_overlay, a candidate must be one whose words code laid over the background.
     made_by_code: frozenset[str] = frozenset()
     has_copy: bool = False
+    # With html_reference: the layouts rendered this round, and the versions the image model made
+    # (generate_image, edit_image). A render is the reference, never the candidate.
+    renders_this_round: int = 0
+    made_by_image_model: frozenset[str] = frozenset()
     # The product's repository images the run was shown, by their ids.
     repository_images: frozenset[str] = frozenset()
+
+
+# With html_reference, how many times one round may render its layout before the image model
+# must make the image from it: a second render lets the studio fix what it saw in the first.
+MAX_LAYOUT_RENDERS_PER_ROUND = 2
+
+
+def next_step(state: Mapping[str, Any]) -> str:
+    """What code says the round should do next, for the techniques with a fixed order of steps."""
+    technique = Technique(state["technique"])
+    made = [op for op in state["operations"] if op.get("ok")]
+    if technique == Technique.HTML_REFERENCE:
+        renders = [op for op in made if op["op"] == RENDER_HTML]
+        if not renders:
+            return "render_html the layout with the words placed as the brief says"
+        last_render = renders[-1]["version_id"]
+        after = made[made.index(renders[-1]) + 1 :]
+        if not any(op["op"] in (GENERATE_IMAGE, EDIT_IMAGE) for op in after):
+            return (
+                f"generate_image with reference_version_ids [{last_render}]: the image model "
+                "makes the final image from the layout"
+            )
+        return "look at the image; edit_image to fix it, or candidate_ready with its version_id"
+    if technique == Technique.BACKGROUND_OVERLAY and state["exact_copy"]:
+        if not any(op["op"] == GENERATE_IMAGE for op in made):
+            return "generate_image the background, with no text"
+        if not any(op["op"] == RUN_PYTHON for op in made):
+            return "run_python to lay the exact words over the background"
+        return "look at the image; run_python to fix it, or candidate_ready with its version_id"
+    return ""
 
 
 def first_technique(chosen: Technique, *, has_reference_assets: bool) -> Technique:
@@ -501,6 +535,24 @@ def operation_problems(
         problems.append(
             "with background_overlay the words are laid over in code: run_python on the "
             "background first, then name that image"
+        )
+    if (
+        technique == Technique.HTML_REFERENCE
+        and operation.op == RENDER_HTML
+        and images.renders_this_round >= MAX_LAYOUT_RENDERS_PER_ROUND
+    ):
+        problems.append(
+            "the layout is rendered: call generate_image with the render in "
+            "reference_version_ids, then look at what the image model made"
+        )
+    if (
+        technique == Technique.HTML_REFERENCE
+        and operation.op == CANDIDATE_READY
+        and operation.version_id not in images.made_by_image_model
+    ):
+        problems.append(
+            "with html_reference a rendered layout is only the reference: name an image "
+            "generate_image or edit_image made from it"
         )
     if (
         operation.op == GENERATE_IMAGE
@@ -1083,6 +1135,7 @@ def produce_data(
         },
         "edit_plan": state["edit_plan"],
         "this_round": state["operations"],
+        **({"next_step": step} if (step := next_step(state)) else {}),
         "images": [_version_data(version) for version in state["versions"]],
         # A thread stored before the run kept its repository images has none.
         **_repository_images_of(state),

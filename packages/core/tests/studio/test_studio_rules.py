@@ -515,3 +515,62 @@ def test_an_operation_may_name_only_the_runs_repository_images():
     )
 
     assert problems == ["a repository image is named by an id that is not of repository_images"]
+
+
+# ------------------------------------------------------------------ html_reference's steps
+def layout_problems(operation: dict, *, renders: int = 0, by_image_model=frozenset()) -> list:
+    return rules.operation_problems(
+        Operation.model_validate(operation),
+        technique=Technique.HTML_REFERENCE,
+        images=RunImages(
+            run_versions=frozenset({V1, V2}),
+            this_round=frozenset({V1, V2}),
+            reference_assets=frozenset(),
+            renders_this_round=renders,
+            made_by_image_model=by_image_model,
+        ),
+        cost_usd=0.0,
+        limits=Limits(),
+    )
+
+
+def test_a_layout_may_be_rendered_again_once_to_fix_it():
+    assert layout_problems({"op": "render_html", "html": "<p>x</p>"}, renders=1) == []
+
+
+def test_a_third_render_of_the_layout_is_refused():
+    [problem] = layout_problems({"op": "render_html", "html": "<p>x</p>"}, renders=2)
+    assert "call generate_image" in problem
+
+
+def test_a_rendered_layout_is_not_a_candidate():
+    [problem] = layout_problems({"op": "candidate_ready", "version_id": V1})
+    assert "only the reference" in problem
+
+
+def test_what_the_image_model_made_from_the_layout_is_a_candidate():
+    candidate = {"op": "candidate_ready", "version_id": V2}
+    assert layout_problems(candidate, by_image_model=frozenset({V2})) == []
+
+
+def round_state(technique: Technique, operations: list, exact_copy=("Hello",)) -> dict:
+    return {"technique": technique.value, "operations": operations, "exact_copy": list(exact_copy)}
+
+
+def test_the_next_step_after_a_render_is_the_image_model_with_the_render():
+    state = round_state(
+        Technique.HTML_REFERENCE, [{"op": "render_html", "version_id": V1, "ok": True}]
+    )
+    step = rules.next_step(state)
+    assert step.startswith("generate_image") and V1 in step
+
+
+def test_the_next_step_of_an_overlay_after_its_background_is_the_words_in_code():
+    state = round_state(
+        Technique.BACKGROUND_OVERLAY, [{"op": "generate_image", "version_id": V1, "ok": True}]
+    )
+    assert rules.next_step(state).startswith("run_python")
+
+
+def test_a_generated_image_has_no_fixed_next_step():
+    assert rules.next_step(round_state(Technique.GENERATED, [])) == ""
