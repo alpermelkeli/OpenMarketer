@@ -12,17 +12,9 @@ type VersionOf = { projectId: string; assetId: string; versionId: string };
 
 /** The address the page shows the image from, or null when an id is not one. */
 export function versionImageSrc(version: VersionOf): string | null {
-  return versionPath(version, "image");
-}
-
-/** The address that saves the image as a file, or null when an id is not one. */
-export function versionDownloadHref(version: VersionOf): string | null {
-  return versionPath(version, "download");
-}
-
-function versionPath({ projectId, assetId, versionId }: VersionOf, last: "image" | "download"): string | null {
+  const { projectId, assetId, versionId } = version;
   if (!isProjectId(projectId) || !isMediaAssetId(assetId) || !isMediaAssetId(versionId)) return null;
-  const segments = ["projects", projectId, "media-assets", assetId, "versions", versionId, last];
+  const segments = ["projects", projectId, "media-assets", assetId, "versions", versionId, "image"];
   return `/api/v1/${segments.map(encodeURIComponent).join("/")}`;
 }
 

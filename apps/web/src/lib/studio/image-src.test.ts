@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assetImageAlt, versionDownloadHref, versionImageSrc } from "./image-src";
+import { assetImageAlt, versionImageSrc } from "./image-src";
 
 const PROJECT = "8ce5e2bb-6e54-49b4-9ddc-b96f20ec1109";
 const ASSET = "0b0e6c6e-3333-4444-8555-666677778888";
@@ -11,16 +11,13 @@ describe("the address of a version's image", () => {
     expect(versionImageSrc({ projectId: PROJECT, assetId: ASSET, versionId: VERSION })).toBe(
       `/api/v1/projects/${PROJECT}/media-assets/${ASSET}/versions/${VERSION}/image`,
     );
-    expect(versionDownloadHref({ projectId: PROJECT, assetId: ASSET, versionId: VERSION })).toBe(
-      `/api/v1/projects/${PROJECT}/media-assets/${ASSET}/versions/${VERSION}/download`,
-    );
   });
 
   it("is none when an id is not one, whatever it holds", () => {
     for (const versionId of ["https://evil.example/x.png", "../../settings", `${VERSION}/../x`, ""]) {
       expect(versionImageSrc({ projectId: PROJECT, assetId: ASSET, versionId })).toBeNull();
     }
-    expect(versionDownloadHref({ projectId: "javascript:alert(1)", assetId: ASSET, versionId: VERSION })).toBeNull();
+    expect(versionImageSrc({ projectId: "javascript:alert(1)", assetId: ASSET, versionId: VERSION })).toBeNull();
   });
 });
 

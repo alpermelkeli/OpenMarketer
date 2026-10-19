@@ -5,11 +5,13 @@ import type { RepositoryImage } from "@/lib/api/types";
 import {
   repositoryImageAlt,
   repositoryImageGroups,
+  repositoryImageKindLabel,
   repositoryImageNotes,
   repositoryImageSize,
   repositoryImageSrc,
 } from "@/lib/studio/repository-images";
 
+import { ImageViewerDialog } from "./image-viewer-dialog";
 import { RepositoryImageControls } from "./repository-image-controls";
 
 type RepositoryImageGridProps = {
@@ -55,8 +57,8 @@ type RepositoryImageTileProps = { projectId: string; image: RepositoryImage };
 
 /**
  * One image: its thumbnail, contained in a square, its path as text, its size, whether a person
- * uploaded it or chose its kind, and its controls. It opens at full size in a new tab, from the
- * address the dashboard builds for it.
+ * uploaded it or chose its kind, and its controls. It opens at full size in a viewer on the page,
+ * from the address the dashboard builds for it.
  */
 function RepositoryImageTile({ projectId, image }: RepositoryImageTileProps) {
   const src = repositoryImageSrc(projectId, image.id);
@@ -97,11 +99,14 @@ function RepositoryImageTile({ projectId, image }: RepositoryImageTileProps) {
 
   return (
     <li className="grid min-w-0 content-start gap-2">
-      <a
-        href={src}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="grid gap-2 rounded-sm outline-offset-4 transition-opacity hover:opacity-85"
+      <ImageViewerDialog
+        src={src}
+        alt={repositoryImageAlt(image)}
+        kind={repositoryImageKindLabel(image.kind)}
+        path={image.path}
+        size={repositoryImageSize(image)}
+        width={image.width}
+        height={image.height}
       >
         <span className="relative block aspect-square overflow-hidden rounded-sm border bg-surface">
           <Image
@@ -113,11 +118,8 @@ function RepositoryImageTile({ projectId, image }: RepositoryImageTileProps) {
             className="object-contain"
           />
         </span>
-        <span className="block min-w-0">
-          {caption}
-          <span className="sr-only">, opens the full image in a new tab</span>
-        </span>
-      </a>
+        <span className="block min-w-0">{caption}</span>
+      </ImageViewerDialog>
       {details}
     </li>
   );

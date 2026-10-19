@@ -9,7 +9,7 @@ import { Notice } from "@/components/common/notice";
 import { RequestProblem } from "@/components/common/request-problem";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/error-message";
-import { useDecideOnAsset, useMediaAsset, useStudioRun } from "@/lib/api/studio";
+import { useDecideOnAsset, useDownloadVersion, useMediaAsset, useStudioRun } from "@/lib/api/studio";
 import { projectPageHref } from "@/lib/projects/project-navigation";
 import { briefGoal, runBrief } from "@/lib/studio/brief";
 import { versionsCost } from "@/lib/studio/reports";
@@ -32,6 +32,7 @@ export function StudioRunScreen({ projectId, runId }: StudioRunScreenProps) {
   const assetId = run.data?.final_asset_id ?? null;
   const detail = useMediaAsset(projectId, assetId);
   const decide = useDecideOnAsset(projectId);
+  const download = useDownloadVersion(projectId);
   const [rejectOpen, setRejectOpen] = useState(false);
 
   if (run.error !== null) {
@@ -112,6 +113,11 @@ export function StudioRunScreen({ projectId, runId }: StudioRunScreenProps) {
                 onRejectOpenChange={(open) => {
                   decide.reset();
                   setRejectOpen(open);
+                }}
+                downloading={download.isPending}
+                downloadProblem={download.error === null ? null : errorMessage(download.error)}
+                onDownload={() => {
+                  if (current !== null) download.mutate({ assetId: asset.id, version: current });
                 }}
               />
               <VersionRounds

@@ -2,14 +2,15 @@
 
 /**
  * Query hooks for the creative studio: the project's runs and one run, its library of assets
- * and one asset with its versions, and the requests that start a run, decide on an asset and
- * delete a run. A version's image is not read here: the page shows it from its own address
- * (`lib/studio/image-src.ts`).
+ * and one asset with its versions, and the requests that start a run, decide on an asset,
+ * download a version's image and delete a run. A version's image is not read here to be shown:
+ * the page shows it from its own address (`lib/studio/image-src.ts`).
  */
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
+import { saveFile, versionFileName } from "@/lib/studio/download";
 import { isStudioRunFinished } from "@/lib/studio/status";
 
 import type { ApiError } from "./api-error";
@@ -21,6 +22,7 @@ import type {
   MediaAsset,
   MediaAssetDetail,
   MediaAssetList,
+  MediaAssetVersion,
   StudioRun,
   StudioRunDetail,
   StudioRunList,
@@ -184,6 +186,25 @@ export function useDecideOnAsset(projectId: string) {
         detail === undefined ? detail : { ...detail, asset },
       );
       return Promise.all(refreshedByAssetDecision(projectId).map((refresh) => queryClient.invalidateQueries(refresh)));
+    },
+  });
+}
+
+/**
+ * Save one version's image as a file. The page fetches it through its own proxy and hands the
+ * bytes to the browser, so nothing navigates to the proxy (which refuses a navigation it cannot
+ * tell from another site's). Nothing in the cache changes.
+ */
+export function useDownloadVersion(projectId: string) {
+  return useMutation<void, ApiError, { assetId: string; version: MediaAssetVersion }>({
+    mutationFn: async ({ assetId, version }) => {
+      const file = dataOf(
+        await api.GET("/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download", {
+          params: { path: { project_id: projectId, asset_id: assetId, version_id: version.id } },
+          parseAs: "blob",
+        }),
+      );
+      saveFile(file, versionFileName(version.id, version.mime || file.type));
     },
   });
 }

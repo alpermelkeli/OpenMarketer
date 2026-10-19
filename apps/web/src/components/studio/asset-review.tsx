@@ -3,10 +3,10 @@
 import { CheckIcon, DownloadIcon, LockIcon, XIcon } from "lucide-react";
 
 import { StatusPill } from "@/components/common/status-pill";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import type { MediaAsset, MediaAssetVersion } from "@/lib/api/types";
 import { formatDateTime } from "@/lib/format";
-import { assetImageAlt, versionDownloadHref } from "@/lib/studio/image-src";
+import { assetImageAlt } from "@/lib/studio/image-src";
 import { assetStatusDisplay, formatCost, platformLabel } from "@/lib/studio/status";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +28,10 @@ type AssetReviewProps = {
   onReject: () => void;
   rejectOpen: boolean;
   onRejectOpenChange: (open: boolean) => void;
+  downloading: boolean;
+  /** Why the last download failed, in words for the person. */
+  downloadProblem: string | null;
+  onDownload: () => void;
 };
 
 /**
@@ -46,11 +50,12 @@ export function AssetReview({
   onReject,
   rejectOpen,
   onRejectOpenChange,
+  downloading,
+  downloadProblem,
+  onDownload,
 }: AssetReviewProps) {
   const status = assetStatusDisplay(asset.status);
   const draft = asset.status === "draft";
-  const download =
-    version === null ? null : versionDownloadHref({ projectId: asset.project_id, assetId: asset.id, versionId: version.id });
 
   return (
     <section aria-labelledby="asset" className="grid gap-5 border-t pt-8">
@@ -110,7 +115,7 @@ export function AssetReview({
               <XIcon data-icon="inline-start" aria-hidden="true" />
               Reject
             </Button>
-            {download !== null && <DownloadLink href={download} />}
+            {version !== null && <DownloadButton downloading={downloading} onDownload={onDownload} />}
           </div>
           {problem !== null && !rejectOpen && (
             <p role="alert" className="text-sm text-pretty text-destructive">
@@ -126,8 +131,14 @@ export function AssetReview({
             {asset.status === "accepted" ? "Accepted" : "Rejected"}
             {asset.decided_at !== null && ` ${formatDateTime(asset.decided_at)}`}. This decision is final.
           </p>
-          {download !== null && <DownloadLink href={download} />}
+          {version !== null && <DownloadButton downloading={downloading} onDownload={onDownload} />}
         </div>
+      )}
+
+      {downloadProblem !== null && (
+        <p role="alert" className="max-w-prose text-sm text-pretty text-destructive">
+          The image could not be downloaded. {downloadProblem}
+        </p>
       )}
 
       <RejectAssetDialog
@@ -141,11 +152,11 @@ export function AssetReview({
   );
 }
 
-function DownloadLink({ href }: { href: string }) {
+function DownloadButton({ downloading, onDownload }: { downloading: boolean; onDownload: () => void }) {
   return (
-    <a href={href} download className={buttonVariants({ variant: "ghost" })}>
+    <Button variant="ghost" onClick={onDownload} disabled={downloading}>
       <DownloadIcon data-icon="inline-start" aria-hidden="true" />
-      Download
-    </a>
+      {downloading ? "Downloading…" : "Download"}
+    </Button>
   );
 }
