@@ -25,3 +25,8 @@ export function isStudioRunId(value: string): boolean {
 export function isMediaAssetId(value: string): boolean {
   return UUID.test(value);
 }
+
+/** An image found in a project's repository has a UUID too. */
+export function isRepositoryImageId(value: string): boolean {
+  return UUID.test(value);
+}

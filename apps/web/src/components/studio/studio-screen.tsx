@@ -6,24 +6,37 @@ import { useRouter } from "next/navigation";
 import { LoadMore } from "@/components/common/load-more";
 import { RequestProblem } from "@/components/common/request-problem";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useMediaAssets, useStartStudioRun, useStudioRuns } from "@/lib/api/studio";
+import { useRepositoryImages } from "@/lib/api/repository-images";
+import {
+  useMediaAssets,
+  useStartStudioRun,
+  useStudioRuns,
+} from "@/lib/api/studio";
 import { projectPageHref, studioHref } from "@/lib/projects/project-navigation";
 import { libraryTiles } from "@/lib/studio/library";
 import { studioRequestProblems } from "@/lib/studio/request-form";
 
 import { LibraryGrid } from "./library-grid";
 import { NewImageForm } from "./new-image-form";
+import { RepositoryImages } from "./repository-images";
 
 type StudioScreenProps = { projectId: string };
 
-/** The project's studio: the images its runs made, each with where it stands, and a way to ask for one. */
+/**
+ * The project's studio: the images its runs made, each with where it stands, the images the last
+ * analysis found in the repository, and a way to ask for one.
+ */
 export function StudioScreen({ projectId }: StudioScreenProps) {
   const router = useRouter();
   const runs = useStudioRuns(projectId);
   const assets = useMediaAssets(projectId);
   const start = useStartStudioRun(projectId);
+  const repositoryImages = useRepositoryImages(projectId);
   const error = runs.error ?? assets.error;
-  const tiles = runs.data === undefined || assets.data === undefined ? undefined : libraryTiles(runs.data, assets.data);
+  const tiles =
+    runs.data === undefined || assets.data === undefined
+      ? undefined
+      : libraryTiles(runs.data, assets.data);
 
   return (
     <div className="grid gap-8">
@@ -32,9 +45,10 @@ export function StudioScreen({ projectId }: StudioScreenProps) {
           Make images for the product
         </h2>
         <p className="mt-2 text-pretty text-muted-foreground">
-          A studio run makes one image for one platform. It plans the image, makes candidates, checks their size and
-          words in code, has a second model look at them, and edits until one passes. What it ends with is a draft:
-          nothing is used anywhere until you accept it. Ask for one from{" "}
+          A studio run makes one image for one platform. It plans the image,
+          makes candidates, checks their size and words in code, has a second
+          model look at them, and edits until one passes. What it ends with is a
+          draft: nothing is used anywhere until you accept it. Ask for one from{" "}
           <Link
             href={projectPageHref(projectId, "chat")}
             className="rounded-sm text-brand underline-offset-4 hover:underline"
@@ -62,11 +76,13 @@ export function StudioScreen({ projectId }: StudioScreenProps) {
         {tiles === undefined && error === null && <Skeleton className="h-48" />}
         {tiles?.length === 0 && (
           <p className="max-w-prose text-sm text-pretty text-muted-foreground">
-            No image has been made for this project yet. Ask the orchestrator for an image in a chat, or start a run
-            below.
+            No image has been made for this project yet. Ask the orchestrator
+            for an image in a chat, or start a run below.
           </p>
         )}
-        {tiles !== undefined && tiles.length > 0 && <LibraryGrid projectId={projectId} tiles={tiles} />}
+        {tiles !== undefined && tiles.length > 0 && (
+          <LibraryGrid projectId={projectId} tiles={tiles} />
+        )}
         <LoadMore
           noun="images"
           hasMore={runs.hasNextPage || assets.hasNextPage}
@@ -78,6 +94,16 @@ export function StudioScreen({ projectId }: StudioScreenProps) {
         />
       </section>
 
+      <RepositoryImages
+        projectId={projectId}
+        images={repositoryImages.data}
+        error={repositoryImages.error}
+        onRetry={() => void repositoryImages.refetch()}
+        hasMore={repositoryImages.hasNextPage}
+        loadingMore={repositoryImages.isFetchingNextPage}
+        onLoadMore={() => void repositoryImages.fetchNextPage()}
+      />
+
       <section aria-labelledby="new-image" className="grid gap-4 border-t pt-8">
         <h2 id="new-image" className="font-heading text-lg">
           New image
@@ -86,7 +112,9 @@ export function StudioScreen({ projectId }: StudioScreenProps) {
           problems={studioRequestProblems(start.error)}
           pending={start.isPending}
           onSubmit={(request) =>
-            start.mutate(request, { onSuccess: (run) => router.push(studioHref(projectId, run.id)) })
+            start.mutate(request, {
+              onSuccess: (run) => router.push(studioHref(projectId, run.id)),
+            })
           }
         />
       </section>

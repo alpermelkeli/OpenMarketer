@@ -18,8 +18,8 @@
  * sends when it reconnects, checked to be an event id), and the upstream request ends
  * when the browser leaves.
  *
- * Two routes answer with an image: a studio version's, to show in the page or to save.
- * They are reads only. Their body is passed on as bytes, but only when the API says it is
+ * Three routes answer with an image: a studio version's, to show in the page or to save,
+ * and one the last analysis found in the project's repository. They are reads only. Their body is passed on as bytes, but only when the API says it is
  * a PNG, a JPEG or a WebP image and it is no larger than `MAX_IMAGE_BYTES`; anything else
  * is refused. Of the API's headers only the five an image needs come back, and the type
  * is the one checked, never whatever else the API wrote.
@@ -40,14 +40,20 @@ export const MAX_BODY_BYTES = 1_000_000;
 export const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 
 /** The only types an image route may answer with, as the API stores a version's. */
-export const IMAGE_TYPES: readonly string[] = ["image/png", "image/jpeg", "image/webp"];
+export const IMAGE_TYPES: readonly string[] = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+];
 
-// The disposition the API writes: inline or attachment, named after the version's UUID.
-const CONTENT_DISPOSITION = /^(inline|attachment); filename="[0-9a-fA-F-]{36}\.(png|jpg|jpeg|webp)"$/;
+// The disposition the API writes: inline or attachment, named after the version's or the image's UUID.
+const CONTENT_DISPOSITION =
+  /^(inline|attachment); filename="[0-9a-fA-F-]{36}\.(png|jpg|jpeg|webp)"$/;
 // What the API asks of a cache for an image: directives only, no quoted text.
 const CACHE_CONTROL = /^[a-z0-9=, -]{1,100}$/i;
 
-const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const UUID =
+  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const VERSION = "[1-9][0-9]{0,8}";
 // The form every credential's name has in the API. Nothing else reaches it as one.
 const CREDENTIAL_NAME = "[a-z][a-z0-9_]{0,63}";
@@ -74,11 +80,19 @@ type AllowedRoute = {
   kind: RouteKind;
 };
 
-function route(method: Method, template: keyof paths, kind: RouteKind = "plain"): AllowedRoute {
+function route(
+  method: Method,
+  template: keyof paths,
+  kind: RouteKind = "plain",
+): AllowedRoute {
   // An image is only ever read: its bytes are never a request's body.
-  if (kind === "image" && method !== "GET") throw new Error(`an image route is a GET: ${template}`);
+  if (kind === "image" && method !== "GET")
+    throw new Error(`an image route is a GET: ${template}`);
   const pattern = template
-    .replace(/\{(project_id|run_id|proposal_id|chat_id|asset_id|version_id)\}/g, UUID)
+    .replace(
+      /\{(project_id|run_id|proposal_id|chat_id|asset_id|version_id|image_id)\}/g,
+      UUID,
+    )
     .replace(/\{version\}/g, VERSION)
     .replace(/\{name\}/g, CREDENTIAL_NAME)
     .replace(/\{(tier|role)\}/g, SETTING_KEY);
@@ -110,8 +124,22 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/projects/{project_id}/media-assets/{asset_id}"),
   route("POST", "/v1/projects/{project_id}/media-assets/{asset_id}/accept"),
   route("POST", "/v1/projects/{project_id}/media-assets/{asset_id}/reject"),
-  route("GET", "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/image", IMAGE),
-  route("GET", "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download", IMAGE),
+  route(
+    "GET",
+    "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/image",
+    IMAGE,
+  ),
+  route(
+    "GET",
+    "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download",
+    IMAGE,
+  ),
+  route("GET", "/v1/projects/{project_id}/repository-images", PAGED),
+  route(
+    "GET",
+    "/v1/projects/{project_id}/repository-images/{image_id}/image",
+    IMAGE,
+  ),
   route("GET", "/v1/projects/{project_id}/chats", PAGED),
   route("POST", "/v1/projects/{project_id}/chats"),
   route("GET", "/v1/projects/{project_id}/chats/{chat_id}"),
@@ -120,11 +148,18 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("POST", "/v1/projects/{project_id}/chats/{chat_id}/read"),
   route("DELETE", "/v1/projects/{project_id}/chats/{chat_id}"),
   route("GET", "/v1/projects/{project_id}/chats/{chat_id}/events", PAGED),
-  route("GET", "/v1/projects/{project_id}/chats/{chat_id}/events/stream", STREAM),
+  route(
+    "GET",
+    "/v1/projects/{project_id}/chats/{chat_id}/events/stream",
+    STREAM,
+  ),
   route("GET", "/v1/projects/{project_id}/profile/versions", PAGED),
   route("GET", "/v1/projects/{project_id}/profile/versions/{version}"),
   route("POST", "/v1/projects/{project_id}/profile/versions/{version}/edits"),
-  route("POST", "/v1/projects/{project_id}/profile/versions/{version}/approval"),
+  route(
+    "POST",
+    "/v1/projects/{project_id}/profile/versions/{version}/approval",
+  ),
   route("GET", "/v1/projects/{project_id}/proposals", PAGED),
   route("POST", "/v1/projects/{project_id}/proposals/{proposal_id}/approval"),
   route("POST", "/v1/projects/{project_id}/proposals/{proposal_id}/rejection"),
@@ -187,19 +222,24 @@ export class ProxyRefusal extends Error {
 export function assertFromDashboard(method: string, headers: Headers): void {
   const host = headers.get("host");
   if (host === null || !LOCAL_HOST.test(host)) {
-    throw refused("the dashboard serves only requests addressed to this machine");
+    throw refused(
+      "the dashboard serves only requests addressed to this machine",
+    );
   }
 
   const changesState = method !== "GET";
   const fetchSite = headers.get("sec-fetch-site");
-  const fetchSiteAllowed = changesState ? ["same-origin"] : ["same-origin", "none"];
+  const fetchSiteAllowed = changesState
+    ? ["same-origin"]
+    : ["same-origin", "none"];
   if (fetchSite !== null && !fetchSiteAllowed.includes(fetchSite)) {
     throw refused("the request was made by another site");
   }
 
   const origin = headers.get("origin");
   if (origin === null) {
-    if (changesState) throw refused("a request that changes something must carry an Origin");
+    if (changesState)
+      throw refused("a request that changes something must carry an Origin");
     return;
   }
   if (origin !== `http://${host}` && origin !== `https://${host}`) {
@@ -226,9 +266,15 @@ export function allowedApiTarget(
   return allowedRoute(method, pathSegments, query).pathAndQuery;
 }
 
-function allowedRoute(method: string, pathSegments: readonly string[], query: URLSearchParams): ApiTarget {
+function allowedRoute(
+  method: string,
+  pathSegments: readonly string[],
+  query: URLSearchParams,
+): ApiTarget {
   const path = `/v1/${pathSegments.join("/")}`;
-  const matched = ALLOWED_ROUTES.find((r) => r.method === method && r.pattern.test(path));
+  const matched = ALLOWED_ROUTES.find(
+    (r) => r.method === method && r.pattern.test(path),
+  );
   if (matched === undefined) {
     throw new ProxyRefusal(
       404,
@@ -245,7 +291,8 @@ function allowedRoute(method: string, pathSegments: readonly string[], query: UR
 
 const QUERY_RULE: Record<RouteKind, string> = {
   plain: "this route takes no query parameters",
-  paged: "a list takes only `limit` (1 to 100) and `cursor` (as the API issued it), each once",
+  paged:
+    "a list takes only `limit` (1 to 100) and `cursor` (as the API issued it), each once",
   stream: "the event stream takes only `after`, once, as an event id",
   image: "this route takes no query parameters",
 };
@@ -262,10 +309,16 @@ function routeQuery(query: URLSearchParams, kind: RouteKind): string {
   return forwarded.toString();
 }
 
-function isAllowedParameter(kind: RouteKind, name: string, value: string): boolean {
+function isAllowedParameter(
+  kind: RouteKind,
+  name: string,
+  value: string,
+): boolean {
   if (kind === "paged") {
     return (
-      (name === "limit" && LIMIT.test(value) && Number(value) <= MAX_PAGE_SIZE) ||
+      (name === "limit" &&
+        LIMIT.test(value) &&
+        Number(value) <= MAX_PAGE_SIZE) ||
       (name === "cursor" && CURSOR.test(value))
     );
   }
@@ -281,7 +334,11 @@ export function lastEventId(headers: Headers): string | undefined {
   const value = headers.get("last-event-id");
   if (value === null) return undefined;
   if (!EVENT_ID.test(value)) {
-    throw new ProxyRefusal(400, "proxy_header_rejected", "`Last-Event-ID` must be an event id");
+    throw new ProxyRefusal(
+      400,
+      "proxy_header_rejected",
+      "`Last-Event-ID` must be an event id",
+    );
   }
   return value;
 }
@@ -311,19 +368,37 @@ export function apiBaseUrl(configured: string | undefined): URL {
  * The JSON body to forward, or none. Anything that is not JSON, or is too large, is
  * refused, and so is a body sent with a DELETE, which the API takes none for.
  */
-export async function readJsonBody(request: Request): Promise<string | undefined> {
+export async function readJsonBody(
+  request: Request,
+): Promise<string | undefined> {
   if (request.method === "GET") return undefined;
   const body = await request.text();
   if (body === "") return undefined;
   if (request.method === "DELETE") {
-    throw new ProxyRefusal(400, "proxy_body_rejected", "a DELETE takes no request body");
+    throw new ProxyRefusal(
+      400,
+      "proxy_body_rejected",
+      "a DELETE takes no request body",
+    );
   }
-  const mediaType = request.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  const mediaType = request.headers
+    .get("content-type")
+    ?.split(";")[0]
+    .trim()
+    .toLowerCase();
   if (mediaType !== "application/json") {
-    throw new ProxyRefusal(415, "proxy_body_rejected", "a request body must be application/json");
+    throw new ProxyRefusal(
+      415,
+      "proxy_body_rejected",
+      "a request body must be application/json",
+    );
   }
   if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES) {
-    throw new ProxyRefusal(413, "proxy_body_rejected", "the request body is too large");
+    throw new ProxyRefusal(
+      413,
+      "proxy_body_rejected",
+      "the request body is too large",
+    );
   }
   return body;
 }
@@ -344,10 +419,21 @@ export async function proxyToApi(
   try {
     assertFromDashboard(request.method, request.headers);
     const query = new URL(request.url).searchParams;
-    const { pathAndQuery, kind } = allowedRoute(request.method, pathSegments, query);
+    const { pathAndQuery, kind } = allowedRoute(
+      request.method,
+      pathSegments,
+      query,
+    );
     const target = new URL(pathAndQuery, apiBaseUrl(configuredApiUrl));
-    if (kind === "stream") return await forwardStream(send, target, lastEventId(request.headers), request.signal);
-    if (kind === "image") return await forwardImage(send, target, request.signal);
+    if (kind === "stream")
+      return await forwardStream(
+        send,
+        target,
+        lastEventId(request.headers),
+        request.signal,
+      );
+    if (kind === "image")
+      return await forwardImage(send, target, request.signal);
     const body = await readJsonBody(request);
     return await forward(send, target, request.method, body);
   } catch (error) {
@@ -395,8 +481,16 @@ async function forwardStream(
     },
     signal,
   });
-  const mediaType = upstream.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
-  if (!upstream.ok || mediaType !== "text/event-stream" || upstream.body === null) {
+  const mediaType = upstream.headers
+    .get("content-type")
+    ?.split(";")[0]
+    .trim()
+    .toLowerCase();
+  if (
+    !upstream.ok ||
+    mediaType !== "text/event-stream" ||
+    upstream.body === null
+  ) {
     const text = await upstream.text();
     return jsonResponse(upstream.status, text === "" ? null : text);
   }
@@ -419,7 +513,11 @@ async function forwardStream(
  * needs come back. An answer that is not a success (the API's 404 for a version it does
  * not have) is passed on as JSON, like any other.
  */
-async function forwardImage(send: typeof fetch, target: URL, signal: AbortSignal): Promise<Response> {
+async function forwardImage(
+  send: typeof fetch,
+  target: URL,
+  signal: AbortSignal,
+): Promise<Response> {
   const upstream = await reach(send, target, {
     method: "GET",
     headers: { accept: IMAGE_TYPES.join(", ") },
@@ -429,10 +527,16 @@ async function forwardImage(send: typeof fetch, target: URL, signal: AbortSignal
     const text = await upstream.text();
     return jsonResponse(upstream.status, text === "" ? null : text);
   }
-  const mediaType = upstream.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  const mediaType = upstream.headers
+    .get("content-type")
+    ?.split(";")[0]
+    .trim()
+    .toLowerCase();
   if (mediaType === undefined || !IMAGE_TYPES.includes(mediaType)) {
     await upstream.body?.cancel();
-    throw upstreamRejected("the API answered with something that is not a PNG, JPEG or WebP image");
+    throw upstreamRejected(
+      "the API answered with something that is not a PNG, JPEG or WebP image",
+    );
   }
   const declared = Number(upstream.headers.get("content-length") ?? "0");
   if (declared > MAX_IMAGE_BYTES) {
@@ -443,16 +547,24 @@ async function forwardImage(send: typeof fetch, target: URL, signal: AbortSignal
   const headers = new Headers({
     "content-type": mediaType,
     "content-length": String(bytes.byteLength),
-    "cache-control": headerMatching(upstream, "cache-control", CACHE_CONTROL) ?? "no-store",
+    "cache-control":
+      headerMatching(upstream, "cache-control", CACHE_CONTROL) ?? "no-store",
     "x-content-type-options": "nosniff",
   });
-  const disposition = headerMatching(upstream, "content-disposition", CONTENT_DISPOSITION);
+  const disposition = headerMatching(
+    upstream,
+    "content-disposition",
+    CONTENT_DISPOSITION,
+  );
   if (disposition !== null) headers.set("content-disposition", disposition);
   return new Response(bytes, { status: upstream.status, headers });
 }
 
 /** The whole body, read a chunk at a time and refused as soon as it passes `limit` bytes. */
-async function readAtMost(upstream: Response, limit: number): Promise<Uint8Array<ArrayBuffer>> {
+async function readAtMost(
+  upstream: Response,
+  limit: number,
+): Promise<Uint8Array<ArrayBuffer>> {
   if (upstream.body === null) return new Uint8Array(0);
   const reader = upstream.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -463,7 +575,9 @@ async function readAtMost(upstream: Response, limit: number): Promise<Uint8Array
     length += value.byteLength;
     if (length > limit) {
       await reader.cancel();
-      throw upstreamRejected("the image is larger than the dashboard passes on");
+      throw upstreamRejected(
+        "the image is larger than the dashboard passes on",
+      );
     }
     chunks.push(value);
   }
@@ -477,7 +591,11 @@ async function readAtMost(upstream: Response, limit: number): Promise<Uint8Array
 }
 
 /** An upstream header in the form the API writes it, or null for anything else or none. */
-function headerMatching(upstream: Response, name: string, form: RegExp): string | null {
+function headerMatching(
+  upstream: Response,
+  name: string,
+  form: RegExp,
+): string | null {
   const value = upstream.headers.get(name);
   return value !== null && form.test(value) ? value : null;
 }
@@ -486,9 +604,17 @@ function upstreamRejected(message: string): ProxyRefusal {
   return new ProxyRefusal(502, "proxy_upstream_rejected", message);
 }
 
-async function reach(send: typeof fetch, target: URL, init: RequestInit): Promise<Response> {
+async function reach(
+  send: typeof fetch,
+  target: URL,
+  init: RequestInit,
+): Promise<Response> {
   try {
-    return await send(target, { ...init, redirect: "manual", cache: "no-store" });
+    return await send(target, {
+      ...init,
+      redirect: "manual",
+      cache: "no-store",
+    });
   } catch {
     throw new ProxyRefusal(
       502,

@@ -1,6 +1,13 @@
 /** Query keys of the server state the dashboard holds, in one place so invalidation cannot drift. */
 
-import { CHAT_RUN, PROPOSAL_KINDS, RESEARCH_RUN, RUN_ENDS, STUDIO_RUN, TURN_ENDS } from "@/lib/chat/events";
+import {
+  CHAT_RUN,
+  PROPOSAL_KINDS,
+  RESEARCH_RUN,
+  RUN_ENDS,
+  STUDIO_RUN,
+  TURN_ENDS,
+} from "@/lib/chat/events";
 
 import type { RunEvent } from "./types";
 
@@ -8,33 +15,57 @@ export const queryKeys = {
   projects: () => ["projects", "list"] as const,
   /** Everything held about one project: the project itself, its runs, its profile versions and its proposals. */
   projectScope: (projectId: string) => ["projects", "one", projectId] as const,
-  project: (projectId: string) => ["projects", "one", projectId, "project"] as const,
-  analyses: (projectId: string) => ["projects", "one", projectId, "analyses", "list"] as const,
+  project: (projectId: string) =>
+    ["projects", "one", projectId, "project"] as const,
+  analyses: (projectId: string) =>
+    ["projects", "one", projectId, "analyses", "list"] as const,
   analysisRun: (projectId: string, runId: string) =>
     ["projects", "one", projectId, "analyses", "run", runId] as const,
-  researches: (projectId: string) => ["projects", "one", projectId, "researches", "list"] as const,
+  researches: (projectId: string) =>
+    ["projects", "one", projectId, "researches", "list"] as const,
   researchRun: (projectId: string, runId: string) =>
     ["projects", "one", projectId, "researches", "run", runId] as const,
   researchReport: (projectId: string, runId: string) =>
-    ["projects", "one", projectId, "researches", "run", runId, "report"] as const,
-  studioRuns: (projectId: string) => ["projects", "one", projectId, "studio-runs", "list"] as const,
+    [
+      "projects",
+      "one",
+      projectId,
+      "researches",
+      "run",
+      runId,
+      "report",
+    ] as const,
+  studioRuns: (projectId: string) =>
+    ["projects", "one", projectId, "studio-runs", "list"] as const,
   studioRun: (projectId: string, runId: string) =>
     ["projects", "one", projectId, "studio-runs", "run", runId] as const,
   /** The project's library: the assets its studio runs made. */
-  mediaAssets: (projectId: string) => ["projects", "one", projectId, "media-assets", "list"] as const,
+  mediaAssets: (projectId: string) =>
+    ["projects", "one", projectId, "media-assets", "list"] as const,
   /** One asset with its versions. */
   mediaAsset: (projectId: string, assetId: string) =>
     ["projects", "one", projectId, "media-assets", "one", assetId] as const,
-  profileVersions: (projectId: string) => ["projects", "one", projectId, "versions", "list"] as const,
+  /**
+   * The images the last analysis found in the project's repository. Under the project's scope, so
+   * an analysis that ends refreshes them with everything else it changed (`useAnalysisRun`).
+   */
+  repositoryImages: (projectId: string) =>
+    ["projects", "one", projectId, "repository-images", "list"] as const,
+  profileVersions: (projectId: string) =>
+    ["projects", "one", projectId, "versions", "list"] as const,
   profileVersion: (projectId: string, version: number) =>
     ["projects", "one", projectId, "versions", "one", version] as const,
-  proposals: (projectId: string) => ["projects", "one", projectId, "proposals", "list"] as const,
+  proposals: (projectId: string) =>
+    ["projects", "one", projectId, "proposals", "list"] as const,
   /** Every proposal of the workspace that waits for a person, wherever it is: the notifications. */
   waitingProposals: () => ["proposals", "waiting"] as const,
   /** Everything held about a project's chats: the list, each chat and its messages. */
-  chatScope: (projectId: string) => ["projects", "one", projectId, "chats"] as const,
-  chats: (projectId: string) => ["projects", "one", projectId, "chats", "list"] as const,
-  chat: (projectId: string, chatId: string) => ["projects", "one", projectId, "chats", "one", chatId] as const,
+  chatScope: (projectId: string) =>
+    ["projects", "one", projectId, "chats"] as const,
+  chats: (projectId: string) =>
+    ["projects", "one", projectId, "chats", "list"] as const,
+  chat: (projectId: string, chatId: string) =>
+    ["projects", "one", projectId, "chats", "one", chatId] as const,
   chatMessages: (projectId: string, chatId: string) =>
     ["projects", "one", projectId, "chats", "one", chatId, "messages"] as const,
   /** The chat's events: the pages of its history, with what its stream has added since. */
@@ -46,10 +77,12 @@ export const queryKeys = {
    * already fetched and not match the server's HTML. Under the keys of what they show, they are
    * refreshed whenever the project or its proposals are.
    */
-  shellProject: (projectId: string) => ["projects", "one", projectId, "project", "shell"] as const,
+  shellProject: (projectId: string) =>
+    ["projects", "one", projectId, "project", "shell"] as const,
   shellWaitingProposals: (projectId: string) =>
     ["projects", "one", projectId, "proposals", "list", "shell"] as const,
-  shellChats: (projectId: string) => ["projects", "one", projectId, "chats", "list", "shell"] as const,
+  shellChats: (projectId: string) =>
+    ["projects", "one", projectId, "chats", "list", "shell"] as const,
   /** Where each credential's value comes from. Never a value: no response holds one. */
   credentials: () => ["settings", "credentials"] as const,
   /** Everything about the models: the settings, and the check that depends on them. */
@@ -87,7 +120,10 @@ export function refreshedByAssetDecision(projectId: string): Refresh[] {
  * are dropped, not read again: they are gone.
  */
 export function refreshedByStudioRunDeleted(projectId: string): Refresh[] {
-  return [{ queryKey: queryKeys.studioRuns(projectId) }, { queryKey: queryKeys.mediaAssets(projectId) }];
+  return [
+    { queryKey: queryKeys.studioRuns(projectId) },
+    { queryKey: queryKeys.mediaAssets(projectId) },
+  ];
 }
 
 /**
@@ -100,18 +136,29 @@ export function refreshedByStudioRunDeleted(projectId: string): Refresh[] {
  * chat's own key is refreshed alone (`exact`), so its events, which the stream keeps current, are
  * not read again.
  */
-export function refreshedByChatEvent(projectId: string, chatId: string, event: RunEvent): Refresh[] {
+export function refreshedByChatEvent(
+  projectId: string,
+  chatId: string,
+  event: RunEvent,
+): Refresh[] {
   const chat = { queryKey: queryKeys.chat(projectId, chatId), exact: true };
   if (event.run_kind === CHAT_RUN) {
     if (event.kind === "turn_started") return [chat];
     if (TURN_ENDS.includes(event.kind)) {
-      return [chat, { queryKey: queryKeys.chatMessages(projectId, chatId) }, { queryKey: queryKeys.chats(projectId) }];
+      return [
+        chat,
+        { queryKey: queryKeys.chatMessages(projectId, chatId) },
+        { queryKey: queryKeys.chats(projectId) },
+      ];
     }
-    if (event.kind === "run_started") return refreshedByRunStarted(projectId, event.detail.run_kind);
+    if (event.kind === "run_started")
+      return refreshedByRunStarted(projectId, event.detail.run_kind);
     return [];
   }
-  if (event.run_kind !== RESEARCH_RUN && event.run_kind !== STUDIO_RUN) return [];
-  if (PROPOSAL_KINDS.includes(event.kind)) return [{ queryKey: queryKeys.proposals(projectId) }];
+  if (event.run_kind !== RESEARCH_RUN && event.run_kind !== STUDIO_RUN)
+    return [];
+  if (PROPOSAL_KINDS.includes(event.kind))
+    return [{ queryKey: queryKeys.proposals(projectId) }];
   if (!RUN_ENDS.includes(event.kind)) return [];
   if (event.run_kind === RESEARCH_RUN) {
     return [
@@ -120,12 +167,18 @@ export function refreshedByChatEvent(projectId: string, chatId: string, event: R
       chat,
     ];
   }
-  return [{ queryKey: queryKeys.studioRun(projectId, event.run_id) }, ...refreshedByStudioRunEnd(projectId), chat];
+  return [
+    { queryKey: queryKeys.studioRun(projectId, event.run_id) },
+    ...refreshedByStudioRunEnd(projectId),
+    chat,
+  ];
 }
 
 function refreshedByRunStarted(projectId: string, runKind: unknown): Refresh[] {
-  if (runKind === RESEARCH_RUN) return [{ queryKey: queryKeys.researches(projectId) }];
-  if (runKind === STUDIO_RUN) return [{ queryKey: queryKeys.studioRuns(projectId) }];
+  if (runKind === RESEARCH_RUN)
+    return [{ queryKey: queryKeys.researches(projectId) }];
+  if (runKind === STUDIO_RUN)
+    return [{ queryKey: queryKeys.studioRuns(projectId) }];
   return [];
 }
 

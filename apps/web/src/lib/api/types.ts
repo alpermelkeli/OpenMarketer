@@ -34,6 +34,10 @@ export type MediaAssetList = Schemas["MediaAssetListResponse"];
 export type MediaAssetStatus = Schemas["MediaAssetStatus"];
 export type MediaAssetDetail = Schemas["MediaAssetDetailResponse"];
 export type MediaAssetVersion = Schemas["MediaAssetVersionResponse"];
+/** An image the last analysis found in the project's repository, which the studio may use as a reference. */
+export type RepositoryImage = Schemas["RepositoryImageResponse"];
+export type RepositoryImageList = Schemas["RepositoryImageListResponse"];
+export type RepositoryImageKind = Schemas["RepositoryImageKind"];
 
 export type ProfileVersion = Schemas["ProfileVersionResponse"];
 export type ProfileVersionSummary = Schemas["ProfileVersionSummaryResponse"];
