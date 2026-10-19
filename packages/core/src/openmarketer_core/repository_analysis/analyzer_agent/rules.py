@@ -299,18 +299,27 @@ def _unwrap_json(arguments: dict[str, Any]) -> dict[str, Any]:
 def _unwrap_json_deeply(value: Any) -> Any:
     """``value`` with every list or object sent as JSON text decoded, at any depth.
 
-    Some models stringify the lists inside a section too (``"evidence": "[...]"``). This is
-    tried only after the submission failed the schema as sent, so a text field that happens to
-    read as JSON is never decoded in a profile that fits.
+    Some models stringify the lists inside a section too (``"evidence": "[...]"``), and some
+    wrap every list in an object of one key, ``item`` (``"platforms": {"item": ["ios"]}``, and
+    ``{"item": "tr"}`` for a list of one), as a tool call translated from XML reads. Both are
+    undone here. This is tried only after the submission failed the schema as sent, so a text
+    field that happens to read as JSON is never decoded in a profile that fits.
     """
     decoded = _decoded(value)
     if decoded is not None:
         value = decoded
+    if isinstance(value, dict) and len(value) == 1 and next(iter(value)) in _LIST_WRAPPERS:
+        wrapped = next(iter(value.values()))
+        value = wrapped if isinstance(wrapped, list) else [wrapped]
     if isinstance(value, dict):
         return {key: _unwrap_json_deeply(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_unwrap_json_deeply(item) for item in value]
     return value
+
+
+# The one key some models wrap a list in.
+_LIST_WRAPPERS = frozenset({"item", "items"})
 
 
 def _decoded(value: Any) -> dict[str, Any] | list[Any] | None:

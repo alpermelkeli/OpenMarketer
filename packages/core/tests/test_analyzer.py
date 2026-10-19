@@ -243,6 +243,19 @@ def test_lists_inside_a_section_sent_as_json_text_are_decoded(files):
     assert result.profile == ProductProfile.model_validate(profile())
 
 
+def test_lists_wrapped_in_an_item_object_are_unwrapped(files):
+    wrapped = profile()
+    wrapped["product"]["evidence"] = {"item": wrapped["product"]["evidence"]}
+    wrapped["product"]["platforms"] = {"item": wrapped["product"]["platforms"]}
+    wrapped["product"]["languages"] = {"item": "tr"}
+    for feature in wrapped["features"]:
+        feature["evidence"] = {"item": feature["evidence"]}
+    result = analyze(files, ScriptedModel([call(SUBMIT, **wrapped)]))
+    expected = profile()
+    expected["product"]["languages"] = ["tr"]
+    assert result.profile == ProductProfile.model_validate(expected)
+
+
 def test_last_attempt_is_repaired_in_code(files):
     bad = profile()
     bad["features"][0]["evidence"] = [{"file": "nope.kt"}]
