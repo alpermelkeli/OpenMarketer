@@ -1240,6 +1240,9 @@
       "ErrorCode": {
         "enum": [
           "invalid_repository_url",
+          "repository_image_refused",
+          "repository_image_too_large",
+          "too_many_repository_images",
           "not_local_request",
           "project_not_found",
           "analysis_not_found",
@@ -2556,6 +2559,19 @@
         "title": "RepositoryImageKind",
         "type": "string"
       },
+      "RepositoryImageKindChoice": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/RepositoryImageKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "RepositoryImageKindChoice",
+        "type": "object"
+      },
       "RepositoryImageListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2590,10 +2606,17 @@
         "additionalProperties": false,
         "properties": {
           "analysis_run_id": {
-            "description": "The analysis that found the image.",
-            "format": "uuid",
-            "title": "Analysis Run Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The analysis that found the image; null for an upload.",
+            "title": "Analysis Run Id"
           },
           "created_at": {
             "format": "date-time",
@@ -2611,7 +2634,12 @@
           },
           "kind": {
             "$ref": "#/components/schemas/RepositoryImageKind",
-            "description": "What the image's path suggests it is; a hint, not a reading of the image."
+            "description": "What the image is: the hint its path suggests, until a person chose it (`kind_chosen`)."
+          },
+          "kind_chosen": {
+            "description": "Whether a person chose the kind; always true for an upload.",
+            "title": "Kind Chosen",
+            "type": "boolean"
           },
           "mime": {
             "description": "`image/png` or `image/webp`.",
@@ -2619,13 +2647,17 @@
             "type": "string"
           },
           "path": {
-            "description": "Where the image was in the repository, relative to its root.",
+            "description": "Where the image was in the repository, relative to its root; for an upload, the uploaded file's name, cleaned.",
             "title": "Path",
             "type": "string"
           },
           "size_bytes": {
             "title": "Size Bytes",
             "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RepositoryImageSource",
+            "description": "`analysis` when an analysis found it, `person` when a person uploaded it."
           },
           "width": {
             "title": "Width",
@@ -2634,9 +2666,11 @@
         },
         "required": [
           "id",
+          "source",
           "analysis_run_id",
           "path",
           "kind",
+          "kind_chosen",
           "mime",
           "width",
           "height",
@@ -2644,6 +2678,41 @@
           "created_at"
         ],
         "title": "RepositoryImageResponse",
+        "type": "object"
+      },
+      "RepositoryImageSource": {
+        "enum": [
+          "analysis",
+          "person"
+        ],
+        "title": "RepositoryImageSource",
+        "type": "string"
+      },
+      "RepositoryImageUpload": {
+        "additionalProperties": false,
+        "properties": {
+          "data_base64": {
+            "description": "The file's bytes in standard base64, without a `data:` prefix or line breaks: at most 11184812 characters, 8388608 bytes decoded.",
+            "title": "Data Base64",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RepositoryImageKind"
+          },
+          "name": {
+            "description": "The file's name; its last part is kept, cleaned, at most 120 characters.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "data_base64"
+        ],
+        "title": "RepositoryImageUpload",
         "type": "object"
       },
       "ResearchReportResponse": {
@@ -6926,7 +6995,7 @@
     },
     "/v1/projects/{project_id}/repository-images": {
       "get": {
-        "description": "The images of the project's latest analysis that found any, a page at a time.",
+        "description": "The project's images, a page at a time, newest first.\n\nThose of its latest analysis that found any and those people uploaded, without the ones a\nperson removed.",
         "operationId": "listRepositoryImages",
         "parameters": [
           {
@@ -7019,6 +7088,287 @@
           }
         },
         "summary": "List Images",
+        "tags": [
+          "repository images"
+        ]
+      },
+      "post": {
+        "description": "Upload one of the product's images, of the kind given. The body is JSON with the file in base64: `data_base64` is at most 11184812 characters, the body at most 12 MB, the file at most 8388608 bytes decoded. It must be a PNG, JPEG or WebP image of one frame, at least 128 and at most 4096 pixels a side; what is kept is written again from its pixels, without its metadata, as a PNG or a WebP. The same bytes uploaded again answer the image kept already. 400 `repository_image_refused` for what is not such an image, or not base64, with the rule in the message; 413 `repository_image_too_large`; 409 `too_many_repository_images` when the project has 24 uploads; 404 `project_not_found`; 503 `storage_unavailable` when object storage could not keep it.",
+        "operationId": "uploadRepositoryImage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepositoryImageUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryImageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Upload",
+        "tags": [
+          "repository images"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/repository-images/{image_id}": {
+      "delete": {
+        "description": "Remove an image from the project's.\n\nAn upload is deleted with its file. An image an analysis found is only marked removed, so\nthat a later analysis finding the same bytes leaves it out too. 404\n`repository_image_not_found` for an image that is not one of this project's, or was\nremoved already; 503 `storage_unavailable` when an upload's file could not be removed, and\nthe image stays then.",
+        "operationId": "removeRepositoryImage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "image_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Image Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Remove",
+        "tags": [
+          "repository images"
+        ]
+      },
+      "patch": {
+        "description": "Choose what an image is; a later analysis keeps the choice for the same bytes.\n\n404 `repository_image_not_found` for an image that is not one of this project's, or was\nremoved.",
+        "operationId": "setRepositoryImageKind",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "image_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Image Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepositoryImageKindChoice"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryImageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Set Kind",
         "tags": [
           "repository images"
         ]

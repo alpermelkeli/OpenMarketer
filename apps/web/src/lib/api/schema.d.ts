@@ -661,15 +661,55 @@ export interface paths {
         };
         /**
          * List Images
-         * @description The images of the project's latest analysis that found any, a page at a time.
+         * @description The project's images, a page at a time, newest first.
+         *
+         *     Those of its latest analysis that found any and those people uploaded, without the ones a
+         *     person removed.
          */
         get: operations["listRepositoryImages"];
         put?: never;
-        post?: never;
+        /**
+         * Upload
+         * @description Upload one of the product's images, of the kind given. The body is JSON with the file in base64: `data_base64` is at most 11184812 characters, the body at most 12 MB, the file at most 8388608 bytes decoded. It must be a PNG, JPEG or WebP image of one frame, at least 128 and at most 4096 pixels a side; what is kept is written again from its pixels, without its metadata, as a PNG or a WebP. The same bytes uploaded again answer the image kept already. 400 `repository_image_refused` for what is not such an image, or not base64, with the rule in the message; 413 `repository_image_too_large`; 409 `too_many_repository_images` when the project has 24 uploads; 404 `project_not_found`; 503 `storage_unavailable` when object storage could not keep it.
+         */
+        post: operations["uploadRepositoryImage"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/repository-images/{image_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove
+         * @description Remove an image from the project's.
+         *
+         *     An upload is deleted with its file. An image an analysis found is only marked removed, so
+         *     that a later analysis finding the same bytes leaves it out too. 404
+         *     `repository_image_not_found` for an image that is not one of this project's, or was
+         *     removed already; 503 `storage_unavailable` when an upload's file could not be removed, and
+         *     the image stays then.
+         */
+        delete: operations["removeRepositoryImage"];
+        options?: never;
+        head?: never;
+        /**
+         * Set Kind
+         * @description Choose what an image is; a later analysis keeps the choice for the same bytes.
+         *
+         *     404 `repository_image_not_found` for an image that is not one of this project's, or was
+         *     removed.
+         */
+        patch: operations["setRepositoryImageKind"];
         trace?: never;
     };
     "/v1/projects/{project_id}/repository-images/{image_id}/image": {
@@ -1611,7 +1651,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "media_asset_decided" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
+        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "media_asset_decided" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
         EventDetailScalar: string | number | boolean | null;
         EventDetailValue: components["schemas"]["EventDetailScalar"] | components["schemas"]["EventDetailScalar"][];
         /**
@@ -2131,6 +2171,10 @@ export interface components {
          * @enum {string}
          */
         RepositoryImageKind: "icon" | "logo" | "screenshot" | "marketing" | "other";
+        /** RepositoryImageKindChoice */
+        RepositoryImageKindChoice: {
+            kind: components["schemas"]["RepositoryImageKind"];
+        };
         /** RepositoryImageListResponse */
         RepositoryImageListResponse: {
             /** Images */
@@ -2145,10 +2189,9 @@ export interface components {
         RepositoryImageResponse: {
             /**
              * Analysis Run Id
-             * Format: uuid
-             * @description The analysis that found the image.
+             * @description The analysis that found the image; null for an upload.
              */
-            analysis_run_id: string;
+            analysis_run_id: string | null;
             /**
              * Created At
              * Format: date-time
@@ -2161,8 +2204,13 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** @description What the image's path suggests it is; a hint, not a reading of the image. */
+            /** @description What the image is: the hint its path suggests, until a person chose it (`kind_chosen`). */
             kind: components["schemas"]["RepositoryImageKind"];
+            /**
+             * Kind Chosen
+             * @description Whether a person chose the kind; always true for an upload.
+             */
+            kind_chosen: boolean;
             /**
              * Mime
              * @description `image/png` or `image/webp`.
@@ -2170,13 +2218,34 @@ export interface components {
             mime: string;
             /**
              * Path
-             * @description Where the image was in the repository, relative to its root.
+             * @description Where the image was in the repository, relative to its root; for an upload, the uploaded file's name, cleaned.
              */
             path: string;
             /** Size Bytes */
             size_bytes: number;
+            /** @description `analysis` when an analysis found it, `person` when a person uploaded it. */
+            source: components["schemas"]["RepositoryImageSource"];
             /** Width */
             width: number;
+        };
+        /**
+         * RepositoryImageSource
+         * @enum {string}
+         */
+        RepositoryImageSource: "analysis" | "person";
+        /** RepositoryImageUpload */
+        RepositoryImageUpload: {
+            /**
+             * Data Base64
+             * @description The file's bytes in standard base64, without a `data:` prefix or line breaks: at most 11184812 characters, 8388608 bytes decoded.
+             */
+            data_base64: string;
+            kind: components["schemas"]["RepositoryImageKind"];
+            /**
+             * Name
+             * @description The file's name; its last part is kept, cleaned, at most 120 characters.
+             */
+            name: string;
         };
         /**
          * ResearchReportResponse
@@ -4785,6 +4854,215 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RepositoryImageListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    uploadRepositoryImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryImageUpload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryImageResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeRepositoryImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setRepositoryImageKind: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryImageKindChoice"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryImageResponse"];
                 };
             };
             /** @description Forbidden */

@@ -58,7 +58,7 @@ from openmarketer_core.db.project_removal import (
 )
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.proposals import ProposalNotFound, ProposalNotPending
-from openmarketer_core.db.repository_images import RepositoryImageNotFound
+from openmarketer_core.db.repository_images import RepositoryImageNotFound, TooManyPersonImages
 from openmarketer_core.db.research_runs import ResearchRunNotFound, ResearchRunUnfinished
 from openmarketer_core.db.research_store import ResearchReportNotFound
 from openmarketer_core.db.session import DatabaseError
@@ -70,6 +70,8 @@ from openmarketer_core.db.studio_runs import (
 from openmarketer_core.llm import LLMError
 from openmarketer_core.orchestrator.chat_agent.rules import ChatTurnError
 from openmarketer_core.repository_analysis.intake import IntakeError
+from openmarketer_core.repository_analysis.repository_images.preparation import ImageRefused
+from openmarketer_core.repository_analysis.repository_images.uploads import UploadTooLarge
 from openmarketer_core.repository_analysis.request import AnalysisNotStarted
 from openmarketer_core.research.page_store import PageStoreUnavailable
 from openmarketer_core.research.request import ResearchNotStarted
@@ -94,6 +96,9 @@ logger = logging.getLogger(__name__)
 
 class ErrorCode(StrEnum):
     INVALID_REPOSITORY_URL = "invalid_repository_url"
+    REPOSITORY_IMAGE_REFUSED = "repository_image_refused"
+    REPOSITORY_IMAGE_TOO_LARGE = "repository_image_too_large"
+    TOO_MANY_REPOSITORY_IMAGES = "too_many_repository_images"
     NOT_LOCAL_REQUEST = "not_local_request"
     PROJECT_NOT_FOUND = "project_not_found"
     ANALYSIS_NOT_FOUND = "analysis_not_found"
@@ -160,6 +165,9 @@ class Problem(BaseModel):
 
 _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     IntakeError: (400, ErrorCode.INVALID_REPOSITORY_URL),
+    ImageRefused: (400, ErrorCode.REPOSITORY_IMAGE_REFUSED),
+    UploadTooLarge: (413, ErrorCode.REPOSITORY_IMAGE_TOO_LARGE),
+    TooManyPersonImages: (409, ErrorCode.TOO_MANY_REPOSITORY_IMAGES),
     NotLocalRequest: (403, ErrorCode.NOT_LOCAL_REQUEST),
     ProjectNotFound: (404, ErrorCode.PROJECT_NOT_FOUND),
     AnalysisRunNotFound: (404, ErrorCode.ANALYSIS_NOT_FOUND),

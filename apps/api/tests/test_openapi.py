@@ -66,6 +66,9 @@ OPERATIONS = {
         "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download",
     ),
     "listRepositoryImages": ("get", "/v1/projects/{project_id}/repository-images"),
+    "uploadRepositoryImage": ("post", "/v1/projects/{project_id}/repository-images"),
+    "setRepositoryImageKind": ("patch", "/v1/projects/{project_id}/repository-images/{image_id}"),
+    "removeRepositoryImage": ("delete", "/v1/projects/{project_id}/repository-images/{image_id}"),
     "getRepositoryImage": (
         "get",
         "/v1/projects/{project_id}/repository-images/{image_id}/image",

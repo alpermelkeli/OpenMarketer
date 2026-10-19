@@ -20,9 +20,11 @@ function image(
 ): RepositoryImage {
   return {
     id,
+    source: "analysis",
     analysis_run_id: "0b0e6c6e-aaaa-4bbb-8ccc-ddddeeeeffff",
     path,
     kind,
+    kind_chosen: false,
     mime: "image/png",
     width: 512,
     height: 256,

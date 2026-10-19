@@ -72,6 +72,11 @@ class AnalysisRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class RepositoryImageSource(StrEnum):
+    ANALYSIS = "analysis"  # an analysis found it in the repository
+    PERSON = "person"  # a person uploaded it
+
+
 class ResearchRunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -319,13 +324,17 @@ class AnalysisRunRecord(Base):
 
 # ------------------------------------------------------- repository images
 class RepositoryImageRecord(Base):
-    """One of the product's own images, found in its repository by an analysis run.
+    """One of the product's own images: found in its repository by an analysis, or uploaded.
 
     The image is in object storage under ``storage_key``, decoded and written again from its
-    pixels (``repository_analysis/repository_images``); the row keeps where it was in the
-    repository, the kind its path suggests, its type, size and hash. A project keeps the
-    images of one analysis: a run that collects any replaces those of the runs before it.
-    A run keeps a path once and identical bytes once.
+    pixels (``repository_analysis/repository_images``); the row keeps where it came from, its
+    kind, its type, size and hash. An analysis image keeps where it was in the repository and
+    its run; a person's upload keeps the uploaded file's cleaned name in ``path`` and no run.
+    A project keeps the analysis images of one analysis: a run that collects any replaces
+    those of the runs before it, carrying over by hash what a person decided about them (a kind
+    chosen, ``kind_chosen_by``; a removal, ``removed_at``). A person's uploads stay until that
+    person, or the project's deletion, removes them, and are never soft-removed. A run keeps a
+    path once and identical bytes once, and a project keeps identical uploads once.
     """
 
     __tablename__ = "repository_image"
@@ -337,22 +346,40 @@ class RepositoryImageRecord(Base):
         CheckConstraint("width > 0 AND height > 0", name="size"),
         CheckConstraint("size_bytes > 0", name="size_bytes"),
         CheckConstraint("sha256 ~ '^[0-9a-f]{64}$'", name="sha256"),
+        CheckConstraint(
+            "(source = 'analysis') = (analysis_run_id IS NOT NULL)", name="analysis_run_id"
+        ),
+        CheckConstraint("source = 'analysis' OR kind_chosen_by IS NOT NULL", name="kind_chosen_by"),
+        CheckConstraint("(removed_at IS NULL) = (removed_by IS NULL)", name="removed_by"),
+        CheckConstraint("source = 'analysis' OR removed_at IS NULL", name="removed_at"),
+        # The project's images read newest first in this order.
+        Index("ix_repository_image_project_id_created_at", "project_id", "created_at", "id"),
         Index(
-            "ix_repository_image_analysis_run_id_created_at", "analysis_run_id", "created_at", "id"
+            "uq_repository_image_project_id_sha256_person",
+            "project_id",
+            "sha256",
+            unique=True,
+            postgresql_where=text("source = 'person'"),
         ),
     )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     project_id: Mapped[uuid.UUID] = _project_fk()
-    analysis_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("analysis_run.id"))
+    source: Mapped[RepositoryImageSource] = mapped_column(
+        _enum(RepositoryImageSource, "source"), server_default=RepositoryImageSource.ANALYSIS.value
+    )
+    analysis_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("analysis_run.id"))
     path: Mapped[str] = mapped_column(Text)
     kind: Mapped[RepositoryImageKind] = mapped_column(_enum(RepositoryImageKind, "kind"))
+    kind_chosen_by: Mapped[uuid.UUID | None]
     mime: Mapped[str] = mapped_column(Text)
     width: Mapped[int] = mapped_column(Integer)
     height: Mapped[int] = mapped_column(Integer)
     size_bytes: Mapped[int] = mapped_column(Integer)
     sha256: Mapped[str] = mapped_column(Text)
     storage_key: Mapped[str] = mapped_column(Text)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_by: Mapped[uuid.UUID | None]
     created_at: Mapped[datetime] = _created_at()
 
 

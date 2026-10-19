@@ -12,6 +12,7 @@ from temporalio.exceptions import ApplicationError
 
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.media_assets import asset_version
+from openmarketer_core.db.repository_images import remove_repository_image
 from openmarketer_core.db.session import transaction
 from openmarketer_core.studio.media_provider import (
     MediaAccountLimited,
@@ -367,6 +368,27 @@ def test_an_attempts_context_lists_the_projects_repository_images_without_their_
     found = context.repository_image_of(str(icon))
     assert found is not None and found.data == ICON
     assert context.repository_image_of(str(uuid.uuid4())) is None
+
+
+def test_an_attempts_context_leaves_out_the_repository_images_a_person_removed(
+    work, run, studio_database, assets, checkpoints
+):
+    icon, shot = studio_database.repository_images(
+        run, assets, ("icon", ICON), ("screenshot", SCREENSHOT)
+    )
+    with transaction(studio_database.sessions) as session:
+        remove_repository_image(
+            session,
+            workspace_id=run.workspace_id,
+            project_id=run.project_id,
+            image_id=shot,
+            removed_by=uuid.uuid4(),
+        )
+
+    context = work.context(GraphRunRef(STUDIO_RUN_KIND, run.run_id), checkpoints)
+
+    assert [image.id for image in context.repository_images] == [str(icon)]
+    assert context.repository_image_of(str(shot)) is None
 
 
 def test_a_run_whose_project_has_no_repository_images_has_an_empty_list(work, run, checkpoints):
