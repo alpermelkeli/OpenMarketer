@@ -812,7 +812,8 @@ def test_without_a_verifier_failure_the_real_icon_is_pasted_only_after_a_compari
     )
     step = rules.next_step(state)
     assert "compare it with the real images" in step
-    assert "if it already shows the real icon, logo or screenshot, do not paste" in step
+    assert "A close likeness of the real icon, logo or screenshot" in step
+    assert "is enough: do not paste" in step
 
 
 def test_after_the_verifier_failed_brand_fit_the_real_icon_is_pasted():
@@ -841,7 +842,7 @@ def test_after_a_program_made_the_latest_image_no_paste_is_offered_again():
 
 
 def test_the_studio_is_told_to_compare_before_it_pastes_a_real_image():
-    assert "if it already shows the real icon, logo or screenshot, do not paste" in (
+    assert "A close likeness (the same symbol, colours and shape" in (
         " ".join(rules.STUDIO_SYSTEM_PROMPT.split())
     )
 
@@ -904,3 +905,8 @@ def test_a_program_without_copy_is_a_candidate_at_once():
         Technique.COMPOSED, [{"op": "run_python", "version_id": V1, "ok": True}], exact_copy=()
     )
     assert not rules.needs_a_look(Operation(op="candidate_ready", version_id=V1), state)
+
+
+def test_the_verifier_passes_a_close_likeness_of_the_real_icon():
+    prompt = " ".join(rules.VERIFIER_SYSTEM_PROMPT.split())
+    assert "A close likeness" in prompt and "passes brand_fit" in prompt

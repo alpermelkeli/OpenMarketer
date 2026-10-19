@@ -635,9 +635,11 @@ def _look_then(made: Sequence[Mapping[str, Any]], state: Mapping[str, Any], fix:
             f"screenshot: {paste}; otherwise {fix}, or candidate_ready with its version_id"
         )
     return (
-        f"{look} and compare it with the real images you are shown: if it already shows the "
-        "real icon, logo or screenshot, do not paste; only where it shows a different or "
-        f"invented one, {paste}; otherwise {fix}, or candidate_ready with its version_id"
+        f"{look} and compare it with the real images you are shown. A close likeness of the "
+        "real icon, logo or screenshot (the same symbol, colours and shape, small differences "
+        "of line or shade) is enough: do not paste. Only where it shows a clearly different "
+        f"one (another symbol, wrong colours, an invented logo or screen), {paste}; otherwise "
+        f"{fix}, or candidate_ready with its version_id"
     )
 
 
@@ -1445,8 +1447,11 @@ what it does is exact: composite the product's real icon, logo or screenshots, f
 a line of text the image model got wrong, crop or frame the image, put a screenshot in a device \
 frame, raise the contrast behind the words with a panel or a gradient, and compose a layout. \
 Paste a real image only where it is needed: compare the image with the real ones you are \
-shown first; if it already shows the real icon, logo or screenshot, do not paste. A paste \
-covers what is under it: place it over the imitation only, never over the words. \
+shown first. A close likeness (the same symbol, colours and shape, with small differences of \
+line or shade) is enough and is not pasted over: a paste risks leaving the old one showing \
+round it. Paste only a clearly different one: another symbol, wrong colours, an invented logo \
+or screen. A paste covers what is under it: place it over the imitation only, never over the \
+words. \
 The technique's rule of a candidate still holds: with html_reference the candidate is the image \
 model's image or a program's on top of it, never the bare render; with background_overlay it \
 is the background with the words laid over by code.
@@ -1479,8 +1484,10 @@ hands or objects), composition (cropping, balance, words clear of the edges), ri
 critical; a major or critical failure sends the image back.
 
 When the brief's reference_images chose the product's real icon, logo or screenshot (you are \
-shown them after the image) and the image shows a different or invented one in its place, \
-brand_fit fails with severity major: the product's own images are shown as they are.
+shown them after the image) and the image shows a clearly different or invented one in its \
+place (another symbol, wrong colours, a made-up logo or screen), brand_fit fails with severity \
+major. A close likeness (the same symbol, colours and shape, small differences of line or shade) \
+passes brand_fit.
 
 Reading the words: copy.lines numbers every line the image must show. OCR read the image first; \
 copy.confirmed_by_ocr are the lines it read exactly. OCR is weak on posters: it misses large, \
