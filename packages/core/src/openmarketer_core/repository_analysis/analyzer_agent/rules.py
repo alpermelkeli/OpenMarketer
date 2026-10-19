@@ -318,6 +318,17 @@ def _unwrap_json_deeply(value: Any) -> Any:
     return value
 
 
+def _sections_named_as_declared(arguments: dict[str, Any]) -> dict[str, Any]:
+    """``arguments`` with a section whose name differs from a declared one only in case
+    (``Measurement`` for ``measurement``) named as declared, unless both were sent."""
+    declared = {name.lower(): name for name in ProductProfile.model_fields}
+    named: dict[str, Any] = {}
+    for key, value in arguments.items():
+        name = declared.get(key.lower(), key)
+        named[key if name in arguments and name != key else name] = value
+    return named
+
+
 # The one key some models wrap a list in.
 _LIST_WRAPPERS = frozenset({"item", "items"})
 
@@ -337,7 +348,7 @@ def _validated_profile(arguments: dict[str, Any]) -> ProductProfile:
     try:
         return ProductProfile.model_validate(_unwrap_json(arguments))
     except ValidationError:
-        deeply = _unwrap_json_deeply(arguments)
+        deeply = _unwrap_json_deeply(_sections_named_as_declared(arguments))
         if deeply == _unwrap_json(arguments):
             raise
         return ProductProfile.model_validate(deeply)

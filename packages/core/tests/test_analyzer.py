@@ -256,6 +256,13 @@ def test_lists_wrapped_in_an_item_object_are_unwrapped(files):
     assert result.profile == ProductProfile.model_validate(expected)
 
 
+def test_a_section_named_in_another_case_is_read_as_declared(files):
+    sent = profile()
+    sent["Product"] = sent.pop("product")
+    result = analyze(files, ScriptedModel([call(SUBMIT, **sent)]))
+    assert result.profile == ProductProfile.model_validate(profile())
+
+
 def test_last_attempt_is_repaired_in_code(files):
     bad = profile()
     bad["features"][0]["evidence"] = [{"file": "nope.kt"}]
