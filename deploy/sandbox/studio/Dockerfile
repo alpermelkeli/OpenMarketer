@@ -27,8 +27,8 @@ RUN apt-get update \
 COPY requirements.txt /opt/studio/requirements.txt
 RUN pip install --no-cache-dir --only-binary=:all: -r /opt/studio/requirements.txt
 
-COPY entry.py run_user.py /opt/studio/
-RUN chmod 0555 /opt/studio/entry.py /opt/studio/run_user.py \
+COPY entry.py run_user.py read_text.py /opt/studio/
+RUN chmod 0555 /opt/studio/entry.py /opt/studio/run_user.py /opt/studio/read_text.py \
     && useradd --uid 10001 --user-group --no-create-home --home-dir /tmp --shell /usr/sbin/nologin studio
 
 ENV HOME=/tmp \

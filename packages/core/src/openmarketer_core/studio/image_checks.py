@@ -3,9 +3,11 @@
 ``check_image`` reads an image's header and measures it against the platform's
 ``PlatformSpec``: its size and aspect ratio, its bytes and its format. ``copy_matches``
 compares the text an OCR engine read in the image with the exact lines the request gave, after
-the same normalisation of both (case, Unicode forms, punctuation, whitespace), and says of each
-line that is not there whether it is missing or reads differently (misspelled), with what was
-read in its place. Code measures these exactly; a model is poor at noticing a wrong letter.
+the same normalisation of both (case, Unicode forms, punctuation, whitespace), and says which
+lines OCR confirmed and, of each it did not, what it read nearest to it. OCR is evidence, not
+the judge: it misses large light words on photos and splits long ones, so a line it did not
+confirm is for the visual verifier to read letter by letter (``studio_agent/rules.py``), while
+a line it read exactly is confirmed.
 
 What is not checked here: the platform's safe margin. The OCR the sandbox gives reads text
 without positions, so whether the text keeps clear of the edges is the visual verifier's
@@ -27,15 +29,15 @@ from dataclasses import dataclass, field
 
 from openmarketer_core.studio.platforms import PlatformSpec
 
-# The failures a check names; the decide rule reads them as keys.
+# The failures a check names; the decide rule reads them as keys. ``COPY`` is named by the
+# verify node, when the verifier's reading of a line OCR did not confirm is not that line.
 WRONG_SIZE = "size"
 WRONG_FORMAT = "format"
 TOO_MANY_BYTES = "bytes"
 UNREADABLE = "unreadable"
 COPY = "copy"
 
-# How close a stretch of the read text must be to a line to count as that line misspelled
-# rather than missing.
+# How close a stretch of the read text must be to a line to be shown as what OCR read of it.
 MISSPELLED_AT = 0.6
 # The most of the read text a report repeats for one line.
 MAX_READ_CHARS = 160
@@ -60,8 +62,9 @@ class ImageCheck:
 
 
 @dataclass(frozen=True)
-class Misspelled:
-    """A line of copy the image shows differently: what it should read, and what was read."""
+class Unconfirmed:
+    """A line of copy OCR did not read exactly: what it should read, and the nearest text OCR
+    read (empty when nothing read close to it)."""
 
     expected: str
     read: str
@@ -69,20 +72,19 @@ class Misspelled:
 
 @dataclass(frozen=True)
 class CopyCheck:
-    """Whether every line of copy is in the read text, and what of each is not."""
+    """Which lines of copy OCR read exactly, and what it read of each of the others."""
 
-    missing: tuple[str, ...] = ()
-    misspelled: tuple[Misspelled, ...] = field(default=())
+    confirmed: tuple[str, ...] = ()
+    unconfirmed: tuple[Unconfirmed, ...] = field(default=())
 
     @property
-    def passed(self) -> bool:
-        return not self.missing and not self.misspelled
+    def all_confirmed(self) -> bool:
+        return not self.unconfirmed
 
     def as_data(self) -> dict[str, object]:
         return {
-            "passed": self.passed,
-            "missing": list(self.missing),
-            "misspelled": [{"expected": m.expected, "read": m.read} for m in self.misspelled],
+            "confirmed": list(self.confirmed),
+            "unconfirmed": [{"expected": u.expected, "read": u.read} for u in self.unconfirmed],
         }
 
 
@@ -135,33 +137,35 @@ def _read_in(read: str, read_words: list[str], wanted: str) -> bool:
 
 
 def copy_matches(ocr_text: str, exact_copy: Sequence[str]) -> CopyCheck:
-    """Whether each line of ``exact_copy`` is in ``ocr_text``, compared normalised.
+    """Which lines of ``exact_copy`` OCR read in ``ocr_text``, compared normalised.
 
     The read text is taken as one run of words, because OCR breaks lines where the image does
-    and not where the copy does. A line read right but for its accents and special letters
-    passes: OCR misses them in large and bold type, and the verifier judges them. A line that
-    is not in it is misspelled when a stretch of as many words reads close to it, and missing
-    otherwise.
+    and not where the copy does. A line read right but for its accents and special letters is
+    not confirmed: OCR misses them in large and bold type, but a wrong letter reads the same,
+    so the verifier, looking at the image, judges them. Of a line not confirmed, the nearest
+    stretch of as many words is kept when it reads close to the line, so the verifier is told
+    what OCR made of it.
     """
     read = normalized(ocr_text)
     read_words = read.split()
     read_unmarked = without_marks(read)
-    missing: list[str] = []
-    misspelled: list[Misspelled] = []
+    confirmed: list[str] = []
+    unconfirmed: list[Unconfirmed] = []
     for line in exact_copy:
         wanted = normalized(line)
         if not wanted or _read_in(read, read_words, wanted):
+            confirmed.append(line)
             continue
         if _read_in(read_unmarked, read_unmarked.split(), without_marks(wanted)):
-            # OCR often drops the mark of a large or bold letter (ç read as c); the line reads
-            # right but for its marks, which the verifier, looking at the image, judges.
+            # Right but for its marks: OCR often drops them in large type, but a wrong letter
+            # (c for ç) reads the same, so the verifier reads this line letter by letter.
+            closest, _ = _closest_stretch(read_words, wanted)
+            unconfirmed.append(Unconfirmed(line, closest[:MAX_READ_CHARS]))
             continue
         closest, ratio = _closest_stretch(read_words, wanted)
-        if ratio >= MISSPELLED_AT:
-            misspelled.append(Misspelled(line, closest[:MAX_READ_CHARS]))
-        else:
-            missing.append(line)
-    return CopyCheck(tuple(missing), tuple(misspelled))
+        nearest = closest[:MAX_READ_CHARS] if ratio >= MISSPELLED_AT else ""
+        unconfirmed.append(Unconfirmed(line, nearest))
+    return CopyCheck(tuple(confirmed), tuple(unconfirmed))
 
 
 def _contains(read: str, wanted: str) -> bool:

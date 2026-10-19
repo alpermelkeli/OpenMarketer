@@ -9,7 +9,7 @@ from openmarketer_core.studio.image_checks import (
     UNREADABLE,
     WRONG_FORMAT,
     WRONG_SIZE,
-    Misspelled,
+    Unconfirmed,
     check_image,
     copy_matches,
 )
@@ -49,45 +49,45 @@ def test_bytes_that_are_not_an_image_are_unreadable():
 
 def test_copy_matches_whatever_the_case_punctuation_and_line_breaks():
     checked = copy_matches("LAUNCH\nday!  Try   it — free", ["Launch day", "Try it, free."])
-    assert checked.passed
+    assert checked.all_confirmed
+    assert checked.confirmed == ("Launch day", "Try it, free.")
 
 
-def test_a_line_read_differently_is_misspelled_with_what_was_read():
+def test_a_line_read_differently_is_unconfirmed_with_what_was_read():
     checked = copy_matches("Lauch day is here", ["Launch day"])
-    assert not checked.passed
-    assert checked.misspelled == (Misspelled("Launch day", "lauch day"),)
-    assert checked.missing == ()
+    assert checked.unconfirmed == (Unconfirmed("Launch day", "lauch day"),)
+    assert checked.confirmed == ()
 
 
-def test_a_line_nothing_reads_like_is_missing():
+def test_a_line_nothing_reads_like_is_unconfirmed_with_nothing_read():
     checked = copy_matches("Something else entirely", ["Launch day"])
-    assert checked.missing == ("Launch day",)
+    assert checked.unconfirmed == (Unconfirmed("Launch day", ""),)
 
 
-def test_no_copy_asked_for_passes_whatever_was_read():
-    assert copy_matches("anything", []).passed
+def test_no_copy_asked_for_confirms_whatever_was_read():
+    assert copy_matches("anything", []).all_confirmed
 
 
 def test_a_line_is_not_found_inside_a_longer_word():
-    assert not copy_matches("relaunched", ["launch"]).passed
+    assert not copy_matches("relaunched", ["launch"]).all_confirmed
 
 
-def test_a_line_read_with_short_noise_between_its_words_matches():
+def test_a_line_read_with_short_noise_between_its_words_is_confirmed():
     check = copy_matches("Soruyu çek, o\nkasana at. üne\n\nSoruKasam", ["Soruyu çek, kasana at."])
-    assert (check.missing, check.misspelled) == ((), ())
+    assert check.all_confirmed
 
 
 def test_noise_does_not_excuse_a_misread_word():
     check = copy_matches("Soruyu cek, o\nkasanna at.", ["Soruyu çek, kasana at."])
-    assert check.missing or check.misspelled
+    assert not check.all_confirmed
 
 
 def test_a_long_word_between_the_words_of_a_line_is_not_noise():
     check = copy_matches("Soruyu çek, hemen kasana at.", ["Soruyu çek, kasana at."])
-    assert check.missing or check.misspelled
+    assert not check.all_confirmed
 
 
-def test_a_line_read_without_its_marks_passes_for_the_verifier_to_judge():
+def test_a_line_read_without_its_marks_is_left_for_the_verifier_to_read():
     check = copy_matches(
         "Soruyu cek,\nkasana at.\nSinavdan once tekrar et",
         [
@@ -95,9 +95,21 @@ def test_a_line_read_without_its_marks_passes_for_the_verifier_to_judge():
             "Sınavdan önce tekrar et",
         ],
     )
-    assert (check.missing, check.misspelled) == ((), ())
+    assert [line.expected for line in check.unconfirmed] == [
+        "Soruyu çek, kasana at.",
+        "Sınavdan önce tekrar et",
+    ]
+    assert check.unconfirmed[0].read == "soruyu cek kasana at"
 
 
-def test_letters_out_of_order_are_still_misspelled_without_marks():
+def test_letters_out_of_order_are_unconfirmed_without_marks():
     check = copy_matches("Soryuu cek, kasana at.", ["Soruyu çek, kasana at."])
-    assert check.missing or check.misspelled
+    assert check.unconfirmed == (Unconfirmed("Soruyu çek, kasana at.", "soryuu cek kasana at"),)
+
+
+def test_the_check_data_names_the_confirmed_lines_and_what_ocr_read_of_the_others():
+    check = copy_matches("Launch day\nTry it fre", ["Launch day", "Try it free"])
+    assert check.as_data() == {
+        "confirmed": ["Launch day"],
+        "unconfirmed": [{"expected": "Try it free", "read": "try it fre"}],
+    }

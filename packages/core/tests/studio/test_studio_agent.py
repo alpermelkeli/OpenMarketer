@@ -26,6 +26,7 @@ from openmarketer_core.llm import ChatReply
 from openmarketer_core.run_events import RunEvent
 from openmarketer_core.studio.brand_kit import EMPTY_BRAND_KIT, BrandKit
 from openmarketer_core.studio.failures import StudioError
+from openmarketer_core.studio.image_checks import COPY as COPY_FAILURE
 from openmarketer_core.studio.media_provider import ImageInput
 from openmarketer_core.studio.platforms import Platform, platform_spec
 from openmarketer_core.studio.requests import AssetRequest
@@ -138,21 +139,29 @@ def a_plan() -> Answer:
     )
 
 
-def a_verdict(**failing: str) -> ChatReply:
-    return text(
-        {
-            "criteria": [
-                {
-                    "criterion": name,
-                    "passed": name not in failing,
-                    "severity": failing.get(name, "none"),
-                    "note": "",
-                }
-                for name in rules.CRITERIA
-            ],
-            "edit_suggestions": [],
-        }
-    )
+def a_verdict(transcription: dict[int, str] | None = None, **failing: str) -> ChatReply:
+    verdict: dict[str, Any] = {
+        "criteria": [
+            {
+                "criterion": name,
+                "passed": name not in failing,
+                "severity": failing.get(name, "none"),
+                "note": "",
+            }
+            for name in rules.CRITERIA
+        ],
+        "edit_suggestions": [],
+    }
+    if transcription is not None:
+        verdict["copy_transcription"] = [
+            {"line": line, "text": read} for line, read in transcription.items()
+        ]
+    return text(verdict)
+
+
+def reading(first_line: str) -> ChatReply:
+    """A verdict whose reading of the image shows ``first_line`` where "Launch day" should be."""
+    return a_verdict({1: first_line, 2: "Try it free"})
 
 
 ACME = BrandKit(name="Acme", palette=("#112233",))
@@ -259,9 +268,10 @@ class Run:
             if step.action is None:
                 break
             errors = world.failing.get(step.action.name)
-            if errors:
+            # An empty error lets that ask succeed, so a later one can fail.
+            if errors and (error := errors.pop(0)):
                 world.asked.append((step.action.name, step.action.payload))
-                resume = ActionOutcome(step.action.action_id, False, {}, errors.pop(0))
+                resume = ActionOutcome(step.action.action_id, False, {}, error)
                 continue
             answer = world.answer(step.action.name, step.action.payload)
             resume = ActionOutcome(step.action.action_id, True, answer, "")
@@ -334,7 +344,7 @@ def test_every_generation_and_edit_is_told_what_the_product_is():
             editing_latest(instruction="Fix it."),
             ready(),
         ],
-        asset_verifier=[a_verdict()],
+        asset_verifier=[reading("Lauch day"), a_verdict()],
     )
     world = World(["Lauch day", READ_BACK])
 
@@ -405,7 +415,7 @@ def test_words_read_back_wrong_are_edited_in_a_second_round_that_passes():
             editing_latest(instruction="Spell the headline right."),
             ready(),
         ],
-        asset_verifier=[a_verdict()],
+        asset_verifier=[reading("Lauch day"), a_verdict()],
     )
     world = World(["Lauch day\nTry it free", READ_BACK])
 
@@ -418,10 +428,11 @@ def test_words_read_back_wrong_are_edited_in_a_second_round_that_passes():
     assert run.result.final_version_id == edited["version_id"]
     assert run.result.rounds == 2
     [first, second] = run.result.reviews
-    assert first.check_report["copy"]["misspelled"] == [
+    assert first.check_report["copy"]["unconfirmed"] == [
         {"expected": "Launch day", "read": "lauch day"}
     ]
-    assert first.verifier_report is None and not first.passed
+    assert first.check_report["notices"] == [rules.COPY_UNCONFIRMED]
+    assert first.verifier_report is not None and not first.passed
     assert second.passed
     assert "edit_planned" in run.kinds()
 
@@ -444,7 +455,7 @@ def test_the_same_wrong_words_twice_switch_to_a_background_with_the_words_in_cod
             ),
             ready(),
         ],
-        asset_verifier=[a_verdict()],
+        asset_verifier=[reading("Lauch day"), reading("Lanch day"), a_verdict()],
     )
     world = World(["Lauch day\nTry it free", "Lanch day\nTry it free", READ_BACK])
 
@@ -477,8 +488,12 @@ def test_a_run_at_its_round_limit_escalates_with_its_best_candidate():
         ],
         asset_verifier=[a_verdict(composition="major")],
     )
-    # The edit comes back at the wrong size and with its words wrong: two failures to one.
-    world = World([READ_BACK, "Lauch day"], sizes={1: (1080, 1000)})
+    # The edit comes back at the wrong size and its words cannot be read: two failures to one.
+    world = World(
+        [READ_BACK],
+        sizes={1: (1080, 1000)},
+        failing={READ_TEXT: ["", "the sandbox timed out"]},
+    )
 
     run = Run(chat, world, limits=Limits(max_rounds=2))
 
@@ -564,7 +579,7 @@ def test_no_payload_of_an_action_carries_an_image():
             editing_latest(instruction="Fix it."),
             ready(),
         ],
-        asset_verifier=[a_verdict()],
+        asset_verifier=[reading("Lauch day"), a_verdict()],
     )
     world = World(["Lauch day", READ_BACK])
 
@@ -773,7 +788,7 @@ def test_an_edits_references_are_numbered_after_the_image_it_changes():
             ),
             ready(),
         ],
-        asset_verifier=[a_verdict()],
+        asset_verifier=[reading("Lauch day"), a_verdict()],
     )
     world = World(["Lauch day", READ_BACK])
 
@@ -913,7 +928,7 @@ def test_an_edit_whose_instruction_a_weak_model_put_in_its_note_is_made():
             editing_latest(note="Erase all lettering so code can print the exact words."),
             ready(),
         ],
-        asset_verifier=[a_verdict()],
+        asset_verifier=[reading("Lauch day"), a_verdict()],
     )
     world = World(["Lauch day", READ_BACK])
 
@@ -1125,3 +1140,106 @@ def test_a_program_on_a_render_is_not_composited_on_the_image_models_image_but_o
     images = _run_images(state)  # type: ignore[arg-type]
 
     assert images.composited_on_image_model == {on_generated["version_id"], on_that["version_id"]}
+
+
+# ---------------------------------------------------------------- the words, OCR and verifier
+def verifier_copy_data(chat: ScriptedChat, call_no: int = 0) -> dict[str, Any]:
+    calls = [c for c in chat.calls if c["role"] == rules.VERIFIER_ROLE]
+    return json.loads(calls[call_no]["messages"][1]["content"][0]["text"])["copy"]
+
+
+def test_a_line_ocr_missed_that_the_verifier_reads_exactly_passes_in_one_round():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict({1: "LAUNCH DAY!"})],
+    )
+    world = World(["Try it free"])
+
+    run = Run(chat, world)
+
+    [review] = run.result.reviews
+    assert review.passed and run.result.rounds == 1
+    assert review.check_report["copy"] == {
+        "confirmed": ["Try it free"],
+        "unconfirmed": [{"expected": "Launch day", "read": ""}],
+    }
+    assert review.check_report["notices"] == [rules.COPY_UNCONFIRMED]
+    assert review.verifier_report is not None
+    assert review.verifier_report["copy_verdict"] == [
+        {"line": 1, "expected": "Launch day", "transcribed": "LAUNCH DAY!", "matches": True}
+    ]
+
+
+def test_a_misreading_the_verifier_confirms_as_a_misspelling_fails_the_copy():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[reading("Lauch day")],
+    )
+    world = World(["Lauch day\nTry it free"])
+
+    run = Run(chat, world, limits=Limits(max_rounds=1))
+
+    [review] = run.result.reviews
+    assert not review.passed
+    assert run.final["candidates"][0]["failures"] == [COPY_FAILURE]
+    assert run.result.needs_review
+
+
+def test_the_verifier_is_told_what_ocr_read_of_a_line_it_did_not_confirm():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict({1: "Launch day"})],
+    )
+
+    Run(chat, World(["Lauch day\nTry it free"]))
+
+    copy = verifier_copy_data(chat)
+    assert copy["confirmed_by_ocr"] == [2]
+    assert copy["to_transcribe"] == [1]
+    assert copy["ocr_notes"] == [
+        'OCR read "lauch day" where "Launch day" is expected: look letter by letter.'
+    ]
+
+
+def test_lines_ocr_confirmed_need_no_reading_from_the_verifier():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+
+    run = Run(chat, World([READ_BACK]))
+
+    assert verifier_copy_data(chat)["to_transcribe"] == []
+    assert run.result.reviews[0].passed
+    assert run.result.reviews[0].check_report["notices"] == []
+
+
+def test_a_verdict_without_the_reading_of_an_unconfirmed_line_is_asked_again():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict(), a_verdict({1: "Launch day"})],
+    )
+
+    run = Run(chat, World(["Try it free"]))
+
+    retry = [c for c in chat.calls if c["role"] == rules.VERIFIER_ROLE][1]["messages"][-1]
+    assert "give copy_transcription for line 1" in retry["content"]
+    assert run.result.reviews[0].passed
+
+
+def test_a_verifier_that_never_reads_an_unconfirmed_line_fails_the_image():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict(), a_verdict()],
+    )
+
+    run = Run(chat, World(["Try it free"]), limits=Limits(max_rounds=1))
+
+    assert run.final["candidates"][0]["failures"] == [rules.VERIFIER_UNREAD]
+    assert not run.result.reviews[0].passed

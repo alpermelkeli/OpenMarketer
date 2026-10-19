@@ -65,7 +65,7 @@ def main() -> int:
             "file:///in/page.html",
         ]
     else:
-        command = ["tesseract", arguments.image, "stdout", "-l", OCR_LANGUAGES]
+        command = [sys.executable, "-I", "/opt/studio/read_text.py", arguments.image, OCR_LANGUAGES]
     exit_code, timed_out = run(command, arguments.timeout)
     if arguments.mode == "render" and exit_code == 0:
         fit_to(OUT / "render.png", arguments.width, arguments.height)

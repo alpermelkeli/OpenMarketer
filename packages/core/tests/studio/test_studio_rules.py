@@ -736,3 +736,56 @@ def test_a_placement_given_line_by_line_is_read_as_text():
 
 def test_a_placement_for_four_lines_has_room():
     assert len(a_brief_with("x" * 1400).copy_placement) == 1400
+
+
+SORU = ["Soruyu çek, kasana at.", "Sınavdan önce tekrar et"]
+OCR_MISSED_THE_FIRST = {
+    "confirmed": ["Sınavdan önce tekrar et"],
+    "unconfirmed": [{"expected": "Soruyu çek, kasana at.", "read": "soryuu cek kasana at"}],
+}
+
+
+def a_reading(text: str) -> dict:
+    return {"copy_transcription": [{"line": 1, "text": text}]}
+
+
+def test_a_reading_of_the_line_whatever_its_case_and_punctuation_matches():
+    verdict = rules.copy_verdict(SORU, OCR_MISSED_THE_FIRST, a_reading("SORUYU ÇEK KASANA AT"))
+    assert [line["matches"] for line in verdict] == [True]
+
+
+def test_a_reading_with_a_plain_letter_for_a_special_one_does_not_match():
+    verdict = rules.copy_verdict(SORU, OCR_MISSED_THE_FIRST, a_reading("Soruyu cek, kasana at."))
+    assert [line["matches"] for line in verdict] == [False]
+
+
+def test_a_reading_with_two_letters_swapped_does_not_match():
+    verdict = rules.copy_verdict(SORU, OCR_MISSED_THE_FIRST, a_reading("Soryuu çek, kasana at."))
+    assert [line["matches"] for line in verdict] == [False]
+
+
+def test_a_line_ocr_confirmed_is_not_judged_by_the_reading():
+    verdict = rules.copy_verdict(SORU, OCR_MISSED_THE_FIRST, a_reading("Soruyu çek, kasana at."))
+    assert [line["line"] for line in verdict] == [1]
+
+
+def test_a_check_stored_before_ocr_was_evidence_has_no_line_to_read():
+    stored = {"passed": True, "missing": [], "misspelled": []}
+    assert rules.unconfirmed_lines(SORU, stored) == []
+    assert rules.copy_verdict(SORU, stored, {}) == []
+
+
+def test_a_verifier_report_must_read_every_line_ocr_did_not_confirm():
+    report = VerifierReport.model_validate(a_report())
+    assert rules.verifier_problems(report, to_transcribe=[1]) == [
+        "give copy_transcription for line 1"
+    ]
+
+
+def test_an_unconfirmed_line_alone_has_no_edit_strategy():
+    assert (
+        rules.edit_strategies(
+            [rules.COPY_UNCONFIRMED], Technique.GENERATED, platform_spec(Platform.INSTAGRAM_POST)
+        )
+        == []
+    )

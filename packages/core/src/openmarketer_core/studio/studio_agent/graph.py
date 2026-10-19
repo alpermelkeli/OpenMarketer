@@ -23,8 +23,10 @@ twice. An action whose failure nothing else could get past (``rules.BLOCKED``: t
 provider's key cannot pay, there is no sandbox) ends the run with its reason, in ``operate`` or
 in ``check``. ``produce`` ends the round when the model names a candidate, when the round's
 operations or the run's cost are used up, or when the model chooses nothing usable. ``check``
-asks for the candidate's text to be read (when the request has copy) and measures it in code;
-``verify`` shows it to the verifier, a different model, only when the checks passed; ``decide``
+asks for the candidate's text to be read (when the request has copy) and measures it in code,
+the read text as evidence only; ``verify`` shows it to the verifier, a different model, when its
+file passed, and fails the copy (``COPY``) when a line OCR did not confirm is not what the
+verifier reads letter by letter (``rules.copy_verdict``); ``decide``
 applies ``rules.decide``; ``edit_plan`` has the studio model plan the next round; ``finalize``
 and ``escalate`` set the result, which whoever runs the graph stores when it ends.
 
@@ -636,17 +638,20 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
 def check(state: StudioState, context: StudioContext) -> dict[str, Any]:
     """Measure the candidate in code: its file against the platform, its words against the copy.
 
-    The words are read by OCR, an action, only when the request has copy.
+    The words are read by OCR, an action, only when the request has copy. OCR is evidence: a
+    line it did not read exactly is recorded (``rules.COPY_UNCONFIRMED``) and left to the
+    verifier, and does not fail the check.
     """
     candidate = state["candidate"]
     failures: list[str] = []
+    notices: list[str] = []
     copy: dict[str, Any] | None = None
     if state["exact_copy"]:
         outcome = request_action(ReadText(**_run_ids(state), version_id=uuid.UUID(candidate)))
         if outcome.succeeded:
             matched = copy_matches(str(outcome.result.get("text", "")), state["exact_copy"])
             copy = matched.as_data()
-            failures += [] if matched.passed else [COPY]
+            notices += [] if matched.all_confirmed else [rules.COPY_UNCONFIRMED]
         else:
             _end_if_blocked(outcome.error)
             copy = {"passed": False, "unread": True}
@@ -658,6 +663,7 @@ def check(state: StudioState, context: StudioContext) -> dict[str, Any]:
         "version_id": candidate,
         "passed": not failures,
         "failures": failures,
+        "notices": notices,
         "width": measured.width,
         "height": measured.height,
         "size_bytes": measured.size_bytes,
@@ -697,13 +703,15 @@ def verify(state: StudioState, context: StudioContext) -> dict[str, Any]:
             ],
         },
     ]
+    exact_copy, copy_check = state["exact_copy"], state["check"].get("copy")
+    to_transcribe = rules.unconfirmed_lines(exact_copy, copy_check)
     submitted = _ask_in_text(
         context,
         rules.VERIFIER_ROLE,
         messages,
         model_type=VerifierReport,
         spent=spent,
-        problems=rules.verifier_problems,
+        problems=lambda report: rules.verifier_problems(report, to_transcribe=to_transcribe),
     )
     entry = dict(state["candidates"][-1])
     if submitted is None:
@@ -712,7 +720,11 @@ def verify(state: StudioState, context: StudioContext) -> dict[str, Any]:
         notes = [*state["notes"], f"round {state['round']}: the verifier's report was unreadable"]
     else:
         report = submitted.model_dump(mode="json")
+        verdict = rules.copy_verdict(exact_copy, copy_check, report)
         failures = rules.verifier_failures(report)
+        if any(not line["matches"] for line in verdict):
+            failures.append(COPY)
+        report["copy_verdict"] = verdict
         notes = state["notes"]
     entry.update(
         verifier=report or None, passed=not failures, failures=[*entry["failures"], *failures]

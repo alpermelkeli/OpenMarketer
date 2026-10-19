@@ -48,8 +48,10 @@ from openmarketer_core.studio.image_checks import (
     UNREADABLE,
     WRONG_FORMAT,
     WRONG_SIZE,
+    normalized,
 )
 from openmarketer_core.studio.platforms import PlatformSpec
+from openmarketer_core.studio.requests import MAX_COPY_LINE_CHARS, MAX_COPY_LINES
 
 CREATIVE_DIRECTOR_ROLE = "creative_director"
 STUDIO_ROLE = "studio"
@@ -105,6 +107,9 @@ ALLOWED_OPERATIONS: Mapping[Technique, tuple[str, ...]] = {
 # The failure keys a round can have besides the image checks' own (``image_checks.py``).
 NO_CANDIDATE = "no_candidate"
 COPY_UNREAD = "copy_unread"
+# What a check records, without failing, when OCR did not read a line exactly: the verifier
+# reads that line instead (``copy_verdict``).
+COPY_UNCONFIRMED = "copy_unconfirmed"
 VERIFIER_UNREAD = "verifier_unread"
 VERIFIER_PREFIX = "verifier:"
 
@@ -312,11 +317,25 @@ class CriterionResult(_Submission):
     note: Text = ""
 
 
+class CopyTranscription(_Submission):
+    """What the verifier reads, letter by letter, where one line of the copy should be."""
+
+    line: int = Field(ge=1, le=MAX_COPY_LINES)
+    # Room for a line with letters added; empty when the line is not in the image.
+    text: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=MAX_COPY_LINE_CHARS * 2)
+    ] = ""
+
+
 class VerifierReport(_Submission):
-    """The visual verifier's report on one candidate: every criterion, and what to change."""
+    """The visual verifier's report on one candidate: every criterion, what to change, and what
+    it reads of each line of the copy."""
 
     criteria: list[CriterionResult] = Field(max_length=len(CRITERIA) * 2)
     edit_suggestions: list[Text] = Field(default_factory=list, max_length=MAX_SUGGESTIONS)
+    copy_transcription: list[CopyTranscription] = Field(
+        default_factory=list, max_length=MAX_COPY_LINES * 2
+    )
 
 
 class EditPlan(_Submission):
@@ -918,13 +937,80 @@ def about_product(kit: BrandKit, exact_copy: Sequence[str]) -> str:
 
 
 # --------------------------------------------------------------------------------- reviews
-def verifier_problems(report: VerifierReport) -> list[str]:
-    """What is wrong with a verifier's report: every criterion is judged exactly once."""
+def verifier_problems(report: VerifierReport, *, to_transcribe: Sequence[int] = ()) -> list[str]:
+    """What is wrong with a verifier's report: every criterion is judged exactly once, and
+    each line of the copy numbered in ``to_transcribe`` (those OCR did not confirm) is read."""
     judged = [result.criterion for result in report.criteria]
     problems = [f"judge the criterion {name}" for name in CRITERIA if name not in judged]
     twice = sorted({name for name in judged if judged.count(name) > 1})
     problems += [f"judge the criterion {name} once" for name in twice]
+    transcribed = {entry.line for entry in report.copy_transcription}
+    problems += [
+        f"give copy_transcription for line {number}"
+        for number in to_transcribe
+        if number not in transcribed
+    ]
     return problems
+
+
+def unconfirmed_lines(exact_copy: Sequence[str], copy_check: Mapping[str, Any] | None) -> list[int]:
+    """The numbers (from 1) of the lines of copy OCR did not confirm.
+
+    A check stored before OCR became evidence has no ``unconfirmed``; it reached the verifier
+    only when OCR had read every line, so none is unconfirmed.
+    """
+    if not copy_check:
+        return []
+    expected = {entry["expected"] for entry in copy_check.get("unconfirmed", [])}
+    return [number for number, line in enumerate(exact_copy, start=1) if line in expected]
+
+
+def copy_review_data(
+    exact_copy: Sequence[str], copy_check: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """What the verifier is told of the copy: every line by number, which OCR confirmed, and
+    what OCR read of each of the others."""
+    unconfirmed = set(unconfirmed_lines(exact_copy, copy_check))
+    read = {entry["expected"]: entry["read"] for entry in (copy_check or {}).get("unconfirmed", [])}
+    return {
+        "lines": [{"line": n, "text": line} for n, line in enumerate(exact_copy, start=1)],
+        "confirmed_by_ocr": [n for n in range(1, len(exact_copy) + 1) if n not in unconfirmed],
+        "to_transcribe": sorted(unconfirmed),
+        "ocr_notes": [
+            _ocr_note(exact_copy[n - 1], read[exact_copy[n - 1]]) for n in sorted(unconfirmed)
+        ],
+    }
+
+
+def _ocr_note(expected: str, read: str) -> str:
+    wanted = json.dumps(expected, ensure_ascii=False)
+    if not read:
+        return f"OCR did not find {wanted}: read the image letter by letter."
+    seen = json.dumps(read, ensure_ascii=False)
+    return f"OCR read {seen} where {wanted} is expected: look letter by letter."
+
+
+def copy_verdict(
+    exact_copy: Sequence[str], copy_check: Mapping[str, Any] | None, report: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Each line of copy OCR did not confirm, with what the verifier read of it and whether
+    that is the line.
+
+    The verifier's transcription is compared after ``normalized`` (case, Unicode form,
+    punctuation, spacing) and with its marks kept: the verifier sees ç, ı and ş, so a wrong
+    special letter is a wrong line. A line OCR confirmed is not judged here: an exact OCR
+    reading is strong evidence on its own.
+    """
+    transcribed = {entry["line"]: entry["text"] for entry in report.get("copy_transcription", [])}
+    verdict = []
+    for number in unconfirmed_lines(exact_copy, copy_check):
+        expected = exact_copy[number - 1]
+        read = transcribed.get(number)
+        matches = read is not None and normalized(read) == normalized(expected)
+        verdict.append(
+            {"line": number, "expected": expected, "transcribed": read, "matches": matches}
+        )
+    return verdict
 
 
 def verifier_failures(report: Mapping[str, Any]) -> list[str]:
@@ -1243,10 +1329,21 @@ When the brief's reference_images chose the product's real icon, logo or screens
 shown them after the image) and the image shows a different or invented one in its place, \
 brand_fit fails with severity major: the product's own images are shown as they are.
 
+Reading the words: copy.lines numbers every line the image must show. OCR read the image first; \
+copy.confirmed_by_ocr are the lines it read exactly. OCR is weak on posters: it misses large, \
+light or thin words on a photo and splits long words, so a line it did not confirm \
+(copy.to_transcribe, with what OCR read in copy.ocr_notes) may be right or wrong, and you \
+decide. For every line, put in copy_transcription what the image shows where that line is, \
+read letter by letter as it is drawn, not as it should be ("" when the line is not in the \
+image). Code compares your reading with the line. A real misspelling, a missing or an extra \
+letter, two letters swapped, or a wrong special letter (ç for c, ı for i, ş for s, ğ for g, ö \
+for o, ü for u, or the other way) is a failure of copy_rendered with severity major; say which \
+line and which letter in its note.
+
 {_COPY_RULES}
 
 Answer with one JSON object and nothing else: {{"criteria": [{{"criterion", "passed", \
-"severity", "note"}}], "edit_suggestions": [...]}}."""
+"severity", "note"}}], "edit_suggestions": [...], "copy_transcription": [{{"line", "text"}}]}}."""
 
 EDIT_PLAN_SYSTEM_PROMPT = f"""\
 You are the studio. The last image of this run did not pass. Plan the next round: what to \
@@ -1361,8 +1458,11 @@ def edit_plan_data(
 
 
 def verifier_data(state: Mapping[str, Any], spec: PlatformSpec) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "request": request_data(state, spec),
         "brief": state["brief"],
         "check": state["check"],
     }
+    if state["exact_copy"]:
+        data["copy"] = copy_review_data(state["exact_copy"], state["check"].get("copy"))
+    return data
