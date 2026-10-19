@@ -6,20 +6,20 @@ import Link from "next/link";
 import { Notice } from "@/components/common/notice";
 import { Button } from "@/components/ui/button";
 import { useDecideProposal } from "@/lib/api/proposals";
-import type { ResearchProposal } from "@/lib/chat/events";
+import type { RunProposal } from "@/lib/chat/events";
 import { proposalText } from "@/lib/chat/research-progress";
 import { projectPageHref } from "@/lib/projects/project-navigation";
 import { decideProblem, effectLabel } from "@/lib/proposals/proposal-display";
 
-type ResearchProposalDecisionProps = { projectId: string; proposal: ResearchProposal };
+type RunProposalDecisionProps = { projectId: string; proposal: RunProposal };
 
 /**
- * The action a research run asked to run that the policy gate held for a person, right in the run's
- * card: what it would do, the buttons to decide it, and the way to the project's approvals screen
- * for what exactly it asks. The decision is the person's own request to the API; the card then
+ * The action a research or studio run asked to run that the policy gate held for a person, right
+ * in the run's card: what it would do, the buttons to decide it, and the way to the project's
+ * approvals screen for what exactly it asks. The decision is the person's own request to the API; the card then
  * shows where it stands, as the chat's events say. Nothing here decides anything itself.
  */
-export function ResearchProposalDecision({ projectId, proposal }: ResearchProposalDecisionProps) {
+export function RunProposalDecision({ projectId, proposal }: RunProposalDecisionProps) {
   const decide = useDecideProposal(projectId);
   const waiting = proposal.status === "waiting";
 

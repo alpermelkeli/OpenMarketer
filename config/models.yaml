@@ -40,6 +40,14 @@ provider:
     allow_fallbacks: true
     require_parameters: true     # only use upstream providers that support the requested features (tools, structured output)
     data_collection: deny        # ask OpenRouter to avoid providers that may retain or train on prompts
+  # Image models that return a square whatever shape is asked. OpenRouter's chat endpoint takes
+  # no size, only image_config.aspect_ratio, and these ignore it: Seedream 5 Flash was measured
+  # returning 2048x2048 for every ratio asked. The studio sends such a model the references of
+  # the asset's shape padded to a square, so that the layout it follows is what the centre crop
+  # keeps. A model missing here is learnt from its first square reply, for the life of the
+  # process only, and that first image is drawn from unpadded references. At most 32 slugs.
+  image_models_returning_squares:
+    - bytedance-seed/seedream-5-0-flash
 
 # Three reusable model classes. Change a tier and every role that uses it follows.
 tiers:
@@ -111,18 +119,20 @@ roles:
   creative_director:             # writes prompts and scripts for image, video and voice providers
     tier: balanced
     temperature: 0.7
-    requires: [structured_output]
+    max_tokens: 16384              # a brief, and the HTML of a layout the studio renders
+    requires: [structured_output, vision]   # vision: the product's repository images, on a contact sheet
 
   # --- checking and learning ------------------------------------------
   studio:                        # creative studio agent: writes code, calls image/video/voice tools, looks at results, edits
     tier: strong
     temperature: 0.4
-    max_tokens: 8192
+    max_tokens: 32768              # programs and HTML pages it writes for the sandbox
     requires: [tools, vision]      # must see the images it produces
 
   asset_verifier:                  # checks every produced asset against the brief; keep it a different model from `studio`
     tier: balanced
     temperature: 0.0
+    max_tokens: 16384
     requires: [structured_output, vision]
 
   critic:                        # pre-approval quality check against brand voice and facts
@@ -147,6 +157,26 @@ roles:
   screener:                      # drops search results whose title and snippet do not bear on the research request
     kind: decisions              # reads untrusted text and answers probabilities only: it cannot call a tool or write text
     model: respan/span-02
+
+  # --- drawing (chat endpoint, image output) ----------------------------
+  # An images role names its model (the tiers are chat models) and takes no temperature, length
+  # limit or reasoning effort. Its fallbacks are its own (defaults.fallbacks are chat models) and
+  # are tried in order by the studio's adapter, one request each with the model's own modalities,
+  # when its model fails in a way another may pass; the version keeps the model that answered. Each of its models must answer with images (the catalogue's
+  # output_modalities). estimate_usd_per_image is what one image is reckoned to cost before it is
+  # made, for a budget to hold, whichever model answers; the catalogue prices image output per
+  # token only, and how many tokens an image is depends on the model. The cost the provider
+  # reports is what is kept.
+  image_generator:               # makes and edits the studio's images, the text in them included
+    kind: images
+    model: bytedance-seed/seedream-5-0-flash   # image only; Turkish copy right 2/2 at 0.018 USD
+    fallbacks: [google/gemini-3.1-flash-lite-image]   # 0.034 USD, fast; when the first is busy
+    requires: [image_output, vision]   # vision: an image to edit and references are sent as images
+    # One figure for whichever model answers, held in the budget before each image; the actual
+    # cost is committed afterwards. Measured on one Turkish feature announcement: Seedream 5 Flash
+    # 0.018, Gemini 3.1 Flash Lite Image 0.034, Recraft v4.1 0.035, Seedream 5 Pro 0.09, Gemini 3
+    # Pro Image 0.14, GPT Image 2 (openai/gpt-5.4-image-2) 0.24; Gemini 2.5 Flash Image misspelt.
+    estimate_usd_per_image: 0.04
 
   # --- retrieval (separate endpoint kind) -------------------------------
   embeddings:                    # memory embeddings; switch provider if your OpenRouter plan lacks this endpoint

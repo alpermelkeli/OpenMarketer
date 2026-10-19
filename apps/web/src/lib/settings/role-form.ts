@@ -21,6 +21,11 @@ export type ParsedRoleForm =
   | { choice: RoleChoiceRequest; problems: null }
   | { choice: null; problems: Readonly<Record<string, readonly string[]>> };
 
+/** Whether a role of `kind` takes fallbacks: a chat role does, and so does one that makes images. */
+export function takesFallbacks(kind: RoleSetting["kind"]): boolean {
+  return kind === "chat" || kind === "images";
+}
+
 /** The form filled with what the workspace chose; a part it did not choose is left empty. */
 export function roleFormOf(choice: RoleSetting["choice"]): RoleForm {
   return {

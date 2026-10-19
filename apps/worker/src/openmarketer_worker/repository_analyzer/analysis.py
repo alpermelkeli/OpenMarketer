@@ -9,7 +9,8 @@ an agent for:
   the limits, both made for the run's workspace, and the run's repository through
   ``LocalClones``;
 - ``clone``: the handler of the action ``clone_repository``;
-- ``finish``: storing the profile and marking the run succeeded, both or neither;
+- ``finish``: storing the profile and marking the run succeeded, both or neither, after
+  keeping the product's own images found in the repository (``_keep_images``);
 - ``release``: removing the run's clone once the run is over.
 
 ``WordedSteps`` wraps the steps of the graph so that what an analysis fails with leaves the
@@ -20,6 +21,13 @@ which value a credential has and how a run changes state are core's. What they a
 an activity owes the engine. A failure says whether another attempt is worth its cost, and
 none carries the clone's folder or its original error, which is logged. Everything can run
 twice without doing its work twice: a clone is the same clone, and a profile is stored once.
+
+The product's images are optional: collecting them happens before the profile is stored,
+while the run is still running, and whatever fails there (object storage, the database, a
+file) is logged and leaves the analysis to go on without them. A run that kept its images
+keeps no second set, and an image's key is named by its bytes, so a repeated attempt writes
+the same objects. The objects of the images a newer set replaced are removed after its rows
+are; one that cannot be removed is logged and left in the bucket.
 
 A step keeps the run's checkpoints on a failure that will be tried again. They are forgotten
 by the runtime when the run ends; here only by an attempt that finds, when it is done, that
@@ -49,6 +57,7 @@ from openmarketer_core.credentials.resolution import CredentialUnreadable, Model
 from openmarketer_core.db.analysis_runs import (
     AnalysisRunFinished,
     AnalysisRunNotFound,
+    AnalysisRunNotStarted,
     analysis_run,
     mark_run_succeeded,
     run_thread_id,
@@ -57,6 +66,12 @@ from openmarketer_core.db.analysis_runs import (
 from openmarketer_core.db.evidence_store import save_analysis_of_project
 from openmarketer_core.db.models import AnalysisRunStatus
 from openmarketer_core.db.projects import ProjectNotFound, get_project
+from openmarketer_core.db.repository_images import (
+    NewRepositoryImage,
+    keep_repository_images,
+    repository_image_key,
+    run_has_repository_images,
+)
 from openmarketer_core.db.session import DatabaseError, transaction
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatModel, LLMError
@@ -80,7 +95,11 @@ from openmarketer_core.repository_analysis.intake import (
     RepositoryTokens,
     remote_repository_url,
 )
+from openmarketer_core.repository_analysis.repository_images.collection import (
+    collect_repository_images,
+)
 from openmarketer_core.repository_analysis.workflow_contract import AnalyzeRepositoryInput
+from openmarketer_core.studio.asset_store import AssetStore, AssetStoreUnavailable
 from openmarketer_core.workspace_settings.analysis_settings import StoredAnalysisLimitsInvalid
 from openmarketer_core.workspace_settings.model_settings import StoredModelChoiceInvalid
 from openmarketer_worker.agent_runtime.activities import AgentGraph
@@ -102,6 +121,16 @@ WORKSPACE_FAILURES = (
     StoredAnalysisLimitsInvalid,
 )
 
+# What keeping the product's images can fail with; each is logged and the analysis goes on.
+IMAGE_FAILURES = (
+    AssetStoreUnavailable,
+    DatabaseError,
+    AnalysisRunNotFound,
+    AnalysisRunNotStarted,
+    AnalysisRunFinished,
+    OSError,
+)
+
 
 class AnalysisWork:
     def __init__(
@@ -114,13 +143,15 @@ class AnalysisWork:
         tokens_of: Callable[[uuid.UUID], RepositoryTokens],
         extractors: Sequence[Extractor],
         limits_of: Callable[[uuid.UUID], Limits],
+        images: AssetStore | None = None,
     ) -> None:
         """``new_model`` makes the chat model of one attempt: a model keeps what it served.
 
         It is given the workspace of the run, as ``tokens_of`` is, which gives the tokens a
         clone for a run of that workspace may carry, and ``limits_of``, which gives the
         limits of an attempt. Each may raise one of ``WORKSPACE_FAILURES``, which ends the
-        analysis.
+        analysis. ``images`` is the object storage the product's images are kept in; without
+        one, none is collected.
         """
         self._sessions = sessions
         self._checkpoints = checkpoints
@@ -129,6 +160,7 @@ class AnalysisWork:
         self._tokens_of = tokens_of
         self._extractors = extractors
         self._limits_of = limits_of
+        self._images = images
 
     def initial_state(self, run: GraphRunRef) -> AnalyzerState:
         """What the graph of ``run`` starts from: the run with its project and workspace."""
@@ -250,6 +282,7 @@ class AnalysisWork:
         intake = self._clones.at_commit(
             run.run_id, self._repository_of(run), final_state["commit_sha"], self._tokens_for(run)
         )
+        self._keep_images(run, intake.files)
         try:
             with transaction(self._sessions) as session:
                 saved = save_analysis_of_project(
@@ -275,6 +308,66 @@ class AnalysisWork:
             logger.exception("the profile of analysis run %s was not stored", run.run_id)
             raise failure(DATABASE_UNAVAILABLE, steps.NOT_STORED) from None
         return saved.profile_id
+
+    def _keep_images(self, run: AnalyzeRepositoryInput, files: RepoFiles) -> None:
+        """Keep the product's own images of the run's repository; never fails the analysis."""
+        if self._images is None:
+            return
+        project = {"workspace_id": run.workspace_id, "project_id": run.project_id}
+        uploaded: list[str] = []
+        try:
+            with transaction(self._sessions) as session:
+                if run_has_repository_images(session, **project, analysis_run_id=run.run_id):
+                    return
+            collected = collect_repository_images(files)
+            new_images: list[NewRepositoryImage] = []
+            for image in collected.images:
+                key = repository_image_key(
+                    **project, analysis_run_id=run.run_id, sha256=image.sha256, mime=image.mime
+                )
+                self._images.put(key, image.data, content_type=image.mime)
+                uploaded.append(key)
+                new_images.append(
+                    NewRepositoryImage(
+                        path=image.candidate.path,
+                        kind=image.candidate.kind,
+                        mime=image.mime,
+                        width=image.width,
+                        height=image.height,
+                        size_bytes=image.size_bytes,
+                        sha256=image.sha256,
+                        storage_key=key,
+                    )
+                )
+            with transaction(self._sessions) as session:
+                kept = keep_repository_images(
+                    session, **project, analysis_run_id=run.run_id, images=new_images
+                )
+        except IMAGE_FAILURES as e:
+            logger.warning(
+                "analysis run %s: its repository images were not kept: %s",
+                run.run_id,
+                type(e).__name__,
+            )
+            self._remove_images(run, uploaded)
+            return
+        logger.info(
+            "analysis run %s: %d repository images kept, %d refused",
+            run.run_id,
+            len(new_images) if kept.kept else 0,
+            collected.refused,
+        )
+        self._remove_images(run, kept.keys_to_remove)
+
+    def _remove_images(self, run: AnalyzeRepositoryInput, keys: Sequence[str]) -> None:
+        """Remove objects no row names; one that stays is logged and left in the bucket."""
+        if self._images is None:
+            return
+        for key in keys:
+            try:
+                self._images.remove(key)
+            except AssetStoreUnavailable:
+                logger.warning("analysis run %s: a replaced repository image stays", run.run_id)
 
 
 class WordedSteps:

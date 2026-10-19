@@ -49,6 +49,7 @@ from openmarketer_worker.checkpoint_cleanup import (
     CheckpointCleanup,
     keep_removing_leftover_checkpoints,
 )
+from openmarketer_worker.creative_studio.wiring import creative_studio
 from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.orchestrator.wiring import orchestrator
 from openmarketer_worker.repository_analyzer.wiring import repository_analyzer
@@ -73,8 +74,9 @@ def agents(
     return [
         repository_analyzer(environ, sessions, database_url, credentials, tracing),
         researcher(environ, sessions, database_url, credentials, tracing),
+        creative_studio(environ, sessions, database_url, credentials, tracing),
         # Not an agent of its own: the follow-up turn the chat agent takes in the worker once a
-        # research run a chat started has ended.
+        # research run or a studio run a chat started has ended.
         orchestrator(environ, sessions, credentials, tracing),
     ]
 

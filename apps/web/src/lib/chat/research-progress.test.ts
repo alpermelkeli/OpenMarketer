@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ResearchRun } from "@/lib/api/types";
 
-import type { ResearchProposal, ResearchRunView } from "./events";
+import type { RunProposal, ResearchRunView } from "./events";
 import { outcomeText, pageHost, progressStatus, proposalText, stageText } from "./research-progress";
 
 function view(over: Partial<ResearchRunView> = {}): ResearchRunView {
@@ -87,7 +87,7 @@ describe("the end of a run's card", () => {
 });
 
 describe("the action the gate held for a run", () => {
-  const proposal = (status: ResearchProposal["status"]): ResearchProposal => ({
+  const proposal = (status: RunProposal["status"]): RunProposal => ({
     id: "p-1",
     actionName: "search_web",
     effect: "spends",

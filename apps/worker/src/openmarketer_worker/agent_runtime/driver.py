@@ -22,6 +22,22 @@ a request and its side effect stands here:
   decided on in time, does not run: the graph is told so as a failed outcome
   (``NOT_APPROVED_TEXTS``), as it is told of any action that failed, and may revise what it
   asked for. The run's ``scope`` says which project the proposal belongs to.
+- An action that spends is weighed by the creative budget first (``_spend``): the activity
+  ``reserve_spend`` estimates its cost and reserves it in the ledger, whose decision is the
+  gate's verdict. Within the amount one action may spend on its own it runs at once; above it,
+  it waits for a person as an action that publishes does, its estimate held and shown with the
+  proposal, and a rejection or a deadline releases the hold; past the month's cap it does not
+  run and the graph is told ``SPEND_REFUSED_TEXT``, with nothing reserved. Once the action
+  ran, ``settle_spend`` commits what its result says it spent (``COST_USD``), or the estimate.
+  When it failed, the hold is released if the failure says the handler spent nothing (one its
+  handler worded, or a refusal before the handler ran); a timeout, a worker that stopped, a
+  cancellation or a failure nobody worded commits the estimate instead
+  (``_HANDLER_MAY_HAVE_SPENT``), since the service may have charged for work the runtime did not
+  see finish. The last attempt's
+  failure decides. Settling is waited for to its end even when the run is cancelled meanwhile,
+  and a settlement that cannot be written is logged and leaves the estimate held, which counts
+  against the cap. The ledger keys every step by the action's id, so a retried attempt finds
+  the same reservation.
 - An action that failed for good is told to the graph as a failed outcome, so
   the agent decides what to do. Only a defect of the agent ends the run
   (``RUN_ENDING_ACTION_FAILURES``).
@@ -106,6 +122,7 @@ with workflow.unsafe.imports_passed_through():
         GateVerdict,
         ProposalStatus,
         RunScope,
+        spends,
         verdict_for,
     )
     from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
@@ -114,33 +131,62 @@ with workflow.unsafe.imports_passed_through():
         wait_for_a_person,
     )
     from openmarketer_worker.agent_runtime.vocabulary import (
+        ACTION_RESULT_TOO_LARGE,
         ACTION_TEXTS,
         CHILD_RUN_ALREADY_STARTED,
         CHILD_RUN_DID_NOT_FINISH,
         CHILD_RUN_UNREADABLE,
+        COST_USD,
+        DATABASE_UNAVAILABLE,
+        INVALID_ACTION_RESULT,
         MAX_ERROR_CHARACTERS,
         NOT_APPROVED_TEXTS,
         PREPARE_RUN,
         PREPARE_RUN_LIMITS,
         PROPOSAL_REFUSED,
+        RESERVE_SPEND,
+        RESERVE_SPEND_LIMITS,
         RETRY_BACKOFF,
         RUN_ACTION,
         RUN_ENDING_ACTION_FAILURES,
         RUN_GRAPH_STEP,
         RUN_REFUSED,
+        SETTLE_SPEND,
+        SETTLE_SPEND_LIMITS,
+        SPEND_NOT_RESERVED,
+        SPEND_NOT_SETTLED,
+        SPEND_REFUSED_TEXT,
         STEP_REFUSED,
         TOO_MANY_ACTIONS,
+        UNEXPECTED,
         UNKNOWN_ACTION,
         WORDED_BY_THE_RUNTIME,
         GraphRunPolicy,
         PreparedRun,
         PrepareRunInput,
+        SpendInput,
+        SpendReserved,
+        SpendSettlement,
         StepInput,
     )
     from openmarketer_worker.agent_runtime.workflow_support import (
         database_write,
         reason_shown,
+        until_it_ends,
     )
+
+# The worded failures of an action after which its spend is committed at the estimate: an error
+# nobody worded, and a result the runtime refused once the handler had returned. After any other
+# worded failure -- the runtime's refusal before the handler ran (``UNKNOWN_ACTION``,
+# ``INVALID_ACTION_PAYLOAD``, ``ACTION_NOT_APPROVED``), or one the handler worded itself, which is
+# its way of saying what went wrong -- the spend is released. A failure that is not worded at all
+# (a timeout, a worker that stopped, a cancellation) commits the estimate too.
+_HANDLER_MAY_HAVE_SPENT = (
+    UNEXPECTED,
+    DATABASE_UNAVAILABLE,
+    ACTION_RESULT_TOO_LARGE,
+    INVALID_ACTION_RESULT,
+)
 
 
 def child_workflow_id(run: GraphRunRef, action_id: str) -> str:
@@ -205,6 +251,9 @@ async def run_graph_with_actions(
         if target is not None:
             resume = await _start_or_wait_the_run(run, scope, request, target, worded_types)
             continue
+        if spends(limits):
+            resume = await _spend(run, scope, decided, request, limits, worded_types)
+            continue
         if verdict_for(limits) == GateVerdict.ASK_A_PERSON:
             status = await _ask_a_person(run, scope, decided, request, limits)
             if status != ProposalStatus.APPROVED:
@@ -224,6 +273,8 @@ async def _ask_a_person(
     decided: DecidedProposals | None,
     request: ActionRequest,
     limits: ActionPolicy,
+    *,
+    estimate_usd: str | None = None,
 ) -> ProposalStatus:
     if scope is None or decided is None:
         # ``agent_workflow`` refuses such a workflow when it is declared; this is the driver
@@ -234,7 +285,118 @@ async def _ask_a_person(
             type=PROPOSAL_REFUSED,
             non_retryable=True,
         )
-    return await wait_for_a_person(run, scope, request, limits, decided)
+    return await wait_for_a_person(run, scope, request, limits, decided, estimate_usd=estimate_usd)
+
+
+async def _spend(
+    run: GraphRunRef,
+    scope: RunScope | None,
+    decided: DecidedProposals | None,
+    request: ActionRequest,
+    limits: ActionPolicy,
+    worded_types: Collection[str],
+) -> ActionOutcome:
+    """The outcome of an action that spends: reserved, perhaps approved, run and settled."""
+    if scope is None:
+        # ``agent_workflow`` refuses such a workflow when it is declared; this is the driver
+        # used without it.
+        raise ApplicationError(
+            f"action {request.name} spends and the run has no workspace to reserve it in",
+            type=SPEND_NOT_RESERVED,
+            non_retryable=True,
+        )
+    try:
+        reserved = await database_write(
+            RESERVE_SPEND,
+            SpendInput(scope=scope, run=run, request=request),
+            RESERVE_SPEND_LIMITS,
+            not_retried=[SPEND_NOT_RESERVED, *RUN_ENDING_ACTION_FAILURES],
+            result_type=SpendReserved,
+        )
+    except ActivityError as failure:
+        if is_cancelled_exception(failure) or _ends_the_run(failure):
+            raise
+        return _failed(request, reason_shown(failure, ACTION_TEXTS, worded_types=worded_types))
+    verdict = verdict_for(limits, reserved.decision)
+    if verdict == GateVerdict.REFUSE:
+        return _failed(request, SPEND_REFUSED_TEXT)
+    if verdict == GateVerdict.ASK_A_PERSON:
+        try:
+            status = await _ask_a_person(
+                run, scope, decided, request, limits, estimate_usd=reserved.estimate_usd
+            )
+        except (ActivityError, ApplicationError, asyncio.CancelledError):
+            # The proposal could not be stored or read, or the run was cancelled while it
+            # waited: the action does not run, and nothing is held for it any more.
+            await _settle(scope, request, reserved, spent=False)
+            raise
+        if status != ProposalStatus.APPROVED:
+            await _settle(scope, request, reserved, spent=False)
+            return _failed(request, NOT_APPROVED_TEXTS[status])
+    try:
+        outcome = await _run_the_action(request, limits)
+    except ActivityError as failure:
+        await _settle(scope, request, reserved, spent=_may_have_spent(failure))
+        if is_cancelled_exception(failure) or _ends_the_run(failure):
+            raise
+        return _failed(request, reason_shown(failure, ACTION_TEXTS, worded_types=worded_types))
+    except asyncio.CancelledError:
+        # The run was cancelled while the action ran, and its handler may still be running.
+        await _settle(scope, request, reserved, spent=True)
+        raise
+    reported = outcome.result.get(COST_USD)
+    await _settle(
+        scope,
+        request,
+        reserved,
+        spent=True,
+        reported_usd=None if reported is None else str(reported),
+    )
+    return outcome
+
+
+def _may_have_spent(failure: ActivityError) -> bool:
+    cause = failure.cause
+    if not isinstance(cause, ApplicationError):
+        return True  # a timeout, a worker that stopped, or a cancellation
+    return cause.type in _HANDLER_MAY_HAVE_SPENT
+
+
+async def _settle(
+    scope: RunScope,
+    request: ActionRequest,
+    reserved: SpendReserved,
+    *,
+    spent: bool,
+    reported_usd: str | None = None,
+) -> None:
+    """Commit or release the action's spend, waited for to its end even if the run is
+    cancelled meanwhile. A settlement that cannot be written leaves the estimate held."""
+    settlement = SpendSettlement(
+        scope=scope,
+        action_id=request.action_id,
+        spent=spent,
+        estimate_usd=reserved.estimate_usd,
+        reported_usd=reported_usd,
+    )
+    try:
+        await until_it_ends(
+            database_write(
+                SETTLE_SPEND,
+                settlement,
+                SETTLE_SPEND_LIMITS,
+                not_retried=[SPEND_NOT_SETTLED],
+                result_type=str,
+            )
+        )
+    except ActivityError as failure:
+        # The action's outcome is what the graph needs; the hold left behind counts against the
+        # cap, which errs on the side of spending less.
+        workflow.logger.warning(
+            "the spend of action %s was not settled: %s",
+            request.action_id,
+            reason_shown(failure, ACTION_TEXTS, worded_types=WORDED_BY_THE_RUNTIME),
+        )
 
 
 async def _start_or_wait_the_run(
@@ -344,25 +506,30 @@ async def _take_step(step: StepInput, policy: GraphRunPolicy) -> StepOutcome:
     )
 
 
+async def _run_the_action(request: ActionRequest, limits: ActionPolicy) -> ActionOutcome:
+    """The activity ``run_action`` under the action's own limits; what fails it is raised."""
+    heartbeat_seconds = limits.heartbeat_timeout_seconds
+    heartbeat_timeout = None if heartbeat_seconds is None else timedelta(seconds=heartbeat_seconds)
+    return await workflow.execute_activity(
+        RUN_ACTION,
+        request,
+        result_type=ActionOutcome,
+        start_to_close_timeout=timedelta(seconds=limits.attempt_timeout_seconds),
+        heartbeat_timeout=heartbeat_timeout,
+        retry_policy=RetryPolicy(
+            initial_interval=timedelta(seconds=limits.retry_after_seconds),
+            backoff_coefficient=RETRY_BACKOFF,
+            maximum_attempts=limits.max_attempts,
+            non_retryable_error_types=list(RUN_ENDING_ACTION_FAILURES),
+        ),
+    )
+
+
 async def _take_action(
     request: ActionRequest, limits: ActionPolicy, worded_types: Collection[str]
 ) -> ActionOutcome:
-    heartbeat_seconds = limits.heartbeat_timeout_seconds
-    heartbeat_timeout = None if heartbeat_seconds is None else timedelta(seconds=heartbeat_seconds)
     try:
-        return await workflow.execute_activity(
-            RUN_ACTION,
-            request,
-            result_type=ActionOutcome,
-            start_to_close_timeout=timedelta(seconds=limits.attempt_timeout_seconds),
-            heartbeat_timeout=heartbeat_timeout,
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=limits.retry_after_seconds),
-                backoff_coefficient=RETRY_BACKOFF,
-                maximum_attempts=limits.max_attempts,
-                non_retryable_error_types=list(RUN_ENDING_ACTION_FAILURES),
-            ),
-        )
+        return await _run_the_action(request, limits)
     except ActivityError as failure:
         if is_cancelled_exception(failure) or _ends_the_run(failure):
             raise

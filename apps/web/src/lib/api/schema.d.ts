@@ -90,11 +90,15 @@ export interface paths {
          * @description Delete the project with everything stored about it, for good.
          *
          *     That is its analyses, the evidence they found, every profile version, its
-         *     proposals, its chats and its research runs with their reports and the pages
-         *     they fetched. Refused while an analysis or a research run of the project is
-         *     queued or running, or a proposal of it waits for a decision. 503
-         *     `storage_unavailable` when the research pages' objects could not be removed
-         *     from object storage; the project stays then. The repository is not touched.
+         *     proposals, its chats, its research runs with their reports and the pages
+         *     they fetched, and its studio runs with their assets and every version's
+         *     image, accepted ones included. Refused while an analysis, a research run or a
+         *     studio run of the project is queued or running (409 `analysis_already_running`,
+         *     `research_unfinished`, `studio_run_unfinished`), or a proposal of it waits for
+         *     a decision. The pages and the images are in the installation's one bucket and
+         *     are removed through the same store. 503 `storage_unavailable` when an object
+         *     could not be removed from object storage; the project stays then. The
+         *     repository is not touched, nor what its runs spent in the month's ledger.
          */
         delete: operations["deleteProject"];
         options?: never;
@@ -311,6 +315,137 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/media-assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Assets
+         * @description The project's library: the assets its studio runs made, newest first, a page at a time.
+         */
+        get: operations["listMediaAssets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/media-assets/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Asset
+         * @description One asset with its versions, each with how it was made and what its reviews found.
+         */
+        get: operations["getMediaAsset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/media-assets/{asset_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept
+         * @description Accept a draft asset, as its current version stands, as the current user.
+         *
+         *     Accepting it again changes nothing. 409 `studio_run_unfinished` while its run may still
+         *     add versions, and `media_asset_decided` when it was rejected. The request takes no body;
+         *     one is a 422.
+         */
+        post: operations["acceptMediaAsset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/media-assets/{asset_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject
+         * @description Reject a draft asset as the current user.
+         *
+         *     Rejecting it again changes nothing. 409 `studio_run_unfinished` while its run may still
+         *     add versions, and `media_asset_decided` when it was accepted. The request takes no body;
+         *     one is a 422.
+         */
+        post: operations["rejectMediaAsset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download
+         * @description The image of one version as a file to save, named after the version.
+         */
+        get: operations["downloadMediaAssetImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Image
+         * @description The image of one version, to show in the page.
+         *
+         *     404 `media_asset_version_not_found` for a version that is not one of this asset's; 503
+         *     `storage_unavailable` when object storage could not give it back.
+         */
+        get: operations["getMediaAssetImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{project_id}/profile/approved": {
         parameters: {
             query?: never;
@@ -517,6 +652,89 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/repository-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Images
+         * @description The project's images, a page at a time, newest first.
+         *
+         *     Those of its latest analysis that found any and those people uploaded, without the ones a
+         *     person removed.
+         */
+        get: operations["listRepositoryImages"];
+        put?: never;
+        /**
+         * Upload
+         * @description Upload one of the product's images, of the kind given. The body is JSON with the file in base64: `data_base64` is at most 11184812 characters, the body at most 12 MB, the file at most 8388608 bytes decoded. It must be a PNG, JPEG or WebP image of one frame, at least 128 and at most 4096 pixels a side; what is kept is written again from its pixels, without its metadata, as a PNG or a WebP. The same bytes uploaded again answer the image kept already. 400 `repository_image_refused` for what is not such an image, or not base64, with the rule in the message; 413 `repository_image_too_large`; 409 `too_many_repository_images` when the project has 24 uploads; 404 `project_not_found`; 503 `storage_unavailable` when object storage could not keep it.
+         */
+        post: operations["uploadRepositoryImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/repository-images/{image_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove
+         * @description Remove an image from the project's.
+         *
+         *     An upload is deleted with its file. An image an analysis found is only marked removed, so
+         *     that a later analysis finding the same bytes leaves it out too. 404
+         *     `repository_image_not_found` for an image that is not one of this project's, or was
+         *     removed already; 503 `storage_unavailable` when an upload's file could not be removed, and
+         *     the image stays then.
+         */
+        delete: operations["removeRepositoryImage"];
+        options?: never;
+        head?: never;
+        /**
+         * Set Kind
+         * @description Choose what an image is; a later analysis keeps the choice for the same bytes.
+         *
+         *     404 `repository_image_not_found` for an image that is not one of this project's, or was
+         *     removed.
+         */
+        patch: operations["setRepositoryImageKind"];
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/repository-images/{image_id}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Image
+         * @description One image, to show in the page.
+         *
+         *     404 `repository_image_not_found` for an image that is not one of this project's; 503
+         *     `storage_unavailable` when object storage could not give it back.
+         */
+        get: operations["getRepositoryImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{project_id}/researches": {
         parameters: {
             query?: never;
@@ -598,6 +816,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/studio-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Runs
+         * @description The project's studio runs as they are now, newest first, one page at a time.
+         */
+        get: operations["listStudioRuns"];
+        put?: never;
+        /**
+         * Start
+         * @description Queue a studio run for the image asked for and return the run to poll.
+         *
+         *     A worker executes it later, under the workspace's budget for generated media; a project
+         *     may have several runs at once. A reference asset that is not the project's is a 422
+         *     beside `reference_asset_ids`. 503 `studio_not_started` when the run could not be handed
+         *     to a worker: it is then stored as failed and a new one can be started.
+         */
+        post: operations["startStudioRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/studio-runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run
+         * @description The run as it is now, with what it was asked for.
+         *
+         *     Queued, running, succeeded, needs review (with its asset) or failed.
+         */
+        get: operations["getStudioRun"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Run
+         * @description Delete a finished run with its assets and every version's image, for good.
+         *
+         *     An accepted asset goes too. 409 `studio_run_unfinished` while the run is queued or
+         *     running: the worker would store images for a run that is gone. 503 `storage_unavailable`
+         *     when the images could not be removed from object storage; the run stays then, and can be
+         *     deleted again. The request takes no body; one is a 422.
+         */
+        delete: operations["deleteStudioRun"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/proposals": {
         parameters: {
             query?: never;
@@ -644,6 +922,40 @@ export interface paths {
          * @description Go back to the analyzer's defaults.
          */
         delete: operations["removeAnalysisLimits"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/creative-budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Budget
+         * @description The caps in use with where each comes from, what was chosen, and this month's spending.
+         *
+         *     409 `environment_setting_invalid` when an environment variable sets a cap to a value that
+         *     breaks its rule.
+         */
+        get: operations["getCreativeBudget"];
+        /**
+         * Set Budget
+         * @description Choose the caps, in place of the choice before; none chosen removes the choice.
+         *
+         *     A cap out of its bounds is a 422 beside its field. 409 `cap_set_by_environment` for a cap
+         *     an environment variable sets.
+         */
+        put: operations["setCreativeBudget"];
+        post?: never;
+        /**
+         * Remove Budget
+         * @description Go back to the environment's caps and the defaults.
+         */
+        delete: operations["removeCreativeBudget"];
         options?: never;
         head?: never;
         patch?: never;
@@ -841,8 +1153,10 @@ export interface components {
          * @description What an action does to the world beyond the run, as its declaration says.
          *
          *     ``INTERNAL`` is work the run does for itself (cloning a repository, reading a page): it
-         *     runs when the graph asks. ``PUBLISHES`` puts something in front of other people and
-         *     ``SPENDS`` costs money; the gate holds both for a person's approval.
+         *     runs when the graph asks. ``PUBLISHES`` puts something in front of other people, and the
+         *     gate holds it for a person's approval. ``SPENDS`` costs money: the gate reserves its
+         *     estimate under the creative budget, which lets it run, holds it for a person or refuses it
+         *     (``gate.py``); its worker declares how its cost is estimated.
          * @enum {string}
          */
         ActionEffect: "internal" | "publishes" | "spends";
@@ -946,6 +1260,29 @@ export interface components {
              */
             unreadable: boolean;
         };
+        /**
+         * AssetRequest
+         * @description One image the studio is asked to make, for one platform, with the words it must show.
+         */
+        AssetRequest: {
+            /** Exact Copy */
+            exact_copy?: string[];
+            /** Goal */
+            goal: string;
+            platform: components["schemas"]["Platform"];
+            /** Reference Asset Ids */
+            reference_asset_ids?: string[];
+            /**
+             * Style Notes
+             * @default
+             */
+            style_notes: string;
+        };
+        /**
+         * AssetTechnique
+         * @enum {string}
+         */
+        AssetTechnique: "generated" | "html_reference" | "background_overlay" | "composed";
         /** Audience */
         Audience: {
             /**
@@ -995,12 +1332,35 @@ export interface components {
          * @enum {string}
          */
         BusinessModelType: "free" | "subscription" | "one_time_purchase" | "ads" | "unknown";
+        /** CapResponse */
+        CapResponse: {
+            /** Default Usd */
+            default_usd: number;
+            /**
+             * Environment Variable
+             * @description The variable that would set it instead.
+             */
+            environment_variable: string;
+            /** @description Where it comes from: environment, stored or default. */
+            source: components["schemas"]["CapSource"];
+            /**
+             * Value Usd
+             * @description The cap in use.
+             */
+            value_usd: number;
+        };
+        /**
+         * CapSource
+         * @description Where the value of a cap in use comes from.
+         * @enum {string}
+         */
+        CapSource: "environment" | "stored" | "default";
         /**
          * CapabilityProblem
          * @description Why a model may not serve a role.
          * @enum {string}
          */
-        CapabilityProblem: "not_in_catalog" | "no_tools" | "no_structured_output" | "no_image_input" | "rejects_temperature" | "fallback_rejects_temperature";
+        CapabilityProblem: "not_in_catalog" | "no_tools" | "no_structured_output" | "no_image_input" | "no_image_output" | "rejects_temperature" | "fallback_rejects_temperature";
         /** CatalogModelResponse */
         CatalogModelResponse: {
             /**
@@ -1012,10 +1372,20 @@ export interface components {
             context_length: number | null;
             /** Id */
             id: string;
+            /**
+             * Image Output Price
+             * @description US dollars per million tokens of image output.
+             */
+            image_output_price: number | null;
             /** Input Modalities */
             input_modalities: string[];
             /** Name */
             name: string;
+            /**
+             * Output Modalities
+             * @description What the model answers with: `image` too.
+             */
+            output_modalities: string[];
             /**
              * Prompt Price
              * @description US dollars per million input tokens.
@@ -1186,6 +1556,13 @@ export interface components {
             /** Max Steps */
             max_steps: number | null;
         };
+        /** ChosenCreativeBudgetResponse */
+        ChosenCreativeBudgetResponse: {
+            /** Auto Per Action Usd */
+            auto_per_action_usd: number | null;
+            /** Monthly Usd */
+            monthly_usd: number | null;
+        };
         /** CreateChatRequest */
         CreateChatRequest: {
             /**
@@ -1200,6 +1577,46 @@ export interface components {
             name: string;
             /** Repository Url */
             repository_url: string;
+        };
+        /** CreativeBudgetBoundsResponse */
+        CreativeBudgetBoundsResponse: {
+            /** Max Auto Per Action Usd */
+            max_auto_per_action_usd: number;
+            /** Max Monthly Usd */
+            max_monthly_usd: number;
+        };
+        /**
+         * CreativeBudgetRequest
+         * @description The caps the workspace chooses. A cap left out or null keeps its environment or default.
+         */
+        CreativeBudgetRequest: {
+            /**
+             * Auto Per Action Usd
+             * @description The most one action may spend without a person's approval, from 0 to 100 USD.
+             */
+            auto_per_action_usd?: number | null;
+            /**
+             * Monthly Usd
+             * @description What the month's generated media may cost, from 0 to 10,000 USD.
+             */
+            monthly_usd?: number | null;
+        };
+        /** CreativeBudgetResponse */
+        CreativeBudgetResponse: {
+            auto_per_action: components["schemas"]["CapResponse"];
+            bounds: components["schemas"]["CreativeBudgetBoundsResponse"];
+            chosen: components["schemas"]["ChosenCreativeBudgetResponse"] | null;
+            monthly: components["schemas"]["CapResponse"];
+            /** Set At */
+            set_at: string | null;
+            /** Set By */
+            set_by: string | null;
+            spent_this_month: components["schemas"]["MonthlySpendResponse"];
+            /**
+             * Unreadable
+             * @description A stored choice breaks a rule: the other sources are shown, and spending is refused until it is reset.
+             */
+            unreadable: boolean;
         };
         /** CredentialListResponse */
         CredentialListResponse: {
@@ -1234,7 +1651,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
+        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "media_asset_decided" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
         EventDetailScalar: string | number | boolean | null;
         EventDetailValue: components["schemas"]["EventDetailScalar"] | components["schemas"]["EventDetailScalar"][];
         /**
@@ -1298,6 +1715,132 @@ export interface components {
             /** Evidence */
             evidence?: components["schemas"]["Evidence"][];
         };
+        /** MediaAssetDetailResponse */
+        MediaAssetDetailResponse: {
+            asset: components["schemas"]["MediaAssetResponse"];
+            /**
+             * Versions
+             * @description Newest first; at most 100, far more than a run makes.
+             */
+            versions: components["schemas"]["MediaAssetVersionResponse"][];
+        };
+        /** MediaAssetListResponse */
+        MediaAssetListResponse: {
+            /** Assets */
+            assets: components["schemas"]["MediaAssetResponse"][];
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+        };
+        /** MediaAssetResponse */
+        MediaAssetResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Current Version Id
+             * @description The version the asset stands for now: the run's best candidate.
+             */
+            current_version_id: string | null;
+            /** Decided At */
+            decided_at: string | null;
+            /** Decided By */
+            decided_by: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            platform: components["schemas"]["Platform"];
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            status: components["schemas"]["MediaAssetStatus"];
+        };
+        /**
+         * MediaAssetStatus
+         * @enum {string}
+         */
+        MediaAssetStatus: "draft" | "accepted" | "rejected";
+        /**
+         * MediaAssetVersionResponse
+         * @description One candidate of an asset: how it was made and what its reviews found, not its image.
+         */
+        MediaAssetVersionResponse: {
+            /**
+             * Check Report
+             * @description What the programmatic checks found; null until the version is reviewed.
+             */
+            check_report: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Code Chars
+             * @description How long that code is; the code itself is not served.
+             */
+            code_chars: number;
+            /** Cost Usd */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Has Code
+             * @description Whether the version was made by code in the sandbox.
+             */
+            has_code: boolean;
+            /** Height */
+            height: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Mime
+             * @description `image/png`, `image/jpeg` or `image/webp`.
+             */
+            mime: string;
+            /** Model */
+            model: string | null;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Passed */
+            passed: boolean | null;
+            /** Prompt */
+            prompt: string | null;
+            /** Provider */
+            provider: string | null;
+            /** Round */
+            round: number;
+            /** Size Bytes */
+            size_bytes: number;
+            technique: components["schemas"]["AssetTechnique"];
+            /**
+             * Verifier Report
+             * @description What the visual verifier found; null when it was not asked.
+             */
+            verifier_report: {
+                [key: string]: unknown;
+            } | null;
+            /** Width */
+            width: number;
+        };
         /** ModelCatalogResponse */
         ModelCatalogResponse: {
             /**
@@ -1338,6 +1881,34 @@ export interface components {
             /** Unreadable */
             unreadable: components["schemas"]["UnreadableChoiceResponse"][];
         };
+        /** MonthlySpendResponse */
+        MonthlySpendResponse: {
+            /** Cap Usd */
+            cap_usd: number;
+            /**
+             * Month Start
+             * Format: date-time
+             * @description The start of this calendar month, in UTC.
+             */
+            month_start: string;
+            /**
+             * Remaining Usd
+             * @description What can still be reserved; never below zero.
+             */
+            remaining_usd: number;
+            /**
+             * Reserved Usd
+             * @description Held for actions that have not settled yet.
+             */
+            reserved_usd: number;
+            /** Spent Usd */
+            spent_usd: number;
+        };
+        /**
+         * Platform
+         * @enum {string}
+         */
+        Platform: "instagram_post" | "instagram_portrait" | "instagram_story" | "x_post" | "linkedin_post" | "og_image" | "app_store_screenshot";
         /**
          * Problem
          * @description The body of every error response except request validation (422).
@@ -1540,6 +2111,11 @@ export interface components {
             /** @description What the action does beyond the run. */
             effect: components["schemas"]["ActionEffect"];
             /**
+             * Estimate Usd
+             * @description What an action that spends was estimated to cost, in USD; null otherwise.
+             */
+            estimate_usd: number | null;
+            /**
              * Expires At
              * Format: date-time
              * @description Undecided by then, the proposal expires and the action does not run.
@@ -1589,6 +2165,87 @@ export interface components {
             from_file: "temperature"[];
             /** Model */
             model: string;
+        };
+        /**
+         * RepositoryImageKind
+         * @enum {string}
+         */
+        RepositoryImageKind: "icon" | "logo" | "screenshot" | "marketing" | "other";
+        /** RepositoryImageKindChoice */
+        RepositoryImageKindChoice: {
+            kind: components["schemas"]["RepositoryImageKind"];
+        };
+        /** RepositoryImageListResponse */
+        RepositoryImageListResponse: {
+            /** Images */
+            images: components["schemas"]["RepositoryImageResponse"][];
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+        };
+        /** RepositoryImageResponse */
+        RepositoryImageResponse: {
+            /**
+             * Analysis Run Id
+             * @description The analysis that found the image; null for an upload.
+             */
+            analysis_run_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Height */
+            height: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** @description What the image is: the hint its path suggests, until a person chose it (`kind_chosen`). */
+            kind: components["schemas"]["RepositoryImageKind"];
+            /**
+             * Kind Chosen
+             * @description Whether a person chose the kind; always true for an upload.
+             */
+            kind_chosen: boolean;
+            /**
+             * Mime
+             * @description `image/png` or `image/webp`.
+             */
+            mime: string;
+            /**
+             * Path
+             * @description Where the image was in the repository, relative to its root; for an upload, the uploaded file's name, cleaned.
+             */
+            path: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** @description `analysis` when an analysis found it, `person` when a person uploaded it. */
+            source: components["schemas"]["RepositoryImageSource"];
+            /** Width */
+            width: number;
+        };
+        /**
+         * RepositoryImageSource
+         * @enum {string}
+         */
+        RepositoryImageSource: "analysis" | "person";
+        /** RepositoryImageUpload */
+        RepositoryImageUpload: {
+            /**
+             * Data Base64
+             * @description The file's bytes in standard base64, without a `data:` prefix or line breaks: at most 11184812 characters, 8388608 bytes decoded.
+             */
+            data_base64: string;
+            kind: components["schemas"]["RepositoryImageKind"];
+            /**
+             * Name
+             * @description The file's name; its last part is kept, cleaned, at most 120 characters.
+             */
+            name: string;
         };
         /**
          * ResearchReportResponse
@@ -1777,7 +2434,7 @@ export interface components {
             inherited: components["schemas"]["ResolvedModelResponse"];
             /**
              * Kind
-             * @description `chat`, or `embeddings` or `decisions` for a role that takes a model only.
+             * @description `chat`; `images` for a role that takes a model and fallbacks only; `embeddings` or `decisions` for one that takes a model only.
              */
             kind: string;
             model_source: components["schemas"]["RoleModelSource"];
@@ -1898,6 +2555,126 @@ export interface components {
              */
             set_by: string;
         };
+        /** StudioRunDetailResponse */
+        StudioRunDetailResponse: {
+            /**
+             * Cost Usd
+             * @description What the run spent, in USD, once it has ended.
+             */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /**
+             * Final Asset Id
+             * @description The asset a run that succeeded or needs review ended with.
+             */
+            final_asset_id: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            platform: components["schemas"]["Platform"];
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** @description What the run was asked for; null when the stored request no longer fits the request's schema, which a later version may have tightened. */
+            request: components["schemas"]["StudioRunRequestResponse"] | null;
+            /**
+             * Requested By
+             * @description Who asked for the run: `person`, `orchestrator` (the chat) or `run`.
+             */
+            requested_by: string;
+            /** Started At */
+            started_at: string | null;
+            status: components["schemas"]["StudioRunStatus"];
+        };
+        /** StudioRunListResponse */
+        StudioRunListResponse: {
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+            /** Runs */
+            runs: components["schemas"]["StudioRunResponse"][];
+        };
+        /**
+         * StudioRunRequestResponse
+         * @description What a run was asked for, as it was stored.
+         */
+        StudioRunRequestResponse: {
+            /**
+             * Exact Copy
+             * @description The lines of text the image must show, exactly; empty for no text.
+             */
+            exact_copy: string[];
+            /** Goal */
+            goal: string;
+            platform: components["schemas"]["Platform"];
+            /**
+             * Reference Asset Ids
+             * @description Assets of the project the studio was asked to look at.
+             */
+            reference_asset_ids: string[];
+            /** Style Notes */
+            style_notes: string;
+        };
+        /** StudioRunResponse */
+        StudioRunResponse: {
+            /**
+             * Cost Usd
+             * @description What the run spent, in USD, once it has ended.
+             */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /**
+             * Final Asset Id
+             * @description The asset a run that succeeded or needs review ended with.
+             */
+            final_asset_id: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            platform: components["schemas"]["Platform"];
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Requested By
+             * @description Who asked for the run: `person`, `orchestrator` (the chat) or `run`.
+             */
+            requested_by: string;
+            /** Started At */
+            started_at: string | null;
+            status: components["schemas"]["StudioRunStatus"];
+        };
+        /**
+         * StudioRunStatus
+         * @enum {string}
+         */
+        StudioRunStatus: "queued" | "running" | "succeeded" | "needs_review" | "failed";
         /**
          * TierModelSource
          * @description Where the model of a tier comes from.
@@ -3043,6 +3820,388 @@ export interface operations {
             };
         };
     };
+    listMediaAssets: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaAssetListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getMediaAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaAssetDetailResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    acceptMediaAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaAssetResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rejectMediaAsset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaAssetResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    downloadMediaAssetImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                asset_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The version's image, in the type stored with it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getMediaAssetImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                asset_id: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The version's image, in the type stored with it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     getApprovedProfile: {
         parameters: {
             query?: never;
@@ -3672,6 +4831,338 @@ export interface operations {
             };
         };
     };
+    listRepositoryImages: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryImageListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    uploadRepositoryImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryImageUpload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryImageResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeRepositoryImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setRepositoryImageKind: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepositoryImageKindChoice"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryImageResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getRepositoryImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image, in the type stored with it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listResearches: {
         parameters: {
             query?: {
@@ -3981,6 +5472,256 @@ export interface operations {
             };
         };
     };
+    listStudioRuns: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioRunListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    startStudioRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioRunResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getStudioRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudioRunDetailResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteStudioRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listWaitingProposals: {
         parameters: {
             query?: {
@@ -4140,6 +5881,158 @@ export interface operations {
             };
             /** @description Forbidden */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getCreativeBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeBudgetResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setCreativeBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreativeBudgetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreativeBudgetResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeCreativeBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

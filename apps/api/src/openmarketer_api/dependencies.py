@@ -29,6 +29,7 @@ from openmarketer_core.db.session import transaction
 from openmarketer_core.llm_catalog import ModelCatalog
 from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.research.page_store import PageStore
+from openmarketer_core.studio.asset_store import AssetStore
 from openmarketer_core.tracing import NOT_TRACING, Tracing
 from openmarketer_core.workflow_start import WorkflowStart
 
@@ -49,6 +50,8 @@ class Services:
     model_catalog: ModelCatalog = field(repr=False)
     # The object storage the pages of deleted research runs are removed from.
     page_store: PageStore
+    # The object storage the studio's images are read from and removed from.
+    asset_store: AssetStore
     # The process's tracing: off unless the environment gave Langfuse's keys (``main.py``).
     tracing: Tracing = NOT_TRACING
 
@@ -115,6 +118,10 @@ def page_store(services: Annotated[Services, Depends(_services)]) -> PageStore:
     return services.page_store
 
 
+def asset_store(services: Annotated[Services, Depends(_services)]) -> AssetStore:
+    return services.asset_store
+
+
 def process_tracing(services: Annotated[Services, Depends(_services)]) -> Tracing:
     return services.tracing
 
@@ -154,6 +161,7 @@ StoringCipher = Annotated[CredentialCipher | None, Depends(credential_cipher)]
 Models = Annotated[ModelRouter, Depends(model_router)]
 Catalog = Annotated[ModelCatalog, Depends(model_catalog)]
 Pages = Annotated[PageStore, Depends(page_store)]
+Assets = Annotated[AssetStore, Depends(asset_store)]
 ProcessTracing = Annotated[Tracing, Depends(process_tracing)]
 StartWorkflow = Annotated[Callable[[WorkflowStart], None], Depends(start_workflow)]
 EventStreamTiming = Annotated[StreamTiming, Depends(event_stream_timing)]

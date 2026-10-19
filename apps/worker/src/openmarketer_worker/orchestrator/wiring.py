@@ -73,6 +73,6 @@ def registration(parts: OrchestratorParts) -> AgentRegistration:
     return AgentRegistration(
         task_queue=CHAT_FOLLOW_UP_TASK_QUEUE,
         workflows=[ChatFollowUp],
-        activities=[activities.follow_up_on_research, activities.record_follow_up_not_taken],
+        activities=[activities.follow_up_on_run, activities.record_follow_up_not_taken],
         checkpoint_cleanups=[],
     )

@@ -254,3 +254,136 @@ def test_decisions_role_names_a_model_and_takes_nothing_else(role):
                 "roles": {"screener": role},
             }
         )
+
+
+def test_images_request_asks_the_roles_model_for_an_image_and_nothing_of_a_chat():
+    msgs = [{"role": "user", "content": "draw"}]
+    payload = router().build_image_request(
+        "image_generator", msgs, image_config={"aspect_ratio": "16:9"}
+    )
+    assert payload["model"] == router().resolve("image_generator").model
+    assert payload["modalities"] == ["image", "text"]
+    assert payload["image_config"] == {"aspect_ratio": "16:9"}
+    assert payload["usage"] == {"include": True}
+    assert not {"temperature", "max_tokens", "reasoning"} & set(payload)
+
+
+def test_images_request_names_one_model_even_when_the_role_has_fallbacks():
+    r = router()
+    resolved = r.resolve("image_generator")
+    payload = r.build_image_request("image_generator", [])
+    assert resolved.fallbacks
+    assert payload["model"] == resolved.model and "models" not in payload
+
+
+def test_images_request_without_fallbacks_names_one_model():
+    r = router().with_workspace(
+        overrides={"image_generator": {"fallbacks": []}}, tiers={}, rejected_parameters={}
+    )
+    assert "models" not in r.build_image_request("image_generator", [])
+
+
+def test_images_and_chat_roles_do_not_build_each_others_requests():
+    with pytest.raises(ConfigError, match="not 'chat'"):
+        router().build_chat_request("image_generator", [])
+    with pytest.raises(ConfigError, match="not 'images'"):
+        router().build_image_request("writer", [])
+
+
+def test_images_role_has_its_own_fallbacks_and_keeps_its_estimate():
+    resolved = router().resolve("image_generator")
+    assert resolved.kind == "images" and resolved.fallbacks == ["google/gemini-3.1-flash-lite-image"]
+    assert resolved.estimate_usd_per_image is not None
+
+
+def test_images_role_never_takes_the_defaults_chat_fallbacks():
+    config = Config.model_validate(
+        {
+            "tiers": {"fast": "a/f", "balanced": "a/b", "strong": "a/s"},
+            "defaults": {"model": "a/d", "fallbacks": ["a/chat"]},
+            "roles": {
+                "drawer": {"kind": "images", "model": "v/draw", "requires": ["image_output"]}
+            },
+        }
+    )
+    assert ModelRouter(config, env=BASE_ENV).resolve("drawer").fallbacks == []
+
+
+def test_capability_check_reports_a_model_that_does_not_make_images():
+    drawer = CatalogModel(
+        id="google/drawer",
+        name="drawer",
+        context_length=None,
+        prompt_price=None,
+        completion_price=None,
+        supported_parameters=frozenset(),
+        input_modalities=frozenset({"text", "image"}),
+        output_modalities=frozenset({"text", "image"}),
+    )
+    talker = catalog_entry("google/talker", [], ["text", "image"])
+    catalog = {"google/drawer": drawer, "google/talker": talker}
+    r = router()
+    assert r.check_capabilities(only(r, "image_generator", "google/drawer"), catalog) == []
+    assert r.check_capabilities(only(r, "image_generator", "google/talker"), catalog) == [
+        ModelProblem("google/talker", CapabilityProblem.NO_IMAGE_OUTPUT)
+    ]
+    with_fallback = r.resolve("image_generator").model_copy(
+        update={"model": "google/drawer", "fallbacks": ["google/talker"]}
+    )
+    assert r.check_capabilities(with_fallback, catalog) == [
+        ModelProblem("google/talker", CapabilityProblem.NO_IMAGE_OUTPUT)
+    ]
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        {"kind": "images", "requires": ["image_output"]},
+        {"kind": "images", "model": "vendor/draw"},
+        {"kind": "images", "model": "vendor/draw", "requires": ["image_output"], "tier": "fast"},
+        {"kind": "images", "model": "vendor/draw", "requires": ["image_output"], "temperature": 1},
+        {"kind": "images", "model": "vendor/draw", "requires": ["image_output"], "fallbacks": ["?"]},
+        {"kind": "chat", "requires": ["image_output"]},
+        {"kind": "chat", "estimate_usd_per_image": 0.1},
+        {"kind": "images", "model": "v/d", "requires": ["image_output"], "estimate_usd_per_image": -1},
+    ],
+    ids=[
+        "no-model",
+        "no-image-output",
+        "tier",
+        "temperature",
+        "fallback-not-a-model",
+        "chat-with-image-output",
+        "chat-with-estimate",
+        "negative-estimate",
+    ],
+)
+def test_images_role_names_a_model_that_draws_and_takes_nothing_of_a_chat(role):
+    with pytest.raises(ValueError, match="roles.drawer"):
+        Config.model_validate(
+            {
+                "tiers": {"fast": "a/f", "balanced": "a/b", "strong": "a/s"},
+                "defaults": {"model": "a/d"},
+                "roles": {"drawer": role},
+            }
+        )
+
+
+def test_image_models_returning_squares_are_slugs():
+    raw = router().config.model_dump()
+    raw["provider"]["image_models_returning_squares"] = ["not-a-slug"]
+    with pytest.raises(ValueError, match="image_models_returning_squares"):
+        Config.model_validate(raw)
+
+
+def test_image_models_returning_squares_are_bounded():
+    raw = router().config.model_dump()
+    raw["provider"]["image_models_returning_squares"] = [f"vendor/drawer-{i}" for i in range(33)]
+    with pytest.raises(ValueError):
+        Config.model_validate(raw)
+
+
+def test_image_models_returning_squares_default_to_none():
+    raw = router().config.model_dump()
+    del raw["provider"]["image_models_returning_squares"]
+    assert Config.model_validate(raw).provider.image_models_returning_squares == []

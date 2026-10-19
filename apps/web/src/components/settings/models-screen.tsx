@@ -29,6 +29,7 @@ const NO_PROBLEMS: readonly ModelProblem[] = [];
  */
 export function ModelsScreen() {
   const catalogList = useId();
+  const imageCatalogList = useId();
   const settings = useModelSettings();
   const check = useModelCheck();
   const data = settings.data;
@@ -42,7 +43,7 @@ export function ModelsScreen() {
         role={role}
         problems={problemsOf(role.role)}
         bounds={data.bounds}
-        catalogList={catalogList}
+        catalogList={role.kind === "images" ? imageCatalogList : catalogList}
       />
     );
 
@@ -60,6 +61,7 @@ export function ModelsScreen() {
         <ModelCatalogStatus />
       </div>
       <ModelCatalogList id={catalogList} />
+      <ModelCatalogList id={imageCatalogList} imagesOnly />
 
       {settings.error !== null && (
         <RequestProblem
@@ -99,8 +101,9 @@ export function ModelsScreen() {
               Roles
             </h3>
             <p className="max-w-prose text-sm text-pretty text-muted-foreground">
-              Only the repository analyzer runs today; the other roles belong to agents still to be built, and what is
-              chosen for them waits until then.
+              The roles listed first are those of what runs today: the analyzer, the chat, the researcher and the
+              creative studio. The others belong to agents still to be built, and what is chosen for them waits until
+              then.
             </p>
             <ul className="divide-y border-y">{inUse.map(rowOf)}</ul>
             {waiting.length > 0 && (

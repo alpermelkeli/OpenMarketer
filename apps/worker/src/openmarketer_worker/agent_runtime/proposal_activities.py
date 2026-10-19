@@ -22,6 +22,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy.orm import Session, sessionmaker
 from temporalio import activity
@@ -69,6 +70,9 @@ class ProposalActivities:
                     request=proposal.request,
                     effect=ActionEffect(proposal.effect),
                     wait_seconds=proposal.wait_seconds,
+                    estimate_usd=(
+                        None if proposal.estimate_usd is None else Decimal(proposal.estimate_usd)
+                    ),
                 )
             left = (stored.expires_at - datetime.now(UTC)).total_seconds()
             return ProposalHeld(proposal_id=stored.id, seconds_left=max(left, 0.0))

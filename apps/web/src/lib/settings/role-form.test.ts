@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { numberIn, roleChoiceOf, roleFormOf } from "./role-form";
+import { numberIn, roleChoiceOf, roleFormOf, takesFallbacks } from "./role-form";
 
 const EMPTY = { model: "", fallbacks: "", temperature: "", maxTokens: "", reasoningEffort: "" } as const;
 
@@ -58,5 +58,17 @@ describe("a number typed in a field", () => {
     expect(numberIn(" 2.5 ")).toBe(2.5);
     expect(numberIn("Infinity")).toBeNaN();
     expect(numberIn("two")).toBeNaN();
+  });
+});
+
+describe("the roles that take fallbacks", () => {
+  it("are chat roles and roles that make images", () => {
+    expect(takesFallbacks("chat")).toBe(true);
+    expect(takesFallbacks("images")).toBe(true);
+  });
+
+  it("are not roles that make embeddings or answer decisions", () => {
+    expect(takesFallbacks("embeddings")).toBe(false);
+    expect(takesFallbacks("decisions")).toBe(false);
   });
 });

@@ -19,8 +19,8 @@ three hooks, and decides nothing about the product:
 Telling the chat is ``record_end``, which stores the run's last event
 (``finished`` with how many findings, ``failed`` with the reason recorded on the
 run) and answers with the chat; the workflow then starts the chat's follow-up
-turn (``ChatFollowUp``) as a child it abandons, with an id derived from the run,
-so a run that is told twice follows up once. Neither can change how the run
+turn (``ChatFollowUp``) as a child it abandons, with an id derived from the run's
+kind and id, so a run that is told twice follows up once. Neither can change how the run
 ended: a failure of either is logged and the hook returns as if it had worked.
 The follow-up is started and not waited for, on the orchestrator's queue.
 
@@ -157,9 +157,10 @@ async def start_follow_up(run: ResearchRunInput, chat_id: uuid.UUID) -> None:
                 workspace_id=run.workspace_id,
                 project_id=run.project_id,
                 chat_id=chat_id,
+                run_kind=RESEARCH_RUN_KIND,
                 run_id=run.run_id,
             ),
-            id=follow_up_workflow_id(run.run_id),
+            id=follow_up_workflow_id(RESEARCH_RUN_KIND, run.run_id),
             task_queue=CHAT_FOLLOW_UP_TASK_QUEUE,
             # The follow-up outlives the run, and is not cancelled with it.
             cancellation_type=ChildWorkflowCancellationType.ABANDON,

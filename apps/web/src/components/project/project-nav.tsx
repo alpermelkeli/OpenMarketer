@@ -1,6 +1,14 @@
 "use client";
 
-import { ArrowLeftIcon, CheckSquareIcon, FileTextIcon, PlayCircleIcon, PlusIcon, TelescopeIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  CheckSquareIcon,
+  FileTextIcon,
+  ImageIcon,
+  PlayCircleIcon,
+  PlusIcon,
+  TelescopeIcon,
+} from "lucide-react";
 import Link from "next/link";
 
 import { NavLink, SettingsLink } from "@/components/shell/nav-link";
@@ -24,6 +32,7 @@ const PAGE_ICONS = {
   profile: FileTextIcon,
   analyses: PlayCircleIcon,
   research: TelescopeIcon,
+  studio: ImageIcon,
   approvals: CheckSquareIcon,
 };
 

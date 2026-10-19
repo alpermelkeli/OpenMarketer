@@ -12,25 +12,33 @@ import { type ChatEvents, useChatEvents } from "@/lib/api/chat-events";
 import { useChat, useChatMessages, useMarkChatRead, useSendChatMessage, useSubmission } from "@/lib/api/chats";
 import { errorMessage } from "@/lib/api/error-message";
 import type { ChatMessage } from "@/lib/api/types";
-import { type ChatActivity, type TurnView, awaitedTurn, foldChatEvents, needsOlderEvents } from "@/lib/chat/events";
+import {
+  type ChatActivity,
+  type TurnView,
+  awaitedTurn,
+  foldChatEvents,
+  isFollowUp,
+  needsOlderEvents,
+} from "@/lib/chat/events";
+import { followUpWording } from "@/lib/chat/follow-up";
 import { chatTimeline } from "@/lib/chat/timeline";
 import { cn } from "@/lib/utils";
 
 import { Composer } from "./composer";
 import { DeleteChatButton } from "./delete-chat-button";
 import { FollowedResearchProgress } from "./followed-research-progress";
+import { FollowedStudioProgress } from "./followed-studio-progress";
 import { MessageMarkdown } from "./message-markdown";
 import { TurnActivity, TurnSteps } from "./turn-activity";
 
-const REVIEWING = "The orchestrator is reviewing the research…";
 const ANSWERING = "The orchestrator is answering another message of this chat…";
 
 /**
- * One chat with the orchestrator: its messages, oldest first, the research runs its turns started,
- * and where the next one is written. A message being answered is shown as sent, with the steps of
+ * One chat with the orchestrator: its messages, oldest first, the research and studio runs its
+ * turns started, and where the next one is written. A message being answered is shown as sent, with the steps of
  * its turn as they happen, and one that failed is kept here to be sent again, since the API stores
- * nothing of a failed turn. While the orchestrator answers a turn it started itself (when research
- * it asked for has ended), nothing can be sent. Opening the chat marks it read.
+ * nothing of a failed turn. While the orchestrator answers a turn it started itself (when a run it
+ * asked for has ended), nothing can be sent. Opening the chat marks it read.
  */
 export function ChatThreadScreen({ projectId, chatId }: { projectId: string; chatId: string }) {
   const chat = useChat(projectId, chatId);
@@ -44,7 +52,7 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
   const activity = useMemo(() => foldChatEvents(events.events ?? []), [events.events]);
   useEventsCoveringMessages(events, activity, messages.data);
   const timeline = useMemo(
-    () => chatTimeline(messages.data ?? [], activity.runs, activity.turns),
+    () => chatTimeline(messages.data ?? [], activity.runs, activity.turns, activity.studioRuns),
     [messages.data, activity],
   );
   const turnById = useMemo(() => new Map(activity.turns.map((turn) => [turn.id, turn])), [activity]);
@@ -55,11 +63,13 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
   const ownTurn = pending ? awaitedTurn(activity, messages.data ?? []) : null;
   // A turn running without this tab waiting for it: a follow-up, or one another tab started.
   const otherTurn = !pending && busy && running !== null ? running : null;
-  const waiting = otherTurn === null ? undefined : otherTurn.trigger === "research_finished" ? REVIEWING : ANSWERING;
+  const waiting =
+    otherTurn === null ? undefined : isFollowUp(otherTurn) ? followUpWording(otherTurn.trigger).reviewing : ANSWERING;
   const liveTurn = ownTurn ?? otherTurn;
   // Runs of a turn that has ended are in the timeline.
-  const liveRuns =
-    liveTurn?.status === "running" ? activity.runs.filter((run) => run.turnId === liveTurn.id) : [];
+  const live = liveTurn?.status === "running" ? liveTurn.id : null;
+  const liveRuns = live === null ? [] : activity.runs.filter((run) => run.turnId === live);
+  const liveStudioRuns = live === null ? [] : activity.studioRuns.filter((run) => run.turnId === live);
 
   const end = useRef<HTMLDivElement>(null);
   const shown = timeline.length + (submission === null ? 0 : 1) + (otherTurn === null ? 0 : 1);
@@ -125,6 +135,9 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
             if (item.kind === "research") {
               return <FollowedResearchProgress key={item.run.id} projectId={projectId} view={item.run} />;
             }
+            if (item.kind === "studio") {
+              return <FollowedStudioProgress key={item.run.id} projectId={projectId} view={item.run} />;
+            }
             return <FailedFollowUp key={item.turn.id} turn={item.turn} />;
           })
         )}
@@ -166,6 +179,9 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
         {liveRuns.map((run) => (
           <FollowedResearchProgress key={run.id} projectId={projectId} view={run} />
         ))}
+        {liveStudioRuns.map((run) => (
+          <FollowedStudioProgress key={run.id} projectId={projectId} view={run} />
+        ))}
         {events.error && (
           <p className="text-xs text-muted-foreground">
             The steps of the orchestrator&rsquo;s turns could not be read; the messages are all here.
@@ -203,11 +219,14 @@ function MessageBubble({ message, turn }: { message: ChatMessage; turn: TurnView
   );
 }
 
-/** A turn the orchestrator started when research ended, which stored no answer. */
+/** A turn the orchestrator started when a run ended, which stored no answer. */
 function FailedFollowUp({ turn }: { turn: TurnView }) {
+  const wording = followUpWording(turn.trigger);
   return (
-    <Notice tone="danger" title="The orchestrator could not review the research" role="status" className="max-w-prose">
-      <p>{turn.reason ?? "No reason was recorded."} The report is still on the run&rsquo;s page.</p>
+    <Notice tone="danger" title={wording.failed} role="status" className="max-w-prose">
+      <p>
+        {turn.reason ?? "No reason was recorded."} {wording.stillThere}
+      </p>
     </Notice>
   );
 }

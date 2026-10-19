@@ -15,14 +15,21 @@ import { useRemoveRoleChoice, useSetRoleChoice } from "@/lib/api/model-settings"
 import type { ChoiceBounds, ModelProblem, RoleSetting } from "@/lib/api/types";
 import { fieldProblems, formProblems, type FormProblems } from "@/lib/settings/form-problems";
 import { problemText, roleLabel, roleSourceDisplay } from "@/lib/settings/model-labels";
-import { roleChoiceOf, roleFormOf, type ReasoningEffortField, type RoleForm } from "@/lib/settings/role-form";
+import {
+  roleChoiceOf,
+  roleFormOf,
+  takesFallbacks,
+  type ReasoningEffortField,
+  type RoleForm,
+} from "@/lib/settings/role-form";
 
 type RoleRowProps = {
   role: RoleSetting;
   /** What the check found wrong with this role's models. */
   problems: readonly ModelProblem[];
   bounds: ChoiceBounds;
-  /** The `id` of the list of the catalogue's models. */
+  /** The `id` of the list of the catalogue's models this role may take: those that make images, for a
+   * role of kind `images`. */
   catalogList: string;
 };
 
@@ -46,6 +53,7 @@ export function RoleRow({ role, problems, bounds, catalogList }: RoleRowProps) {
   const pending = setChoice.isPending || removeChoice.isPending;
   const effective = role.effective;
   const isChat = role.kind === "chat";
+  const hasFallbacks = takesFallbacks(role.kind);
 
   function open() {
     setChoice.reset();
@@ -89,7 +97,7 @@ export function RoleRow({ role, problems, bounds, catalogList }: RoleRowProps) {
           <code className="text-sm">{effective.model}</code>
           <StatusPill tone={source.tone}>{source.label}</StatusPill>
         </dd>
-        {isChat && (
+        {hasFallbacks && (
           <>
             <dt className="text-muted-foreground">Fallbacks</dt>
             <dd className="break-all">
@@ -97,6 +105,10 @@ export function RoleRow({ role, problems, bounds, catalogList }: RoleRowProps) {
                 <code key={model} className="mr-2">{model}</code>
               ))}
             </dd>
+          </>
+        )}
+        {isChat && (
+          <>
             <dt className="text-muted-foreground">Temperature</dt>
             <dd>{role.temperature_sent ? effective.temperature : "Not sent: the model rejects it"}</dd>
             <dt className="text-muted-foreground">Length limit</dt>
@@ -162,26 +174,29 @@ export function RoleRow({ role, problems, bounds, catalogList }: RoleRowProps) {
             )}
           </Field>
 
+          {hasFallbacks && (
+            <Field
+              id={`${id}-fallbacks`}
+              label={`Fallbacks (at most ${bounds.max_fallbacks}, one per line)`}
+              problems={fieldProblems(fieldsProblems, "fallbacks")}
+            >
+              <Textarea
+                id={`${id}-fallbacks`}
+                value={form.fallbacks}
+                onChange={(event) => change("fallbacks", event.target.value)}
+                placeholder={role.inherited.fallbacks.join("\n") || "None"}
+                spellCheck={false}
+                rows={2}
+                disabled={pending}
+                className="font-mono"
+                aria-invalid={fieldProblems(fieldsProblems, "fallbacks").length > 0}
+                aria-describedby={`${id}-fallbacks-errors`}
+              />
+            </Field>
+          )}
+
           {isChat && (
             <>
-              <Field
-                id={`${id}-fallbacks`}
-                label={`Fallbacks (at most ${bounds.max_fallbacks}, one per line)`}
-                problems={fieldProblems(fieldsProblems, "fallbacks")}
-              >
-                <Textarea
-                  id={`${id}-fallbacks`}
-                  value={form.fallbacks}
-                  onChange={(event) => change("fallbacks", event.target.value)}
-                  placeholder={role.inherited.fallbacks.join("\n") || "None"}
-                  spellCheck={false}
-                  rows={2}
-                  disabled={pending}
-                  className="font-mono"
-                  aria-invalid={fieldProblems(fieldsProblems, "fallbacks").length > 0}
-                  aria-describedby={`${id}-fallbacks-errors`}
-                />
-              </Field>
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field
                   id={`${id}-temperature`}

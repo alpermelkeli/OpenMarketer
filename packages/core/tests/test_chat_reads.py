@@ -5,6 +5,7 @@ They need PostgreSQL (see the root ``conftest.py``).
 
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 from typing import TypedDict
 
 import pytest
@@ -20,15 +21,20 @@ from openmarketer_core.db.analysis_runs import (
     mark_run_started,
     request_analysis_run,
 )
+from openmarketer_core.db.media_assets import NewAssetVersion, add_version, record_version_review
 from openmarketer_core.db.models import (
     AnalysisRunRecord,
     AnalysisRunStatus,
+    AssetTechnique,
+    MediaAssetStatus,
     ProductProfileRecord,
     ProfileStatus,
     Project,
     ProjectStatus,
     ResearchRunRecord,
     ResearchRunStatus,
+    StudioRunRecord,
+    StudioRunStatus,
     Workspace,
 )
 from openmarketer_core.db.profile_versions import approve_profile_version
@@ -42,11 +48,23 @@ from openmarketer_core.db.research_runs import (
     mark_run_started as mark_research_started,
 )
 from openmarketer_core.db.research_store import save_research_report
+from openmarketer_core.db.run_events import append_events
+from openmarketer_core.db.studio_runs import (
+    StudioRun,
+    mark_run_needs_review,
+    request_studio_run,
+)
+from openmarketer_core.db.studio_runs import mark_run_started as mark_studio_started
 from openmarketer_core.orchestrator.reads import ChatReads, UnknownProfileSection
 from openmarketer_core.orchestrator.reads_postgres import PostgresChatReads
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import CheckedFinding, Report
+from openmarketer_core.run_events import ESCALATED, RunEvent
+from openmarketer_core.studio.asset_store import asset_key
+from openmarketer_core.studio.platforms import Platform
+from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 
 PERSON = uuid.uuid4()
 
@@ -61,6 +79,9 @@ class _Scope(TypedDict):
 DAY = 24 * 60 * 60
 PROFILE = ProductProfile.model_validate({"product": {"name": "Memoria", "type": "consumer_app"}})
 REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
+ASSET_REQUEST = AssetRequest(
+    goal="Announce the Android launch", exact_copy=["Now on Android"], platform=Platform.X_POST
+)
 
 
 def new_scope(session: Session) -> RunScope:
@@ -317,6 +338,137 @@ def test_a_run_without_a_report_reads_as_none(session, scope):
     assert reads.research_report(run.id) is None
     assert reads.research_report() is None
     assert reads.research_report(uuid.uuid4()) is None
+
+
+def test_studio_runs_are_read_newest_first_with_their_request(session, scope):
+    older = studio_run_that_needs_review(session, scope)
+    session.execute(
+        update(StudioRunRecord)
+        .where(StudioRunRecord.id == older.id)
+        .values(created_at=func.now() - timedelta(hours=1))
+    )
+    newer = request_studio_run(
+        session, **_ids(scope), request=ASSET_REQUEST, requested_by="orchestrator"
+    )
+    reads = reads_of(session, scope)
+
+    runs = reads.recent_studio_runs(10)
+    assert [run.id for run in runs] == [newer.id, older.id]
+    assert [run.id for run in reads.recent_studio_runs(1)] == [newer.id]
+    assert (runs[0].goal, runs[0].exact_copy, runs[0].platform) == (
+        "Announce the Android launch",
+        ["Now on Android"],
+        "x_post",
+    )
+    assert runs[1].status is StudioRunStatus.NEEDS_REVIEW
+    assert runs[1].cost_usd == 0.9
+    # A listing leaves the reviews out; the run itself has them.
+    assert runs[1].review is None
+
+
+def test_a_studio_run_is_read_with_its_review_and_why_it_needs_one(session, scope):
+    run = studio_run_that_needs_review(session, scope)
+
+    found = reads_of(session, scope).studio_run(run.id)
+
+    assert found is not None
+    assert found.final_asset_id == run.final_asset_id
+    assert found.review_reason == "the round limit was reached"
+    assert found.review is not None
+    assert found.review.passed is False
+    assert found.review.check_failures == ["copy"]
+    assert found.review.failed_criteria == [
+        {"criterion": "legibility", "severity": "major", "note": "the copy is too small"}
+    ]
+
+
+def test_a_queued_studio_run_has_no_review(session, scope):
+    run = request_studio_run(session, **_ids(scope), request=ASSET_REQUEST, requested_by="person")
+
+    found = reads_of(session, scope).studio_run(run.id)
+
+    assert found is not None
+    assert (found.status, found.review, found.review_reason) == (StudioRunStatus.QUEUED, None, None)
+
+
+def test_the_studio_library_is_read_with_each_images_decision(session, scope):
+    run = studio_run_that_needs_review(session, scope)
+
+    [asset] = reads_of(session, scope).media_assets(10)
+
+    assert (asset.id, asset.run_id, asset.platform) == (run.final_asset_id, run.id, "x_post")
+    assert asset.status is MediaAssetStatus.DRAFT
+    assert asset.current_version_id is not None
+
+
+def test_studio_reads_of_one_project_do_not_reach_another(session, scope):
+    other = new_scope(session)
+    other_run = studio_run_that_needs_review(session, other)
+    reads = reads_of(session, scope)
+
+    assert reads.studio_run(other_run.id) is None
+    assert reads.recent_studio_runs(10) == []
+    assert reads.media_assets(10) == []
+
+
+def studio_run_that_needs_review(session: Session, scope: RunScope) -> StudioRun:
+    """A studio run that hit a limit with one reviewed image, as the studio leaves one."""
+    run = request_studio_run(session, **_ids(scope), request=ASSET_REQUEST, requested_by="person")
+    mark_studio_started(session, **_ids(scope), run_id=run.id)
+    version_id = uuid.uuid4()
+    add_version(
+        session,
+        **_ids(scope),
+        run_id=run.id,
+        version_id=version_id,
+        action_id=f"studio-run:{run.id}:1",
+        version=NewAssetVersion(
+            round=1,
+            technique=AssetTechnique.GENERATED,
+            storage_key=asset_key(
+                **_ids(scope), run_id=run.id, version_id=version_id, mime="image/png"
+            ),
+            mime="image/png",
+            width=1600,
+            height=900,
+            size_bytes=1024,
+            cost_usd=Decimal("0.04"),
+        ),
+    )
+    record_version_review(
+        session,
+        **_ids(scope),
+        version_id=version_id,
+        check_report={"passed": False, "failures": ["copy"]},
+        verifier_report={
+            "criteria": [
+                {"criterion": "artifacts", "passed": True, "severity": "minor", "note": ""},
+                {
+                    "criterion": "legibility",
+                    "passed": False,
+                    "severity": "major",
+                    "note": "the copy is too small",
+                },
+            ],
+            "edit_suggestions": [],
+        },
+        passed=False,
+    )
+    ended = mark_run_needs_review(
+        session, **_ids(scope), run_id=run.id, final_version_id=version_id, cost_usd=Decimal("0.9")
+    )
+    append_events(
+        session,
+        **_ids(scope),
+        run_kind=STUDIO_RUN_KIND,
+        run_id=run.id,
+        events=[
+            RunEvent(
+                ESCALATED, {"version_id": str(version_id), "reason": "the round limit was reached"}
+            )
+        ],
+    )
+    return ended
 
 
 def research_run_with_report(

@@ -1,18 +1,23 @@
-"""The chat agent's tools: what the model may read of its project, and the one request action.
+"""The chat agent's tools: what the model may read of its project, and the request actions.
 
 The read tools answer with bounded JSON text built from the records ``ChatReads`` returns,
 and never with what a model sent. Problems (a section that does not exist, an identifier
 that does not name anything) are text the model can correct from. No read tool writes
 anything or asks for an action.
 
-``start_research`` is the other kind: a *request action*. It asks the turn's caller
-(``ChatTurnContext.requests``) to create a research run for the project and start it, and
-answers with the run's id and status; it writes nothing itself and starts no workflow, and a
-caller that gave no port is told that starting runs is not available. A run that was started
-is recorded for the person watching the turn (``run_started``, through
-``ChatTurnContext.events``), so the chat can follow the run's own progress. What it sends is read
-strictly against ``ResearchRequest`` first, so a request that does not fit is refused with
-the fields at fault and never their values.
+``start_research`` and ``start_creative`` are the other kind: *request actions*. Each asks
+the turn's caller (``ChatTurnContext.requests``) to create a run for the project and start it
+(a research run, a studio run that makes one image), and answers with the run's id and
+status; it writes nothing itself and starts no workflow, and a caller that gave no port is
+told that starting runs is not available. A run that was started is recorded for the person
+watching the turn (``run_started``, through ``ChatTurnContext.events``), so the chat can
+follow the run's own progress. What it sends is read strictly against ``ResearchRequest`` or
+``AssetRequest`` first, so a request that does not fit is refused with the fields at fault
+and never their values.
+
+Everything a read tool answers with that a person, a model or a web page wrote (a research
+finding, a studio run's goal and copy, the verifier's notes) is the project's data, and the
+system prompt tells the model to read it as such.
 
 The tools are declared on the agent here; importing this module is what puts them on it.
 """
@@ -36,10 +41,12 @@ from openmarketer_core.orchestrator.reads import (
     PROFILE_SECTIONS,
     UnknownProfileSection,
 )
-from openmarketer_core.orchestrator.requests import ResearchNotStarted
+from openmarketer_core.orchestrator.requests import ResearchNotStarted, StudioNotStarted
 from openmarketer_core.research.questions import DEFAULT_MAX_SOURCES, ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import RUN_STARTED, RunEvent
+from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 
 # The most a tool answer is; a profile with many features is the long one.
 MAX_ANSWER_CHARS = 6000
@@ -199,6 +206,85 @@ def start_research(
         RunEvent(RUN_STARTED, {"run_kind": RESEARCH_RUN_KIND, "run_id": str(run.id)})
     )
     return _text({"run_id": str(run.id), "status": run.status, "requested_by": run.requested_by})
+
+
+@agent.tool
+def list_studio_runs(context: ChatTurnContext, limit: int = 10) -> str:
+    """The project's recent studio runs, newest first, at most limit of them: the image each
+    was asked for (goal, platform, exact copy), its status, what it cost, the asset it ended
+    with in the Studio library, and why one failed. Each has an id whose run you can read in
+    full with get_studio_run."""
+    runs = context.reads.recent_studio_runs(max(1, min(limit, MAX_LISTED_RECORDS)))
+    if not runs:
+        return "The project has no studio runs."
+    return _text([asdict(run) for run in runs])
+
+
+@agent.tool
+def get_studio_run(context: ChatTurnContext, run_id: str) -> str:
+    """One studio run in full: what it was asked for, its status and cost, the asset it ended
+    with, what the checks and the visual verifier found of that image, and why a run that
+    needs review was handed to a person. run_id comes from a listed studio run."""
+    wanted = _uuid_of(run_id)
+    if wanted is None:
+        return "error: run_id must be a UUID; take one from a listed studio run"
+    found = context.reads.studio_run(wanted)
+    if found is None:
+        return f"error: no studio run {wanted} in this project"
+    return _text(asdict(found))
+
+
+@agent.tool
+def list_media_assets(context: ChatTurnContext, limit: int = 10) -> str:
+    """The project's Studio library, newest first, at most limit images: each with the run
+    that made it, its platform, and whether a person accepted it, rejected it or has not
+    decided yet (draft)."""
+    assets = context.reads.media_assets(max(1, min(limit, MAX_LISTED_RECORDS)))
+    if not assets:
+        return "The project's Studio library is empty."
+    return _text([asdict(asset) for asset in assets])
+
+
+@agent.tool
+def start_creative(
+    context: ChatTurnContext,
+    goal: str,
+    platform: str,
+    exact_copy: list[str] | None = None,
+    style_notes: str = "",
+    reference_asset_ids: list[str] | None = None,
+) -> str:
+    """Start a studio run of this project: it makes one image for one platform and stores it
+    in the project's Studio library for a person to accept. Use it only when the operator asks
+    for an image. platform is one of: instagram_post, instagram_portrait, instagram_story,
+    x_post, linkedin_post, og_image, app_store_screenshot.
+    exact_copy is every line of text the image must show, word for word as the operator gave
+    it; empty for an image without text. style_notes are the operator's wishes on the look;
+    reference_asset_ids name images of the Studio library to look at. It answers with the new
+    run's id and status; the image is read later."""
+    if context.requests is None:
+        return "error: starting a studio run is not available here"
+    try:
+        request = read_strict_json(
+            AssetRequest,
+            {
+                "goal": goal,
+                "platform": platform,
+                "exact_copy": exact_copy or [],
+                "style_notes": style_notes,
+                "reference_asset_ids": reference_asset_ids or [],
+            },
+        )
+    except DoesNotFit as e:
+        return f"error: the image request does not fit{fields_phrase(e.fields)}"
+    try:
+        run = context.requests.start_creative(request)
+    except StudioNotStarted as e:
+        return f"error: {e}"
+    context.events.record(
+        RunEvent(RUN_STARTED, {"run_kind": STUDIO_RUN_KIND, "run_id": str(run.id)})
+    )
+    return _text({"run_id": str(run.id), "status": run.status, "platform": run.platform})
 
 
 def _uuid_of(value: str) -> uuid.UUID | None:

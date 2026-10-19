@@ -33,6 +33,7 @@ TABLES = {
     "product_profile",
     "analysis_run",
     "credential",
+    "repository_image",
 }
 
 

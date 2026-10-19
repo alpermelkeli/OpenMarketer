@@ -19,7 +19,9 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     FailureTexts,
 )
 
-FOLLOW_UP_ON_RESEARCH = "follow_up_on_research"
+# Renamed from ``follow_up_on_research`` when studio runs were followed up on too: a follow-up
+# that was in flight then is not replayed by this code (there is no versioning).
+FOLLOW_UP_ON_RUN = "follow_up_on_run"
 RECORD_FOLLOW_UP_NOT_TAKEN = "record_follow_up_not_taken"
 
 # Failure types of the activity. A busy chat and a model provider that may answer later are
@@ -44,7 +46,7 @@ WORDED_BY_THE_ACTIVITY = (
 )
 
 CHAT_IS_BUSY = "the chat is answering another turn"
-NOTHING_TO_FOLLOW_UP_ON = "the chat or the research run is not there to follow up on"
+NOTHING_TO_FOLLOW_UP_ON = "the chat or the run is not there to follow up on"
 FOLLOW_UP_GIVEN_UP = "the chat tried to follow up as often as it may"
 
 # What the chat is told, after ``follow_up.NOT_TAKEN``'s start, when the follow-up ended

@@ -26,6 +26,7 @@ from temporalio.worker import Worker
 
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
 from openmarketer_core.research.workflow_contract import (
+    RESEARCH_RUN_KIND,
     RESEARCH_WORKFLOW,
     ResearchRunInput,
     research_workflow_id,
@@ -147,7 +148,7 @@ async def follow_ups(temporal) -> AsyncIterator[Callable]:
     read: list[str] = []
 
     async def follow_up_of(run: ResearchRunInput) -> FollowUp | None:
-        handle = temporal.get_workflow_handle(follow_up_workflow_id(run.run_id))
+        handle = temporal.get_workflow_handle(follow_up_workflow_id(RESEARCH_RUN_KIND, run.run_id))
         try:
             described = await handle.describe()
         except RPCError as e:
@@ -231,6 +232,7 @@ async def test_run_asked_for_by_a_chat_starts_the_chats_follow_up(temporal, task
         "workspace_id": str(run.workspace_id),
         "project_id": str(run.project_id),
         "chat_id": str(chat_id),
+        "run_kind": RESEARCH_RUN_KIND,
         "run_id": str(run.run_id),
     }
 

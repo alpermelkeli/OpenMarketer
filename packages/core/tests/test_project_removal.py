@@ -1,6 +1,7 @@
 """Tests for deleting a project. They need PostgreSQL (see the root ``conftest.py``)."""
 
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -20,21 +21,27 @@ from openmarketer_core.db.analysis_runs import (
 from openmarketer_core.db.chat import append_exchange, create_chat
 from openmarketer_core.db.chat_turns import finish_turn, start_turn
 from openmarketer_core.db.evidence_store import save_analysis_of_project
+from openmarketer_core.db.media_assets import NewAssetVersion, accept_asset, add_version
 from openmarketer_core.db.models import (
     AnalysisRunRecord,
+    AssetTechnique,
     ChatMessageRecord,
     ChatThreadRecord,
     ChatTurnRecord,
     ChatTurnTrigger,
     Evidence,
+    MediaAssetRecord,
+    MediaAssetVersionRecord,
     ProductProfileRecord,
     Project,
     ProposalRecord,
+    RepositoryImageRecord,
     RepoSnapshot,
     ResearchPageRecord,
     ResearchReportRecord,
     ResearchRunRecord,
     RunEventRecord,
+    StudioRunRecord,
     Workspace,
 )
 from openmarketer_core.db.profile_versions import approve_profile_version, save_edited_profile
@@ -42,10 +49,16 @@ from openmarketer_core.db.project_removal import (
     ProjectHasPendingProposal,
     ProjectHasUnfinishedResearch,
     ProjectHasUnfinishedRun,
+    ProjectHasUnfinishedStudioRun,
     delete_project,
 )
 from openmarketer_core.db.projects import ProjectNotFound, create_project
 from openmarketer_core.db.proposals import decide_proposal, propose_action
+from openmarketer_core.db.repository_images import (
+    NewRepositoryImage,
+    keep_repository_images,
+    repository_image_key,
+)
 from openmarketer_core.db.research_pages import NewPage, store_page
 from openmarketer_core.db.research_runs import (
     mark_run_failed as mark_research_failed,
@@ -61,17 +74,33 @@ from openmarketer_core.db.research_runs import (
 )
 from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.db.run_events import append_events
+from openmarketer_core.db.studio_runs import (
+    mark_run_needs_review as mark_studio_needs_review,
+)
+from openmarketer_core.db.studio_runs import (
+    mark_run_started as mark_studio_started,
+)
+from openmarketer_core.db.studio_runs import (
+    request_studio_run,
+)
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.extraction import ExtractedFact
 from openmarketer_core.repository_analysis.intake import Snapshot
+from openmarketer_core.repository_analysis.repository_images.selection import (
+    RepositoryImageKind,
+)
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import Report
 from openmarketer_core.run_events import TURN_ANSWERED, TURN_STARTED, RunEvent
+from openmarketer_core.studio.asset_store import asset_key
+from openmarketer_core.studio.platforms import Platform
+from openmarketer_core.studio.requests import AssetRequest
 
 REVIEWER = uuid.UUID("11111111-1111-4111-8111-111111111111")
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
 FACT = ExtractedFact(extractor="manifest", kind="manifest.name", value="app", file="package.json")
 RESEARCH_REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
+ASSET_REQUEST = AssetRequest(goal="Announce the launch", platform=Platform.OG_IMAGE)
 
 
 def new_workspace(session: Session) -> uuid.UUID:
@@ -95,11 +124,38 @@ def new_project(session: Session, workspace_id: uuid.UUID) -> uuid.UUID:
     ).id
 
 
-def analysed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -> None:
-    """Run an analysis of the project to success, storing a snapshot, its evidence and a version."""
+def analysed(
+    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID, *, images: int = 0
+) -> tuple[str, ...]:
+    """Run an analysis of the project to success, storing a snapshot, its evidence and a version.
+
+    With ``images``, the run keeps that many repository images first; their keys are answered.
+    """
     scope = {"workspace_id": workspace_id, "project_id": project_id}
     run = request_analysis_run(session, **scope)
     mark_run_started(session, **scope, run_id=run.id)
+    keys = tuple(
+        repository_image_key(**scope, analysis_run_id=run.id, sha256=f"{n:064x}", mime="image/png")
+        for n in range(images)
+    )
+    keep_repository_images(
+        session,
+        **scope,
+        analysis_run_id=run.id,
+        images=[
+            NewRepositoryImage(
+                path=f"assets/logo-{n}.png",
+                kind=RepositoryImageKind.LOGO,
+                mime="image/png",
+                width=512,
+                height=512,
+                size_bytes=4096,
+                sha256=f"{n:064x}",
+                storage_key=key,
+            )
+            for n, key in enumerate(keys)
+        ],
+    )
     snapshot = Snapshot(
         root=Path("/unused"), source_url="https://unused", commit_sha="a" * 40, ref="main"
     )
@@ -107,6 +163,7 @@ def analysed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -
         session, **scope, snapshot=snapshot, facts=[FACT], profile=PROFILE
     )
     mark_run_succeeded(session, **scope, run_id=run.id, profile_id=saved.profile_id)
+    return keys
 
 
 def researched(
@@ -155,6 +212,61 @@ def researched(
     return run.id, keys
 
 
+def studio_run_of(
+    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID, *, chat_id=None
+) -> uuid.UUID:
+    """A started studio run of the project, as a chat asked for it when ``chat_id`` is given."""
+    run = request_studio_run(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        request=ASSET_REQUEST,
+        requested_by="person",
+        chat_thread_id=chat_id,
+    )
+    mark_studio_started(session, workspace_id=workspace_id, project_id=project_id, run_id=run.id)
+    return run.id
+
+
+def made_asset(
+    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID, *, chat_id=None
+) -> tuple[str, ...]:
+    """A studio run of the project that ended with two versions of an accepted asset."""
+    scope = {"workspace_id": workspace_id, "project_id": project_id}
+    run_id = studio_run_of(session, workspace_id, project_id, chat_id=chat_id)
+    keys: list[str] = []
+    asset_id = None
+    for round in (1, 2):
+        version_id = uuid.uuid4()
+        key = asset_key(**scope, run_id=run_id, version_id=version_id, mime="image/png")
+        version = add_version(
+            session,
+            **scope,
+            run_id=run_id,
+            version_id=version_id,
+            action_id=f"studio-run:{run_id}:{round}",
+            asset_id=asset_id,
+            version=NewAssetVersion(
+                round=round,
+                technique=AssetTechnique.COMPOSED,
+                storage_key=key,
+                mime="image/png",
+                width=1200,
+                height=630,
+                size_bytes=100,
+                cost_usd=Decimal(0),
+            ),
+        )
+        asset_id = version.asset_id
+        keys.append(key)
+    mark_studio_needs_review(
+        session, **scope, run_id=run_id, final_version_id=version_id, cost_usd=Decimal(0)
+    )
+    assert asset_id is not None
+    accept_asset(session, **scope, asset_id=asset_id, decided_by=REVIEWER)
+    return tuple(keys)
+
+
 def proposed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -> uuid.UUID:
     """A pending proposal of an action a run of the project asked for."""
     run = GraphRunRef(kind="writer-run", run_id=uuid.uuid4())
@@ -187,6 +299,10 @@ def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
         "research_run": ResearchRunRecord.project_id,
         "research_page": ResearchPageRecord.project_id,
         "research_report": ResearchReportRecord.project_id,
+        "studio_run": StudioRunRecord.project_id,
+        "media_asset": MediaAssetRecord.project_id,
+        "media_asset_version": MediaAssetVersionRecord.project_id,
+        "repository_image": RepositoryImageRecord.project_id,
     }
     return {
         name: session.scalar(select(func.count()).where(column == project_id)) or 0
@@ -208,12 +324,20 @@ NOTHING = {
     "research_run": 0,
     "research_page": 0,
     "research_report": 0,
+    "studio_run": 0,
+    "media_asset": 0,
+    "media_asset_version": 0,
+    "repository_image": 0,
 }
 
 WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message", "chat_turn", "run_event") + (
     "research_run",
     "research_page",
     "research_report",
+    "studio_run",
+    "media_asset",
+    "media_asset_version",
+    "repository_image",
 )
 
 
@@ -330,6 +454,49 @@ def test_project_with_an_unfinished_research_is_not_deleted(session, workspace_i
     assert rows_of(session, project_id)["research_run"] == 1
 
 
+def test_project_is_deleted_with_its_studio_runs_and_accepted_assets(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    _, page_keys = researched(session, workspace_id, project_id)
+    asset_keys = made_asset(session, workspace_id, project_id)
+    assert rows_of(session, project_id)["media_asset_version"] == 2
+
+    answered = delete_project(session, workspace_id=workspace_id, project_id=project_id)
+
+    assert sorted(answered) == sorted([*page_keys, *asset_keys])
+    assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_is_deleted_with_its_repository_images(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    image_keys = analysed(session, workspace_id, project_id, images=2)
+    assert rows_of(session, project_id)["repository_image"] == 2
+
+    answered = delete_project(session, workspace_id=workspace_id, project_id=project_id)
+
+    assert sorted(answered) == sorted(image_keys)
+    assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_is_deleted_with_a_studio_run_a_chat_asked_for(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    chat = create_chat(session, workspace_id=workspace_id, project_id=project_id)
+    made_asset(session, workspace_id, project_id, chat_id=chat.id)
+
+    delete_project(session, workspace_id=workspace_id, project_id=project_id)
+
+    assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_with_an_unfinished_studio_run_is_not_deleted(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    studio_run_of(session, workspace_id, project_id)
+
+    with pytest.raises(ProjectHasUnfinishedStudioRun):
+        delete_project(session, workspace_id=workspace_id, project_id=project_id)
+
+    assert rows_of(session, project_id)["studio_run"] == 1
+
+
 def test_approved_and_edited_versions_are_deleted_too(session, workspace_id):
     project_id = new_project(session, workspace_id)
     analysed(session, workspace_id, project_id)
@@ -377,6 +544,8 @@ def test_other_projects_keep_their_rows(session, workspace_id):
     analysed(session, workspace_id, deleted)
     analysed(session, workspace_id, kept)
     researched(session, workspace_id, kept)
+    made_asset(session, workspace_id, deleted)
+    made_asset(session, workspace_id, kept)
     before = rows_of(session, kept)
     delete_project(session, workspace_id=workspace_id, project_id=deleted)
     assert rows_of(session, kept) == before

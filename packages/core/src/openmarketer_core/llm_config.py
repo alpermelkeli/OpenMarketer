@@ -12,11 +12,17 @@ order (first match wins):
                               (dashboard settings), then models.yaml tiers.<tier>
     6. models.yaml            defaults.model
 
-A role is of one of three kinds: ``chat`` (a conversation, the most of them),
-``embeddings``, or ``decisions``: yes-or-no questions about a list of texts,
+A role is of one of four kinds: ``chat`` (a conversation, the most of them),
+``embeddings``, ``decisions``: yes-or-no questions about a list of texts,
 answered with a probability each by OpenRouter's decisions endpoint
-(``provider.decisions_url``). A decisions role names its model and takes
-nothing else: none of a chat request's parameters applies to it.
+(``provider.decisions_url``), or ``images``: a request to the chat endpoint
+that asks for an image back (``build_image_request``). A decisions role names
+its model and takes nothing else: none of a chat request's parameters applies
+to it. An images role names its model, requires image output, may give
+``fallbacks`` (models that also draw, which the caller tries in order, one
+request each, when the first fails in a way another model may pass; the
+defaults' chat fallbacks never apply to it) and ``estimate_usd_per_image``, what
+one image is reckoned to cost when the catalogue gives no price per image.
 
 It also builds OpenRouter chat-completion requests and decision requests.
 OpenRouter exposes an OpenAI-compatible chat API, so the same chat payload also
@@ -54,9 +60,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 DEFAULT_CONFIG_PATH = "config/models.yaml"  # relative to the repository root
 
-Capability = Literal["tools", "structured_output", "vision"]
+Capability = Literal["tools", "structured_output", "vision", "image_output"]
 Tier = Literal["fast", "balanced", "strong"]
-RoleKind = Literal["chat", "embeddings", "decisions"]
+RoleKind = Literal["chat", "embeddings", "decisions", "images"]
 # The request parameters a model can be marked as rejecting. Only one so far.
 RejectableParameter = Literal["temperature"]
 REJECTABLE_PARAMETERS: tuple[RejectableParameter, ...] = ("temperature",)
@@ -87,6 +93,10 @@ def _interpolate(obj: Any, env: Mapping[str, str]) -> Any:
     return obj
 
 
+# How many image models the configuration may name as returning squares.
+MAX_IMAGE_MODELS_RETURNING_SQUARES = 32
+
+
 # ----------------------------------------------------------------- schema
 class Routing(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -105,6 +115,16 @@ class Provider(BaseModel):
     app_url: str = ""
     app_name: str = "OpenMarketer"
     routing: Routing = Routing()
+    # Image models known to return a square whatever shape is asked; the studio's adapter
+    # starts with them (``studio.openrouter_images.SquareOnlyModels``) and learns others.
+    image_models_returning_squares: list[str] = Field(
+        default_factory=list, max_length=MAX_IMAGE_MODELS_RETURNING_SQUARES
+    )
+
+    @field_validator("image_models_returning_squares")
+    @classmethod
+    def _square_slugs(cls, v: list[str]) -> list[str]:
+        return [_check_slug(x, "provider.image_models_returning_squares") for x in v]
 
 
 class Defaults(BaseModel):
@@ -141,6 +161,15 @@ DECISIONS_ROLE_REFUSES = (
     "reasoning_effort",
     "dimensions",
 )
+# What an images role may not set: the parts of a chat request it does not send. A model of its
+# own is required too, since the tiers are chat models. Its fallbacks are sent as a chat's are.
+IMAGES_ROLE_REFUSES = (
+    "tier",
+    "temperature",
+    "max_tokens",
+    "reasoning_effort",
+    "dimensions",
+)
 
 
 class RoleConfig(BaseModel):
@@ -154,6 +183,7 @@ class RoleConfig(BaseModel):
     requires: list[Capability] = Field(default_factory=list)
     reasoning_effort: Literal["low", "medium", "high"] | None = None
     dimensions: int | None = None
+    estimate_usd_per_image: float | None = Field(default=None, ge=0)
 
     @field_validator("model")
     @classmethod
@@ -175,6 +205,22 @@ class RoleConfig(BaseModel):
         others = [part for part in DECISIONS_ROLE_REFUSES if getattr(self, part) not in (None, [])]
         if others:
             raise ValueError(f"a decisions role takes a model only, not {', '.join(others)}")
+        return self
+
+    @model_validator(mode="after")
+    def _images_name_a_model_that_draws(self) -> RoleConfig:
+        """An images request carries its models, messages and the shape; nothing else of a chat."""
+        if self.kind != "images":
+            if self.estimate_usd_per_image is not None or "image_output" in self.requires:
+                raise ValueError("only an images role makes images")
+            return self
+        if self.model is None:
+            raise ValueError("an images role names its model")
+        if "image_output" not in self.requires:
+            raise ValueError("an images role requires image_output")
+        others = [part for part in IMAGES_ROLE_REFUSES if getattr(self, part) not in (None, [])]
+        if others:
+            raise ValueError(f"an images role does not take {', '.join(others)}")
         return self
 
 
@@ -218,6 +264,7 @@ class Resolved(BaseModel):
     requires: list[str]
     reasoning_effort: str | None = None
     dimensions: int | None = None
+    estimate_usd_per_image: float | None = None
 
     @property
     def tools_allowed(self) -> bool:
@@ -239,6 +286,13 @@ class CatalogModel:
     completion_price: float | None
     supported_parameters: frozenset[str]
     input_modalities: frozenset[str]
+    output_modalities: frozenset[str] = frozenset()
+    # US dollars per million output tokens of an image; how many tokens an image is, is the model's.
+    image_output_price: float | None = None
+    # OpenRouter's ``pricing.image`` as it gives it, in US dollars per image. Its documentation
+    # does not say whether that is an image read or an image made (vision models carry it too),
+    # so it is shown as it is and never used for an estimate.
+    image_price: float | None = None
 
 
 class CapabilityProblem(StrEnum):
@@ -248,6 +302,7 @@ class CapabilityProblem(StrEnum):
     NO_TOOLS = "no_tools"
     NO_STRUCTURED_OUTPUT = "no_structured_output"
     NO_IMAGE_INPUT = "no_image_input"
+    NO_IMAGE_OUTPUT = "no_image_output"
     REJECTS_TEMPERATURE = "rejects_temperature"
     # A fallback is sent the request made for the first model, temperature included.
     FALLBACK_REJECTS_TEMPERATURE = "fallback_rejects_temperature"
@@ -259,6 +314,29 @@ class ModelProblem:
 
     model: str
     problem: CapabilityProblem
+
+
+IMAGE_ONLY = ["image"]
+IMAGE_AND_TEXT = ["image", "text"]
+
+
+def image_modalities(model: str, catalog: Mapping[str, CatalogModel] | None) -> list[str]:
+    """What an image request to ``model`` asks back: its own outputs, as the catalogue gives them.
+
+    OpenRouter's image-generation guide asks for ``["image", "text"]`` from a model that
+    answers with both (Gemini, GPT-5 Image) and ``["image"]`` from one that makes images only
+    (FLUX, Seedream, Recraft), and a model of images only refuses the first. It does not say
+    that a model of both accepts ``["image"]``, so ``["image"]`` is asked only when the
+    catalogue says the model makes images and no text. A model the catalogue does not list, or
+    one whose outputs it does not give, or no catalogue at all: ``["image", "text"]``, which
+    the caller may ask again as ``["image"]`` when the provider says no endpoint gives those
+    outputs.
+    """
+    entry = catalog.get(model) if catalog is not None else None
+    outputs = entry.output_modalities if entry is not None else frozenset()
+    if "image" in outputs and "text" not in outputs:
+        return list(IMAGE_ONLY)
+    return list(IMAGE_AND_TEXT)
 
 
 # ----------------------------------------------------------------- router
@@ -382,12 +460,13 @@ class ModelRouter:
             value = getattr(rc, key, None)
             return default if value is None else value
 
-        # A decisions request has no fallbacks: the endpoint takes one model.
-        fallbacks = (
-            []
-            if rc.kind == "decisions"
-            else [m for m in pick("fallbacks", d.fallbacks) if m != model]
-        )
+        # A decisions request has no fallbacks: the endpoint takes one model. An images role's
+        # are its own or its workspace's only: the defaults' are chat models, which do not draw.
+        if rc.kind == "decisions":
+            fallbacks: list[str] = []
+        else:
+            chosen = pick("fallbacks", [] if rc.kind == "images" else d.fallbacks)
+            fallbacks = [m for m in chosen if m != model]
         return Resolved(
             role=role,
             kind=rc.kind,
@@ -400,6 +479,7 @@ class ModelRouter:
             requires=list(rc.requires),
             reasoning_effort=pick("reasoning_effort", None),
             dimensions=rc.dimensions,
+            estimate_usd_per_image=rc.estimate_usd_per_image,
         )
 
     def resolve_all(self) -> dict[str, Resolved]:
@@ -441,6 +521,8 @@ class ModelRouter:
                 problems.append(ModelProblem(slug, CapabilityProblem.NO_STRUCTURED_OUTPUT))
             if "vision" in resolved.requires and "image" not in entry.input_modalities:
                 problems.append(ModelProblem(slug, CapabilityProblem.NO_IMAGE_INPUT))
+            if "image_output" in resolved.requires and "image" not in entry.output_modalities:
+                problems.append(ModelProblem(slug, CapabilityProblem.NO_IMAGE_OUTPUT))
             if sends_temperature and "temperature" not in params:
                 problem = (
                     CapabilityProblem.REJECTS_TEMPERATURE
@@ -512,6 +594,55 @@ class ModelRouter:
             payload["response_format"] = response_format
         if extra:
             payload.update(extra)
+        return payload
+
+    def image_models(self, role: str) -> list[str]:
+        """The models an image request of ``role`` tries, in order: its model, its fallbacks."""
+        r = self.resolve(role)
+        return [r.model, *r.fallbacks]
+
+    def build_image_request(
+        self,
+        role: str,
+        messages: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        image_config: Mapping[str, Any] | None = None,
+        catalog: Mapping[str, CatalogModel] | None = None,
+        modalities: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        """The body of a chat-completions request to one model of ``role`` that asks for an
+        image back.
+
+        ``model`` is the role's model (the default) or one of its fallbacks: a request names
+        one model and no ``models`` list, because OpenRouter, given the list, answered from the
+        fallback although the first model answers alone, and a list is sent one ``modalities``
+        that a model of images only refuses. The caller tries the fallbacks itself
+        (``image_models``). ``image_config`` is OpenRouter's description of the image (its
+        ``aspect_ratio``); a model that does not read it ignores it, and the caller fits what
+        comes back. The provider routing is the chat requests', and so is the cost the reply
+        reports (``usage``). ``modalities`` are the model's own (``image_modalities`` of
+        ``catalog``, the provider's when the caller could read it) unless given. Raises
+        ``ConfigError`` for a role that is not of kind ``images`` and for a model that is not
+        the role's.
+        """
+        r = self.resolve(role)
+        if r.kind != "images":
+            raise ConfigError(f"role '{role}' is of kind '{r.kind}', not 'images'")
+        chosen = r.model if model is None else model
+        if chosen not in (r.model, *r.fallbacks):
+            raise ConfigError(f"role '{role}' does not name that model")
+        payload: dict[str, Any] = {
+            "model": chosen,
+            "messages": messages,
+            "modalities": list(modalities)
+            if modalities is not None
+            else image_modalities(chosen, catalog),
+            "provider": self.config.provider.routing.model_dump(),
+            "usage": {"include": True},
+        }
+        if image_config:
+            payload["image_config"] = dict(image_config)
         return payload
 
     def build_decision_request(

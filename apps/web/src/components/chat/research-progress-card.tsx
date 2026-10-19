@@ -9,7 +9,7 @@ import { type ProgressStatus, outcomeText, progressDisplay, stageText } from "@/
 import { shortId } from "@/lib/format";
 import { researchHref } from "@/lib/projects/project-navigation";
 
-import { ResearchProposalDecision } from "./research-proposal-decision";
+import { RunProposalDecision } from "./run-proposal-decision";
 
 type ResearchProgressCardProps = {
   projectId: string;
@@ -49,7 +49,7 @@ export function ResearchProgressCard({ projectId, view, status }: ResearchProgre
       </header>
 
       {view.proposal !== null && (
-        <ResearchProposalDecision projectId={projectId} proposal={view.proposal} />
+        <RunProposalDecision projectId={projectId} proposal={view.proposal} />
       )}
 
       {/* Polite, so a screen reader hears the run move on without being interrupted. */}

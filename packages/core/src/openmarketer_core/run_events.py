@@ -60,6 +60,16 @@ SYNTHESIZED = "synthesized"  # {findings, round}
 FINISHED = "finished"  # {findings}
 FAILED = "failed"  # {reason}
 
+# ------------------------------------------------------------ studio run
+BRIEFED = "briefed"  # {technique}
+PRODUCED = "produced"  # {operation, version_id, technique, round, ok}
+CHECKED = "checked"  # {version_id, passed, failures}
+VERIFIED = "verified"  # {version_id, passed, failed}
+TECHNIQUE_SWITCHED = "technique_switched"  # {from_technique, to_technique, round}
+EDIT_PLANNED = "edit_planned"  # {round, steps}
+FINALIZED = "finalized"  # {version_id, round}
+ESCALATED = "escalated"  # {version_id, reason}
+
 # ------------------------------------------------------------- a run's actions
 # The policy gate held one of the run's actions for a person: it waits, and how it ended.
 PROPOSAL_WAITING = "proposal_waiting"  # {proposal_id, action_name, effect}

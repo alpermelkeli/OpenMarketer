@@ -20,6 +20,29 @@ export type ResearchRunList = Schemas["ResearchRunListResponse"];
 export type ResearchRunStatus = Schemas["ResearchRunStatus"];
 export type ResearchReport = Schemas["ResearchReportResponse"];
 
+export type StudioRun = Schemas["StudioRunResponse"];
+/** One run as its own route serves it: the run with what it was asked for. */
+export type StudioRunDetail = Schemas["StudioRunDetailResponse"];
+export type StudioRunRequest = Schemas["StudioRunRequestResponse"];
+export type StudioRunList = Schemas["StudioRunListResponse"];
+export type StudioRunStatus = Schemas["StudioRunStatus"];
+export type AssetRequest = Schemas["AssetRequest"];
+export type Platform = Schemas["Platform"];
+export type AssetTechnique = Schemas["AssetTechnique"];
+export type MediaAsset = Schemas["MediaAssetResponse"];
+export type MediaAssetList = Schemas["MediaAssetListResponse"];
+export type MediaAssetStatus = Schemas["MediaAssetStatus"];
+export type MediaAssetDetail = Schemas["MediaAssetDetailResponse"];
+export type MediaAssetVersion = Schemas["MediaAssetVersionResponse"];
+/** An image the last analysis found in the project's repository, which the studio may use as a reference. */
+export type RepositoryImage = Schemas["RepositoryImageResponse"];
+export type RepositoryImageList = Schemas["RepositoryImageListResponse"];
+export type RepositoryImageKind = Schemas["RepositoryImageKind"];
+export type RepositoryImageSource = Schemas["RepositoryImageSource"];
+/** An image a person adds to the project, as its bytes in base64. */
+export type RepositoryImageUpload = Schemas["RepositoryImageUpload"];
+export type RepositoryImageKindChoice = Schemas["RepositoryImageKindChoice"];
+
 export type ProfileVersion = Schemas["ProfileVersionResponse"];
 export type ProfileVersionSummary = Schemas["ProfileVersionSummaryResponse"];
 export type ProfileVersionList = Schemas["ProfileVersionListResponse"];
@@ -72,6 +95,12 @@ export type CapabilityProblem = Schemas["CapabilityProblem"];
 
 export type AnalysisSettings = Schemas["AnalysisSettingsResponse"];
 export type AnalysisLimitsRequest = Schemas["AnalysisLimitsRequest"];
+
+export type CreativeBudget = Schemas["CreativeBudgetResponse"];
+export type CreativeBudgetRequest = Schemas["CreativeBudgetRequest"];
+export type CreativeBudgetCap = Schemas["CapResponse"];
+export type CapSource = Schemas["CapSource"];
+export type MonthlySpend = Schemas["MonthlySpendResponse"];
 
 export type Problem = Schemas["Problem"];
 export type ErrorCode = Schemas["ErrorCode"];

@@ -11,6 +11,7 @@ import threading
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -28,6 +29,7 @@ from openmarketer_core.decision_questions import YesNoQuestion
 from openmarketer_core.decisions import DecisionError, DecisionReply
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatModel, ChatReply, LLMError
+from openmarketer_core.studio.media_provider import ImageInput, MediaRefused, MediaResult
 from openmarketer_core.tracing import (
     LANGFUSE_CLOUD,
     NOT_TRACING,
@@ -376,3 +378,72 @@ def _imported_names(source_file: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module)
     return names
+
+
+IMAGE_BYTES = b"\x89PNG\r\n\x1a\n-made-up-image-bytes"
+
+
+class ScriptedImages:
+    """An image provider that answers with an image, or refuses, and holds a key."""
+
+    api_key = PROVIDER_KEY
+
+    def __init__(self, refuses: bool = False) -> None:
+        self.refuses = refuses
+
+    def generate(self, prompt, *, width, height, references=()) -> MediaResult:
+        if self.refuses:
+            raise MediaRefused("the image model refused to make this image")
+        return MediaResult(
+            data=IMAGE_BYTES,
+            mime="image/png",
+            width=width,
+            height=height,
+            cost_usd=Decimal("0.04"),
+            provider="openrouter",
+            model="vendor/drawer",
+            params={"aspect_ratio": "1:1", "fitted": "none"},
+        )
+
+    def edit(self, image, instruction, *, width, height, references=()) -> MediaResult:
+        return self.generate(instruction, width=width, height=height)
+
+    def estimate(self, operation) -> Decimal:
+        return Decimal("0.08")
+
+
+def test_media_provider_is_given_back_as_it_is_while_tracing_is_off():
+    provider = ScriptedImages()
+    assert NOT_TRACING.media(provider) is provider
+
+
+def test_image_call_is_a_generation_with_its_prompt_size_model_and_cost_but_no_bytes(traced):
+    reference = ImageInput(IMAGE_BYTES, "image/png")
+    result = traced.tracing.media(ScriptedImages()).generate(
+        "a launch banner", width=1024, height=1024, references=[reference]
+    )
+
+    assert result.data == IMAGE_BYTES
+    call = attributes(traced.named("image.generate"))
+    assert call["langfuse.observation.type"] == "generation"
+    assert json.loads(call["langfuse.observation.input"]) == {
+        "prompt": "a launch banner",
+        "width": 1024,
+        "height": 1024,
+        "references": 1,
+    }
+    assert call["langfuse.observation.model.name"] == "vendor/drawer"
+    assert json.loads(call["langfuse.observation.cost_details"]) == {"total": 0.04}
+    assert "made-up-image-bytes" not in traced.sent()
+    assert PROVIDER_KEY not in traced.sent()
+
+
+def test_refused_image_call_is_an_error_with_its_message_and_is_still_raised(traced):
+    with pytest.raises(MediaRefused):
+        traced.tracing.media(ScriptedImages(refuses=True)).generate("x", width=8, height=8)
+
+    call = attributes(traced.named("image.generate"))
+    assert call["langfuse.observation.level"] == "ERROR"
+    assert (
+        call["langfuse.observation.status_message"] == "the image model refused to make this image"
+    )

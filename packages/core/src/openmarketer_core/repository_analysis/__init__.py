@@ -13,6 +13,8 @@
 - ``intake/``: cloning a repository and reading it safely (the secret scan
   and redaction, ``RepoFiles``, the rule for which host gets a token).
 - ``analyzer_agent/``: the agent that drafts the profile, its rules and tools.
+- ``repository_images/``: the product's own images in the repository (icon, logo,
+  screenshots, marketing images): which are kept, cleaned of metadata, collected.
 
 What several features share stays above this folder: ``db/`` (run state is in
 ``db/analysis_runs.py``), ``graph_checkpoints/``, the model access (``llm.py``,

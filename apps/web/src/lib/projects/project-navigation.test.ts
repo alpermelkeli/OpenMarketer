@@ -6,8 +6,10 @@ import {
   projectIdOfPath,
   projectPageHref,
   projectPageOfPath,
+  PROJECT_PAGES,
   researchHref,
   shortRepositoryName,
+  studioHref,
 } from "./project-navigation";
 
 const ID = "7b755025-304e-457a-99f6-9d8245b7a35a";
@@ -34,6 +36,7 @@ describe("which page of the project an address shows", () => {
     expect(projectPageOfPath(`/projects/${ID}/profile`)).toBe("profile");
     expect(projectPageOfPath(`/projects/${ID}/analyses`)).toBe("analyses");
     expect(projectPageOfPath(`/projects/${ID}/research`)).toBe("research");
+    expect(projectPageOfPath(`/projects/${ID}/studio`)).toBe("studio");
     expect(projectPageOfPath(`/projects/${ID}/approvals`)).toBe("approvals");
   });
 
@@ -84,5 +87,21 @@ describe("the address of a research run", () => {
 
   it("belongs to the research page", () => {
     expect(projectPageOfPath(researchHref(ID, RUN))).toBe("research");
+  });
+});
+
+describe("the studio", () => {
+  const RUN = "6d5e4f3a-2b1c-4d5e-8f90-1a2b3c4d5e6f";
+
+  it("is listed after the research and before the approvals", () => {
+    const pages = PROJECT_PAGES.map((entry) => entry.page);
+    expect(pages.indexOf("studio")).toBe(pages.indexOf("research") + 1);
+    expect(pages.indexOf("approvals")).toBeGreaterThan(pages.indexOf("studio"));
+    expect(PROJECT_PAGES.find((entry) => entry.page === "studio")?.label).toBe("Studio");
+  });
+
+  it("has an address for each of its runs, which belongs to the studio page", () => {
+    expect(studioHref(ID, RUN)).toBe(`/projects/${ID}/studio/${RUN}`);
+    expect(projectPageOfPath(studioHref(ID, RUN))).toBe("studio");
   });
 });

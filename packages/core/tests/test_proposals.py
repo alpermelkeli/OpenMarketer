@@ -5,6 +5,7 @@ They need PostgreSQL (see the root ``conftest.py``).
 
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -63,6 +64,8 @@ def propose(
     action_id: str | None = None,
     payload: dict | None = None,
     wait_seconds: float = DAY,
+    effect: ActionEffect = ActionEffect.PUBLISHES,
+    estimate_usd: Decimal | None = None,
 ) -> ActionProposal:
     run = GraphRunRef(kind="writer-run", run_id=uuid.uuid4())
     request = ActionRequest(
@@ -76,8 +79,9 @@ def propose(
         run=run,
         workflow_id=f"write-{run.run_id}",
         request=request,
-        effect=ActionEffect.PUBLISHES,
+        effect=effect,
         wait_seconds=wait_seconds,
+        estimate_usd=estimate_usd,
     )
 
 
@@ -117,6 +121,24 @@ def test_proposed_action_waits_for_a_person_with_what_it_asked_for(session, scop
     assert (proposal.action_name, proposal.effect) == ("publish_post", ActionEffect.PUBLISHES)
     assert proposal.payload == {"text": "v2 is out"}
     assert (proposal.decided_by, proposal.decided_at) == (None, None)
+
+
+def test_proposed_spend_holds_what_it_was_estimated_to_cost(session, scope):
+    proposal = propose(session, scope, effect=ActionEffect.SPENDS, estimate_usd=Decimal("0.400000"))
+
+    assert proposal.estimate_usd == Decimal("0.4")
+    assert get_proposal(session, **_ids(scope), proposal_id=proposal.id).estimate_usd == Decimal(
+        "0.4"
+    )
+
+
+def test_proposal_that_does_not_spend_has_no_estimate(session, scope):
+    assert propose(session, scope).estimate_usd is None
+
+
+def test_database_refuses_an_estimate_on_an_action_that_does_not_spend(session, scope):
+    with pytest.raises(IntegrityError), session.begin_nested():
+        propose(session, scope, estimate_usd=Decimal(1))
 
 
 def test_deadline_is_the_wait_from_now(session, scope):

@@ -6,6 +6,10 @@
 # The profile `tracing` adds a self-hosted Langfuse on http://localhost:3001, for tracing agent
 # runs (`make up tracing=1`). Plain `make up` leaves it out: it is four more containers.
 #
+# The creative studio's sandbox is part of the plain stack: `make up` builds its image when it
+# is missing and starts the egress proxy its install phase reaches PyPI through. `make sandbox`
+# rebuilds the image after a change to deploy/sandbox/studio.
+#
 # Credentials here are development defaults; never reuse them elsewhere.
 name: openmarketer-dev
 
@@ -238,6 +242,35 @@ services:
       # The browser fetches uploaded media from MinIO's port on the host.
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:${MINIO_PORT:-9000}
       LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://minio:9000
+
+  # ---- the creative studio's sandbox --------------------------------------------------------
+
+  # Builds the sandbox's image when it is missing, then exits: the worker starts one container
+  # of it per program, render or reading, never compose.
+  studio-sandbox-image:
+    image: openmarketer/studio-sandbox:dev
+    build: ../sandbox/studio
+    entrypoint: ["true"]
+    network_mode: none
+    restart: "no"
+
+  # The only way out of the network the sandbox's install phase runs on: a forward proxy that
+  # lets through HTTPS to PyPI and nothing else (deploy/sandbox/egress-proxy/squid.conf). It
+  # publishes no port: only containers on `studio-sandbox` reach it. The run phase has no
+  # network at all.
+  studio-egress-proxy:
+    image: ubuntu/squid:6.6-24.04_edge
+    volumes:
+      - ../sandbox/egress-proxy/squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - default
+      - studio-sandbox
+
+networks:
+  # Internal: a container on it reaches the proxy and nothing else, not even the host.
+  studio-sandbox:
+    name: openmarketer-studio-sandbox
+    internal: true
 
 volumes:
   postgres-data:

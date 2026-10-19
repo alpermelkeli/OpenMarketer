@@ -71,6 +71,7 @@ from openmarketer_core.repository_analysis.workflow_contract import (
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.request import REQUESTED_BY_THE_CHAT
 from openmarketer_core.research.workflow_contract import ResearchRunInput
+from openmarketer_core.studio.asset_store import AssetStore
 from openmarketer_worker import AgentRegistration
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, checkpoints_in
 from openmarketer_worker.agent_runtime.vocabulary import (
@@ -290,6 +291,7 @@ def analyzer_with(sessions, checkpoints, clones_root, model, intake):
         new_model: Callable[[uuid.UUID], ChatModel] | None = None,
         tokens_of: Callable[[uuid.UUID], RepositoryTokens] = lambda workspace_id: NO_TOKENS,
         limits_of: Callable[[uuid.UUID], Limits] = lambda workspace_id: Limits(),
+        repository_images: AssetStore | None = None,
     ) -> Analyzer:
         return Analyzer(
             wiring.AnalyzerParts(
@@ -301,6 +303,7 @@ def analyzer_with(sessions, checkpoints, clones_root, model, intake):
                 extractors=[],
                 policy=policy,
                 limits_of=limits_of,
+                repository_images=repository_images,
             )
         )
 

@@ -26,9 +26,11 @@ from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.agent_runtime.model_input import shown
 from openmarketer_core.db.models import (
     AnalysisRunStatus,
+    MediaAssetStatus,
     ProfileStatus,
     ProjectStatus,
     ResearchRunStatus,
+    StudioRunStatus,
 )
 
 # The sections of a Product Profile (the fields of ``profile.ProductProfile``), in order.
@@ -139,6 +141,62 @@ class ResearchReportReading:
 
 
 @dataclass(frozen=True)
+class AssetReviewReading:
+    """What the checks and the visual verifier found of the version a studio run ended with.
+
+    ``check_failures`` are the names of the programmatic checks it failed, worded by code;
+    ``failed_criteria`` are the verifier's criteria it failed, each with the criterion, its
+    severity and the verifier's note, which a model wrote. ``passed`` is ``None`` while the
+    version has not been reviewed.
+    """
+
+    version_id: uuid.UUID
+    passed: bool | None
+    check_failures: list[str]
+    failed_criteria: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class StudioRunReading:
+    """One studio run of the project: what it was asked for and how far it got.
+
+    ``goal`` and ``exact_copy`` are the request's, ``None`` and empty when the stored request
+    no longer fits its schema. ``final_asset_id`` is the asset a run that succeeded or needs
+    review ended with, in the project's Studio library; ``review`` is what the checks and the
+    verifier found of it, and ``review_reason`` why a run that needs review was handed to a
+    person, as the run's code worded it. Both are ``None`` where a listing leaves them out.
+    """
+
+    id: uuid.UUID
+    status: StudioRunStatus
+    platform: str
+    goal: str | None
+    exact_copy: list[str]
+    requested_by: str
+    error: str | None
+    final_asset_id: uuid.UUID | None
+    cost_usd: float
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    review: AssetReviewReading | None = None
+    review_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class MediaAssetReading:
+    """One image of the project's Studio library and a person's decision on it."""
+
+    id: uuid.UUID
+    run_id: uuid.UUID
+    platform: str
+    status: MediaAssetStatus
+    current_version_id: uuid.UUID | None
+    created_at: datetime
+    decided_at: datetime | None
+
+
+@dataclass(frozen=True)
 class ProjectStatusReading:
     """Where the project stands: what it is, its review state, and its latest work."""
 
@@ -201,5 +259,23 @@ class ChatReads(Protocol):
 
         With ``run_id``, that run's report and nothing else: ``None`` when the run has
         none or the project has no such run.
+        """
+        ...
+
+    def recent_studio_runs(self, limit: int) -> Sequence[StudioRunReading]:
+        """The project's studio runs, newest first, at most ``limit`` records, without reviews.
+
+        ``MAX_LISTED_RECORDS`` bounds it further.
+        """
+        ...
+
+    def studio_run(self, run_id: uuid.UUID) -> StudioRunReading | None:
+        """One studio run of the project with its review, or ``None`` if there is none."""
+        ...
+
+    def media_assets(self, limit: int) -> Sequence[MediaAssetReading]:
+        """The project's Studio library, newest first, at most ``limit`` assets.
+
+        ``MAX_LISTED_RECORDS`` bounds it further.
         """
         ...

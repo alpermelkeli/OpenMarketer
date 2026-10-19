@@ -1,13 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_BODY_BYTES, allowedApiTarget, apiBaseUrl, assertFromDashboard, proxyToApi } from "./api-proxy";
+import {
+  MAX_BODY_BYTES,
+  MAX_IMAGE_BYTES,
+  MAX_UPLOAD_BODY_BYTES,
+  allowedApiTarget,
+  apiBaseUrl,
+  assertFromDashboard,
+  proxyToApi,
+} from "./api-proxy";
 
 const PROJECT = "8ce5e2bb-6e54-49b4-9ddc-b96f20ec1109";
 const RUN = "0b0e6c6e-1111-4222-8333-444455556666";
 const APPROVAL = ["projects", PROJECT, "profile", "versions", "3", "approval"];
 
-function request(method: string, headers: Record<string, string>, body?: string, query = ""): Request {
-  return new Request(`http://localhost:3000/api/v1/ignored${query}`, { method, headers, body });
+function request(
+  method: string,
+  headers: Record<string, string>,
+  body?: string,
+  query = "",
+): Request {
+  return new Request(`http://localhost:3000/api/v1/ignored${query}`, {
+    method,
+    headers,
+    body,
+  });
 }
 
 const NO_QUERY = new URLSearchParams();
@@ -30,13 +47,18 @@ describe("a request from another site", () => {
   it("is refused when its Origin is another site", async () => {
     const api = apiAnswering(200, "{}");
     const response = await proxyToApi(
-      request("POST", { host: "localhost:3000", origin: "https://evil.example" }),
+      request("POST", {
+        host: "localhost:3000",
+        origin: "https://evil.example",
+      }),
       APPROVAL,
       undefined,
       api,
     );
     expect(response.status).toBe(403);
-    expect(await response.json()).toMatchObject({ code: "proxy_request_refused" });
+    expect(await response.json()).toMatchObject({
+      code: "proxy_request_refused",
+    });
     expect(api).not.toHaveBeenCalled();
   });
 
@@ -53,12 +75,18 @@ describe("a request from another site", () => {
   });
 
   it("is refused when it comes from another port of this machine", () => {
-    const headers = new Headers({ host: "localhost:3000", origin: "http://localhost:5173" });
+    const headers = new Headers({
+      host: "localhost:3000",
+      origin: "http://localhost:5173",
+    });
     expect(() => assertFromDashboard("POST", headers)).toThrow("another site");
   });
 
   it("is refused when a same-site page that is not this origin makes it", () => {
-    const headers = new Headers({ ...fromDashboard, "sec-fetch-site": "same-site" });
+    const headers = new Headers({
+      ...fromDashboard,
+      "sec-fetch-site": "same-site",
+    });
     expect(() => assertFromDashboard("POST", headers)).toThrow("another site");
   });
 
@@ -68,18 +96,30 @@ describe("a request from another site", () => {
   });
 
   it("is refused when the Host is a foreign name pointed at this machine", () => {
-    const headers = new Headers({ host: "evil.example:3000", origin: "http://evil.example:3000" });
-    expect(() => assertFromDashboard("POST", headers)).toThrow("addressed to this machine");
+    const headers = new Headers({
+      host: "evil.example:3000",
+      origin: "http://evil.example:3000",
+    });
+    expect(() => assertFromDashboard("POST", headers)).toThrow(
+      "addressed to this machine",
+    );
   });
 
   it("is refused when the Host only looks local", () => {
-    for (const host of ["localhost.evil.example", "localhost@evil.example", "127.0.0.1.nip.io"]) {
+    for (const host of [
+      "localhost.evil.example",
+      "localhost@evil.example",
+      "127.0.0.1.nip.io",
+    ]) {
       expect(() => assertFromDashboard("GET", new Headers({ host }))).toThrow();
     }
   });
 
   it("cannot read through the proxy either", () => {
-    const headers = new Headers({ host: "localhost:3000", "sec-fetch-site": "cross-site" });
+    const headers = new Headers({
+      host: "localhost:3000",
+      "sec-fetch-site": "cross-site",
+    });
     expect(() => assertFromDashboard("GET", headers)).toThrow("another site");
   });
 });
@@ -87,7 +127,9 @@ describe("a request from another site", () => {
 describe("a request that changes something", () => {
   it("is refused without an Origin", () => {
     const headers = new Headers({ host: "localhost:3000" });
-    expect(() => assertFromDashboard("POST", headers)).toThrow("must carry an Origin");
+    expect(() => assertFromDashboard("POST", headers)).toThrow(
+      "must carry an Origin",
+    );
   });
 
   it("is refused as a top-level navigation", () => {
@@ -116,7 +158,11 @@ describe("a request that changes something", () => {
   it("is refused when its body is not JSON", async () => {
     const api = apiAnswering(201, "{}");
     const response = await proxyToApi(
-      request("POST", { ...fromDashboard, "content-type": "text/plain" }, '{"name":"x"}'),
+      request(
+        "POST",
+        { ...fromDashboard, "content-type": "text/plain" },
+        '{"name":"x"}',
+      ),
       ["projects"],
       undefined,
       api,
@@ -128,14 +174,20 @@ describe("a request that changes something", () => {
 
 describe("a read from the dashboard", () => {
   it("needs no Origin, as browsers send none with a same-origin GET", () => {
-    const headers = new Headers({ host: "127.0.0.1:3000", "sec-fetch-site": "same-origin" });
+    const headers = new Headers({
+      host: "127.0.0.1:3000",
+      "sec-fetch-site": "same-origin",
+    });
     expect(() => assertFromDashboard("GET", headers)).not.toThrow();
   });
 
   it("passes the API's status and body on", async () => {
     const problem = '{"code":"profile_not_found","message":"no draft"}';
     const response = await proxyToApi(
-      request("GET", { host: "localhost:3000", "sec-fetch-site": "same-origin" }),
+      request("GET", {
+        host: "localhost:3000",
+        "sec-fetch-site": "same-origin",
+      }),
       ["projects", PROJECT, "profile", "versions"],
       "http://127.0.0.1:9999",
       apiAnswering(404, problem),
@@ -166,9 +218,16 @@ describe("the routes that are forwarded", () => {
     expect(allowedApiPath("GET", ["projects", PROJECT, "analyses", RUN])).toBe(
       `/v1/projects/${PROJECT}/analyses/${RUN}`,
     );
-    expect(allowedApiPath("POST", ["projects", PROJECT, "profile", "versions", "12", "edits"])).toBe(
-      `/v1/projects/${PROJECT}/profile/versions/12/edits`,
-    );
+    expect(
+      allowedApiPath("POST", [
+        "projects",
+        PROJECT,
+        "profile",
+        "versions",
+        "12",
+        "edits",
+      ]),
+    ).toBe(`/v1/projects/${PROJECT}/profile/versions/12/edits`);
   });
 
   it("do not include other methods of a known path", () => {
@@ -197,26 +256,56 @@ describe("the routes that are forwarded", () => {
 });
 
 describe("the routes of proposals", () => {
-  const proposal = (decision: string) => ["projects", PROJECT, "proposals", RUN, decision];
+  const proposal = (decision: string) => [
+    "projects",
+    PROJECT,
+    "proposals",
+    RUN,
+    decision,
+  ];
 
   it("forward the list, an approval, a rejection and the workspace's waiting list", () => {
-    expect(allowedApiPath("GET", ["projects", PROJECT, "proposals"])).toBe(`/v1/projects/${PROJECT}/proposals`);
-    expect(allowedApiPath("POST", proposal("approval"))).toBe(`/v1/projects/${PROJECT}/proposals/${RUN}/approval`);
-    expect(allowedApiPath("POST", proposal("rejection"))).toBe(`/v1/projects/${PROJECT}/proposals/${RUN}/rejection`);
+    expect(allowedApiPath("GET", ["projects", PROJECT, "proposals"])).toBe(
+      `/v1/projects/${PROJECT}/proposals`,
+    );
+    expect(allowedApiPath("POST", proposal("approval"))).toBe(
+      `/v1/projects/${PROJECT}/proposals/${RUN}/approval`,
+    );
+    expect(allowedApiPath("POST", proposal("rejection"))).toBe(
+      `/v1/projects/${PROJECT}/proposals/${RUN}/rejection`,
+    );
     expect(allowedApiPath("GET", ["proposals"])).toBe("/v1/proposals");
   });
 
   it("do not include one by its id, a decision by GET, a proposal that is not an id, or a filter", () => {
-    expect(() => allowedApiPath("GET", ["projects", PROJECT, "proposals", RUN])).toThrow();
+    expect(() =>
+      allowedApiPath("GET", ["projects", PROJECT, "proposals", RUN]),
+    ).toThrow();
     expect(() => allowedApiPath("GET", proposal("approval"))).toThrow();
-    expect(() => allowedApiPath("POST", ["projects", PROJECT, "proposals", "latest", "approval"])).toThrow();
-    expect(() => allowedApiPath("POST", ["projects", PROJECT, "proposals", RUN])).toThrow();
+    expect(() =>
+      allowedApiPath("POST", [
+        "projects",
+        PROJECT,
+        "proposals",
+        "latest",
+        "approval",
+      ]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("POST", ["projects", PROJECT, "proposals", RUN]),
+    ).toThrow();
     expect(() => allowedApiPath("GET", ["proposals", "latest"])).toThrow();
     for (const segments of [
       ["projects", PROJECT, "proposals"],
       ["proposals"],
     ]) {
-      expect(() => allowedApiTarget("GET", segments, new URLSearchParams("status=pending"))).toThrow();
+      expect(() =>
+        allowedApiTarget(
+          "GET",
+          segments,
+          new URLSearchParams("status=pending"),
+        ),
+      ).toThrow();
     }
   });
 });
@@ -228,7 +317,9 @@ describe("the routes of a project's chat", () => {
   it("forward the chats, one of them, its messages, its read mark and its deletion", () => {
     expect(allowedApiPath("GET", CHATS)).toBe(`/v1/projects/${PROJECT}/chats`);
     expect(allowedApiPath("POST", CHATS)).toBe(`/v1/projects/${PROJECT}/chats`);
-    expect(allowedApiPath("GET", [...CHATS, CHAT])).toBe(`/v1/projects/${PROJECT}/chats/${CHAT}`);
+    expect(allowedApiPath("GET", [...CHATS, CHAT])).toBe(
+      `/v1/projects/${PROJECT}/chats/${CHAT}`,
+    );
     expect(allowedApiPath("GET", [...CHATS, CHAT, "messages"])).toBe(
       `/v1/projects/${PROJECT}/chats/${CHAT}/messages`,
     );
@@ -246,13 +337,21 @@ describe("the routes of a project's chat", () => {
   it("do not include a wrong method, a chat that is not an id, or a path below one", () => {
     expect(() => allowedApiPath("GET", [...CHATS, CHAT, "read"])).toThrow();
     expect(() => allowedApiPath("POST", [...CHATS, CHAT])).toThrow();
-    expect(() => allowedApiPath("POST", [...CHATS, CHAT, "messages", RUN])).toThrow();
+    expect(() =>
+      allowedApiPath("POST", [...CHATS, CHAT, "messages", RUN]),
+    ).toThrow();
     expect(() => allowedApiPath("GET", [...CHATS, "latest"])).toThrow();
     expect(() => allowedApiPath("DELETE", CHATS)).toThrow();
     expect(() => allowedApiPath("DELETE", [...CHATS, "latest"])).toThrow();
-    expect(() => allowedApiPath("GET", ["projects", PROJECT, "chat"])).toThrow();
     expect(() =>
-      allowedApiTarget("GET", [...CHATS, CHAT, "messages"], new URLSearchParams("role=user")),
+      allowedApiPath("GET", ["projects", PROJECT, "chat"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiTarget(
+        "GET",
+        [...CHATS, CHAT, "messages"],
+        new URLSearchParams("role=user"),
+      ),
     ).toThrow();
   });
 });
@@ -262,7 +361,9 @@ describe("the routes of research", () => {
   const RESEARCH = "0b0e6c6e-2222-4333-8444-555566667777";
 
   it("forward the runs, the report of one and the deletion of one", () => {
-    expect(allowedApiPath("GET", RESEARCHES)).toBe(`/v1/projects/${PROJECT}/researches`);
+    expect(allowedApiPath("GET", RESEARCHES)).toBe(
+      `/v1/projects/${PROJECT}/researches`,
+    );
     expect(allowedApiPath("GET", [...RESEARCHES, RESEARCH])).toBe(
       `/v1/projects/${PROJECT}/researches/${RESEARCH}`,
     );
@@ -278,12 +379,397 @@ describe("the routes of research", () => {
     expect(() => allowedApiPath("POST", RESEARCHES)).toThrow();
     expect(() => allowedApiPath("DELETE", RESEARCHES)).toThrow();
     expect(() => allowedApiPath("DELETE", [...RESEARCHES, "latest"])).toThrow();
-    expect(() => allowedApiPath("DELETE", [...RESEARCHES, RESEARCH, "report"])).toThrow();
-    expect(() => allowedApiPath("GET", [...RESEARCHES, "latest"])).toThrow();
-    expect(() => allowedApiPath("GET", [...RESEARCHES, RESEARCH, "pages"])).toThrow();
     expect(() =>
-      allowedApiTarget("GET", RESEARCHES, new URLSearchParams("status=succeeded")),
+      allowedApiPath("DELETE", [...RESEARCHES, RESEARCH, "report"]),
     ).toThrow();
+    expect(() => allowedApiPath("GET", [...RESEARCHES, "latest"])).toThrow();
+    expect(() =>
+      allowedApiPath("GET", [...RESEARCHES, RESEARCH, "pages"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiTarget(
+        "GET",
+        RESEARCHES,
+        new URLSearchParams("status=succeeded"),
+      ),
+    ).toThrow();
+  });
+});
+
+describe("the routes of the studio", () => {
+  const RUNS = ["projects", PROJECT, "studio-runs"];
+  const ASSETS = ["projects", PROJECT, "media-assets"];
+  const ASSET = "0b0e6c6e-3333-4444-8555-666677778888";
+  const VERSION = "0b0e6c6e-9999-4aaa-8bbb-ccccddddeeee";
+
+  it("forward the runs, starting and deleting one, and the library with its decisions", () => {
+    expect(allowedApiPath("GET", RUNS)).toBe(
+      `/v1/projects/${PROJECT}/studio-runs`,
+    );
+    expect(allowedApiPath("POST", RUNS)).toBe(
+      `/v1/projects/${PROJECT}/studio-runs`,
+    );
+    expect(allowedApiPath("GET", [...RUNS, RUN])).toBe(
+      `/v1/projects/${PROJECT}/studio-runs/${RUN}`,
+    );
+    expect(allowedApiPath("DELETE", [...RUNS, RUN])).toBe(
+      `/v1/projects/${PROJECT}/studio-runs/${RUN}`,
+    );
+    expect(allowedApiPath("GET", ASSETS)).toBe(
+      `/v1/projects/${PROJECT}/media-assets`,
+    );
+    expect(allowedApiPath("GET", [...ASSETS, ASSET])).toBe(
+      `/v1/projects/${PROJECT}/media-assets/${ASSET}`,
+    );
+    expect(allowedApiPath("POST", [...ASSETS, ASSET, "accept"])).toBe(
+      `/v1/projects/${PROJECT}/media-assets/${ASSET}/accept`,
+    );
+    expect(allowedApiPath("POST", [...ASSETS, ASSET, "reject"])).toBe(
+      `/v1/projects/${PROJECT}/media-assets/${ASSET}/reject`,
+    );
+  });
+
+  it("page the runs and the library", () => {
+    expect(allowedApiTarget("GET", RUNS, new URLSearchParams("limit=20"))).toBe(
+      `/v1/projects/${PROJECT}/studio-runs?limit=20`,
+    );
+    expect(
+      allowedApiTarget("GET", ASSETS, new URLSearchParams("cursor=abc")),
+    ).toBe(`/v1/projects/${PROJECT}/media-assets?cursor=abc`);
+  });
+
+  it("forward a version's image and its download as reads only, with no query", () => {
+    const image = [...ASSETS, ASSET, "versions", VERSION, "image"];
+    const download = [...ASSETS, ASSET, "versions", VERSION, "download"];
+    expect(allowedApiPath("GET", image)).toBe(
+      `/v1/projects/${PROJECT}/media-assets/${ASSET}/versions/${VERSION}/image`,
+    );
+    expect(allowedApiPath("GET", download)).toBe(
+      `/v1/projects/${PROJECT}/media-assets/${ASSET}/versions/${VERSION}/download`,
+    );
+    for (const method of ["POST", "PUT", "DELETE"]) {
+      expect(() => allowedApiPath(method, image)).toThrow();
+      expect(() => allowedApiPath(method, download)).toThrow();
+    }
+    expect(() =>
+      allowedApiTarget("GET", image, new URLSearchParams("size=small")),
+    ).toThrow();
+  });
+
+  it("do not include a wrong method, an id of another form, or a path below one", () => {
+    expect(() => allowedApiPath("PUT", RUNS)).toThrow();
+    expect(() => allowedApiPath("POST", [...RUNS, RUN])).toThrow();
+    expect(() => allowedApiPath("GET", [...RUNS, "latest"])).toThrow();
+    expect(() => allowedApiPath("DELETE", [...ASSETS, ASSET])).toThrow();
+    expect(() => allowedApiPath("GET", [...ASSETS, ASSET, "accept"])).toThrow();
+    expect(() =>
+      allowedApiPath("GET", [...ASSETS, ASSET, "versions"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("GET", [...ASSETS, ASSET, "versions", "1", "image"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("GET", [...ASSETS, ASSET, "versions", VERSION, "code"]),
+    ).toThrow();
+  });
+
+  it("forward reading, choosing and removing the creative budget", () => {
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      expect(allowedApiPath(method, ["settings", "creative-budget"])).toBe(
+        "/v1/settings/creative-budget",
+      );
+    }
+    expect(() =>
+      allowedApiPath("POST", ["settings", "creative-budget"]),
+    ).toThrow();
+  });
+});
+
+describe("the routes of the repository's images", () => {
+  const IMAGES = ["projects", PROJECT, "repository-images"];
+  const IMAGE = "0b0e6c6e-1111-4222-8333-444455556666";
+
+  it("forward the list, paged", () => {
+    expect(allowedApiPath("GET", IMAGES)).toBe(
+      `/v1/projects/${PROJECT}/repository-images`,
+    );
+    expect(
+      allowedApiTarget(
+        "GET",
+        IMAGES,
+        new URLSearchParams("limit=20&cursor=abc"),
+      ),
+    ).toBe(`/v1/projects/${PROJECT}/repository-images?limit=20&cursor=abc`);
+    expect(() =>
+      allowedApiTarget("GET", IMAGES, new URLSearchParams("kind=logo")),
+    ).toThrow();
+  });
+
+  it("forward an image as a read only, with no query", () => {
+    const image = [...IMAGES, IMAGE, "image"];
+    expect(allowedApiPath("GET", image)).toBe(
+      `/v1/projects/${PROJECT}/repository-images/${IMAGE}/image`,
+    );
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      expect(() => allowedApiPath(method, image)).toThrow();
+    }
+    for (const method of ["PUT", "PATCH", "DELETE"]) {
+      expect(() => allowedApiPath(method, IMAGES)).toThrow();
+    }
+    expect(() =>
+      allowedApiTarget("GET", image, new URLSearchParams("size=small")),
+    ).toThrow();
+  });
+
+  it("pass an image on as bytes, with the disposition the API names after its id", async () => {
+    const WEBP = new Uint8Array([0x52, 0x49, 0x46, 0x46]);
+    const disposition = `inline; filename="${IMAGE}.webp"`;
+    const api = vi.fn<typeof fetch>(
+      async () =>
+        new Response(WEBP, {
+          headers: {
+            "content-type": "image/webp",
+            "content-disposition": disposition,
+          },
+        }),
+    );
+    const headers = { host: "localhost:3000", "sec-fetch-site": "same-origin" };
+    const response = await proxyToApi(
+      request("GET", headers),
+      [...IMAGES, IMAGE, "image"],
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(WEBP);
+    expect(response.headers.get("content-type")).toBe("image/webp");
+    expect(response.headers.get("content-disposition")).toBe(disposition);
+  });
+
+  it("forward an upload, a change of kind and a removal, and nothing else of one image", () => {
+    expect(allowedApiPath("POST", IMAGES)).toBe(
+      `/v1/projects/${PROJECT}/repository-images`,
+    );
+    expect(allowedApiPath("PATCH", [...IMAGES, IMAGE])).toBe(
+      `/v1/projects/${PROJECT}/repository-images/${IMAGE}`,
+    );
+    expect(allowedApiPath("DELETE", [...IMAGES, IMAGE])).toBe(
+      `/v1/projects/${PROJECT}/repository-images/${IMAGE}`,
+    );
+    for (const method of ["GET", "POST", "PUT"]) {
+      expect(() => allowedApiPath(method, [...IMAGES, IMAGE])).toThrow();
+    }
+    expect(() => allowedApiPath("PATCH", [...IMAGES, "logo.png"])).toThrow();
+    expect(() => allowedApiPath("DELETE", [...IMAGES, "logo.png"])).toThrow();
+    expect(() =>
+      allowedApiTarget("POST", IMAGES, new URLSearchParams("kind=logo")),
+    ).toThrow();
+  });
+
+  it("refuse an upload, a change of kind or a removal without the dashboard's Origin", async () => {
+    const api = apiAnswering(200, "{}");
+    const noOrigin = { host: "localhost:3000", "content-type": "application/json" };
+    for (const [method, segments] of [
+      ["POST", IMAGES],
+      ["PATCH", [...IMAGES, IMAGE]],
+      ["DELETE", [...IMAGES, IMAGE]],
+    ] as const) {
+      const body = method === "DELETE" ? undefined : '{"kind":"logo"}';
+      const bare = await proxyToApi(request(method, noOrigin, body), segments, undefined, api);
+      expect(bare.status).toBe(403);
+      const foreign = await proxyToApi(
+        request(method, { ...noOrigin, origin: "https://evil.example" }, body),
+        segments,
+        undefined,
+        api,
+      );
+      expect(foreign.status).toBe(403);
+    }
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("forward a change of kind as PATCH with its JSON body", async () => {
+    const api = apiAnswering(200, "{}");
+    const response = await proxyToApi(
+      request("PATCH", { ...fromDashboard, "content-type": "application/json" }, '{"kind":"logo"}'),
+      [...IMAGES, IMAGE],
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(200);
+    const [, init] = api.mock.calls[0];
+    expect(init?.method).toBe("PATCH");
+    expect(init?.body).toBe('{"kind":"logo"}');
+  });
+
+  it("do not include an id of another form or a path beside one", () => {
+    expect(() => allowedApiPath("GET", [...IMAGES, IMAGE])).toThrow();
+    expect(() =>
+      allowedApiPath("GET", [...IMAGES, "logo.png", "image"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("GET", [...IMAGES, IMAGE, "download"]),
+    ).toThrow();
+  });
+});
+
+describe("an image the API answers with", () => {
+  const ASSET = "0b0e6c6e-3333-4444-8555-666677778888";
+  const VERSION = "0b0e6c6e-9999-4aaa-8bbb-ccccddddeeee";
+  const IMAGE = [
+    "projects",
+    PROJECT,
+    "media-assets",
+    ASSET,
+    "versions",
+    VERSION,
+    "image",
+  ];
+  const reading = { host: "localhost:3000", "sec-fetch-site": "same-origin" };
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+  function apiImage(
+    body: BodyInit | null,
+    headers: Record<string, string>,
+    status = 200,
+  ) {
+    return vi.fn<typeof fetch>(
+      async () => new Response(body, { status, headers }),
+    );
+  }
+
+  async function read(
+    api: typeof fetch,
+    headers: Record<string, string> = reading,
+  ) {
+    return proxyToApi(request("GET", headers), IMAGE, undefined, api);
+  }
+
+  it("is passed on as bytes, asked for as an image", async () => {
+    const api = apiImage(PNG, { "content-type": "image/png" });
+    const response = await read(api);
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(PNG);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("content-length")).toBe(String(PNG.byteLength));
+    expect(api.mock.calls[0][1]?.headers).toEqual({
+      accept: "image/png, image/jpeg, image/webp",
+    });
+  });
+
+  it("is passed on for each of the three types the studio stores", async () => {
+    for (const type of ["image/png", "image/jpeg", "image/webp"]) {
+      const response = await read(apiImage(PNG, { "content-type": type }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe(type);
+    }
+  });
+
+  it("is refused when it is any other type", async () => {
+    for (const type of [
+      "text/html",
+      "image/svg+xml",
+      "application/json",
+      "application/octet-stream",
+    ]) {
+      const response = await read(
+        apiImage("<svg onload=alert(1)>", { "content-type": type }),
+      );
+      expect(response.status).toBe(502);
+      expect(response.headers.get("content-type")).toBe("application/json");
+      expect(await response.json()).toMatchObject({
+        code: "proxy_upstream_rejected",
+      });
+    }
+    const untyped = await read(apiImage(new Blob([PNG]), {}));
+    expect(untyped.status).toBe(502);
+  });
+
+  it("is refused when it is larger than the limit, declared or not", async () => {
+    const declared = await read(
+      apiImage(PNG, {
+        "content-type": "image/png",
+        "content-length": String(MAX_IMAGE_BYTES + 1),
+      }),
+    );
+    expect(declared.status).toBe(502);
+    const large = new Uint8Array(MAX_IMAGE_BYTES + 1);
+    const undeclared = await read(
+      apiImage(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(large);
+            controller.close();
+          },
+        }),
+        { "content-type": "image/png" },
+      ),
+    );
+    expect(undeclared.status).toBe(502);
+    expect(await undeclared.json()).toMatchObject({
+      code: "proxy_upstream_rejected",
+    });
+  });
+
+  it("comes back with the five headers an image needs and no other", async () => {
+    const response = await read(
+      apiImage(PNG, {
+        "content-type": "image/png; charset=binary",
+        "content-disposition": `attachment; filename="${VERSION}.png"`,
+        "cache-control": "private, max-age=86400, immutable",
+        "set-cookie": "session=1",
+        "x-internal": "secret",
+        link: "<https://evil.example>; rel=preload",
+      }),
+    );
+    expect([...response.headers.keys()].sort()).toEqual([
+      "cache-control",
+      "content-disposition",
+      "content-length",
+      "content-type",
+      "x-content-type-options",
+    ]);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("content-disposition")).toBe(
+      `attachment; filename="${VERSION}.png"`,
+    );
+    expect(response.headers.get("cache-control")).toBe(
+      "private, max-age=86400, immutable",
+    );
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("drops a disposition or a cache rule the API does not write", async () => {
+    const response = await read(
+      apiImage(PNG, {
+        "content-type": "image/png",
+        "content-disposition": 'attachment; filename="../../evil.html"',
+        "cache-control": 'public, no-cache="set-cookie"',
+      }),
+    );
+    expect(response.headers.get("content-disposition")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("passes the API's refusal on as JSON", async () => {
+    const problem =
+      '{"code":"media_asset_version_not_found","message":"no such version"}';
+    const response = await read(
+      apiImage(problem, { "content-type": "application/json" }, 404),
+    );
+    expect(response.status).toBe(404);
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(await response.text()).toBe(problem);
+  });
+
+  it("is not read for another site", async () => {
+    const api = apiImage(PNG, { "content-type": "image/png" });
+    const response = await read(api, {
+      host: "localhost:3000",
+      "sec-fetch-site": "cross-site",
+    });
+    expect(response.status).toBe(403);
+    expect(api).not.toHaveBeenCalled();
   });
 });
 
@@ -303,40 +789,85 @@ describe("the events of a chat", () => {
           controller.close();
         },
       });
-      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
     });
   }
 
   it("forward the history page by page, and the stream from an event id", () => {
-    expect(allowedApiTarget("GET", EVENTS, new URLSearchParams("limit=100&cursor=abc"))).toBe(
-      `/v1/projects/${PROJECT}/chats/${CHAT}/events?limit=100&cursor=abc`,
-    );
+    expect(
+      allowedApiTarget(
+        "GET",
+        EVENTS,
+        new URLSearchParams("limit=100&cursor=abc"),
+      ),
+    ).toBe(`/v1/projects/${PROJECT}/chats/${CHAT}/events?limit=100&cursor=abc`);
     expect(allowedApiPath("GET", STREAM)).toBe(streamPath);
-    expect(allowedApiTarget("GET", STREAM, new URLSearchParams("after=42"))).toBe(`${streamPath}?after=42`);
+    expect(
+      allowedApiTarget("GET", STREAM, new URLSearchParams("after=42")),
+    ).toBe(`${streamPath}?after=42`);
   });
 
   it("take no other method, and nothing below the stream", () => {
     expect(() => allowedApiPath("POST", EVENTS)).toThrow();
     expect(() => allowedApiPath("POST", STREAM)).toThrow();
     expect(() => allowedApiPath("GET", [...STREAM, "1"])).toThrow();
-    expect(() => allowedApiPath("GET", ["projects", PROJECT, "chats", "latest", "events", "stream"])).toThrow();
+    expect(() =>
+      allowedApiPath("GET", [
+        "projects",
+        PROJECT,
+        "chats",
+        "latest",
+        "events",
+        "stream",
+      ]),
+    ).toThrow();
   });
 
   it("refuse an `after` that is not an event id, and every other query on the stream", () => {
-    for (const query of ["after=-1", "after=1e3", "after=abc", "after=", "after=01", "after=1&after=2", "limit=5", "cursor=abc"]) {
-      expect(() => allowedApiTarget("GET", STREAM, new URLSearchParams(query))).toThrow("only `after`");
+    for (const query of [
+      "after=-1",
+      "after=1e3",
+      "after=abc",
+      "after=",
+      "after=01",
+      "after=1&after=2",
+      "limit=5",
+      "cursor=abc",
+    ]) {
+      expect(() =>
+        allowedApiTarget("GET", STREAM, new URLSearchParams(query)),
+      ).toThrow("only `after`");
     }
-    expect(() => allowedApiTarget("GET", EVENTS, new URLSearchParams("after=1"))).toThrow("only `limit`");
+    expect(() =>
+      allowedApiTarget("GET", EVENTS, new URLSearchParams("after=1")),
+    ).toThrow("only `limit`");
   });
 
   it("pass the stream through as it arrives, with no buffering", async () => {
-    const api = apiStreaming(["retry: 1000\n\n", 'id: 3\nevent: tool_called\ndata: {"id":3}\n\n']);
-    const response = await proxyToApi(request("GET", reading, undefined, "?after=2"), STREAM, undefined, api);
+    const api = apiStreaming([
+      "retry: 1000\n\n",
+      'id: 3\nevent: tool_called\ndata: {"id":3}\n\n',
+    ]);
+    const response = await proxyToApi(
+      request("GET", reading, undefined, "?after=2"),
+      STREAM,
+      undefined,
+      api,
+    );
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
-    expect(response.headers.get("cache-control")).toBe("no-store, no-transform");
+    expect(response.headers.get("content-type")).toBe(
+      "text/event-stream; charset=utf-8",
+    );
+    expect(response.headers.get("cache-control")).toBe(
+      "no-store, no-transform",
+    );
     expect(response.headers.get("x-accel-buffering")).toBe("no");
-    expect(await response.text()).toBe('retry: 1000\n\nid: 3\nevent: tool_called\ndata: {"id":3}\n\n');
+    expect(await response.text()).toBe(
+      'retry: 1000\n\nid: 3\nevent: tool_called\ndata: {"id":3}\n\n',
+    );
     const [target, init] = api.mock.calls[0];
     expect(String(target)).toBe(`http://127.0.0.1:8000${streamPath}?after=2`);
     expect(init?.headers).toEqual({ accept: "text/event-stream" });
@@ -351,9 +882,17 @@ describe("the events of a chat", () => {
           finish = () => controller.close();
         },
       });
-      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
     });
-    const response = await proxyToApi(request("GET", reading), STREAM, undefined, api);
+    const response = await proxyToApi(
+      request("GET", reading),
+      STREAM,
+      undefined,
+      api,
+    );
     const reader = response.body?.getReader();
     const first = await reader?.read();
     expect(new TextDecoder().decode(first?.value)).toBe("retry: 1000\n\n");
@@ -362,8 +901,16 @@ describe("the events of a chat", () => {
 
   it("forward the browser's Last-Event-ID, and only when it is an event id", async () => {
     const api = apiStreaming([]);
-    await proxyToApi(request("GET", { ...reading, "last-event-id": "17" }), STREAM, undefined, api);
-    expect(api.mock.calls[0][1]?.headers).toEqual({ accept: "text/event-stream", "last-event-id": "17" });
+    await proxyToApi(
+      request("GET", { ...reading, "last-event-id": "17" }),
+      STREAM,
+      undefined,
+      api,
+    );
+    expect(api.mock.calls[0][1]?.headers).toEqual({
+      accept: "text/event-stream",
+      "last-event-id": "17",
+    });
 
     const refusedApi = apiStreaming([]);
     const response = await proxyToApi(
@@ -373,21 +920,33 @@ describe("the events of a chat", () => {
       refusedApi,
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ code: "proxy_header_rejected" });
+    expect(await response.json()).toMatchObject({
+      code: "proxy_header_rejected",
+    });
     expect(refusedApi).not.toHaveBeenCalled();
   });
 
   it("do not forward a Last-Event-ID to any other route", async () => {
     const api = apiAnswering(200, '{"events":[],"next_cursor":null}');
-    await proxyToApi(request("GET", { ...reading, "last-event-id": "17" }), EVENTS, undefined, api);
-    expect(api.mock.calls[0][1]?.headers).toEqual({ accept: "application/json" });
+    await proxyToApi(
+      request("GET", { ...reading, "last-event-id": "17" }),
+      EVENTS,
+      undefined,
+      api,
+    );
+    expect(api.mock.calls[0][1]?.headers).toEqual({
+      accept: "application/json",
+    });
   });
 
   it("end the upstream request when the browser leaves", async () => {
     const api = apiStreaming([]);
     const browser = new AbortController();
     await proxyToApi(
-      new Request("http://localhost:3000/api/v1/ignored", { headers: reading, signal: browser.signal }),
+      new Request("http://localhost:3000/api/v1/ignored", {
+        headers: reading,
+        signal: browser.signal,
+      }),
       STREAM,
       undefined,
       api,
@@ -400,7 +959,12 @@ describe("the events of a chat", () => {
 
   it("pass the API's refusal on as JSON", async () => {
     const problem = '{"code":"chat_not_found","message":"no chat"}';
-    const response = await proxyToApi(request("GET", reading), STREAM, undefined, apiAnswering(404, problem));
+    const response = await proxyToApi(
+      request("GET", reading),
+      STREAM,
+      undefined,
+      apiAnswering(404, problem),
+    );
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toBe("application/json");
     expect(await response.text()).toBe(problem);
@@ -421,26 +985,41 @@ describe("the events of the workspace", () => {
           controller.close();
         },
       });
-      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
     });
   }
 
   it("forward the stream from an event id, and nothing else", () => {
     expect(allowedApiPath("GET", STREAM)).toBe(streamPath);
-    expect(allowedApiTarget("GET", STREAM, new URLSearchParams("after=42"))).toBe(`${streamPath}?after=42`);
+    expect(
+      allowedApiTarget("GET", STREAM, new URLSearchParams("after=42")),
+    ).toBe(`${streamPath}?after=42`);
     expect(() => allowedApiPath("POST", STREAM)).toThrow();
     expect(() => allowedApiPath("GET", [...STREAM, "1"])).toThrow();
     expect(() => allowedApiPath("GET", ["events"])).toThrow();
   });
 
   it("refuse an `after` that is not an event id, and every other query", () => {
-    for (const query of ["after=-1", "after=abc", "after=1&after=2", "limit=5", "cursor=abc"]) {
-      expect(() => allowedApiTarget("GET", STREAM, new URLSearchParams(query))).toThrow("only `after`");
+    for (const query of [
+      "after=-1",
+      "after=abc",
+      "after=1&after=2",
+      "limit=5",
+      "cursor=abc",
+    ]) {
+      expect(() =>
+        allowedApiTarget("GET", STREAM, new URLSearchParams(query)),
+      ).toThrow("only `after`");
     }
   });
 
   it("pass the stream through, with the browser's Last-Event-ID", async () => {
-    const api = apiStreaming(['id: 9\nevent: proposal_waiting\ndata: {"id":9}\n\n']);
+    const api = apiStreaming([
+      'id: 9\nevent: proposal_waiting\ndata: {"id":9}\n\n',
+    ]);
     const response = await proxyToApi(
       request("GET", { ...reading, "last-event-id": "8" }),
       STREAM,
@@ -448,44 +1027,75 @@ describe("the events of the workspace", () => {
       api,
     );
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
-    expect(await response.text()).toBe('id: 9\nevent: proposal_waiting\ndata: {"id":9}\n\n');
+    expect(response.headers.get("content-type")).toBe(
+      "text/event-stream; charset=utf-8",
+    );
+    expect(await response.text()).toBe(
+      'id: 9\nevent: proposal_waiting\ndata: {"id":9}\n\n',
+    );
     const [target, init] = api.mock.calls[0];
     expect(String(target)).toBe(`http://127.0.0.1:8000${streamPath}`);
-    expect(init?.headers).toEqual({ accept: "text/event-stream", "last-event-id": "8" });
+    expect(init?.headers).toEqual({
+      accept: "text/event-stream",
+      "last-event-id": "8",
+    });
   });
 });
 
 describe("the route that deletes a project", () => {
   it("takes one project by its id", () => {
-    expect(allowedApiPath("DELETE", ["projects", PROJECT])).toBe(`/v1/projects/${PROJECT}`);
+    expect(allowedApiPath("DELETE", ["projects", PROJECT])).toBe(
+      `/v1/projects/${PROJECT}`,
+    );
   });
 
   it("deletes nothing under a project and no project named otherwise", () => {
-    expect(() => allowedApiPath("DELETE", ["projects", PROJECT, "profile", "versions", "1"])).toThrow();
-    expect(() => allowedApiPath("DELETE", ["projects", "not-a-uuid"])).toThrow();
-    expect(() => allowedApiPath("DELETE", ["projects", PROJECT, ".."])).toThrow();
+    expect(() =>
+      allowedApiPath("DELETE", [
+        "projects",
+        PROJECT,
+        "profile",
+        "versions",
+        "1",
+      ]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("DELETE", ["projects", "not-a-uuid"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("DELETE", ["projects", PROJECT, ".."]),
+    ).toThrow();
   });
 });
 
 describe("the routes that read", () => {
   it("are the lists, a project, a run and a version", () => {
     expect(allowedApiPath("GET", ["projects"])).toBe("/v1/projects");
-    expect(allowedApiPath("GET", ["projects", PROJECT])).toBe(`/v1/projects/${PROJECT}`);
-    expect(allowedApiPath("GET", ["projects", PROJECT, "analyses"])).toBe(`/v1/projects/${PROJECT}/analyses`);
-    expect(allowedApiPath("GET", ["projects", PROJECT, "profile", "versions"])).toBe(
-      `/v1/projects/${PROJECT}/profile/versions`,
+    expect(allowedApiPath("GET", ["projects", PROJECT])).toBe(
+      `/v1/projects/${PROJECT}`,
     );
-    expect(allowedApiPath("GET", ["projects", PROJECT, "profile", "versions", "7"])).toBe(
-      `/v1/projects/${PROJECT}/profile/versions/7`,
+    expect(allowedApiPath("GET", ["projects", PROJECT, "analyses"])).toBe(
+      `/v1/projects/${PROJECT}/analyses`,
     );
+    expect(
+      allowedApiPath("GET", ["projects", PROJECT, "profile", "versions"]),
+    ).toBe(`/v1/projects/${PROJECT}/profile/versions`);
+    expect(
+      allowedApiPath("GET", ["projects", PROJECT, "profile", "versions", "7"]),
+    ).toBe(`/v1/projects/${PROJECT}/profile/versions/7`);
   });
 
   it("cannot be used to change anything", () => {
     expect(() => allowedApiPath("POST", ["projects", PROJECT])).toThrow();
-    expect(() => allowedApiPath("POST", ["projects", PROJECT, "profile", "versions"])).toThrow();
-    expect(() => allowedApiPath("POST", ["projects", PROJECT, "profile", "versions", "7"])).toThrow();
-    expect(() => allowedApiPath("DELETE", ["projects", PROJECT, "analyses"])).toThrow();
+    expect(() =>
+      allowedApiPath("POST", ["projects", PROJECT, "profile", "versions"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("POST", ["projects", PROJECT, "profile", "versions", "7"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("DELETE", ["projects", PROJECT, "analyses"]),
+    ).toThrow();
   });
 });
 
@@ -495,33 +1105,60 @@ describe("the query of a list", () => {
 
   it("forwards limit and cursor", () => {
     expect(list("limit=20")).toBe("/v1/projects?limit=20");
-    expect(list("cursor=MjAyNi0xMC0wOV9h-b")).toBe("/v1/projects?cursor=MjAyNi0xMC0wOV9h-b");
-    expect(list("limit=100&cursor=abc", ["projects", PROJECT, "analyses"])).toBe(
-      `/v1/projects/${PROJECT}/analyses?limit=100&cursor=abc`,
+    expect(list("cursor=MjAyNi0xMC0wOV9h-b")).toBe(
+      "/v1/projects?cursor=MjAyNi0xMC0wOV9h-b",
     );
-    expect(list("cursor=abc", ["projects", PROJECT, "profile", "versions"])).toBe(
-      `/v1/projects/${PROJECT}/profile/versions?cursor=abc`,
-    );
+    expect(
+      list("limit=100&cursor=abc", ["projects", PROJECT, "analyses"]),
+    ).toBe(`/v1/projects/${PROJECT}/analyses?limit=100&cursor=abc`);
+    expect(
+      list("cursor=abc", ["projects", PROJECT, "profile", "versions"]),
+    ).toBe(`/v1/projects/${PROJECT}/profile/versions?cursor=abc`);
     expect(list("limit=50", ["projects", PROJECT, "chats"])).toBe(
       `/v1/projects/${PROJECT}/chats?limit=50`,
     );
   });
 
   it("refuses any other parameter instead of dropping it", () => {
-    for (const query of ["workspace=other", "limit=20&debug=1", "Limit=20", "cursor[]=a"]) {
+    for (const query of [
+      "workspace=other",
+      "limit=20&debug=1",
+      "Limit=20",
+      "cursor[]=a",
+    ]) {
       expect(() => list(query)).toThrow("only `limit`");
     }
   });
 
   it("refuses a limit outside what the API allows", () => {
-    for (const limit of ["0", "101", "1000", "-1", "1e2", "10.0", " 10", "", "0x10"]) {
+    for (const limit of [
+      "0",
+      "101",
+      "1000",
+      "-1",
+      "1e2",
+      "10.0",
+      " 10",
+      "",
+      "0x10",
+    ]) {
       expect(() => list(`limit=${encodeURIComponent(limit)}`)).toThrow();
     }
   });
 
   it("refuses a cursor the API could not have issued", () => {
     const tooLong = "a".repeat(201);
-    for (const cursor of ["", tooLong, "a b", "a/b", "a+b", "a=", "a&b", "../x", "a%00"]) {
+    for (const cursor of [
+      "",
+      tooLong,
+      "a b",
+      "a/b",
+      "a+b",
+      "a=",
+      "a&b",
+      "../x",
+      "a%00",
+    ]) {
       expect(() => list(`cursor=${encodeURIComponent(cursor)}`)).toThrow();
     }
   });
@@ -532,33 +1169,55 @@ describe("the query of a list", () => {
   });
 
   it("refuses every query on a route that is not a paged list", () => {
-    expect(() => list("limit=5", ["projects", PROJECT])).toThrow("no query parameters");
-    expect(() => list("cursor=a", ["projects", PROJECT, "profile", "versions", "2"])).toThrow();
-    expect(() => allowedApiTarget("POST", ["projects"], new URLSearchParams("limit=5"))).toThrow();
-    expect(() => allowedApiTarget("POST", APPROVAL, new URLSearchParams("approved_by=x"))).toThrow();
+    expect(() => list("limit=5", ["projects", PROJECT])).toThrow(
+      "no query parameters",
+    );
+    expect(() =>
+      list("cursor=a", ["projects", PROJECT, "profile", "versions", "2"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiTarget("POST", ["projects"], new URLSearchParams("limit=5")),
+    ).toThrow();
+    expect(() =>
+      allowedApiTarget("POST", APPROVAL, new URLSearchParams("approved_by=x")),
+    ).toThrow();
   });
 
   it("reaches the API as the only query", async () => {
     const api = apiAnswering(200, '{"projects":[],"next_cursor":null}');
     await proxyToApi(
-      request("GET", { host: "localhost:3000", "sec-fetch-site": "same-origin" }, undefined, "?cursor=abc&limit=2"),
+      request(
+        "GET",
+        { host: "localhost:3000", "sec-fetch-site": "same-origin" },
+        undefined,
+        "?cursor=abc&limit=2",
+      ),
       ["projects"],
       undefined,
       api,
     );
-    expect(String(api.mock.calls[0][0])).toBe("http://127.0.0.1:8000/v1/projects?cursor=abc&limit=2");
+    expect(String(api.mock.calls[0][0])).toBe(
+      "http://127.0.0.1:8000/v1/projects?cursor=abc&limit=2",
+    );
   });
 
   it("is answered 400 without asking the API when it is refused", async () => {
     const api = apiAnswering(200, "{}");
     const response = await proxyToApi(
-      request("GET", { host: "localhost:3000" }, undefined, "?limit=5&workspace=other"),
+      request(
+        "GET",
+        { host: "localhost:3000" },
+        undefined,
+        "?limit=5&workspace=other",
+      ),
       ["projects"],
       undefined,
       api,
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ code: "proxy_query_rejected" });
+    expect(await response.json()).toMatchObject({
+      code: "proxy_query_rejected",
+    });
     expect(api).not.toHaveBeenCalled();
   });
 });
@@ -568,31 +1227,52 @@ describe("the routes of the model and analysis settings", () => {
 
   it("forward the settings, a tier, a role, the rejected parameters, the catalogue and the check", () => {
     expect(allowedApiPath("GET", MODELS)).toBe("/v1/settings/models");
-    expect(allowedApiPath("PUT", [...MODELS, "tiers", "fast"])).toBe("/v1/settings/models/tiers/fast");
-    expect(allowedApiPath("DELETE", [...MODELS, "tiers", "fast"])).toBe("/v1/settings/models/tiers/fast");
+    expect(allowedApiPath("PUT", [...MODELS, "tiers", "fast"])).toBe(
+      "/v1/settings/models/tiers/fast",
+    );
+    expect(allowedApiPath("DELETE", [...MODELS, "tiers", "fast"])).toBe(
+      "/v1/settings/models/tiers/fast",
+    );
     expect(allowedApiPath("PUT", [...MODELS, "roles", "repo_analyzer"])).toBe(
       "/v1/settings/models/roles/repo_analyzer",
     );
-    expect(allowedApiPath("DELETE", [...MODELS, "roles", "repo_analyzer"])).toBe(
-      "/v1/settings/models/roles/repo_analyzer",
+    expect(
+      allowedApiPath("DELETE", [...MODELS, "roles", "repo_analyzer"]),
+    ).toBe("/v1/settings/models/roles/repo_analyzer");
+    expect(allowedApiPath("PUT", [...MODELS, "rejected-parameters"])).toBe(
+      "/v1/settings/models/rejected-parameters",
     );
-    expect(allowedApiPath("PUT", [...MODELS, "rejected-parameters"])).toBe("/v1/settings/models/rejected-parameters");
-    expect(allowedApiPath("GET", [...MODELS, "catalog"])).toBe("/v1/settings/models/catalog");
-    expect(allowedApiPath("GET", [...MODELS, "check"])).toBe("/v1/settings/models/check");
+    expect(allowedApiPath("GET", [...MODELS, "catalog"])).toBe(
+      "/v1/settings/models/catalog",
+    );
+    expect(allowedApiPath("GET", [...MODELS, "check"])).toBe(
+      "/v1/settings/models/check",
+    );
   });
 
   it("forward reading, choosing and removing the limits of an analysis", () => {
     for (const method of ["GET", "PUT", "DELETE"]) {
-      expect(allowedApiPath(method, ["settings", "analysis"])).toBe("/v1/settings/analysis");
+      expect(allowedApiPath(method, ["settings", "analysis"])).toBe(
+        "/v1/settings/analysis",
+      );
     }
   });
 
   it("do not include a tier or a role of another form, or a path below one", () => {
-    for (const name of ["", "Fast", "repo-analyzer", "..", "fast%2F..", `a${"b".repeat(64)}`]) {
+    for (const name of [
+      "",
+      "Fast",
+      "repo-analyzer",
+      "..",
+      "fast%2F..",
+      `a${"b".repeat(64)}`,
+    ]) {
       expect(() => allowedApiPath("PUT", [...MODELS, "tiers", name])).toThrow();
       expect(() => allowedApiPath("PUT", [...MODELS, "roles", name])).toThrow();
     }
-    expect(() => allowedApiPath("PUT", [...MODELS, "roles", "writer", "model"])).toThrow();
+    expect(() =>
+      allowedApiPath("PUT", [...MODELS, "roles", "writer", "model"]),
+    ).toThrow();
     expect(() => allowedApiPath("GET", [...MODELS, "tiers", "fast"])).toThrow();
     expect(() => allowedApiPath("POST", ["settings", "analysis"])).toThrow();
     expect(() => allowedApiPath("DELETE", [...MODELS])).toThrow();
@@ -613,16 +1293,37 @@ describe("the credential routes", () => {
 
   it("forward the list, the storing of one and the removal of one", () => {
     expect(allowedApiPath("GET", LIST)).toBe("/v1/settings/credentials");
-    expect(allowedApiPath("PUT", ONE)).toBe("/v1/settings/credentials/github_token");
-    expect(allowedApiPath("DELETE", ONE)).toBe("/v1/settings/credentials/github_token");
-    expect(allowedApiPath("PUT", [...LIST, `a${"b".repeat(63)}`])).toContain("/v1/settings/credentials/ab");
+    expect(allowedApiPath("PUT", ONE)).toBe(
+      "/v1/settings/credentials/github_token",
+    );
+    expect(allowedApiPath("DELETE", ONE)).toBe(
+      "/v1/settings/credentials/github_token",
+    );
+    expect(allowedApiPath("PUT", [...LIST, `a${"b".repeat(63)}`])).toContain(
+      "/v1/settings/credentials/ab",
+    );
   });
 
   it("do not include any other method on these paths", () => {
-    for (const method of ["POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]) {
+    for (const method of [
+      "POST",
+      "PUT",
+      "DELETE",
+      "PATCH",
+      "HEAD",
+      "OPTIONS",
+    ]) {
       expect(() => allowedApiPath(method, LIST)).toThrow();
     }
-    for (const method of ["GET", "POST", "PATCH", "HEAD", "OPTIONS", "put", "delete"]) {
+    for (const method of [
+      "GET",
+      "POST",
+      "PATCH",
+      "HEAD",
+      "OPTIONS",
+      "put",
+      "delete",
+    ]) {
       expect(() => allowedApiPath(method, ONE)).toThrow();
     }
   });
@@ -650,41 +1351,72 @@ describe("the credential routes", () => {
 
   it("do not include a path below or beside a credential", () => {
     expect(() => allowedApiPath("PUT", [...ONE, "value"])).toThrow();
-    expect(() => allowedApiPath("DELETE", ["settings", "credentials", "github_token", ".."])).toThrow();
+    expect(() =>
+      allowedApiPath("DELETE", [
+        "settings",
+        "credentials",
+        "github_token",
+        "..",
+      ]),
+    ).toThrow();
     expect(() => allowedApiPath("GET", ["settings"])).toThrow();
     expect(() => allowedApiPath("PUT", ["settings", "github_token"])).toThrow();
   });
 
   it("take no query", () => {
-    expect(() => allowedApiTarget("GET", LIST, new URLSearchParams("limit=5"))).toThrow("no query parameters");
-    expect(() => allowedApiTarget("PUT", ONE, new URLSearchParams(`value=${SECRET}`))).toThrow();
-    expect(() => allowedApiTarget("DELETE", ONE, new URLSearchParams("force=1"))).toThrow();
+    expect(() =>
+      allowedApiTarget("GET", LIST, new URLSearchParams("limit=5")),
+    ).toThrow("no query parameters");
+    expect(() =>
+      allowedApiTarget("PUT", ONE, new URLSearchParams(`value=${SECRET}`)),
+    ).toThrow();
+    expect(() =>
+      allowedApiTarget("DELETE", ONE, new URLSearchParams("force=1")),
+    ).toThrow();
   });
 
   it("send a new value to the API as the body, and nothing of the browser's with it", async () => {
     const api = apiAnswering(200, '{"name":"github_token","source":"stored"}');
     const response = await proxyToApi(
-      request("PUT", { ...json, cookie: "session=1", authorization: "Bearer x" }, valueBody),
+      request(
+        "PUT",
+        { ...json, cookie: "session=1", authorization: "Bearer x" },
+        valueBody,
+      ),
       ONE,
       undefined,
       api,
     );
     expect(response.status).toBe(200);
     const [target, init] = api.mock.calls[0];
-    expect(String(target)).toBe("http://127.0.0.1:8000/v1/settings/credentials/github_token");
+    expect(String(target)).toBe(
+      "http://127.0.0.1:8000/v1/settings/credentials/github_token",
+    );
     expect(init?.method).toBe("PUT");
     expect(init?.body).toBe(valueBody);
-    expect(init?.headers).toEqual({ accept: "application/json", "content-type": "application/json" });
+    expect(init?.headers).toEqual({
+      accept: "application/json",
+      "content-type": "application/json",
+    });
   });
 
   it("remove without a body, and pass the API's 204 on as a 204 with no body", async () => {
-    const api = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
-    const response = await proxyToApi(request("DELETE", fromDashboard), ONE, undefined, api);
+    const api = vi.fn<typeof fetch>(
+      async () => new Response(null, { status: 204 }),
+    );
+    const response = await proxyToApi(
+      request("DELETE", fromDashboard),
+      ONE,
+      undefined,
+      api,
+    );
     expect(response.status).toBe(204);
     expect(response.body).toBeNull();
     expect(await response.text()).toBe("");
     const [target, init] = api.mock.calls[0];
-    expect(String(target)).toBe("http://127.0.0.1:8000/v1/settings/credentials/github_token");
+    expect(String(target)).toBe(
+      "http://127.0.0.1:8000/v1/settings/credentials/github_token",
+    );
     expect(init?.method).toBe("DELETE");
     expect(init?.body).toBeUndefined();
     expect(init?.headers).toEqual({ accept: "application/json" });
@@ -692,9 +1424,16 @@ describe("the credential routes", () => {
 
   it("refuse a removal that carries a body", async () => {
     const api = apiAnswering(204, "");
-    const response = await proxyToApi(request("DELETE", json, valueBody), ONE, undefined, api);
+    const response = await proxyToApi(
+      request("DELETE", json, valueBody),
+      ONE,
+      undefined,
+      api,
+    );
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ code: "proxy_body_rejected" });
+    expect(await response.json()).toMatchObject({
+      code: "proxy_body_rejected",
+    });
     expect(api).not.toHaveBeenCalled();
   });
 
@@ -704,10 +1443,20 @@ describe("the credential routes", () => {
       ["DELETE", undefined],
     ] as const) {
       const api = apiAnswering(200, "{}");
-      const headers = { host: "localhost:3000", "content-type": "application/json" };
-      const response = await proxyToApi(request(method, headers, body), ONE, undefined, api);
+      const headers = {
+        host: "localhost:3000",
+        "content-type": "application/json",
+      };
+      const response = await proxyToApi(
+        request(method, headers, body),
+        ONE,
+        undefined,
+        api,
+      );
       expect(response.status).toBe(403);
-      expect(await response.json()).toMatchObject({ code: "proxy_request_refused" });
+      expect(await response.json()).toMatchObject({
+        code: "proxy_request_refused",
+      });
       expect(api).not.toHaveBeenCalled();
     }
   });
@@ -729,7 +1478,11 @@ describe("the credential routes", () => {
       ] as const) {
         const api = apiAnswering(200, "{}");
         const response = await proxyToApi(
-          request(method, { ...headers, "content-type": "application/json" }, body),
+          request(
+            method,
+            { ...headers, "content-type": "application/json" },
+            body,
+          ),
           ONE,
           undefined,
           api,
@@ -743,29 +1496,73 @@ describe("the credential routes", () => {
   it("bound the size of a new value's body", async () => {
     const api = apiAnswering(200, "{}");
     const tooLarge = JSON.stringify({ value: "a".repeat(MAX_BODY_BYTES) });
-    const response = await proxyToApi(request("PUT", json, tooLarge), ONE, undefined, api);
+    const response = await proxyToApi(
+      request("PUT", json, tooLarge),
+      ONE,
+      undefined,
+      api,
+    );
     expect(response.status).toBe(413);
     expect(api).not.toHaveBeenCalled();
   });
 
   it("never repeat or log a body, whatever becomes of the request", async () => {
-    const logs = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
-      vi.spyOn(console, level).mockImplementation(() => undefined),
+    const logs = (["log", "info", "warn", "error", "debug"] as const).map(
+      (level) => vi.spyOn(console, level).mockImplementation(() => undefined),
     );
     const down = vi.fn<typeof fetch>(async () => {
       throw new TypeError(`fetch failed for ${SECRET}`);
     });
     const answers = [
       // Forwarded and answered, refused by the API, and the API not answering.
-      await proxyToApi(request("PUT", json, valueBody), ONE, undefined, apiAnswering(200, '{"source":"stored"}')),
-      await proxyToApi(request("PUT", json, valueBody), ONE, undefined, apiAnswering(409, '{"code":"x"}')),
+      await proxyToApi(
+        request("PUT", json, valueBody),
+        ONE,
+        undefined,
+        apiAnswering(200, '{"source":"stored"}'),
+      ),
+      await proxyToApi(
+        request("PUT", json, valueBody),
+        ONE,
+        undefined,
+        apiAnswering(409, '{"code":"x"}'),
+      ),
       await proxyToApi(request("PUT", json, valueBody), ONE, undefined, down),
       // Refused here: another site, no JSON, a query, an unknown path, a removal with a body.
-      await proxyToApi(request("PUT", { ...json, origin: "https://evil.example" }, valueBody), ONE, undefined, down),
-      await proxyToApi(request("PUT", { ...fromDashboard, "content-type": "text/plain" }, valueBody), ONE, undefined, down),
-      await proxyToApi(request("PUT", json, valueBody, "?debug=1"), ONE, undefined, down),
-      await proxyToApi(request("PUT", json, valueBody), [...ONE, "value"], undefined, down),
-      await proxyToApi(request("DELETE", json, valueBody), ONE, undefined, down),
+      await proxyToApi(
+        request("PUT", { ...json, origin: "https://evil.example" }, valueBody),
+        ONE,
+        undefined,
+        down,
+      ),
+      await proxyToApi(
+        request(
+          "PUT",
+          { ...fromDashboard, "content-type": "text/plain" },
+          valueBody,
+        ),
+        ONE,
+        undefined,
+        down,
+      ),
+      await proxyToApi(
+        request("PUT", json, valueBody, "?debug=1"),
+        ONE,
+        undefined,
+        down,
+      ),
+      await proxyToApi(
+        request("PUT", json, valueBody),
+        [...ONE, "value"],
+        undefined,
+        down,
+      ),
+      await proxyToApi(
+        request("DELETE", json, valueBody),
+        ONE,
+        undefined,
+        down,
+      ),
       await proxyToApi(request("PUT", json, valueBody), ONE, "not a url", down),
     ];
     for (const answer of answers) {
@@ -783,8 +1580,93 @@ describe("the API address", () => {
   });
 
   it("must be a plain http(s) origin", () => {
-    for (const value of ["file:///etc", "http://user:pw@host", "http://host/base", "nonsense"]) {
+    for (const value of [
+      "file:///etc",
+      "http://user:pw@host",
+      "http://host/base",
+      "nonsense",
+    ]) {
       expect(() => apiBaseUrl(value)).toThrow("OPENMARKETER_API_URL");
     }
+  });
+});
+
+describe("the size of a request body", () => {
+  const IMAGES = ["projects", PROJECT, "repository-images"];
+  const json = { ...fromDashboard, "content-type": "application/json" };
+
+  function bodyOf(bytes: number): string {
+    const frame = '{"data_base64":""}';
+    return `{"data_base64":"${"A".repeat(bytes - frame.length)}"}`;
+  }
+
+  it("may reach the upload's limit on the route that uploads an image", async () => {
+    const api = apiAnswering(201, "{}");
+    const response = await proxyToApi(
+      request("POST", json, bodyOf(MAX_UPLOAD_BODY_BYTES)),
+      IMAGES,
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(201);
+    expect(String(api.mock.calls[0][1]?.body).length).toBe(MAX_UPLOAD_BODY_BYTES);
+  });
+
+  it("is refused past the upload's limit, before the API is asked", async () => {
+    const api = apiAnswering(201, "{}");
+    const response = await proxyToApi(
+      request("POST", json, bodyOf(MAX_UPLOAD_BODY_BYTES + 1)),
+      IMAGES,
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ code: "proxy_body_rejected" });
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("is refused when it declares more than its route takes", async () => {
+    const api = apiAnswering(201, "{}");
+    const response = await proxyToApi(
+      request(
+        "POST",
+        { ...json, "content-length": String(MAX_UPLOAD_BODY_BYTES + 1) },
+        "{}",
+      ),
+      IMAGES,
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(413);
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("stays at the ordinary limit on every other route, a change of an image's kind among them", async () => {
+    const api = apiAnswering(200, "{}");
+    for (const [method, segments] of [
+      ["PATCH", [...IMAGES, RUN]],
+      ["POST", ["projects"]],
+      ["POST", ["projects", PROJECT, "studio-runs"]],
+    ] as const) {
+      const response = await proxyToApi(
+        request(method, json, bodyOf(MAX_BODY_BYTES + 1)),
+        segments,
+        undefined,
+        api,
+      );
+      expect(response.status).toBe(413);
+    }
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("is forwarded at the ordinary limit on another route", async () => {
+    const api = apiAnswering(201, "{}");
+    const response = await proxyToApi(
+      request("POST", json, bodyOf(MAX_BODY_BYTES)),
+      ["projects"],
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(201);
   });
 });

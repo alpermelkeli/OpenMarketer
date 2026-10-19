@@ -5,7 +5,8 @@ is what the tests and the OpenAPI export use. ``app_from_env`` is what uvicorn
 runs: it reads the settings and attaches the database, the workflow starter,
 the environment, the cipher credentials are stored with, the model
 configuration, the provider's catalogue of models, the object storage the pages
-of deleted research runs are removed from, and whether its turns are traced to
+of deleted research runs are removed from, the object storage the studio's
+images are read from and removed from, and whether its turns are traced to
 Langfuse. Neither connects to anything: the database, the workflow server and
 the object storage are reached when a request first needs them.
 
@@ -31,6 +32,7 @@ from openmarketer_api.routes import (
     analyses,
     analysis_settings,
     chat,
+    creative_budget,
     credentials,
     events,
     health,
@@ -38,13 +40,16 @@ from openmarketer_api.routes import (
     profiles,
     projects,
     proposals,
+    repository_images,
     research,
+    studio,
 )
 from openmarketer_api.settings import Settings
 from openmarketer_api.temporal_workflows import TemporalWorkflows
 from openmarketer_core.db.session import session_factory
 from openmarketer_core.llm_catalog import ModelCatalog
 from openmarketer_core.research.page_store import S3PageStore
+from openmarketer_core.studio.asset_store import S3AssetStore
 from openmarketer_core.tracing import start_tracing
 
 logger = logging.getLogger(__name__)
@@ -68,6 +73,8 @@ def create_app() -> FastAPI:
         projects,
         analyses,
         research,
+        studio,
+        repository_images,
         profiles,
         proposals,
         events,
@@ -75,6 +82,7 @@ def create_app() -> FastAPI:
         credentials,
         model_settings,
         analysis_settings,
+        creative_budget,
     ):
         workspace_routes.include_router(resource.router)
     # Beside the per-project views: every pending proposal of the workspace, for the
@@ -97,6 +105,7 @@ def app_from_env() -> FastAPI:
         model_router=settings.model_router,
         model_catalog=ModelCatalog(settings.model_router.config.provider.base_url),
         page_store=S3PageStore.from_env(os.environ),
+        asset_store=S3AssetStore.from_env(os.environ),
         tracing=tracing,
     )
     return app

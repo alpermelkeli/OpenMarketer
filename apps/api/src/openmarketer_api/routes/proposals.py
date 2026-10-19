@@ -63,6 +63,9 @@ class ProposalResponse(BaseModel):
     )
     decided_by: uuid.UUID | None
     decided_at: datetime | None
+    estimate_usd: float | None = Field(
+        description="What an action that spends was estimated to cost, in USD; null otherwise."
+    )
 
 
 class ProposalListResponse(BaseModel):
@@ -88,6 +91,7 @@ def _response(proposal: ActionProposal) -> ProposalResponse:
         expires_at=proposal.expires_at,
         decided_by=proposal.decided_by,
         decided_at=proposal.decided_at,
+        estimate_usd=None if proposal.estimate_usd is None else float(proposal.estimate_usd),
     )
 
 

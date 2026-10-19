@@ -2,7 +2,8 @@
 
 Everything an analysis depends on is built here once (the analyzer's settings,
 the model router, the extractors, access to the runs' checkpoints, the place
-of the runs' clones on this worker's disk) and handed to what runs it; the
+of the runs' clones on this worker's disk, the object storage the product's
+images are kept in) and handed to what runs it; the
 result says what the worker registers and how the checkpoints its runs leave
 behind are removed. The process's own things come in as arguments: the
 environment mapping, the session factory, the database URL and the
@@ -61,6 +62,7 @@ from openmarketer_core.repository_analysis.intake import (
     run_intake,
 )
 from openmarketer_core.repository_analysis.workflow_contract import ANALYSIS_TASK_QUEUE
+from openmarketer_core.studio.asset_store import AssetStore, S3AssetStore
 from openmarketer_core.tracing import Tracing
 from openmarketer_core.workspace_settings.analysis_limits import LARGEST_LIMITS
 from openmarketer_worker import AgentRegistration
@@ -101,6 +103,9 @@ class AnalyzerParts:
     extractors: Sequence[Extractor]
     policy: AnalysisPolicy
     limits_of: Callable[[uuid.UUID], Limits] = field(default=lambda workspace_id: Limits())
+    # The object storage the product's images found in a repository are kept in; without
+    # one, an analysis collects none.
+    repository_images: AssetStore | None = None
 
 
 def repository_analyzer(
@@ -144,6 +149,8 @@ def repository_analyzer(
             extractors=list(discover_extractors()),
             policy=policy,
             limits_of=settings.analysis_limits,
+            # The studio's bucket, under a prefix of the repository images' own.
+            repository_images=S3AssetStore.from_env(environ),
         )
     )
 
@@ -165,6 +172,7 @@ def registration(parts: AnalyzerParts) -> AgentRegistration:
         tokens_of=parts.tokens_of,
         extractors=parts.extractors,
         limits_of=parts.limits_of,
+        images=parts.repository_images,
     )
     # One queue, the one the API starts the workflow on.
     worker = AgentWorker(agent, task_queue=ANALYSIS_TASK_QUEUE)

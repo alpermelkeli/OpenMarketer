@@ -1,6 +1,7 @@
 """The activity of ``ChatFollowUp``: one follow-up turn, with the model of the chat's workspace.
 
-It calls core's ``follow_up_on_research`` and holds no rule of its own: what the turn is told,
+It calls core's ``follow_up_on_run`` for the run's kind (a research run or a studio run) and
+holds no rule of its own: what the turn is told,
 what it stores, that a run already followed up on is not followed up again, and that a busy
 chat is ``ChatBusy`` are all core's. What it adds is what an activity owes the engine: the
 model is resolved for the chat's workspace at each attempt, a failure leaves with a type that
@@ -44,6 +45,7 @@ from openmarketer_core.db.chat_turns import ChatBusy, FollowUpGivenUp
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.research_runs import ResearchRunNotFound
 from openmarketer_core.db.session import transaction
+from openmarketer_core.db.studio_runs import StudioRunNotFound
 from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.orchestrator.chat_agent.rules import (
@@ -52,8 +54,8 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
     failure_reason,
 )
 from openmarketer_core.orchestrator.follow_up import (
-    ResearchRunNotEnded,
-    follow_up_on_research,
+    RunNotEnded,
+    follow_up_on_run,
     record_follow_up_not_taken,
 )
 from openmarketer_core.orchestrator.reads_postgres import PostgresChatReads
@@ -69,6 +71,9 @@ logger = logging.getLogger(__name__)
 # provider's key is set nowhere, a stored value does not open, or a stored model choice breaks
 # a rule. None passes by itself, and each is worded for the operator.
 WORKSPACE_FAILURES = (ModelKeyNotSet, CredentialUnreadable, StoredModelChoiceInvalid)
+# What there is no chat or run to follow up on is told with: no such project, chat or run of
+# the chat, whichever kind of run it is.
+NOTHING_THERE = (ProjectNotFound, ChatNotFound, ResearchRunNotFound, StudioRunNotFound)
 
 
 class FollowUpActivities:
@@ -90,9 +95,9 @@ class FollowUpActivities:
         self._tracing = tracing
         self._limits = limits
 
-    @activity.defn(name=steps.FOLLOW_UP_ON_RESEARCH)
-    async def follow_up_on_research(self, follow_up: ChatFollowUpInput) -> None:
-        """Take the chat's turn about the research run that ended, unless it was taken."""
+    @activity.defn(name=steps.FOLLOW_UP_ON_RUN)
+    async def follow_up_on_run(self, follow_up: ChatFollowUpInput) -> None:
+        """Take the chat's turn about the run that ended, unless it was taken."""
         subject = subject_of(follow_up)
         with worded_failures(steps.FOLLOW_UP_TEXTS, subject=subject):
             await run_in_thread(lambda: self._follow_up(follow_up), subject=subject)
@@ -112,29 +117,31 @@ class FollowUpActivities:
                 workspace_id=follow_up.workspace_id,
                 project_id=follow_up.project_id,
                 chat_id=follow_up.chat_id,
+                run_kind=follow_up.run_kind,
                 run_id=follow_up.run_id,
                 cause=not_taken.cause,
             )
-        except (ProjectNotFound, ChatNotFound, ResearchRunNotFound) as e:
+        except NOTHING_THERE as e:
             logger.info("%s has no chat to tell: %s", subject_of(follow_up), e)
 
     def _follow_up(self, follow_up: ChatFollowUpInput) -> None:
         try:
             model = self._new_model(follow_up.workspace_id)
             with self._tracing.traced(), transaction(self._sessions) as reading:
-                answered = follow_up_on_research(
+                answered = follow_up_on_run(
                     self._sessions,
                     PostgresChatReads(reading, follow_up.workspace_id, follow_up.project_id),
                     workspace_id=follow_up.workspace_id,
                     project_id=follow_up.project_id,
                     chat_id=follow_up.chat_id,
+                    run_kind=follow_up.run_kind,
                     run_id=follow_up.run_id,
                     model=model,
                     limits=self._limits,
                 )
         except ChatBusy:
             raise ApplicationError(steps.CHAT_IS_BUSY, type=steps.CHAT_BUSY) from None
-        except (ProjectNotFound, ChatNotFound, ResearchRunNotFound, ResearchRunNotEnded) as e:
+        except (*NOTHING_THERE, RunNotEnded) as e:
             logger.info("%s has nothing to follow up on: %s", subject_of(follow_up), e)
             raise _ended(steps.NOTHING_TO_FOLLOW_UP, steps.NOTHING_TO_FOLLOW_UP_ON) from None
         except FollowUpGivenUp as e:
@@ -160,4 +167,4 @@ def _ended(kind: str, message: str) -> ApplicationError:
 
 def subject_of(follow_up: ChatFollowUpInput) -> str:
     """How the log names the follow-up's work."""
-    return f"the follow-up of research run {follow_up.run_id} in chat {follow_up.chat_id}"
+    return f"the follow-up of {follow_up.run_kind} {follow_up.run_id} in chat {follow_up.chat_id}"

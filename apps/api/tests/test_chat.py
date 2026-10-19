@@ -134,7 +134,7 @@ def scope(sessions) -> RunScope:
 
 
 @pytest.fixture
-def services(app, sessions, scope, repository_models, no_catalog, page_store) -> None:
+def services(app, sessions, scope, repository_models, no_catalog, page_store, asset_store) -> None:
     """The application wired to the test database, this test's workspace, no stored key."""
     app.state.services = Services(
         sessions=sessions,
@@ -144,6 +144,7 @@ def services(app, sessions, scope, repository_models, no_catalog, page_store) ->
         model_router=repository_models,
         model_catalog=no_catalog,
         page_store=page_store,
+        asset_store=asset_store,
     )
     app.dependency_overrides[current_workspace_id] = lambda: scope.workspace_id
 

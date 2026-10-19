@@ -1,6 +1,7 @@
 """Tests for reading the model provider's catalogue. HTTP goes through a fake transport."""
 
 import httpx
+import pytest
 
 from openmarketer_core.llm_catalog import ModelCatalog, catalog_model
 from openmarketer_core.llm_config import CatalogModel
@@ -62,7 +63,7 @@ def test_catalogue_is_read_from_the_providers_models_list():
             input_modalities=frozenset({"text", "image"}),
         )
     }
-    assert str(requests[0].url) == BASE_URL + "/models"
+    assert str(requests[0].url) == BASE_URL + "/models?output_modalities=all"
 
 
 def test_catalogue_request_carries_no_key():
@@ -139,3 +140,44 @@ def test_last_catalogue_is_kept_when_a_later_fetch_fails():
     first = catalog.models()
     clock.now = 11 * 60
     assert catalog.models() == first
+
+
+def test_output_modalities_and_the_image_output_price_are_read():
+    model = catalog_model(
+        {
+            "id": "google/drawer",
+            "pricing": {"prompt": "0.0000005", "image_output": "0.00006"},
+            "architecture": {"input_modalities": ["text"], "output_modalities": ["image", "text"]},
+        }
+    )
+    assert model is not None
+    assert model.output_modalities == frozenset({"image", "text"})
+    assert model.image_output_price == pytest.approx(60.0)
+
+
+def test_catalogue_asks_for_models_of_every_output_so_image_only_models_are_listed():
+    image_only = {
+        "id": "black-forest-labs/flux-3-image",
+        "name": "FLUX 3",
+        "pricing": {"prompt": "0", "completion": "0", "image": "0.04"},
+        "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["image"]},
+    }
+    transport, requests = answering(listing(ENTRY, image_only))
+    models = catalog_with(transport).models()
+    assert requests[0].url.params["output_modalities"] == "all"
+    assert models is not None
+    flux = models["black-forest-labs/flux-3-image"]
+    assert flux.output_modalities == frozenset({"image"})
+    assert flux.input_modalities == frozenset({"text", "image"})
+
+
+def test_the_per_image_price_is_kept_as_the_catalogue_gives_it():
+    model = catalog_model({"id": "recraft/recraft-v4.1-flash", "pricing": {"image": "0.04"}})
+    assert model is not None
+    assert model.image_price == pytest.approx(0.04)
+    assert model.image_output_price is None
+
+
+def test_a_per_image_price_that_is_not_a_number_is_left_out():
+    model = catalog_model({"id": "a/b", "pricing": {"image": "per image"}})
+    assert model is not None and model.image_price is None

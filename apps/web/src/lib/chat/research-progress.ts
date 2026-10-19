@@ -13,7 +13,7 @@
 import type { Tone } from "@/lib/analysis/run-status";
 import type { ResearchRun } from "@/lib/api/types";
 
-import type { ResearchProposal, ResearchRunView, ResearchStage } from "./events";
+import type { RunProposal, ResearchRunView, ResearchStage } from "./events";
 
 export type ProgressStatus = {
   state: "running" | "finished" | "failed";
@@ -51,7 +51,7 @@ export function outcomeText(status: ProgressStatus): string | null {
 }
 
 /** Where the action the policy gate held stands, as a sentence of the run's card. */
-export function proposalText(proposal: ResearchProposal): string {
+export function proposalText(proposal: RunProposal): string {
   switch (proposal.status) {
     case "waiting":
       return `The run asked to run ${proposal.actionName} and waits for your decision. Nothing runs until you decide.`;

@@ -34,6 +34,7 @@ ACTIVITY_CODE = (
     "openmarketer_worker.agent_runtime.agent_worker",
     "openmarketer_worker.agent_runtime.proposal_activities",
     "openmarketer_worker.agent_runtime.routes",
+    "openmarketer_worker.agent_runtime.spend_activities",
 )
 
 
@@ -79,6 +80,7 @@ def test_the_runtime_has_the_modules_these_tests_know():
         "driver",
         "proposal_activities",
         "routes",
+        "spend_activities",
         "vocabulary",
         "workflow_dsl",
         "workflow_support",
