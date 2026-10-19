@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
 
 from openmarketer_core.studio.brand_kit import BrandKit
 from openmarketer_core.studio.code_screening import MAX_REQUIREMENTS, MAX_SOURCE_BYTES
@@ -114,7 +114,7 @@ MAX_PACKAGES = MAX_REQUIREMENTS
 MAX_NOTE_CHARS = 300
 MAX_PLAN_STEPS = 6
 MAX_SUGGESTIONS = 6
-MAX_PLACEMENT_CHARS = 500
+MAX_PLACEMENT_CHARS = 1500
 # The most of the product's repository images a run is shown (an analysis keeps no more).
 MAX_REPOSITORY_IMAGES = 24
 # The most of an image's path the models are shown, and of a note of what a reference is for.
@@ -169,6 +169,14 @@ class ReferenceImage(_Submission):
     ]
 
 
+def _placement_as_text(value: Any) -> Any:
+    """Where the words go, as text: a director that answers line by line
+    (``{"ÖNCE": "top left", ...}``) is read as one ``line: where`` row each."""
+    if isinstance(value, dict):
+        return "\n".join(f"{line}: {where}" for line, where in value.items())
+    return value
+
+
 class Brief(_Submission):
     """The creative director's plan for the asset, made once at the start of the run.
 
@@ -184,7 +192,9 @@ class Brief(_Submission):
     technique: Technique
     image_prompt: Prompt = ""
     copy_placement: Annotated[
-        str, StringConstraints(strip_whitespace=True, max_length=MAX_PLACEMENT_CHARS)
+        str,
+        BeforeValidator(_placement_as_text),
+        StringConstraints(strip_whitespace=True, max_length=MAX_PLACEMENT_CHARS),
     ] = ""
     reference_images: list[ReferenceImage] = Field(default_factory=list, max_length=MAX_REFERENCES)
 

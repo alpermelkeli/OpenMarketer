@@ -574,3 +574,24 @@ def test_the_next_step_of_an_overlay_after_its_background_is_the_words_in_code()
 
 def test_a_generated_image_has_no_fixed_next_step():
     assert rules.next_step(round_state(Technique.GENERATED, [])) == ""
+
+
+# --------------------------------------------------------------------- the brief's words
+def a_brief_with(copy_placement) -> rules.Brief:
+    return rules.Brief.model_validate(
+        {
+            "goal": "A launch image.",
+            "visual_concept": "A split frame.",
+            "technique": "html_reference",
+            "copy_placement": copy_placement,
+        }
+    )
+
+
+def test_a_placement_given_line_by_line_is_read_as_text():
+    brief = a_brief_with({"ÖNCE": "top left", "SONRA": "top right"})
+    assert brief.copy_placement == "ÖNCE: top left\nSONRA: top right"
+
+
+def test_a_placement_for_four_lines_has_room():
+    assert len(a_brief_with("x" * 1400).copy_placement) == 1400
