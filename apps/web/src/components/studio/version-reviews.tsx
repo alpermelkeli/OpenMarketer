@@ -13,7 +13,7 @@ type VersionReviewsProps = { version: MediaAssetVersion };
  * the verifier's notes by a model: it is shown as text only.
  */
 export function VersionReviews({ version }: VersionReviewsProps) {
-  const check = checkReportOf(version.check_report);
+  const check = checkReportOf(version.check_report, version.verifier_report);
   const verifier = verifierReportOf(version.verifier_report);
 
   if (check === null) {
@@ -27,18 +27,42 @@ export function VersionReviews({ version }: VersionReviewsProps) {
         <ul className="grid gap-1.5">
           {check.items.map((item) => (
             <li key={item.label} className="grid gap-1">
-              <Verdict passed={item.passed} label={item.label}>
+              <Verdict passed={item.passed} unconfirmed={item.unconfirmed} label={item.label}>
                 {item.detail}
               </Verdict>
-              {item.lines !== undefined && (
-                <ul aria-label="Lines that do not read as asked" className="grid gap-1 pl-6 text-xs">
-                  {item.lines.map((line, index) => (
+              {item.confirmed !== undefined && item.confirmed.length > 0 && (
+                <ul aria-label="Lines OCR confirmed" className="grid gap-1 pl-6 text-xs">
+                  {item.confirmed.map((line, index) => (
                     <li key={index} className="text-pretty">
-                      <span className="text-muted-foreground">Should read </span>“{line.expected}”
-                      <span className="text-muted-foreground">
-                        {line.read === null ? ", not found in the image" : ", reads "}
+                      “{line}”<span className="text-muted-foreground">, read by OCR as asked</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {item.lines !== undefined && (
+                <ul aria-label="Lines OCR could not confirm" className="grid gap-1.5 pl-6 text-xs">
+                  {item.lines.map((line, index) => (
+                    <li key={index} className="grid gap-0.5 text-pretty">
+                      <span>
+                        <span className="text-muted-foreground">Should read </span>“{line.expected}”
+                        <span className="text-muted-foreground">
+                          {line.read === null ? ", OCR read nothing close to it" : ", OCR read "}
+                        </span>
+                        {line.read !== null && <>“{line.read}”</>}
                       </span>
-                      {line.read !== null && <>“{line.read}”</>}
+                      {line.verdict !== null && (
+                        <span
+                          className={
+                            line.verifier === null
+                              ? "text-warning"
+                              : line.verifier.matches
+                                ? "text-muted-foreground"
+                                : "text-destructive"
+                          }
+                        >
+                          {line.verdict}
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -48,6 +72,13 @@ export function VersionReviews({ version }: VersionReviewsProps) {
           {check.other.map((name) => (
             <li key={name}>
               <Verdict passed={false} label="Other">
+                <span className="font-mono">{name}</span>
+              </Verdict>
+            </li>
+          ))}
+          {check.otherNotices.map((name) => (
+            <li key={`notice-${name}`}>
+              <Verdict passed={false} unconfirmed label="Noted">
                 <span className="font-mono">{name}</span>
               </Verdict>
             </li>
@@ -99,10 +130,34 @@ export function VersionReviews({ version }: VersionReviewsProps) {
   );
 }
 
-type VerdictProps = { passed: boolean; label: string; minor?: boolean; children?: ReactNode };
+type VerdictProps = {
+  passed: boolean;
+  label: string;
+  minor?: boolean;
+  /** Neither passed nor failed: nothing confirmed it. */
+  unconfirmed?: boolean;
+  children?: ReactNode;
+};
 
-/** "Passes" or "Fails", with a tick, a cross or a dash for a minor note, then what was found. */
-function Verdict({ passed, label, minor = false, children }: VerdictProps) {
+/**
+ * "Passes", "Fails" or "Not confirmed", with a tick, a cross, or a dash for a minor note or
+ * for what nothing confirmed, then what was found.
+ */
+function Verdict({ passed, label, minor = false, unconfirmed = false, children }: VerdictProps) {
+  if (unconfirmed) {
+    return (
+      <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
+        <span className="inline-flex size-4 shrink-0 translate-y-0.5 items-center justify-center rounded-full border border-dashed border-warning/60 text-warning">
+          <MinusIcon aria-hidden="true" className="size-3" />
+        </span>
+        <span>{label}</span>
+        <span className="text-xs text-warning">Not confirmed</span>
+        {children !== undefined && children !== false && children !== "" && (
+          <span className="text-xs text-muted-foreground">· {children}</span>
+        )}
+      </p>
+    );
+  }
   const Icon = passed ? (minor ? MinusIcon : CheckIcon) : XIcon;
   return (
     <p className="flex flex-wrap items-baseline gap-x-2 text-sm">

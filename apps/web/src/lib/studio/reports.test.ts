@@ -34,10 +34,105 @@ describe("the programmatic checks of a version", () => {
       passed: false,
       detail: "2 lines of the copy do not read as asked.",
       lines: [
-        { expected: "Try it free", read: null },
-        { expected: "Ship faster", read: "Shlp faster" },
+        { expected: "Try it free", read: null, verifier: null, verdict: null },
+        { expected: "Ship faster", read: "Shlp faster", verifier: null, verdict: null },
       ],
     });
+  });
+
+  it("list the lines OCR confirmed, and pass the words when it confirmed every one", () => {
+    const report = checkReportOf({
+      passed: true,
+      failures: [],
+      notices: [],
+      copy: { confirmed: ["Ship faster", "Try it free"], unconfirmed: [] },
+      ...MEASURED,
+    });
+    expect(report?.items.at(-1)).toEqual({
+      label: "Words",
+      passed: true,
+      detail: "OCR read every line of the copy as asked.",
+      confirmed: ["Ship faster", "Try it free"],
+    });
+  });
+
+  it("leave a line OCR could not confirm unconfirmed while the verifier has given no verdict", () => {
+    const report = checkReportOf({
+      passed: true,
+      failures: [],
+      notices: ["copy_unconfirmed"],
+      copy: { confirmed: ["Ship faster"], unconfirmed: [{ expected: "Çay saati", read: "Cay saat" }] },
+      ...MEASURED,
+    });
+    const words = report?.items.at(-1);
+    expect(words).toMatchObject({
+      passed: false,
+      unconfirmed: true,
+      detail: "OCR confirmed 1 of 2 lines of the copy; no one has confirmed the others.",
+      confirmed: ["Ship faster"],
+      lines: [
+        {
+          expected: "Çay saati",
+          read: "Cay saat",
+          verifier: null,
+          verdict: "The verifier gave no verdict on this line, so it is not confirmed.",
+        },
+      ],
+    });
+    expect(words?.detail).not.toContain("reads as asked");
+    expect(report?.otherNotices).toEqual([]);
+  });
+
+  it("show what the verifier read of each unconfirmed line and whether it matches", () => {
+    const check = {
+      passed: true,
+      failures: [],
+      notices: ["copy_unconfirmed"],
+      copy: {
+        confirmed: [],
+        unconfirmed: [
+          { expected: "Çay saati", read: "Cay saat" },
+          { expected: "Try it free", read: "" },
+        ],
+      },
+      ...MEASURED,
+    };
+    const matching = checkReportOf(check, {
+      criteria: [],
+      copy_verdict: [
+        { line: 1, expected: "Çay saati", transcribed: "Çay saati", matches: true },
+        { line: 2, expected: "Try it free", transcribed: "Try it free", matches: true },
+      ],
+    });
+    expect(matching?.items.at(-1)).toMatchObject({
+      passed: true,
+      detail: "OCR confirmed 0 of 2 lines of the copy; the verifier read the others as asked.",
+    });
+    expect(matching?.items.at(-1)?.lines?.map((line) => [line.read, line.verdict])).toEqual([
+      ["Cay saat", "The verifier read “Çay saati” — matches"],
+      [null, "The verifier read “Try it free” — matches"],
+    ]);
+
+    const wrong = checkReportOf(check, {
+      criteria: [],
+      copy_verdict: [
+        { line: 1, expected: "Çay saati", transcribed: "Cay saati", matches: false },
+        { line: 2, expected: "Try it free", transcribed: null, matches: false },
+      ],
+    });
+    expect(wrong?.items.at(-1)).toMatchObject({
+      passed: false,
+      detail: "OCR confirmed 0 of 2 lines of the copy; the verifier read 2 of the others differently from what was asked.",
+    });
+    expect(wrong?.items.at(-1)?.lines?.map((line) => line.verdict)).toEqual([
+      "The verifier read “Cay saati” — does not match",
+      "The verifier gave no reading of it — does not match",
+    ]);
+  });
+
+  it("keep a notice it has no words for by its name", () => {
+    const report = checkReportOf({ passed: true, failures: [], notices: ["copy_unconfirmed", "faint", 2], ...MEASURED });
+    expect(report?.otherNotices).toEqual(["faint"]);
   });
 
   it("say when the words could not be read, and leave out a copy check the request did not ask for", () => {
