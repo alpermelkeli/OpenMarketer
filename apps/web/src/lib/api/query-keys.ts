@@ -46,8 +46,9 @@ export const queryKeys = {
   mediaAsset: (projectId: string, assetId: string) =>
     ["projects", "one", projectId, "media-assets", "one", assetId] as const,
   /**
-   * The images the last analysis found in the project's repository. Under the project's scope, so
-   * an analysis that ends refreshes them with everything else it changed (`useAnalysisRun`).
+   * The project's repository images: what the last analysis found and what a person added. Under
+   * the project's scope, so an analysis that ends refreshes them with everything else it changed
+   * (`useAnalysisRun`).
    */
   repositoryImages: (projectId: string) =>
     ["projects", "one", projectId, "repository-images", "list"] as const,
@@ -113,6 +114,14 @@ export function refreshedByStudioRunEnd(projectId: string): Refresh[] {
 /** What a decision on an asset makes out of date: the library that lists its state. The asset itself is set from the answer. */
 export function refreshedByAssetDecision(projectId: string): Refresh[] {
   return [{ queryKey: queryKeys.mediaAssets(projectId) }];
+}
+
+/**
+ * What adding, relabelling or removing a repository image makes out of date: the list of them,
+ * whose groups follow each image's kind. Nothing else holds one.
+ */
+export function refreshedByRepositoryImageChange(projectId: string): Refresh[] {
+  return [{ queryKey: queryKeys.repositoryImages(projectId) }];
 }
 
 /**

@@ -38,6 +38,10 @@ export type MediaAssetVersion = Schemas["MediaAssetVersionResponse"];
 export type RepositoryImage = Schemas["RepositoryImageResponse"];
 export type RepositoryImageList = Schemas["RepositoryImageListResponse"];
 export type RepositoryImageKind = Schemas["RepositoryImageKind"];
+export type RepositoryImageSource = Schemas["RepositoryImageSource"];
+/** An image a person adds to the project, as its bytes in base64. */
+export type RepositoryImageUpload = Schemas["RepositoryImageUpload"];
+export type RepositoryImageKindChoice = Schemas["RepositoryImageKindChoice"];
 
 export type ProfileVersion = Schemas["ProfileVersionResponse"];
 export type ProfileVersionSummary = Schemas["ProfileVersionSummaryResponse"];

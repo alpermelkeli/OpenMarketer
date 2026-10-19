@@ -6,6 +6,8 @@ import {
   repositoryImageAlt,
   repositoryImageGroups,
   repositoryImageKindLabel,
+  repositoryImageNotes,
+  repositoryImageRemoval,
   repositoryImageSize,
   repositoryImageSrc,
 } from "./repository-images";
@@ -94,8 +96,56 @@ describe("the address of a repository image", () => {
 
 describe("the text that stands for a repository image", () => {
   it("says its kind and its path", () => {
-    expect(repositoryImageAlt({ kind: "logo", path: "assets/logo.png" })).toBe(
-      "Logo from the repository at assets/logo.png",
+    expect(
+      repositoryImageAlt({
+        kind: "logo",
+        path: "assets/logo.png",
+        source: "analysis",
+      }),
+    ).toBe("Logo from the repository at assets/logo.png");
+  });
+
+  it("says an upload's kind and the name it was uploaded as", () => {
+    expect(
+      repositoryImageAlt({ kind: "screenshot", path: "home.png", source: "person" }),
+    ).toBe("Screenshot uploaded as home.png");
+  });
+});
+
+describe("the notes beside a repository image", () => {
+  it("are none for an image an analysis found and labelled", () => {
+    expect(repositoryImageNotes({ source: "analysis", kind_chosen: false })).toEqual([]);
+  });
+
+  it("say that a person uploaded it", () => {
+    expect(repositoryImageNotes({ source: "person", kind_chosen: false })).toEqual([
+      "Uploaded",
+    ]);
+  });
+
+  it("say that a person chose its kind, for a found image or an upload", () => {
+    expect(repositoryImageNotes({ source: "analysis", kind_chosen: true })).toEqual([
+      "Kind chosen by a person",
+    ]);
+    expect(repositoryImageNotes({ source: "person", kind_chosen: true })).toEqual([
+      "Uploaded",
+      "Kind chosen by a person",
+    ]);
+  });
+});
+
+describe("removing a repository image", () => {
+  it("deletes an upload from the project", () => {
+    const removal = repositoryImageRemoval({ source: "person" });
+    expect(removal.title).toBe("Delete this image?");
+    expect(removal.description).toBe("It is removed from the project.");
+  });
+
+  it("hides a found image, and says a later analysis keeps it hidden", () => {
+    const removal = repositoryImageRemoval({ source: "analysis" });
+    expect(removal.title).toBe("Hide this image?");
+    expect(removal.description).toBe(
+      "The studio will not use it, and a later analysis keeps it hidden.",
     );
   });
 });

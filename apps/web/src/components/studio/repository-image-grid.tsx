@@ -5,16 +5,19 @@ import type { RepositoryImage } from "@/lib/api/types";
 import {
   repositoryImageAlt,
   repositoryImageGroups,
+  repositoryImageNotes,
   repositoryImageSize,
   repositoryImageSrc,
 } from "@/lib/studio/repository-images";
+
+import { RepositoryImageControls } from "./repository-image-controls";
 
 type RepositoryImageGridProps = {
   projectId: string;
   images: readonly RepositoryImage[];
 };
 
-/** The repository's images in a quiet grid, one group per kind, each kind named in words. */
+/** The repository's images in a quiet grid, one group per kind, each kind named in words, each with what a person can change. */
 export function RepositoryImageGrid({
   projectId,
   images,
@@ -51,11 +54,13 @@ export function RepositoryImageGrid({
 type RepositoryImageTileProps = { projectId: string; image: RepositoryImage };
 
 /**
- * One image: its thumbnail, contained in a square, its path as text and its size. It opens at full
- * size in a new tab, from the address the dashboard builds for it.
+ * One image: its thumbnail, contained in a square, its path as text, its size, whether a person
+ * uploaded it or chose its kind, and its controls. It opens at full size in a new tab, from the
+ * address the dashboard builds for it.
  */
 function RepositoryImageTile({ projectId, image }: RepositoryImageTileProps) {
   const src = repositoryImageSrc(projectId, image.id);
+  const notes = repositoryImageNotes(image);
   const caption = (
     <>
       <span className="block truncate font-mono text-xs" title={image.path}>
@@ -66,10 +71,18 @@ function RepositoryImageTile({ projectId, image }: RepositoryImageTileProps) {
       </span>
     </>
   );
+  const details = (
+    <>
+      {notes.length > 0 && (
+        <p className="text-xs text-muted-foreground">{notes.join(" · ")}</p>
+      )}
+      <RepositoryImageControls projectId={projectId} image={image} />
+    </>
+  );
 
   if (src === null) {
     return (
-      <li className="grid min-w-0 gap-2">
+      <li className="grid min-w-0 content-start gap-2">
         <div className="grid aspect-square place-items-center rounded-sm border bg-surface text-muted-foreground">
           <ImageOffIcon aria-hidden="true" className="size-5" />
           <span className="sr-only">
@@ -77,12 +90,13 @@ function RepositoryImageTile({ projectId, image }: RepositoryImageTileProps) {
           </span>
         </div>
         <p className="min-w-0">{caption}</p>
+        {details}
       </li>
     );
   }
 
   return (
-    <li className="min-w-0">
+    <li className="grid min-w-0 content-start gap-2">
       <a
         href={src}
         target="_blank"
@@ -104,6 +118,7 @@ function RepositoryImageTile({ projectId, image }: RepositoryImageTileProps) {
           <span className="sr-only">, opens the full image in a new tab</span>
         </span>
       </a>
+      {details}
     </li>
   );
 }

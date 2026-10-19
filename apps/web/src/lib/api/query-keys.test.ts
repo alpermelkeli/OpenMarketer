@@ -4,6 +4,7 @@ import {
   queryKeys,
   refreshedByAssetDecision,
   refreshedByChatEvent,
+  refreshedByRepositoryImageChange,
   refreshedByStudioRunDeleted,
   refreshedByStudioRunEnd,
   refreshedByWorkspaceEvent,
@@ -154,6 +155,14 @@ describe("what a change in the studio refreshes", () => {
     expect(refreshedByStudioRunDeleted(PROJECT).map((r) => r.queryKey)).toEqual(
       [queryKeys.studioRuns(PROJECT), queryKeys.mediaAssets(PROJECT)],
     );
+  });
+});
+
+describe("what a change of a repository image refreshes", () => {
+  it("is the list of the project's repository images", () => {
+    expect(
+      refreshedByRepositoryImageChange(PROJECT).map((r) => r.queryKey),
+    ).toEqual([queryKeys.repositoryImages(PROJECT)]);
   });
 });
 

@@ -7,6 +7,7 @@ import type { ApiError } from "@/lib/api/api-error";
 import type { RepositoryImage } from "@/lib/api/types";
 import { projectPageHref } from "@/lib/projects/project-navigation";
 
+import { AddRepositoryImage } from "./add-repository-image";
 import { RepositoryImageGrid } from "./repository-image-grid";
 
 type RepositoryImagesProps = {
@@ -20,7 +21,10 @@ type RepositoryImagesProps = {
   onLoadMore: () => void;
 };
 
-/** The section of the images the last analysis found in the repository, which the studio may use as references. */
+/**
+ * The section of the project's repository images: those the last analysis found and those a person
+ * added, which the studio may use as references, with the way to add, relabel and remove them.
+ */
 export function RepositoryImages({
   projectId,
   images,
@@ -40,8 +44,10 @@ export function RepositoryImages({
           From the repository
         </h2>
         <p className="text-sm text-pretty text-muted-foreground">
-          Images the last analysis found in the repository. The studio may use
-          them as references; run an analysis again to refresh them.
+          Images the last analysis found in the repository, and any you added.
+          The studio uses what is listed here as references. Add an image,
+          change an image&rsquo;s kind or remove one here; run an analysis
+          again to refresh the ones it finds.
         </p>
       </div>
       {error !== null && (
@@ -54,15 +60,15 @@ export function RepositoryImages({
       {images === undefined && error === null && <Skeleton className="h-40" />}
       {images?.length === 0 && (
         <p className="max-w-prose text-sm text-pretty text-muted-foreground">
-          The last analysis found no images in the repository, or none has run
-          since images are collected.{" "}
+          No image is listed: the last analysis found none in the repository,
+          or none has run since images are collected, and none was added.{" "}
           <Link
             href={projectPageHref(projectId, "analyses")}
             className="rounded-sm text-brand underline-offset-4 hover:underline"
           >
             Run an analysis
           </Link>{" "}
-          to collect them.
+          to collect them, or add one below.
         </p>
       )}
       {images !== undefined && images.length > 0 && (
@@ -74,6 +80,7 @@ export function RepositoryImages({
         loading={loadingMore}
         onLoadMore={onLoadMore}
       />
+      <AddRepositoryImage projectId={projectId} />
     </section>
   );
 }

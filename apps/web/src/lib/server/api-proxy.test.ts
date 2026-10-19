@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_BODY_BYTES,
   MAX_IMAGE_BYTES,
+  MAX_UPLOAD_BODY_BYTES,
   allowedApiTarget,
   apiBaseUrl,
   assertFromDashboard,
@@ -509,8 +510,10 @@ describe("the routes of the repository's images", () => {
     expect(allowedApiPath("GET", image)).toBe(
       `/v1/projects/${PROJECT}/repository-images/${IMAGE}/image`,
     );
-    for (const method of ["POST", "PUT", "DELETE"]) {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
       expect(() => allowedApiPath(method, image)).toThrow();
+    }
+    for (const method of ["PUT", "PATCH", "DELETE"]) {
       expect(() => allowedApiPath(method, IMAGES)).toThrow();
     }
     expect(() =>
@@ -541,6 +544,62 @@ describe("the routes of the repository's images", () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(WEBP);
     expect(response.headers.get("content-type")).toBe("image/webp");
     expect(response.headers.get("content-disposition")).toBe(disposition);
+  });
+
+  it("forward an upload, a change of kind and a removal, and nothing else of one image", () => {
+    expect(allowedApiPath("POST", IMAGES)).toBe(
+      `/v1/projects/${PROJECT}/repository-images`,
+    );
+    expect(allowedApiPath("PATCH", [...IMAGES, IMAGE])).toBe(
+      `/v1/projects/${PROJECT}/repository-images/${IMAGE}`,
+    );
+    expect(allowedApiPath("DELETE", [...IMAGES, IMAGE])).toBe(
+      `/v1/projects/${PROJECT}/repository-images/${IMAGE}`,
+    );
+    for (const method of ["GET", "POST", "PUT"]) {
+      expect(() => allowedApiPath(method, [...IMAGES, IMAGE])).toThrow();
+    }
+    expect(() => allowedApiPath("PATCH", [...IMAGES, "logo.png"])).toThrow();
+    expect(() => allowedApiPath("DELETE", [...IMAGES, "logo.png"])).toThrow();
+    expect(() =>
+      allowedApiTarget("POST", IMAGES, new URLSearchParams("kind=logo")),
+    ).toThrow();
+  });
+
+  it("refuse an upload, a change of kind or a removal without the dashboard's Origin", async () => {
+    const api = apiAnswering(200, "{}");
+    const noOrigin = { host: "localhost:3000", "content-type": "application/json" };
+    for (const [method, segments] of [
+      ["POST", IMAGES],
+      ["PATCH", [...IMAGES, IMAGE]],
+      ["DELETE", [...IMAGES, IMAGE]],
+    ] as const) {
+      const body = method === "DELETE" ? undefined : '{"kind":"logo"}';
+      const bare = await proxyToApi(request(method, noOrigin, body), segments, undefined, api);
+      expect(bare.status).toBe(403);
+      const foreign = await proxyToApi(
+        request(method, { ...noOrigin, origin: "https://evil.example" }, body),
+        segments,
+        undefined,
+        api,
+      );
+      expect(foreign.status).toBe(403);
+    }
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("forward a change of kind as PATCH with its JSON body", async () => {
+    const api = apiAnswering(200, "{}");
+    const response = await proxyToApi(
+      request("PATCH", { ...fromDashboard, "content-type": "application/json" }, '{"kind":"logo"}'),
+      [...IMAGES, IMAGE],
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(200);
+    const [, init] = api.mock.calls[0];
+    expect(init?.method).toBe("PATCH");
+    expect(init?.body).toBe('{"kind":"logo"}');
   });
 
   it("do not include an id of another form or a path beside one", () => {
@@ -1529,5 +1588,85 @@ describe("the API address", () => {
     ]) {
       expect(() => apiBaseUrl(value)).toThrow("OPENMARKETER_API_URL");
     }
+  });
+});
+
+describe("the size of a request body", () => {
+  const IMAGES = ["projects", PROJECT, "repository-images"];
+  const json = { ...fromDashboard, "content-type": "application/json" };
+
+  function bodyOf(bytes: number): string {
+    const frame = '{"data_base64":""}';
+    return `{"data_base64":"${"A".repeat(bytes - frame.length)}"}`;
+  }
+
+  it("may reach the upload's limit on the route that uploads an image", async () => {
+    const api = apiAnswering(201, "{}");
+    const response = await proxyToApi(
+      request("POST", json, bodyOf(MAX_UPLOAD_BODY_BYTES)),
+      IMAGES,
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(201);
+    expect(String(api.mock.calls[0][1]?.body).length).toBe(MAX_UPLOAD_BODY_BYTES);
+  });
+
+  it("is refused past the upload's limit, before the API is asked", async () => {
+    const api = apiAnswering(201, "{}");
+    const response = await proxyToApi(
+      request("POST", json, bodyOf(MAX_UPLOAD_BODY_BYTES + 1)),
+      IMAGES,
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ code: "proxy_body_rejected" });
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("is refused when it declares more than its route takes", async () => {
+    const api = apiAnswering(201, "{}");
+    const response = await proxyToApi(
+      request(
+        "POST",
+        { ...json, "content-length": String(MAX_UPLOAD_BODY_BYTES + 1) },
+        "{}",
+      ),
+      IMAGES,
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(413);
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("stays at the ordinary limit on every other route, a change of an image's kind among them", async () => {
+    const api = apiAnswering(200, "{}");
+    for (const [method, segments] of [
+      ["PATCH", [...IMAGES, RUN]],
+      ["POST", ["projects"]],
+      ["POST", ["projects", PROJECT, "studio-runs"]],
+    ] as const) {
+      const response = await proxyToApi(
+        request(method, json, bodyOf(MAX_BODY_BYTES + 1)),
+        segments,
+        undefined,
+        api,
+      );
+      expect(response.status).toBe(413);
+    }
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("is forwarded at the ordinary limit on another route", async () => {
+    const api = apiAnswering(201, "{}");
+    const response = await proxyToApi(
+      request("POST", json, bodyOf(MAX_BODY_BYTES)),
+      ["projects"],
+      undefined,
+      api,
+    );
+    expect(response.status).toBe(201);
   });
 });

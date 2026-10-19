@@ -24,6 +24,11 @@
  * is refused. Of the API's headers only the five an image needs come back, and the type
  * is the one checked, never whatever else the API wrote.
  *
+ * A request body is JSON of at most `MAX_BODY_BYTES`, except on the one route that takes
+ * an image a person uploads to the project, which may carry up to `MAX_UPLOAD_BODY_BYTES`:
+ * the image's 8 MiB in base64, with room for the rest of the JSON. A body is refused as
+ * soon as it passes its route's limit, before it is read whole.
+ *
  * A request body can hold a secret (a credential being stored). It is passed on to
  * the API and nowhere else: nothing here logs it or puts it in an answer.
  */
@@ -35,6 +40,12 @@ export const DEFAULT_API_URL = "http://127.0.0.1:8000";
 
 /** Larger than any profile the analyzer produces; small enough to refuse abuse. */
 export const MAX_BODY_BYTES = 1_000_000;
+
+/**
+ * The body of an uploaded repository image: 8 MiB of image is 11,184,812 characters of
+ * base64, and the API takes no more; 12 MiB leaves room for its name and kind.
+ */
+export const MAX_UPLOAD_BODY_BYTES = 12_582_912;
 
 /** Twice the largest file any studio platform takes (8 MiB); larger is not an image the studio made. */
 export const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
@@ -63,7 +74,7 @@ const SETTING_KEY = "[a-z][a-z0-9_]{0,63}";
 // The whole of a Host header that names this machine, as the API itself matches it.
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i;
 
-type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /**
  * What a route takes besides its path: nothing; a list's page (`limit` and `cursor`);
@@ -78,12 +89,15 @@ type AllowedRoute = {
   template: keyof paths;
   pattern: RegExp;
   kind: RouteKind;
+  /** The largest request body this route takes, in bytes. */
+  maxBodyBytes: number;
 };
 
 function route(
   method: Method,
   template: keyof paths,
   kind: RouteKind = "plain",
+  maxBodyBytes: number = MAX_BODY_BYTES,
 ): AllowedRoute {
   // An image is only ever read: its bytes are never a request's body.
   if (kind === "image" && method !== "GET")
@@ -96,7 +110,13 @@ function route(
     .replace(/\{version\}/g, VERSION)
     .replace(/\{name\}/g, CREDENTIAL_NAME)
     .replace(/\{(tier|role)\}/g, SETTING_KEY);
-  return { method, template, pattern: new RegExp(`^${pattern}$`), kind };
+  return {
+    method,
+    template,
+    pattern: new RegExp(`^${pattern}$`),
+    kind,
+    maxBodyBytes,
+  };
 }
 
 const PAGED = "paged";
@@ -135,6 +155,14 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
     IMAGE,
   ),
   route("GET", "/v1/projects/{project_id}/repository-images", PAGED),
+  route(
+    "POST",
+    "/v1/projects/{project_id}/repository-images",
+    "plain",
+    MAX_UPLOAD_BODY_BYTES,
+  ),
+  route("PATCH", "/v1/projects/{project_id}/repository-images/{image_id}"),
+  route("DELETE", "/v1/projects/{project_id}/repository-images/{image_id}"),
   route(
     "GET",
     "/v1/projects/{project_id}/repository-images/{image_id}/image",
@@ -247,8 +275,12 @@ export function assertFromDashboard(method: string, headers: Headers): void {
   }
 }
 
-/** Where an allowed request goes: the API path and query, and what kind of route answers it. */
-export type ApiTarget = { pathAndQuery: string; kind: RouteKind };
+/** Where an allowed request goes: the API path and query, what kind of route answers it, and the largest body it takes. */
+export type ApiTarget = {
+  pathAndQuery: string;
+  kind: RouteKind;
+  maxBodyBytes: number;
+};
 
 /**
  * The API path and query for an allowed request; refuses every other method and path.
@@ -286,6 +318,7 @@ function allowedRoute(
   return {
     pathAndQuery: forwarded === "" ? path : `${path}?${forwarded}`,
     kind: matched.kind,
+    maxBodyBytes: matched.maxBodyBytes,
   };
 }
 
@@ -365,14 +398,23 @@ export function apiBaseUrl(configured: string | undefined): URL {
 }
 
 /**
- * The JSON body to forward, or none. Anything that is not JSON, or is too large, is
- * refused, and so is a body sent with a DELETE, which the API takes none for.
+ * The JSON body to forward, or none. Anything that is not JSON, or is larger than
+ * `maxBytes`, is refused, and so is a body sent with a DELETE, which the API takes none
+ * for. A body that declares or reaches more than `maxBytes` is refused before it is read
+ * whole.
  */
 export async function readJsonBody(
   request: Request,
+  maxBytes: number = MAX_BODY_BYTES,
 ): Promise<string | undefined> {
   if (request.method === "GET") return undefined;
-  const body = await request.text();
+  if (Number(request.headers.get("content-length") ?? "0") > maxBytes) {
+    await request.body?.cancel();
+    throw bodyTooLarge();
+  }
+  const body = new TextDecoder().decode(
+    await readAtMost(request, maxBytes, bodyTooLarge),
+  );
   if (body === "") return undefined;
   if (request.method === "DELETE") {
     throw new ProxyRefusal(
@@ -393,14 +435,15 @@ export async function readJsonBody(
       "a request body must be application/json",
     );
   }
-  if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES) {
-    throw new ProxyRefusal(
-      413,
-      "proxy_body_rejected",
-      "the request body is too large",
-    );
-  }
   return body;
+}
+
+function bodyTooLarge(): ProxyRefusal {
+  return new ProxyRefusal(
+    413,
+    "proxy_body_rejected",
+    "the request body is too large",
+  );
 }
 
 /**
@@ -419,7 +462,7 @@ export async function proxyToApi(
   try {
     assertFromDashboard(request.method, request.headers);
     const query = new URL(request.url).searchParams;
-    const { pathAndQuery, kind } = allowedRoute(
+    const { pathAndQuery, kind, maxBodyBytes } = allowedRoute(
       request.method,
       pathSegments,
       query,
@@ -434,7 +477,7 @@ export async function proxyToApi(
       );
     if (kind === "image")
       return await forwardImage(send, target, request.signal);
-    const body = await readJsonBody(request);
+    const body = await readJsonBody(request, maxBodyBytes);
     return await forward(send, target, request.method, body);
   } catch (error) {
     if (error instanceof ProxyRefusal) return error.toResponse();
@@ -543,7 +586,9 @@ async function forwardImage(
     await upstream.body?.cancel();
     throw upstreamRejected("the image is larger than the dashboard passes on");
   }
-  const bytes = await readAtMost(upstream, MAX_IMAGE_BYTES);
+  const bytes = await readAtMost(upstream, MAX_IMAGE_BYTES, () =>
+    upstreamRejected("the image is larger than the dashboard passes on"),
+  );
   const headers = new Headers({
     "content-type": mediaType,
     "content-length": String(bytes.byteLength),
@@ -560,13 +605,14 @@ async function forwardImage(
   return new Response(bytes, { status: upstream.status, headers });
 }
 
-/** The whole body, read a chunk at a time and refused as soon as it passes `limit` bytes. */
+/** The whole body, read a chunk at a time and refused with `tooLarge` as soon as it passes `limit` bytes. */
 async function readAtMost(
-  upstream: Response,
+  message: Request | Response,
   limit: number,
+  tooLarge: () => ProxyRefusal,
 ): Promise<Uint8Array<ArrayBuffer>> {
-  if (upstream.body === null) return new Uint8Array(0);
-  const reader = upstream.body.getReader();
+  if (message.body === null) return new Uint8Array(0);
+  const reader = message.body.getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;
   for (;;) {
@@ -575,9 +621,7 @@ async function readAtMost(
     length += value.byteLength;
     if (length > limit) {
       await reader.cancel();
-      throw upstreamRejected(
-        "the image is larger than the dashboard passes on",
-      );
+      throw tooLarge();
     }
     chunks.push(value);
   }
