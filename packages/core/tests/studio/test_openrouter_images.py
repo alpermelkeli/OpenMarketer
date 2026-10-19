@@ -12,7 +12,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.llm_config import CatalogModel, ModelRouter
 from openmarketer_core.studio.media_provider import (
     ImageInput,
     MediaAccountLimited,
@@ -22,6 +22,7 @@ from openmarketer_core.studio.media_provider import (
 )
 from openmarketer_core.studio.openrouter_images import (
     ACCOUNT_LIMITED,
+    IMAGES_ENDPOINT_ONLY,
     OpenRouterImages,
     nearest_aspect_ratio,
 )
@@ -56,7 +57,9 @@ def reply_with(url: str | None, *, cost: Any = 0.039, **choice: Any) -> dict[str
 class Provider:
     """The adapter with a transport that answers once and keeps what it was sent."""
 
-    def __init__(self, answer: httpx.Response | Exception, api_key: str | None = None) -> None:
+    def __init__(
+        self, answer: httpx.Response | Exception, api_key: str | None = None, catalog: Any = None
+    ) -> None:
         self.requests: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -67,7 +70,10 @@ class Provider:
 
         router = ModelRouter.from_file(MODELS_YAML, env={"OPENROUTER_API_KEY": "env-key"})
         self.images = OpenRouterImages(
-            router=router, transport=httpx.MockTransport(handler), api_key=api_key
+            router=router,
+            transport=httpx.MockTransport(handler),
+            api_key=api_key,
+            catalog=catalog,
         )
 
     @property
@@ -323,3 +329,132 @@ def test_a_size_beyond_the_limits_is_refused_before_anything_is_sent():
     with pytest.raises(ValueError):
         provider.images.generate("x", width=20_000, height=64)
     assert provider.requests == []
+
+
+def listed(slug: str, *outputs: str) -> CatalogModel:
+    return CatalogModel(
+        id=slug,
+        name=slug,
+        context_length=None,
+        prompt_price=None,
+        completion_price=None,
+        supported_parameters=frozenset(),
+        input_modalities=frozenset({"text", "image"}),
+        output_modalities=frozenset(outputs),
+    )
+
+
+def catalogue_of_the_roles_models(*outputs: str) -> dict[str, CatalogModel]:
+    resolved = ModelRouter.from_file(MODELS_YAML, env={}).resolve("image_generator")
+    return {slug: listed(slug, *outputs) for slug in [resolved.model, *resolved.fallbacks]}
+
+
+def test_models_that_make_images_only_are_asked_for_an_image_only():
+    models = catalogue_of_the_roles_models("image")
+    provider = Provider(
+        httpx.Response(200, json=reply_with(data_url(image_bytes((64, 64))))),
+        catalog=lambda: models,
+    )
+
+    provider.images.generate("x", width=64, height=64)
+
+    assert provider.body["modalities"] == ["image"]
+
+
+def test_models_that_also_write_text_are_asked_for_an_image_and_text():
+    models = catalogue_of_the_roles_models("image", "text")
+    provider = Provider(
+        httpx.Response(200, json=reply_with(data_url(image_bytes((64, 64))))),
+        catalog=lambda: models,
+    )
+
+    provider.images.generate("x", width=64, height=64)
+
+    assert provider.body["modalities"] == ["image", "text"]
+
+
+def test_a_catalogue_that_cannot_be_read_leaves_the_request_as_it_was_and_is_logged(caplog):
+    provider = Provider(
+        httpx.Response(200, json=reply_with(data_url(image_bytes((64, 64))))),
+        catalog=lambda: None,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = provider.images.generate("x", width=64, height=64)
+
+    assert result.data
+    assert provider.body["modalities"] == ["image", "text"]
+    assert "model catalogue not available" in caplog.text
+
+
+def test_the_reply_of_a_model_that_makes_images_only_is_read():
+    drawn = image_bytes((64, 64))
+    reply = {
+        "model": "black-forest-labs/flux-3-image",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "images": [{"type": "image_url", "image_url": {"url": data_url(drawn)}}],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"cost": 0.04},
+    }
+
+    result = answering(reply).images.generate("x", width=64, height=64)
+
+    assert result.data == drawn
+
+
+def test_an_image_given_as_a_url_text_or_after_an_unreadable_entry_is_read():
+    drawn = image_bytes((64, 64))
+    reply = reply_with(None)
+    reply["choices"][0]["message"]["images"] = [
+        {"type": "image_url"},
+        {"type": "image_url", "image_url": data_url(drawn)},
+    ]
+
+    assert answering(reply).images.generate("x", width=64, height=64).data == drawn
+
+
+def test_an_image_in_the_messages_content_parts_is_read_when_images_has_none():
+    drawn = image_bytes((64, 64))
+    reply = reply_with(None)
+    reply["choices"][0]["message"]["content"] = [
+        {"type": "text", "text": "Here it is."},
+        {"type": "image_url", "image_url": {"url": data_url(drawn)}},
+    ]
+
+    assert answering(reply).images.generate("x", width=64, height=64).data == drawn
+
+
+IMAGES_ENDPOINT_404 = {
+    "error": {
+        "code": 404,
+        "message": "qwen/qwen-image-3 is an image generation model and cannot be used with the "
+        "chat/completions endpoint. Use the /api/v1/images endpoint instead.",
+    }
+}
+
+
+def test_a_model_served_on_the_images_endpoint_only_is_told_in_our_own_words():
+    provider = answering(IMAGES_ENDPOINT_404, status=404)
+
+    with pytest.raises(MediaProviderError) as failure:
+        provider.images.generate("x", width=64, height=64)
+
+    assert str(failure.value) == IMAGES_ENDPOINT_ONLY
+    assert type(failure.value) is MediaProviderError
+    assert "qwen" not in str(failure.value)
+
+
+def test_another_404_is_still_the_providers_http_error():
+    provider = answering({"error": {"code": 404, "message": "No endpoints found"}}, status=404)
+
+    with pytest.raises(MediaProviderError) as failure:
+        provider.images.generate("x", width=64, height=64)
+
+    assert str(failure.value) == "the image provider answered HTTP 404"

@@ -160,7 +160,8 @@ const PROBLEMS: Record<CapabilityProblem, string> = {
   not_in_catalog: "is not in the provider's catalogue. Check its name.",
   no_tools: "cannot call tools, which this role needs.",
   no_structured_output: "cannot answer in a set structure, which this role needs.",
-  no_image_input: "does not accept images, which this role needs.",
+  no_image_input:
+    "does not take images as input, which this role is sent: an image to edit or references to follow, for an image role.",
   no_image_output: "does not answer with images, which this role makes.",
   rejects_temperature:
     "does not accept a temperature, which this role's requests carry. Mark it below as rejecting the temperature.",

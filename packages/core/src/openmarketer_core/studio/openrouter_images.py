@@ -2,22 +2,30 @@
 
 One request per image: the role's model (``image_generator`` by default, resolved by
 ``ModelRouter``) is sent the prompt, or the image to edit and the instruction, and any
-references as image parts (``llm.image_part``), and asked for an image back
-(``modalities``). The shape is asked for with OpenRouter's ``image_config.aspect_ratio``, the
-supported ratio nearest the size; a model that ignores it is still held to the size, since what
-comes back is fitted to it here: cropped about its centre to the size's proportions and resized,
-and the result says so (``params["fitted"]``).
+references as image parts (``llm.image_part``), and asked for an image back (``modalities``:
+``["image"]`` when the provider's catalogue says one of the request's models makes images only,
+``["image", "text"]`` otherwise or when the catalogue cannot be read,
+``llm_config.image_modalities``). The shape is asked for with OpenRouter's
+``image_config.aspect_ratio``, the supported ratio nearest the size; a model that ignores it is
+still held to the size, since what comes back is fitted to it here: cropped about its centre to
+the size's proportions and resized, and the result says so (``params["fitted"]``).
 
-What comes back is the model's: an image is kept only when it is a data URL of a PNG, JPEG or
-WebP whose bytes ``output_check.check_image`` accepts as that type, within the same limits as a
-sandbox's output. The cost is what the provider reports (``usage.cost``); without it, the role's
+What comes back is the model's. OpenRouter gives a model's image in the reply's
+``choices[0].message.images`` whether the model also writes text or not; the first entry that
+holds a URL is read there, and in the message's content parts when ``images`` has none. An
+image is kept only when it is a data URL of a PNG, JPEG or WebP whose bytes
+``output_check.check_image`` accepts as that type, within the same limits as a sandbox's
+output. The cost is what the provider reports (``usage.cost``); without it, the role's
 estimate, and the result says which (``params["cost_source"]``).
 
 What the provider writes (an error page, a refusal's text, a reply without an image) is logged,
 cut short, and never put in an error: an error is a fixed sentence. An answer that the key's
 balance or usage limit is too low (HTTP 402, or an error that names the limit it hit) is
-``MediaAccountLimited``, with a sentence that says where to raise it. The provider's key is
-handed in by the caller that resolved it, or is the environment's, and is kept out of ``repr``.
+``MediaAccountLimited``, with a sentence that says where to raise it. A model OpenRouter serves
+only on its images endpoint (HTTP 404 that says so: Qwen Image, FLUX 3, GPT Image) is told in a
+sentence of its own (``IMAGES_ENDPOINT_ONLY``): this adapter uses the chat endpoint only. The
+provider's key is handed in by the caller that resolved it, or is the environment's, and is
+kept out of ``repr``.
 """
 
 from __future__ import annotations
@@ -27,7 +35,7 @@ import binascii
 import io
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -36,7 +44,7 @@ import httpx
 from PIL import Image, ImageOps
 
 from openmarketer_core.llm import image_part, model_name_to_keep, reported_status
-from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.llm_config import CatalogModel, ModelRouter
 from openmarketer_core.studio.media_provider import (
     ImageInput,
     MediaAccountLimited,
@@ -81,6 +89,13 @@ ACCOUNT_LIMITED = (
     "the OpenRouter key's balance or usage limit is too low for image output; "
     "raise it at openrouter.ai/settings/keys"
 )
+# OpenRouter answers 404 for a model it serves on /api/v1/images only, and says so in its error.
+_NOT_ON_THIS_ENDPOINT_STATUS = 404
+_IMAGES_ENDPOINT_MARKS = ("/images endpoint", "api/v1/images", "image generation model")
+IMAGES_ENDPOINT_ONLY = (
+    "this image model is served by OpenRouter's images endpoint, which the studio does not use "
+    "yet; choose another image model for the image_generator role in Settings"
+)
 # OpenRouter answers 403 when its moderation flags the input.
 _REFUSED_STATUSES = (403,)
 # The finish reasons a model gives when it would not draw what was asked.
@@ -99,7 +114,9 @@ class OpenRouterImages:
 
     ``api_key`` is the provider's key, for a caller that resolved one itself; without it the
     key is the router's environment's. ``limits`` bound what is accepted back and the size
-    that may be asked for.
+    that may be asked for. ``catalog`` gives the provider's catalogue, or ``None`` when it
+    cannot be read now (``llm_catalog.ModelCatalog.models``); without it every request asks
+    for an image and text, which a model that makes images only may refuse.
     """
 
     router: ModelRouter
@@ -107,6 +124,9 @@ class OpenRouterImages:
     transport: httpx.BaseTransport | None = None
     limits: OutputLimits = field(default_factory=OutputLimits)
     api_key: str | None = field(default=None, repr=False)
+    catalog: Callable[[], Mapping[str, CatalogModel] | None] | None = field(
+        default=None, repr=False
+    )
 
     def generate(
         self, prompt: str, *, width: int, height: int, references: Sequence[ImageInput] = ()
@@ -152,6 +172,7 @@ class OpenRouterImages:
             self.role,
             [{"role": "user", "content": content}],
             image_config={"aspect_ratio": aspect_ratio},
+            catalog=self._catalogue(),
         )
         body = self._post(payload)
         drawn = self._image_in(body)
@@ -180,6 +201,16 @@ class OpenRouterImages:
             },
         )
 
+    def _catalogue(self) -> Mapping[str, CatalogModel] | None:
+        if self.catalog is None:
+            return None
+        models = self.catalog()
+        if models is None:
+            logger.warning(
+                "model catalogue not available: the image request asks for an image and text"
+            )
+        return models
+
     def _check_size(self, width: int, height: int) -> None:
         for side in (width, height):
             if isinstance(side, bool) or not isinstance(side, int) or side < 1:
@@ -203,6 +234,8 @@ class OpenRouterImages:
             logger.warning(
                 "image provider answered HTTP %s: %r", response.status_code, response.text[:300]
             )
+            if _wants_the_images_endpoint(response):
+                raise MediaProviderError(IMAGES_ENDPOINT_ONLY)
             raise _failure(
                 response.status_code,
                 f"the image provider answered HTTP {response.status_code}",
@@ -232,7 +265,7 @@ class OpenRouterImages:
         message = choice.get("message") if isinstance(choice, dict) else None
         if not isinstance(message, dict):
             raise MediaProviderError("the image provider's reply has no message")
-        url = _first_image_url(message.get("images"))
+        url = _first_image_url(message.get("images")) or _first_image_url(message.get("content"))
         if url is None:
             content = message.get("content")
             logger.warning(
@@ -300,13 +333,19 @@ def _parts(images: Sequence[ImageInput]) -> list[dict[str, Any]]:
     return [image_part(image.data, image.mime) for image in images]
 
 
-def _first_image_url(images: Any) -> str | None:
-    if not isinstance(images, list) or not images:
+def _first_image_url(parts: Any) -> str | None:
+    """The URL of the first image of ``parts``, a list of OpenRouter's image parts:
+    ``{"type": "image_url", "image_url": {"url": ...}}``, or with the URL as ``image_url``
+    itself. Anything else in the list is passed over."""
+    if not isinstance(parts, list):
         return None
-    first = images[0]
-    image_url = first.get("image_url") if isinstance(first, dict) else None
-    url = image_url.get("url") if isinstance(image_url, dict) else None
-    return url if isinstance(url, str) else None
+    for part in parts:
+        image_url = part.get("image_url") if isinstance(part, dict) else None
+        if isinstance(image_url, dict):
+            image_url = image_url.get("url")
+        if isinstance(image_url, str) and image_url:
+            return image_url
+    return None
 
 
 def _was_refused(choice: dict[str, Any]) -> bool:
@@ -325,6 +364,17 @@ def _error_in(response: httpx.Response) -> Any:
     except ValueError:
         return None
     return body.get("error") if isinstance(body, dict) else None
+
+
+def _wants_the_images_endpoint(response: httpx.Response) -> bool:
+    """Whether a reply says the model is served on the images endpoint, not the chat one. Read
+    only to tell the kind of failure: nothing of it is put in the error raised."""
+    if response.status_code != _NOT_ON_THIS_ENDPOINT_STATUS:
+        return False
+    error = _error_in(response)
+    message = error.get("message") if isinstance(error, dict) else None
+    text = (message if isinstance(message, str) else response.text[:2000]).lower()
+    return any(mark in text for mark in _IMAGES_ENDPOINT_MARKS)
 
 
 def _names_a_limit(error: Any) -> bool:

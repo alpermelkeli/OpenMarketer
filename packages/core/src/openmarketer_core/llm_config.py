@@ -274,6 +274,10 @@ class CatalogModel:
     output_modalities: frozenset[str] = frozenset()
     # US dollars per million output tokens of an image; how many tokens an image is, is the model's.
     image_output_price: float | None = None
+    # OpenRouter's ``pricing.image`` as it gives it, in US dollars per image. Its documentation
+    # does not say whether that is an image read or an image made (vision models carry it too),
+    # so it is shown as it is and never used for an estimate.
+    image_price: float | None = None
 
 
 class CapabilityProblem(StrEnum):
@@ -295,6 +299,30 @@ class ModelProblem:
 
     model: str
     problem: CapabilityProblem
+
+
+def image_modalities(
+    models: Sequence[str], catalog: Mapping[str, CatalogModel] | None
+) -> list[str]:
+    """What an image request to ``models`` (its model, then its fallbacks) asks back.
+
+    OpenRouter's image-generation guide asks for ``["image", "text"]`` from a model that
+    answers with both (Gemini, GPT-5 Image) and ``["image"]`` from one that makes images only
+    (FLUX, Seedream, Recraft). It does not say that a model of both accepts ``["image"]``, so
+    ``["image"]`` is asked only when the catalogue says one of the request's models makes
+    images and no text. ``models`` is one request, so a fallback of images only makes it
+    ``["image"]`` for the models before it too. A model the catalogue does not list, or one
+    whose outputs it does not give, or no catalogue at all, leaves the request as it was
+    before the catalogue was read: ``["image", "text"]``.
+    """
+    if catalog is None:
+        return ["image", "text"]
+    for slug in models:
+        entry = catalog.get(slug)
+        outputs = entry.output_modalities if entry is not None else frozenset()
+        if "image" in outputs and "text" not in outputs:
+            return ["image"]
+    return ["image", "text"]
 
 
 # ----------------------------------------------------------------- router
@@ -560,6 +588,7 @@ class ModelRouter:
         messages: list[dict[str, Any]],
         *,
         image_config: Mapping[str, Any] | None = None,
+        catalog: Mapping[str, CatalogModel] | None = None,
     ) -> dict[str, Any]:
         """The body of a chat-completions request for ``role`` that asks for an image back.
 
@@ -567,7 +596,9 @@ class ModelRouter:
         model that does not read it ignores it, and the caller fits what comes back. The
         provider routing is the chat requests', and so are the fallbacks (``models``, tried
         in order) and the cost the reply reports (``usage``); the reply's ``model`` names the
-        one that answered. Raises ``ConfigError`` for a role that is not of kind ``images``.
+        one that answered. ``catalog`` is the provider's, when the caller could read it: the
+        ``modalities`` asked for are the request's models' (``image_modalities``). Raises
+        ``ConfigError`` for a role that is not of kind ``images``.
         """
         r = self.resolve(role)
         if r.kind != "images":
@@ -575,7 +606,7 @@ class ModelRouter:
         payload: dict[str, Any] = {
             "model": r.model,
             "messages": messages,
-            "modalities": ["image", "text"],
+            "modalities": image_modalities([r.model, *r.fallbacks], catalog),
             "provider": self.config.provider.routing.model_dump(),
             "usage": {"include": True},
         }

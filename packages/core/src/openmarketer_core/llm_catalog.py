@@ -1,8 +1,12 @@
 """The model provider's catalogue: which models it serves and what each accepts.
 
 The dashboard's model picker lists it, and a role's choice is checked against
-it (``ModelRouter.check_capabilities``). OpenRouter publishes the catalogue at
-``GET <base_url>/models`` without a key, so no credential is sent.
+it (``ModelRouter.check_capabilities``), and an image request asks back what
+its models make (``llm_config.image_modalities``). OpenRouter publishes the
+catalogue at ``GET <base_url>/models`` without a key, so no credential is sent.
+That list leaves out the models that make images only (FLUX, Seedream, Recraft,
+GPT Image) unless it is asked for every output (``output_modalities=all``), so
+it is.
 
 What the provider writes is untrusted text: an entry is kept only when its id
 is a model slug, its name is printable text of a bounded length, and its
@@ -33,6 +37,8 @@ logger = logging.getLogger(__name__)
 MAX_ENTRIES = 5000
 MAX_TEXT_LENGTH = 200
 TOKENS_PER_PRICE_UNIT = 1_000_000
+# Without it the list has only the models that answer with text.
+EVERY_OUTPUT = {"output_modalities": "all"}
 
 
 class ModelCatalog:
@@ -75,7 +81,11 @@ class ModelCatalog:
     def _fetch(self) -> dict[str, CatalogModel] | None:
         try:
             with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
-                response = client.get(self._url, headers={"Accept": "application/json"})
+                response = client.get(
+                    self._url,
+                    params=EVERY_OUTPUT,
+                    headers={"Accept": "application/json"},
+                )
         except httpx.HTTPError as e:
             logger.warning("model catalogue: request failed: %s", type(e).__name__)
             return None
@@ -123,6 +133,7 @@ def catalog_model(entry: Any) -> CatalogModel | None:
         input_modalities=_words(architecture.get("input_modalities")),
         output_modalities=_words(architecture.get("output_modalities")),
         image_output_price=_price(pricing.get("image_output")),
+        image_price=_amount(pricing.get("image")),
     )
 
 
@@ -138,15 +149,21 @@ def _positive_int(value: Any) -> int | None:
 
 def _price(value: Any) -> float | None:
     """A price per token, as text or a number, in US dollars per million tokens."""
+    per_token = _amount(value)
+    return None if per_token is None else per_token * TOKENS_PER_PRICE_UNIT
+
+
+def _amount(value: Any) -> float | None:
+    """A price as the catalogue gives it, as text or a number, in US dollars per its unit."""
     if isinstance(value, bool) or not isinstance(value, str | int | float):
         return None
     try:
-        per_token = float(value)
+        amount = float(value)
     except ValueError:
         return None
-    if not math.isfinite(per_token) or per_token < 0:
+    if not math.isfinite(amount) or amount < 0:
         return None
-    return per_token * TOKENS_PER_PRICE_UNIT
+    return amount
 
 
 def _words(value: Any) -> frozenset[str]:

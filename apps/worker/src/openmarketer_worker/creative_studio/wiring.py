@@ -13,6 +13,9 @@ models and its image model are both OpenRouter's) can be stored from the dashboa
 worker started, so it is resolved for the run's workspace when an attempt needs it
 (``new_model``, ``new_media``), and so are the workspace's model choices. What one paid image
 is reckoned to cost is read from the image role of the workspace's models, and needs no key.
+The provider's catalogue (``ModelCatalog``, read without a key, kept for a while and shared by
+every attempt) tells an image request what its models make; one that cannot be read leaves
+the request as it was, and never fails an image.
 
 ``creative_studio`` reads the environment; ``registration`` takes what was built
 (``StudioParts``) and declares the agent's worker side: a handler for each of its five
@@ -40,6 +43,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from openmarketer_core.agent_runtime.langgraph_agent import AgentSteps
 from openmarketer_core.db.checkpoint_cleanup import remove_checkpoints_of_studio_runs
 from openmarketer_core.llm import ChatModel, RouterChatModel
+from openmarketer_core.llm_catalog import ModelCatalog
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ModelRouter
 from openmarketer_core.studio.asset_store import AssetStore, S3AssetStore
 from openmarketer_core.studio.docker_sandbox import DockerSandbox
@@ -114,6 +118,7 @@ def creative_studio(
         environ.get("LLM_CONFIG_PATH") or DEFAULT_CONFIG_PATH, env=environ
     )
     workspace_settings = WorkspaceSettings(sessions)
+    catalog = ModelCatalog(router.config.provider.base_url)
 
     def new_model(workspace_id: uuid.UUID) -> ChatModel:
         chosen = workspace_settings.router_for(workspace_id, router)
@@ -125,7 +130,7 @@ def creative_studio(
         # OpenRouter's like every other role.
         chosen = workspace_settings.router_for(workspace_id, router)
         key = credentials.model_key(workspace_id, chosen)
-        return tracing.media(OpenRouterImages(router=chosen, api_key=key))
+        return tracing.media(OpenRouterImages(router=chosen, api_key=key, catalog=catalog.models))
 
     def image_estimate(workspace_id: uuid.UUID) -> Decimal:
         chosen = workspace_settings.router_for(workspace_id, router)
