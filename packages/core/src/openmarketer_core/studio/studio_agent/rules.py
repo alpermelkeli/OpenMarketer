@@ -7,7 +7,9 @@ every prompt, which failures a round had, and what follows a round (``decide``).
 the request's: no model writes, changes or adds a word of it, and the words a prompt asks an
 image model to render are put there by code (``generation_prompt``, ``edit_instruction``),
 with where they go, what the product is (``about_product``) and none of a model's sentences
-that would forbid them (``without_text_bans``).
+that would forbid them (``without_text_bans``). For a size that is not square, every image prompt
+ends with the region a square picture keeps once cropped to it (``square_crop.crop_safe_note``),
+since some image models return a square whatever they are asked.
 
 The four techniques, in the order the decide rule falls back through:
 
@@ -52,6 +54,7 @@ from openmarketer_core.studio.image_checks import (
 )
 from openmarketer_core.studio.platforms import PlatformSpec
 from openmarketer_core.studio.requests import MAX_COPY_LINE_CHARS, MAX_COPY_LINES
+from openmarketer_core.studio.square_crop import crop_safe_note
 
 CREATIVE_DIRECTOR_ROLE = "creative_director"
 STUDIO_ROLE = "studio"
@@ -147,10 +150,17 @@ MAX_ABOUT_LINE_CHARS = 160
 MAX_ABOUT_FEATURES = 3
 # What code says of the references an image model is sent: a line for each, and a sentence.
 MAX_REFERENCE_LINES_CHARS = 3 * MAX_REFERENCES * (MAX_REFERENCE_USE_CHARS + 30) + 200
+# The sentence of the region a square keeps once cropped to the size (``crop_safe_note``).
+MAX_CROP_NOTE_CHARS = 300
 # What the code adds to a model's prompt: the lines of copy and a sentence around them, where
-# they go, what the product is, and what each reference is for.
+# they go, what the product is, what each reference is for, and the region to keep things in.
 MAX_COMPOSED_PROMPT_CHARS = (
-    MAX_PROMPT_CHARS + 1200 + MAX_PLACEMENT_CHARS + MAX_ABOUT_CHARS + MAX_REFERENCE_LINES_CHARS
+    MAX_PROMPT_CHARS
+    + 1200
+    + MAX_PLACEMENT_CHARS
+    + MAX_ABOUT_CHARS
+    + MAX_REFERENCE_LINES_CHARS
+    + MAX_CROP_NOTE_CHARS
 )
 
 
@@ -880,28 +890,36 @@ def generation_prompt(
     copy_placement: str = "",
     about: str = "",
     references: str = "",
+    crop_to: PlatformSpec | None = None,
 ) -> str:
     """The prompt an image model is sent: the model's picture, what the product is, what each
-    reference is for (``reference_lines``), then the copy and where it goes, as code puts them.
+    reference is for (``reference_lines``), then the copy and where it goes, as code puts them,
+    and, for a ``crop_to`` that is not square, the region a square picture keeps once cropped
+    to it (``crop_safe_note``).
 
     With copy that the image model renders, a sentence of the model's that forbids text would
     contradict the copy, so it is taken out first (``without_text_bans``).
     """
+    crop = _crop_note(crop_to)
     if technique == Technique.BACKGROUND_OVERLAY:
         return _joined(
             prompt,
             about,
             references,
             _no_text_for_overlay(copy_placement, exact_copy),
+            crop,
         )
     if not exact_copy:
-        return _joined(prompt, about, references, "The image shows no text, letters or numbers.")
+        return _joined(
+            prompt, about, references, "The image shows no text, letters or numbers.", crop
+        )
     return _joined(
         without_text_bans(prompt),
         about,
         references,
         _copy_sentence(exact_copy),
         _placement(copy_placement),
+        crop,
     )
 
 
@@ -913,19 +931,26 @@ def edit_instruction(
     copy_placement: str = "",
     about: str = "",
     references: str = "",
+    crop_to: PlatformSpec | None = None,
 ) -> str:
     """The instruction an edit is sent with, with the product, the references and the copy as
-    code puts them."""
+    code puts them, and the region a square keeps once cropped to ``crop_to``."""
+    crop = _crop_note(crop_to)
     if technique == Technique.BACKGROUND_OVERLAY:
         return _joined(
             instruction,
             about,
             references,
             _no_text_for_overlay(copy_placement, exact_copy),
+            crop,
         )
     if not exact_copy:
         return _joined(
-            instruction, about, references, "Keep the image free of text, letters and numbers."
+            instruction,
+            about,
+            references,
+            "Keep the image free of text, letters and numbers.",
+            crop,
         )
     return _joined(
         without_text_bans(instruction),
@@ -933,11 +958,18 @@ def edit_instruction(
         references,
         _copy_sentence(exact_copy),
         _placement(copy_placement),
+        crop,
     )
 
 
 def _joined(*parts: str) -> str:
     return "\n\n".join(part for part in parts if part)
+
+
+def _crop_note(spec: PlatformSpec | None) -> str:
+    if spec is None:
+        return ""
+    return crop_safe_note(spec.width, spec.height)[:MAX_CROP_NOTE_CHARS]
 
 
 def _no_text_for_overlay(copy_placement: str, exact_copy: Sequence[str]) -> str:

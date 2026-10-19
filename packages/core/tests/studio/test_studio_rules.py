@@ -8,6 +8,7 @@ from openmarketer_core.agent_runtime.model_input import read_strict_json
 from openmarketer_core.studio.brand_kit import EMPTY_BRAND_KIT, BrandKit
 from openmarketer_core.studio.image_checks import COPY, WRONG_SIZE
 from openmarketer_core.studio.platforms import Platform, platform_spec
+from openmarketer_core.studio.square_crop import CROP_SAFE_LEAD, crop_safe_note
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_core.studio.studio_agent.rules import (
     Limits,
@@ -360,6 +361,25 @@ def test_the_product_block_goes_into_every_generation_and_edit():
         assert about in rules.edit_instruction("Brighter.", [], technique, about=about)
 
 
+PORTRAIT = platform_spec(Platform.INSTAGRAM_PORTRAIT)
+
+
+def test_every_prompt_for_a_shape_not_square_ends_with_the_region_a_square_crop_keeps():
+    note = crop_safe_note(PORTRAIT.width, PORTRAIT.height)
+    for technique in Technique:
+        for copy in ([], ["Launch"]):
+            prompt = rules.generation_prompt("A desk.", copy, technique, crop_to=PORTRAIT)
+            edit = rules.edit_instruction("Brighter.", copy, technique, crop_to=PORTRAIT)
+            assert prompt.endswith(note)
+            assert edit.endswith(note)
+
+
+def test_a_prompt_for_a_square_says_nothing_of_a_crop():
+    square = platform_spec(Platform.INSTAGRAM_POST)
+    prompt = rules.generation_prompt("A desk.", ["Launch"], Technique.GENERATED, crop_to=square)
+    assert CROP_SAFE_LEAD not in prompt
+
+
 def test_the_composed_prompt_fits_its_payload():
     prompt = rules.generation_prompt(
         "p" * rules.MAX_PROMPT_CHARS,
@@ -370,6 +390,8 @@ def test_the_composed_prompt_fits_its_payload():
             BrandKit(name="n" * 300, kind="k" * 300, audience="a" * 300, features=("f",) * 5),
             ["c"],
         ),
+        references="r" * rules.MAX_REFERENCE_LINES_CHARS,
+        crop_to=platform_spec(Platform.APP_STORE_SCREENSHOT),
     )
     assert len(prompt) <= rules.MAX_COMPOSED_PROMPT_CHARS
 

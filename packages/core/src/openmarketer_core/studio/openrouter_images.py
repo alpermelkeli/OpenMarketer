@@ -21,7 +21,14 @@ ones tried before it (``params["models_failed"]``).
 The shape is asked for with OpenRouter's
 ``image_config.aspect_ratio``, the supported ratio nearest the size; a model that ignores it is
 still held to the size, since what comes back is fitted to it here: cropped about its centre to
-the size's proportions and resized, and the result says so (``params["fitted"]``).
+the size's proportions and resized, and the result says so (``params["fitted"]``). Some models
+(Seedream on OpenRouter) return a square whatever they are asked: a model whose reply is square
+when the size is not is remembered for the life of the process (``SquareOnlyModels``, learnt from
+its first such reply, which is still cropped), and is then sent the images of the size's shape
+padded to a square about their centre (``padded_to_a_square``), so that the layout it follows is
+the region the crop keeps; the prompt says what that region is (``square_crop.crop_safe_note``,
+put there by the studio's rules). The result says whether the prompt had that sentence and how
+many images were padded (``params["crop_safe_note"]``, ``params["images_padded"]``).
 
 What comes back is the model's. OpenRouter gives a model's image in the reply's
 ``choices[0].message.images`` whether the model also writes text or not; the first entry that
@@ -48,15 +55,22 @@ import binascii
 import io
 import logging
 import math
+import threading
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
-from openmarketer_core.llm import image_part, model_name_to_keep, reported_status
+from openmarketer_core.llm import (
+    MAX_IMAGE_PART_BYTES,
+    image_part,
+    model_name_to_keep,
+    reported_status,
+)
 from openmarketer_core.llm_config import IMAGE_ONLY, CatalogModel, ModelRouter
 from openmarketer_core.studio.media_provider import (
     ImageInput,
@@ -68,7 +82,8 @@ from openmarketer_core.studio.media_provider import (
     MediaUnavailable,
 )
 from openmarketer_core.studio.output_check import OutputLimits, RawOutput, check_image
-from openmarketer_core.studio.sandbox import ImageMime
+from openmarketer_core.studio.sandbox import ImageMime, SandboxFile
+from openmarketer_core.studio.square_crop import CROP_SAFE_LEAD, SQUARE_TOLERANCE
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +108,44 @@ ASPECT_TOLERANCE = 0.01
 
 # A reply carries its image as base64 text, a third larger than the bytes.
 MAX_REPLY_BYTES = 64 * 1024 * 1024
+
+# How many models a process remembers as returning squares; the oldest is forgotten.
+MAX_REMEMBERED_SQUARE_MODELS = 256
+# The longest side of an image padded to a square: about what a square-only model returns.
+MAX_PADDED_SIDE = 2048
+# How much a padded image's extension is blurred, as a share of its side.
+_PADDING_BLUR = 1 / 16
+
+
+class SquareOnlyModels:
+    """The image models known, in this process, to return a square whatever shape is asked.
+
+    Bounded and safe across threads; a model forgotten costs one cropped image again, and a
+    model that returns the shape it was asked for is forgotten at once.
+    """
+
+    def __init__(self, limit: int = MAX_REMEMBERED_SQUARE_MODELS) -> None:
+        self._limit = limit
+        self._models: OrderedDict[str, None] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def returns_squares(self, model: str) -> bool:
+        with self._lock:
+            return model in self._models
+
+    def remember(self, model: str) -> None:
+        with self._lock:
+            self._models[model] = None
+            self._models.move_to_end(model)
+            while len(self._models) > self._limit:
+                self._models.popitem(last=False)
+
+    def forget(self, model: str) -> None:
+        with self._lock:
+            self._models.pop(model, None)
+
+
+_SQUARE_ONLY_OF_THIS_PROCESS = SquareOnlyModels()
 
 _PASSING_STATUSES = (408, 429)
 # OpenRouter answers 402 when the account's credits or the key's limit cannot pay for a request;
@@ -143,6 +196,9 @@ class OpenRouterImages:
     catalog: Callable[[], Mapping[str, CatalogModel] | None] | None = field(
         default=None, repr=False
     )
+    square_only: SquareOnlyModels = field(
+        default_factory=lambda: _SQUARE_ONLY_OF_THIS_PROCESS, repr=False
+    )
 
     def generate(
         self, prompt: str, *, width: int, height: int, references: Sequence[ImageInput] = ()
@@ -150,8 +206,7 @@ class OpenRouterImages:
         text = f"{prompt}\n\nThe image is {width}x{height} pixels."
         if references:
             text += " The images attached are references to follow."
-        content = [{"type": "text", "text": text}, *_parts(references)]
-        return self._draw("generate", content, width=width, height=height)
+        return self._draw("generate", text, references, text_first=True, width=width, height=height)
 
     def edit(
         self,
@@ -165,8 +220,9 @@ class OpenRouterImages:
         text = f"Edit the first image: {instruction}\n\nThe result is {width}x{height} pixels."
         if references:
             text += " The other images attached are references to follow."
-        content = [*_parts([image, *references]), {"type": "text", "text": text}]
-        return self._draw("edit", content, width=width, height=height)
+        return self._draw(
+            "edit", text, [image, *references], text_first=False, width=width, height=height
+        )
 
     def estimate(self, operation: MediaOperation) -> Decimal:
         """The role's ``estimate_usd_per_image``, the same for both operations.
@@ -180,14 +236,30 @@ class OpenRouterImages:
         return Decimal(str(estimate))
 
     def _draw(
-        self, operation: MediaOperation, content: list[dict[str, Any]], *, width: int, height: int
+        self,
+        operation: MediaOperation,
+        text: str,
+        images: Sequence[ImageInput],
+        *,
+        text_first: bool,
+        width: int,
+        height: int,
     ) -> MediaResult:
+        """The image of the first of the role's models that draws one. ``images`` go after
+        ``text`` or before it (an edit's image to change first), each model's own way: a model
+        known to return squares is sent those of the size's shape padded to a square."""
         self._check_size(width, height)
         aspect_ratio = nearest_aspect_ratio(width, height)
         catalogue = self._catalogue()
         failures: list[MediaProviderError] = []
         failed: list[str] = []
         for model in self.router.image_models(self.role):
+            sent, padded = images, 0
+            if self.square_only.returns_squares(model):
+                sent, padded = _padded_where_shaped(images, width, height)
+            text_part = {"type": "text", "text": text}
+            parts = _parts(sent)
+            content = [text_part, *parts] if text_first else [*parts, text_part]
             try:
                 body, modalities = self._ask(model, content, aspect_ratio, catalogue)
                 drawn = self._image_in(body)
@@ -198,10 +270,12 @@ class OpenRouterImages:
                 failures.append(e)
                 failed.append(model)
                 continue
+            checked = self._checked(drawn)
+            self._learn_the_shape(model, checked.width, checked.height, aspect_ratio)
             return self._result(
                 operation,
                 body,
-                drawn,
+                checked,
                 asked_for=model,
                 width=width,
                 height=height,
@@ -209,9 +283,34 @@ class OpenRouterImages:
                     "aspect_ratio": aspect_ratio,
                     "modalities": modalities,
                     "models_failed": failed,
+                    "crop_safe_note": CROP_SAFE_LEAD in text,
+                    "images_padded": padded,
                 },
             )
         raise _of_all(failures)
+
+    def _checked(self, drawn: bytes) -> SandboxFile:
+        checked, reason = check_image(RawOutput("image", drawn), self.limits)
+        if checked is None:
+            logger.warning("image model's image refused: %s", reason)
+            raise MediaProviderError("the image the model returned is not an accepted image")
+        return checked
+
+    def _learn_the_shape(self, model: str, width: int, height: int, aspect_ratio: str) -> None:
+        """Remember ``model`` as returning squares when it returned one for a shape that is not,
+        and forget it when it returned another shape."""
+        if aspect_ratio == "1:1":
+            return
+        if _is_square(width, height):
+            if not self.square_only.returns_squares(model):
+                logger.warning(
+                    "image model %s returned a square for %s; it is sent padded references",
+                    model,
+                    aspect_ratio,
+                )
+            self.square_only.remember(model)
+            return
+        self.square_only.forget(model)
 
     def _ask(
         self,
@@ -246,17 +345,13 @@ class OpenRouterImages:
         self,
         operation: MediaOperation,
         body: dict[str, Any],
-        drawn: bytes,
+        checked: SandboxFile,
         *,
         asked_for: str,
         width: int,
         height: int,
         params: Mapping[str, Any],
     ) -> MediaResult:
-        checked, reason = check_image(RawOutput("image", drawn), self.limits)
-        if checked is None:
-            logger.warning("image model's image refused: %s", reason)
-            raise MediaProviderError("the image the model returned is not an accepted image")
         data, mime, fitted = fit_to_size(checked.data, checked.mime, width, height)
         cost, cost_source = self._cost(body)
         return MediaResult(
@@ -410,6 +505,65 @@ def fit_to_size(
     out = io.BytesIO()
     fitted.save(out, format="PNG")
     return out.getvalue(), "image/png", "resized" if same_shape else "cropped_and_resized"
+
+
+def padded_to_a_square(data: bytes) -> bytes | None:
+    """The image centred on a square of its longer side, as a PNG, or ``None`` when it is
+    square already. The strips added are the image itself stretched to the square and blurred,
+    so they carry its colours and nothing a model would read as part of the layout; a square
+    larger than ``MAX_PADDED_SIDE`` is scaled down to it."""
+    with Image.open(io.BytesIO(data)) as opened:
+        has_alpha = "A" in opened.getbands() or "transparency" in opened.info
+        image = opened.convert("RGBA" if has_alpha else "RGB")
+    width, height = image.size
+    side = max(width, height)
+    if width == height:
+        return None
+    extension = image.resize((side, side), Image.Resampling.BILINEAR)
+    square = extension.filter(ImageFilter.GaussianBlur(radius=side * _PADDING_BLUR))
+    square.paste(image, ((side - width) // 2, (side - height) // 2))
+    if side > MAX_PADDED_SIDE:
+        square = square.resize((MAX_PADDED_SIDE, MAX_PADDED_SIDE), Image.Resampling.LANCZOS)
+    out = io.BytesIO()
+    square.save(out, format="PNG")
+    return out.getvalue()
+
+
+def _padded_where_shaped(
+    images: Sequence[ImageInput], width: int, height: int
+) -> tuple[list[ImageInput], int]:
+    """``images`` with those of the size's shape padded to a square, and how many were. A
+    padded image too large to show a model is sent as it was."""
+    if _is_square(width, height):
+        return list(images), 0
+    sent: list[ImageInput] = []
+    padded = 0
+    for image in images:
+        square = padded_to_a_square(image.data) if _has_the_shape(image, width, height) else None
+        if square is None or len(square) > MAX_IMAGE_PART_BYTES:
+            sent.append(image)
+            continue
+        sent.append(ImageInput(data=square, mime="image/png"))
+        padded += 1
+    return sent, padded
+
+
+def _has_the_shape(image: ImageInput, width: int, height: int) -> bool:
+    try:
+        with Image.open(io.BytesIO(image.data)) as opened:
+            shown = opened.size
+    except (OSError, ValueError):
+        return False
+    return _same_shape(shown, (width, height))
+
+
+def _same_shape(first: tuple[int, int], second: tuple[int, int]) -> bool:
+    wanted = second[0] / second[1]
+    return abs(first[0] / first[1] - wanted) <= ASPECT_TOLERANCE * wanted
+
+
+def _is_square(width: int, height: int) -> bool:
+    return abs(math.log(width / height)) <= math.log(1 + SQUARE_TOLERANCE)
 
 
 def _parts(images: Sequence[ImageInput]) -> list[dict[str, Any]]:

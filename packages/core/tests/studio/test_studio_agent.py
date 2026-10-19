@@ -30,6 +30,7 @@ from openmarketer_core.studio.image_checks import COPY as COPY_FAILURE
 from openmarketer_core.studio.media_provider import ImageInput
 from openmarketer_core.studio.platforms import Platform, platform_spec
 from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.studio.square_crop import CROP_SAFE_LEAD, crop_safe_note
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_core.studio.studio_agent.definitions import (
     EDIT_IMAGE,
@@ -228,10 +229,9 @@ class Run:
         limits: Limits | None = None,
         brand_kit: BrandKit = ACME,
         repository: tuple[RepositoryImageInfo, ...] = (),
+        platform: Platform = Platform.INSTAGRAM_POST,
     ):
-        request = AssetRequest(
-            goal="Announce the launch.", exact_copy=COPY, platform=Platform.INSTAGRAM_POST
-        )
+        request = AssetRequest(goal="Announce the launch.", exact_copy=COPY, platform=platform)
         run = StudioRunInput(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
         known = {image.id for image in repository}
         context = StudioContext(
@@ -403,6 +403,65 @@ def test_a_thread_stored_before_the_product_block_still_asks_for_its_image():
     payload = _payload_of(state, pending)  # type: ignore[arg-type]
 
     assert "About the product" not in payload.model_dump()["prompt"]
+
+
+PORTRAIT_CROP_NOTE = crop_safe_note(1080, 1350)
+
+
+def test_every_generation_and_edit_for_a_shape_not_square_says_what_a_square_crop_keeps():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[
+            operation("generate_image", prompt="A desk."),
+            ready(),
+            a_plan(),
+            editing_latest(instruction="Fix it."),
+            ready(),
+        ],
+        asset_verifier=[reading("Lauch day"), a_verdict()],
+    )
+    world = World(["Lauch day", READ_BACK], sizes={0: (1080, 1350), 1: (1080, 1350)})
+
+    Run(chat, world, platform=Platform.INSTAGRAM_PORTRAIT)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    [edited] = world.payloads(EDIT_IMAGE)
+    assert generated["prompt"].endswith(PORTRAIT_CROP_NOTE)
+    assert edited["instruction"].endswith(PORTRAIT_CROP_NOTE)
+
+
+def test_a_square_asset_is_not_told_of_a_crop():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    assert CROP_SAFE_LEAD not in generated["prompt"]
+
+
+def test_an_operation_chosen_before_the_crop_note_is_asked_as_it_was():
+    run = StudioRunInput(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+    request = AssetRequest(goal="Launch.", exact_copy=COPY, platform=Platform.INSTAGRAM_PORTRAIT)
+    state: dict[str, Any] = {**initial_state(run, request), "round": 1}
+    pending = {
+        "op": GENERATE_IMAGE,
+        "version_id": str(uuid.uuid4()),
+        "technique": "generated",
+        "prompt": "A desk.",
+        "reference_version_ids": [],
+        "reference_asset_ids": [],
+    }
+
+    before = _payload_of(state, pending)  # type: ignore[arg-type]
+    after = _payload_of(state, {**pending, "crop_safe": True})  # type: ignore[arg-type]
+
+    assert CROP_SAFE_LEAD not in before.model_dump()["prompt"]
+    assert after.model_dump()["prompt"].endswith(PORTRAIT_CROP_NOTE)
 
 
 def test_words_read_back_wrong_are_edited_in_a_second_round_that_passes():

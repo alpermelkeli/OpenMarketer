@@ -24,8 +24,11 @@ from openmarketer_core.studio.openrouter_images import (
     ACCOUNT_LIMITED,
     IMAGES_ENDPOINT_ONLY,
     OpenRouterImages,
+    SquareOnlyModels,
     nearest_aspect_ratio,
+    padded_to_a_square,
 )
+from openmarketer_core.studio.square_crop import crop_safe_note
 
 MODELS_YAML = Path(__file__).resolve().parents[4] / "config" / "models.yaml"
 PROVIDER_KEY = "sk-or-v1-made-up-image-key"
@@ -62,7 +65,11 @@ class Provider:
     the next of ``answers`` (one answer: every request), the last one again when they run out."""
 
     def __init__(
-        self, answer: Answer | list[Answer], api_key: str | None = None, catalog: Any = None
+        self,
+        answer: Answer | list[Answer],
+        api_key: str | None = None,
+        catalog: Any = None,
+        square_only: SquareOnlyModels | None = None,
     ) -> None:
         self.requests: list[httpx.Request] = []
         answers = answer if isinstance(answer, list) else [answer]
@@ -80,6 +87,8 @@ class Provider:
             transport=httpx.MockTransport(handler),
             api_key=api_key,
             catalog=catalog,
+            # Each test its own, so that what one learns is not another's.
+            square_only=square_only or SquareOnlyModels(),
         )
 
     @property
@@ -590,3 +599,145 @@ def test_another_404_is_still_the_providers_http_error():
         provider.images.generate("x", width=64, height=64)
 
     assert str(failure.value) == "the image provider answered HTTP 404"
+
+
+# ------------------------------------------------------------------ models that return squares
+def picture(size: tuple[int, int], colour: tuple[int, int, int] = (200, 40, 40)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, colour).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def sent_images(body: dict[str, Any]) -> list[Image.Image]:
+    parts = [part for part in body["messages"][0]["content"] if part["type"] == "image_url"]
+    return [
+        Image.open(io.BytesIO(base64.b64decode(part["image_url"]["url"].split(",", 1)[1])))
+        for part in parts
+    ]
+
+
+SQUARE_REPLY = httpx.Response(200, json=reply_with(data_url(image_bytes((2048, 2048)))))
+PORTRAIT_REFERENCE = ImageInput(picture((1080, 1350)), "image/png")
+SQUARE_REFERENCE = ImageInput(picture((256, 256)), "image/png")
+
+
+def test_a_model_that_returns_a_square_for_a_portrait_is_remembered_and_its_image_cropped():
+    known = SquareOnlyModels()
+    provider = Provider(SQUARE_REPLY, square_only=known)
+
+    result = provider.images.generate("a poster", width=1080, height=1350)
+
+    assert known.returns_squares(FIRST)
+    assert (result.width, result.height) == (1080, 1350)
+    assert Image.open(io.BytesIO(result.data)).size == (1080, 1350)
+    assert result.params["fitted"] == "cropped_and_resized"
+    assert result.params["images_padded"] == 0
+
+
+def test_a_model_known_to_return_squares_is_sent_the_references_of_the_shape_padded():
+    known = SquareOnlyModels()
+    known.remember(FIRST)
+    provider = Provider(SQUARE_REPLY, square_only=known)
+
+    result = provider.images.generate(
+        "a poster", width=1080, height=1350, references=[PORTRAIT_REFERENCE, SQUARE_REFERENCE]
+    )
+
+    padded, square = sent_images(provider.body)
+    assert padded.size == (1350, 1350)
+    assert square.size == (256, 256)
+    assert result.params["images_padded"] == 1
+
+
+def test_an_edit_for_a_square_only_model_pads_the_image_it_changes():
+    known = SquareOnlyModels()
+    known.remember(FIRST)
+    provider = Provider(SQUARE_REPLY, square_only=known)
+
+    result = provider.images.edit(PORTRAIT_REFERENCE, "brighter", width=1080, height=1350)
+
+    [changed] = sent_images(provider.body)
+    assert changed.size == (1350, 1350)
+    assert result.params["images_padded"] == 1
+
+
+def test_a_model_not_known_to_return_squares_is_sent_the_references_as_they_are():
+    provider = Provider(SQUARE_REPLY)
+
+    provider.images.generate("a poster", width=1080, height=1350, references=[PORTRAIT_REFERENCE])
+
+    [sent] = sent_images(provider.body)
+    assert sent.size == (1080, 1350)
+
+
+def test_a_square_asset_pads_nothing_and_learns_nothing():
+    known = SquareOnlyModels()
+    provider = Provider(SQUARE_REPLY, square_only=known)
+
+    result = provider.images.generate("a post", width=1080, height=1080)
+
+    assert not known.returns_squares(FIRST)
+    assert result.params["images_padded"] == 0
+
+
+def test_a_model_that_returns_the_shape_asked_is_forgotten():
+    known = SquareOnlyModels()
+    known.remember(FIRST)
+    provider = answering(reply_with(data_url(image_bytes((1080, 1350)))))
+    provider.images.square_only = known
+
+    provider.images.generate("a poster", width=1080, height=1350)
+
+    assert not known.returns_squares(FIRST)
+
+
+def test_the_result_says_whether_the_prompt_had_the_crop_note():
+    provider = Provider(SQUARE_REPLY)
+    note = crop_safe_note(1080, 1350)
+
+    told = provider.images.generate(f"a poster\n\n{note}", width=1080, height=1350)
+    untold = provider.images.generate("a poster", width=1080, height=1350)
+
+    assert told.params["crop_safe_note"] is True
+    assert untold.params["crop_safe_note"] is False
+
+
+def test_a_padded_image_is_centred_on_a_square_of_its_longer_side():
+    padded = Image.open(io.BytesIO(padded_to_a_square(picture((400, 500))) or b""))
+
+    assert padded.size == (500, 500)
+    # The image itself fills the central 80% of the width; the strips carry its colour.
+    assert padded.getpixel((250, 250)) == (200, 40, 40)
+    assert padded.getpixel((50, 0)) == (200, 40, 40)
+    assert padded.getpixel((2, 250)) == (200, 40, 40)
+
+
+def test_a_padded_image_keeps_its_layout_in_the_region_the_crop_keeps():
+    layout = Image.new("RGB", (400, 500), (255, 255, 255))
+    layout.paste((0, 0, 0), (0, 0, 400, 50))  # a band along the top
+    buffer = io.BytesIO()
+    layout.save(buffer, format="PNG")
+
+    padded = Image.open(io.BytesIO(padded_to_a_square(buffer.getvalue()) or b"")).convert("RGB")
+
+    assert padded.getpixel((50, 10)) == (0, 0, 0)  # the band's left end, at x 50 of 500
+    assert padded.getpixel((449, 10)) == (0, 0, 0)
+    assert padded.getpixel((250, 300)) == (255, 255, 255)
+
+
+def test_a_square_image_is_not_padded():
+    assert padded_to_a_square(picture((300, 300))) is None
+
+
+def test_a_large_padded_image_is_scaled_to_the_longest_side_a_square_only_model_returns():
+    padded = Image.open(io.BytesIO(padded_to_a_square(picture((1290, 2796))) or b""))
+    assert padded.size == (2048, 2048)
+
+
+def test_the_models_remembered_as_returning_squares_are_bounded():
+    known = SquareOnlyModels(limit=2)
+    for model in ("a", "b", "c"):
+        known.remember(model)
+
+    assert not known.returns_squares("a")
+    assert known.returns_squares("b") and known.returns_squares("c")

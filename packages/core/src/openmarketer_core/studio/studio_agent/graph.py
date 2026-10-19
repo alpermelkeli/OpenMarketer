@@ -491,6 +491,9 @@ def _chosen(state: StudioState, operation: Operation) -> dict[str, Any]:
         "note": operation.note,
         **{name: getattr(operation, name) for name in fields},
     }
+    if operation.op in rules.SPENDING_OPERATIONS:
+        # Kept with the operation, so that its prompt is the same on every run of ``operate``.
+        pending["crop_safe"] = True
     return {"pending": pending, "technique": technique, "notes": notes}
 
 
@@ -602,17 +605,24 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
         )
 
     # What code adds to every prompt. A thread stored before the brief kept ``about_product``
-    # has none, and its prompts go without it.
+    # has none, and its prompts go without it; an operation chosen before prompts said what a
+    # square crop keeps (``crop_safe``) is asked as it was then.
     added = {
         "copy_placement": str(state["brief"].get("copy_placement", "")),
         "about": state.get("about_product", ""),
     }
+    crop_to = _spec(state) if pending.get("crop_safe") else None
     op = pending["op"]
     if op == rules.GENERATE_IMAGE:
         return GenerateImage(
             **common,
             prompt=rules.generation_prompt(
-                pending["prompt"], state["exact_copy"], technique, **added, references=lines(1)
+                pending["prompt"],
+                state["exact_copy"],
+                technique,
+                **added,
+                references=lines(1),
+                crop_to=crop_to,
             ),
             reference_version_ids=ids("reference_version_ids"),
             reference_asset_ids=ids("reference_asset_ids"),
@@ -629,6 +639,7 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
                 technique,
                 **added,
                 references=lines(2),
+                crop_to=crop_to,
             ),
             reference_version_ids=ids("reference_version_ids"),
             reference_asset_ids=ids("reference_asset_ids"),
