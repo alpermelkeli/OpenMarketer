@@ -57,6 +57,10 @@ OPERATIONS = {
     "getMediaAsset": ("get", "/v1/projects/{project_id}/media-assets/{asset_id}"),
     "acceptMediaAsset": ("post", "/v1/projects/{project_id}/media-assets/{asset_id}/accept"),
     "rejectMediaAsset": ("post", "/v1/projects/{project_id}/media-assets/{asset_id}/reject"),
+    "selectMediaAssetVersion": (
+        "post",
+        "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/select",
+    ),
     "getMediaAssetImage": (
         "get",
         "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/image",

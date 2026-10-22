@@ -22,15 +22,17 @@ The shape is asked for with OpenRouter's
 ``image_config.aspect_ratio``, the supported ratio nearest the size; a model that ignores it is
 still held to the size, since what comes back is fitted to it here: cropped about its centre to
 the size's proportions and resized, and the result says so (``params["fitted"]``). Some models
-(Seedream on OpenRouter) return a square whatever they are asked: a model whose reply is square
-when the size is not is remembered for the life of the process (``SquareOnlyModels``: seeded with
-the configuration's ``provider.image_models_returning_squares`` when the adapter is built, so that a
-model listed there is padded for from its first image, and learnt from a model's first such reply,
-which is still cropped), and is then sent the images of the size's shape
-padded to a square about their centre (``padded_to_a_square``), so that the layout it follows is
-the region the crop keeps; the prompt says what that region is (``square_crop.crop_safe_note``,
-put there by the studio's rules). The result says whether the prompt had that sentence and how
-many images were padded (``params["crop_safe_note"]``, ``params["images_padded"]``).
+(Seedream on OpenRouter) return a square for some shapes and the asked shape for others: a model
+whose reply is square when the size is not is remembered for that shape, for the life of the
+process (``SquareOnlyModels``: seeded with the configuration's
+``provider.image_models_returning_squares`` when the adapter is built, for models that do so for
+every non-square shape, and learnt from a reply otherwise, which is still cropped), and is then
+sent the images of that shape padded to a square about their centre
+(``padded_to_a_square``), so that the layout it follows is the region the crop keeps; the prompt
+says what that region is (``square_crop.crop_safe_note``, put there by the studio's rules) and,
+when an image was padded, that its blurred strips are not the picture (``PADDING_NOTE``). The
+result says whether the prompt had the crop sentence and how many images were padded
+(``params["crop_safe_note"]``, ``params["images_padded"]``).
 
 What comes back is the model's. OpenRouter gives a model's image in the reply's
 ``choices[0].message.images`` whether the model also writes text or not; the first entry that
@@ -111,41 +113,60 @@ ASPECT_TOLERANCE = 0.01
 # A reply carries its image as base64 text, a third larger than the bytes.
 MAX_REPLY_BYTES = 64 * 1024 * 1024
 
-# How many models a process remembers as returning squares; the oldest is forgotten.
-MAX_REMEMBERED_SQUARE_MODELS = 256
+# How many model-and-shape pairs a process remembers as returning squares; the oldest is
+# forgotten.
+MAX_REMEMBERED_SQUARE_SHAPES = 256
+# The shape recorded for a configured model: it returns a square for every non-square ratio.
+EVERY_SHAPE = "*"
 # The longest side of an image padded to a square: about what a square-only model returns.
 MAX_PADDED_SIDE = 2048
 # How much a padded image's extension is blurred, as a share of its side.
 _PADDING_BLUR = 1 / 16
+# What the prompt says when an image was padded, so the model does not treat the strips as
+# part of the picture. Seedream 5 Flash returns 4:5 as a square but 16:9 as 2560x1440, so
+# padding is learnt per shape; a model that really returns squares still needs the note.
+PADDING_NOTE = (
+    "\n\nThe image you are given is padded to a square with blurred strips. Those strips are "
+    "not part of the picture and will be cropped away: never repeat them, and never draw a "
+    "frame or band where they meet the picture."
+)
 
 
 class SquareOnlyModels:
-    """The image models known, in this process, to return a square whatever shape is asked.
+    """The image models known, in this process, to return a square for a shape.
 
-    Bounded and safe across threads; a model forgotten costs one cropped image again, and a
-    model that returns the shape it was asked for is forgotten at once (a configured one until
-    the next adapter is built, which remembers it again).
+    A model can return a square for one ratio and the shape asked for another, so what is
+    remembered is the model and the ratio it happened at. A model named in the configuration
+    is remembered for every non-square ratio until a reply shows it keeps one. Bounded and safe
+    across threads; a forgotten shape costs one cropped image again.
     """
 
-    def __init__(self, limit: int = MAX_REMEMBERED_SQUARE_MODELS) -> None:
+    def __init__(self, limit: int = MAX_REMEMBERED_SQUARE_SHAPES) -> None:
         self._limit = limit
-        self._models: OrderedDict[str, None] = OrderedDict()
+        self._shapes: OrderedDict[tuple[str, str], None] = OrderedDict()
         self._lock = threading.Lock()
 
-    def returns_squares(self, model: str) -> bool:
+    def returns_squares(self, model: str, aspect_ratio: str) -> bool:
         with self._lock:
-            return model in self._models
+            return (model, EVERY_SHAPE) in self._shapes or (
+                model,
+                aspect_ratio,
+            ) in self._shapes
 
-    def remember(self, model: str) -> None:
+    def remember(self, model: str, aspect_ratio: str) -> None:
         with self._lock:
-            self._models[model] = None
-            self._models.move_to_end(model)
-            while len(self._models) > self._limit:
-                self._models.popitem(last=False)
+            shape = (model, aspect_ratio)
+            self._shapes[shape] = None
+            self._shapes.move_to_end(shape)
+            while len(self._shapes) > self._limit:
+                self._shapes.popitem(last=False)
 
-    def forget(self, model: str) -> None:
+    def forget(self, model: str, aspect_ratio: str) -> None:
+        """Forget that the model returns a square for this ratio, and any claim that it does so
+        for every ratio: a reply that kept the asked shape disproves both."""
         with self._lock:
-            self._models.pop(model, None)
+            self._shapes.pop((model, EVERY_SHAPE), None)
+            self._shapes.pop((model, aspect_ratio), None)
 
 
 _SQUARE_ONLY_OF_THIS_PROCESS = SquareOnlyModels()
@@ -206,7 +227,7 @@ class OpenRouterImages:
     def __post_init__(self) -> None:
         # Again for each adapter: a listed model that once returned its shape was forgotten.
         for model in self.router.config.provider.image_models_returning_squares:
-            self.square_only.remember(model)
+            self.square_only.remember(model, EVERY_SHAPE)
 
     def generate(
         self, prompt: str, *, width: int, height: int, references: Sequence[ImageInput] = ()
@@ -263,9 +284,10 @@ class OpenRouterImages:
         failed: list[str] = []
         for model in self.router.image_models(self.role):
             sent, padded = images, 0
-            if self.square_only.returns_squares(model):
+            if self.square_only.returns_squares(model, aspect_ratio):
                 sent, padded = _padded_where_shaped(images, width, height)
-            text_part = {"type": "text", "text": text}
+            prompt = text + PADDING_NOTE if padded else text
+            text_part = {"type": "text", "text": prompt}
             parts = _parts(sent)
             content = [text_part, *parts] if text_first else [*parts, text_part]
             try:
@@ -291,7 +313,7 @@ class OpenRouterImages:
                     "aspect_ratio": aspect_ratio,
                     "modalities": modalities,
                     "models_failed": failed,
-                    "crop_safe_note": CROP_SAFE_LEAD in text,
+                    "crop_safe_note": CROP_SAFE_LEAD in prompt,
                     "images_padded": padded,
                 },
             )
@@ -305,20 +327,20 @@ class OpenRouterImages:
         return checked
 
     def _learn_the_shape(self, model: str, width: int, height: int, aspect_ratio: str) -> None:
-        """Remember ``model`` as returning squares when it returned one for a shape that is not,
-        and forget it when it returned another shape."""
+        """Remember that ``model`` returns a square for ``aspect_ratio`` when it did, and that
+        it keeps the asked shape for it when it did not."""
         if aspect_ratio == "1:1":
             return
         if _is_square(width, height):
-            if not self.square_only.returns_squares(model):
+            if not self.square_only.returns_squares(model, aspect_ratio):
                 logger.warning(
                     "image model %s returned a square for %s; it is sent padded references",
                     model,
                     aspect_ratio,
                 )
-            self.square_only.remember(model)
+            self.square_only.remember(model, aspect_ratio)
             return
-        self.square_only.forget(model)
+        self.square_only.forget(model, aspect_ratio)
 
     def _ask(
         self,

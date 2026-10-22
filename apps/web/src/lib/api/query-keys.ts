@@ -111,7 +111,7 @@ export function refreshedByStudioRunEnd(projectId: string): Refresh[] {
   ];
 }
 
-/** What a decision on an asset makes out of date: the library that lists its state. The asset itself is set from the answer. */
+/** What a decision on an asset, or another of its versions chosen, makes out of date: the library that lists its state. The asset itself is set from the answer. */
 export function refreshedByAssetDecision(projectId: string): Refresh[] {
   return [{ queryKey: queryKeys.mediaAssets(projectId) }];
 }

@@ -459,6 +459,74 @@ def test_accepting_again_changes_nothing(
     assert (again.status_code, again.json()) == (200, first)
 
 
+def test_selecting_a_version_makes_it_the_current_one(
+    client: TestClient, services, scope, sessions, asset_store
+):
+    _, asset_id, _ = finished_run(sessions, scope, asset_store, versions=2)
+    detail = client.get(assets_url(scope, f"/{asset_id}")).json()
+    first = next(version for version in detail["versions"] if version["round"] == 1)
+
+    response = client.post(assets_url(scope, f"/{asset_id}/versions/{first['id']}/select"))
+
+    assert response.status_code == 200
+    assert (response.json()["current_version_id"], response.json()["status"]) == (
+        first["id"],
+        "draft",
+    )
+    assert (
+        client.get(assets_url(scope, f"/{asset_id}")).json()["asset"]["current_version_id"]
+        == first["id"]
+    )
+
+
+def test_a_version_of_a_running_run_is_not_selected(
+    client: TestClient, services, scope, sessions, asset_store
+):
+    _, version = running_run_with_asset(sessions, scope, asset_store)
+
+    response = client.post(assets_url(scope, f"/{version.asset_id}/versions/{version.id}/select"))
+
+    assert (response.status_code, response.json()["code"]) == (409, "studio_run_unfinished")
+
+
+def test_a_version_of_another_asset_is_not_selected(
+    client: TestClient, services, scope, sessions, asset_store
+):
+    _, asset_id, _ = finished_run(sessions, scope, asset_store)
+    _, _, other_version = finished_run(sessions, scope, asset_store)
+
+    response = client.post(assets_url(scope, f"/{asset_id}/versions/{other_version.id}/select"))
+
+    assert (response.status_code, response.json()["code"]) == (
+        404,
+        "media_asset_version_not_found",
+    )
+
+
+def test_an_accepted_asset_is_not_selected(
+    client: TestClient, services, scope, sessions, asset_store
+):
+    _, asset_id, _ = finished_run(sessions, scope, asset_store, versions=2)
+    client.post(assets_url(scope, f"/{asset_id}/accept"))
+    detail = client.get(assets_url(scope, f"/{asset_id}")).json()
+    first = next(version for version in detail["versions"] if version["round"] == 1)
+
+    response = client.post(assets_url(scope, f"/{asset_id}/versions/{first['id']}/select"))
+
+    assert (response.status_code, response.json()["code"]) == (409, "media_asset_decided")
+
+
+def test_a_selection_takes_no_body(client: TestClient, services, scope, sessions, asset_store):
+    _, asset_id, last = finished_run(sessions, scope, asset_store)
+
+    response = client.post(
+        assets_url(scope, f"/{asset_id}/versions/{last.id}/select"),
+        json={"version_id": str(last.id)},
+    )
+
+    assert response.status_code == 422
+
+
 def test_an_accepted_asset_cannot_be_rejected(
     client: TestClient, services, scope, sessions, asset_store
 ):

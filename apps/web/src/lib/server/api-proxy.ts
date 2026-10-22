@@ -145,6 +145,10 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("POST", "/v1/projects/{project_id}/media-assets/{asset_id}/accept"),
   route("POST", "/v1/projects/{project_id}/media-assets/{asset_id}/reject"),
   route(
+    "POST",
+    "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/select",
+  ),
+  route(
     "GET",
     "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/image",
     IMAGE,

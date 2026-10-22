@@ -27,6 +27,7 @@ from openmarketer_core.db.media_assets import (
     media_asset,
     record_version_review,
     reject_asset,
+    select_asset_version,
 )
 from openmarketer_core.db.models import (
     AssetTechnique,
@@ -275,6 +276,65 @@ def test_a_person_accepts_an_asset_once_its_run_has_ended(session, run):
     assert accepted.decided_by == PERSON
     assert accepted.decided_at is not None
     assert again == accepted
+
+
+def test_a_person_selects_a_version_of_a_draft_asset_once_its_run_has_ended(session, run):
+    first = store(session, run, "studio-run:r:1")
+    second = store(session, run, "studio-run:r:2", asset_id=first.asset_id, round=2)
+    ended(session, run, second.id)
+
+    chosen = select_asset_version(
+        session, **run.project, asset_id=first.asset_id, version_id=first.id
+    )
+
+    assert chosen.current_version_id == first.id
+    assert chosen.status is MediaAssetStatus.DRAFT
+
+
+def test_selecting_the_current_version_again_changes_nothing(session, run):
+    version = store(session, run, "studio-run:r:1")
+    ended(session, run, version.id)
+    first = select_asset_version(
+        session, **run.project, asset_id=version.asset_id, version_id=version.id
+    )
+
+    again = select_asset_version(
+        session, **run.project, asset_id=version.asset_id, version_id=version.id
+    )
+
+    assert again == first
+
+
+def test_an_asset_is_not_selected_while_its_run_may_add_versions(session, run):
+    first = store(session, run, "studio-run:r:1")
+    second = store(session, run, "studio-run:r:2", asset_id=first.asset_id, round=2)
+
+    with pytest.raises(StudioRunUnfinished):
+        select_asset_version(session, **run.project, asset_id=first.asset_id, version_id=first.id)
+
+    assert (
+        media_asset(session, **run.project, asset_id=first.asset_id).current_version_id == second.id
+    )
+
+
+def test_a_version_of_another_asset_is_not_selected(session, run):
+    other = another_run_of(session, run)
+    foreign = store(session, other, "studio-run:o:1")
+    own = store(session, run, "studio-run:r:1")
+    ended(session, run, own.id)
+
+    with pytest.raises(MediaAssetVersionNotFound):
+        select_asset_version(session, **run.project, asset_id=own.asset_id, version_id=foreign.id)
+
+
+def test_a_decided_asset_is_not_selected(session, run):
+    first = store(session, run, "studio-run:r:1")
+    second = store(session, run, "studio-run:r:2", asset_id=first.asset_id, round=2)
+    ended(session, run, second.id)
+    accept_asset(session, **run.project, asset_id=first.asset_id, decided_by=PERSON)
+
+    with pytest.raises(MediaAssetDecided):
+        select_asset_version(session, **run.project, asset_id=first.asset_id, version_id=first.id)
 
 
 def test_a_decided_asset_is_not_decided_the_other_way(session, run):

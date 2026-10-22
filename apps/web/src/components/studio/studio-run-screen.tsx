@@ -9,7 +9,13 @@ import { Notice } from "@/components/common/notice";
 import { RequestProblem } from "@/components/common/request-problem";
 import { Skeleton } from "@/components/ui/skeleton";
 import { errorMessage } from "@/lib/api/error-message";
-import { useDecideOnAsset, useDownloadVersion, useMediaAsset, useStudioRun } from "@/lib/api/studio";
+import {
+  useDecideOnAsset,
+  useDownloadVersion,
+  useMediaAsset,
+  useSelectAssetVersion,
+  useStudioRun,
+} from "@/lib/api/studio";
 import { projectPageHref } from "@/lib/projects/project-navigation";
 import { briefGoal, runBrief } from "@/lib/studio/brief";
 import { versionsCost } from "@/lib/studio/reports";
@@ -32,6 +38,7 @@ export function StudioRunScreen({ projectId, runId }: StudioRunScreenProps) {
   const assetId = run.data?.final_asset_id ?? null;
   const detail = useMediaAsset(projectId, assetId);
   const decide = useDecideOnAsset(projectId);
+  const select = useSelectAssetVersion(projectId);
   const download = useDownloadVersion(projectId);
   const [rejectOpen, setRejectOpen] = useState(false);
 
@@ -127,6 +134,13 @@ export function StudioRunScreen({ projectId, runId }: StudioRunScreenProps) {
                 goal={goal}
                 versions={versions}
                 currentVersionId={asset.current_version_id}
+                selectable={finished && asset.status === "draft"}
+                selectingVersionId={select.isPending ? select.variables.versionId : null}
+                selectionProblem={select.error === null ? null : errorMessage(select.error)}
+                onSelectVersion={(versionId) => {
+                  select.reset();
+                  select.mutate({ assetId: asset.id, versionId });
+                }}
               />
             </>
           )}

@@ -169,6 +169,32 @@ export function useStartStudioRun(projectId: string) {
 
 type Decision = "accept" | "reject";
 
+/**
+ * Choose the version a draft asset stands for, before a decision. The asset is set from the
+ * answer, so the large image and what Accept and Download use change with it; the library is
+ * read again because its tile shows the current version.
+ */
+export function useSelectAssetVersion(projectId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<MediaAsset, ApiError, { assetId: string; versionId: string }>({
+    mutationFn: async ({ assetId, versionId }) =>
+      dataOf(
+        await api.POST(
+          "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/select",
+          { params: { path: { project_id: projectId, asset_id: assetId, version_id: versionId } } },
+        ),
+      ),
+    onSuccess: (asset) => {
+      queryClient.setQueryData<MediaAssetDetail>(queryKeys.mediaAsset(projectId, asset.id), (detail) =>
+        detail === undefined ? detail : { ...detail, asset },
+      );
+      return Promise.all(
+        refreshedByAssetDecision(projectId).map((refresh) => queryClient.invalidateQueries(refresh)),
+      );
+    },
+  });
+}
+
 /** Accept or reject a draft asset as its current version stands. The asset is set from the answer. */
 export function useDecideOnAsset(projectId: string) {
   const queryClient = useQueryClient();

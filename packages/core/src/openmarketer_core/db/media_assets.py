@@ -13,9 +13,11 @@ again finds the version it stored instead of adding a second. ``record_version_r
 the reviews to a version once. Which version a run ends with is recorded with the run's
 outcome (``db/studio_runs.py``).
 
-A person decides on an asset once its run has ended: a draft is accepted or rejected, once,
-and deciding the same again changes nothing (``MediaAssetDecided`` otherwise). A decision takes
-the workspace lock like every person's write of a workspace.
+A person chooses which version a draft asset stands for once its run has ended, and decides on
+it: a draft is accepted or rejected, once, and deciding the same again changes nothing
+(``MediaAssetDecided`` otherwise). The chosen version is the one accepting, downloading and
+later steps use. Both a choice and a decision take the workspace lock like every person's write
+of a workspace.
 
 Every function is scoped to a workspace and a project, takes a session and never commits; an
 asset or version of another workspace or project is treated as missing. Assets are deleted
@@ -385,6 +387,50 @@ def reject_asset(
     return _decide(
         session, workspace_id, project_id, asset_id, decided_by, MediaAssetStatus.REJECTED
     )
+
+
+def select_asset_version(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    asset_id: uuid.UUID,
+    version_id: uuid.UUID,
+) -> MediaAsset:
+    """A person chooses the version the draft asset stands for, once its run has ended.
+
+    The version must be one of the asset's. Choosing the current version again changes
+    nothing. Raises ``MediaAssetNotFound``, ``MediaAssetVersionNotFound``,
+    ``StudioRunUnfinished`` while the run may still add versions, and ``MediaAssetDecided``
+    once the asset was accepted or rejected. Takes the workspace lock.
+    """
+    wait_for_other_writes(session, workspace_id)
+    found = session.execute(
+        _assets_of_project(workspace_id, project_id)
+        .add_columns(StudioRunRecord.status)
+        .join(StudioRunRecord, StudioRunRecord.id == MediaAssetRecord.run_id)
+        .where(MediaAssetRecord.id == asset_id)
+        .with_for_update(of=MediaAssetRecord)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if found is None:
+        raise MediaAssetNotFound(project_id, asset_id)
+    record, run_status = found
+    if record.status is not MediaAssetStatus.DRAFT:
+        raise MediaAssetDecided(asset_id, record.status)
+    if run_status not in FINISHED:
+        raise StudioRunUnfinished(record.run_id, run_status)
+    version = session.scalar(
+        _versions_of_project(workspace_id, project_id).where(
+            MediaAssetVersionRecord.id == version_id,
+            MediaAssetVersionRecord.asset_id == asset_id,
+        )
+    )
+    if version is None:
+        raise MediaAssetVersionNotFound(project_id, version_id)
+    record.current_version_id = version.id
+    session.flush()
+    return _asset(record)
 
 
 def _decide(

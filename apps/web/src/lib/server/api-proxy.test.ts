@@ -427,6 +427,11 @@ describe("the routes of the studio", () => {
     expect(allowedApiPath("POST", [...ASSETS, ASSET, "reject"])).toBe(
       `/v1/projects/${PROJECT}/media-assets/${ASSET}/reject`,
     );
+    expect(
+      allowedApiPath("POST", [...ASSETS, ASSET, "versions", VERSION, "select"]),
+    ).toBe(
+      `/v1/projects/${PROJECT}/media-assets/${ASSET}/versions/${VERSION}/select`,
+    );
   });
 
   it("page the runs and the library", () => {
@@ -467,6 +472,12 @@ describe("the routes of the studio", () => {
     ).toThrow();
     expect(() =>
       allowedApiPath("GET", [...ASSETS, ASSET, "versions", "1", "image"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("GET", [...ASSETS, ASSET, "versions", VERSION, "select"]),
+    ).toThrow();
+    expect(() =>
+      allowedApiPath("POST", [...ASSETS, ASSET, "versions", "1", "select"]),
     ).toThrow();
     expect(() =>
       allowedApiPath("GET", [...ASSETS, ASSET, "versions", VERSION, "code"]),

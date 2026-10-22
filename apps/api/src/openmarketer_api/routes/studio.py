@@ -51,6 +51,7 @@ from openmarketer_core.db.media_assets import (
     list_media_assets,
     media_asset,
     reject_asset,
+    select_asset_version,
 )
 from openmarketer_core.db.models import AssetTechnique, MediaAssetStatus, StudioRunStatus
 from openmarketer_core.db.pages import MAX_PAGE_SIZE
@@ -477,6 +478,38 @@ def reject(
         project_id=project_id,
         asset_id=asset_id,
         decided_by=decider,
+    )
+    return _asset_response(asset)
+
+
+@router.post(
+    "/media-assets/{asset_id}/versions/{version_id}/select",
+    operation_id="selectMediaAssetVersion",
+    response_model=MediaAssetResponse,
+    responses=problems(404, 409),
+    dependencies=[Depends(no_request_body)],
+)
+def select_version(
+    project_id: uuid.UUID,
+    asset_id: uuid.UUID,
+    version_id: uuid.UUID,
+    session: DbSession,
+    workspace_id: CurrentWorkspaceId,
+) -> MediaAssetResponse:
+    """Make one of the asset's versions the one it stands for.
+
+    Choosing is not a decision: the asset stays a draft and another version can be chosen
+    before it is accepted or rejected. 404 `media_asset_version_not_found` for a version that
+    is not one of this asset's; 409 `studio_run_unfinished` while its run may still add
+    versions, and `media_asset_decided` once it was accepted or rejected. The request takes no
+    body; one is a 422.
+    """
+    asset = select_asset_version(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        asset_id=asset_id,
+        version_id=version_id,
     )
     return _asset_response(asset)
 

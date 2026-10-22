@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import type { MediaAssetVersion } from "@/lib/api/types";
 import { formatDateTime } from "@/lib/format";
 import { assetImageAlt } from "@/lib/studio/image-src";
@@ -16,10 +17,28 @@ type VersionRoundsProps = {
   versions: readonly MediaAssetVersion[];
   /** The version the asset stands for now, marked in its round. */
   currentVersionId: string | null;
+  /** Whether a person may choose another version: the run has ended and the asset is a draft. */
+  selectable: boolean;
+  /** The version being chosen, while the request is in flight. */
+  selectingVersionId: string | null;
+  /** Why the last choice failed, in words for the person. */
+  selectionProblem: string | null;
+  onSelectVersion: (versionId: string) => void;
 };
 
 /** Every round of the run, the first first: each version's image, how it was made, what it cost and what its reviews found. */
-export function VersionRounds({ projectId, assetId, platform, goal, versions, currentVersionId }: VersionRoundsProps) {
+export function VersionRounds({
+  projectId,
+  assetId,
+  platform,
+  goal,
+  versions,
+  currentVersionId,
+  selectable,
+  selectingVersionId,
+  selectionProblem,
+  onSelectVersion,
+}: VersionRoundsProps) {
   const rounds = roundsOf(versions);
   return (
     <section aria-labelledby="rounds" className="grid gap-6 border-t pt-8">
@@ -30,6 +49,17 @@ export function VersionRounds({ projectId, assetId, platform, goal, versions, cu
         <p className="mt-1 text-sm text-pretty text-muted-foreground">
           Every image the run made, round by round, with how it was made and what the reviews found.
         </p>
+        {selectable && (
+          <p className="mt-1 text-sm text-pretty text-muted-foreground">
+            Choose any version to make it the asset&apos;s image before accepting it. Accepting fixes the
+            version chosen then.
+          </p>
+        )}
+        {selectionProblem !== null && (
+          <p role="alert" className="mt-2 text-sm text-pretty text-destructive">
+            {selectionProblem}
+          </p>
+        )}
       </div>
       <ol className="grid gap-10">
         {rounds.map(({ round, versions: made }) => (
@@ -45,6 +75,9 @@ export function VersionRounds({ projectId, assetId, platform, goal, versions, cu
                   goal={goal}
                   version={version}
                   current={version.id === currentVersionId}
+                  selectable={selectable}
+                  selecting={version.id === selectingVersionId}
+                  onSelect={() => onSelectVersion(version.id)}
                 />
               ))}
             </ul>
@@ -62,9 +95,22 @@ type VersionItemProps = {
   goal?: string;
   version: MediaAssetVersion;
   current: boolean;
+  selectable: boolean;
+  selecting: boolean;
+  onSelect: () => void;
 };
 
-function VersionItem({ projectId, assetId, platform, goal, version, current }: VersionItemProps) {
+function VersionItem({
+  projectId,
+  assetId,
+  platform,
+  goal,
+  version,
+  current,
+  selectable,
+  selecting,
+  onSelect,
+}: VersionItemProps) {
   return (
     <li className="grid gap-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-6">
       <div className="w-40 overflow-hidden rounded-sm border">
@@ -79,10 +125,17 @@ function VersionItem({ projectId, assetId, platform, goal, version, current }: V
       </div>
       <div className="grid min-w-0 content-start gap-3">
         <div className="grid gap-0.5">
-          <p className="text-sm">
-            {techniqueLabel(version.technique)}
-            {current && <span className="ml-2 text-2xs tracking-widest text-brand uppercase">The asset now</span>}
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm">
+              {techniqueLabel(version.technique)}
+              {current && <span className="ml-2 text-2xs tracking-widest text-brand uppercase">The asset now</span>}
+            </p>
+            {!current && selectable && (
+              <Button variant="outline" size="sm" onClick={onSelect} disabled={selecting}>
+                {selecting ? "Choosing…" : "Use this version"}
+              </Button>
+            )}
+          </div>
           <p className="flex flex-wrap gap-x-3 font-mono text-xs text-muted-foreground tabular-nums">
             <span>
               {version.width} × {version.height}

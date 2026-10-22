@@ -405,6 +405,25 @@ def test_the_prompts_say_the_copy_is_never_written_or_changed():
         assert "Never write, change" in prompt
 
 
+def test_the_copy_rule_forbids_readable_extra_text_but_lets_illegible_marks_stay():
+    prompt = rules.generation_prompt("A desk.", ["Launch"], Technique.GENERATED)
+
+    assert "any other readable words" in prompt
+    assert "Pencil strokes, scribbles" in prompt
+    assert "no other words, letters or numbers anywhere" not in prompt
+
+
+def test_a_prompt_without_copy_asks_for_no_readable_text_and_allows_marks():
+    prompt = rules.generation_prompt("A desk.", [], Technique.GENERATED)
+
+    assert "no readable text" in prompt
+    assert "pencil strokes, scribbles and texture are not text" in prompt
+
+
+def test_the_verifier_does_not_fail_the_copy_for_an_illegible_mark():
+    assert "do not fail copy_rendered for it" in rules.VERIFIER_SYSTEM_PROMPT
+
+
 # ------------------------------------------------------------------------------- reviews
 def a_report(**failing: str) -> dict:
     return {

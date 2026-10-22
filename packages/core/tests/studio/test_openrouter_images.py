@@ -22,7 +22,9 @@ from openmarketer_core.studio.media_provider import (
 )
 from openmarketer_core.studio.openrouter_images import (
     ACCOUNT_LIMITED,
+    EVERY_SHAPE,
     IMAGES_ENDPOINT_ONLY,
+    PADDING_NOTE,
     OpenRouterImages,
     SquareOnlyModels,
     nearest_aspect_ratio,
@@ -639,7 +641,8 @@ def test_a_model_that_returns_a_square_for_a_portrait_is_remembered_and_its_imag
 
     result = provider.images.generate("a poster", width=1080, height=1350)
 
-    assert known.returns_squares(FIRST)
+    assert known.returns_squares(FIRST, "4:5")
+    assert not known.returns_squares(FIRST, "16:9")
     assert (result.width, result.height) == (1080, 1350)
     assert Image.open(io.BytesIO(result.data)).size == (1080, 1350)
     assert result.params["fitted"] == "cropped_and_resized"
@@ -648,7 +651,7 @@ def test_a_model_that_returns_a_square_for_a_portrait_is_remembered_and_its_imag
 
 def test_a_model_known_to_return_squares_is_sent_the_references_of_the_shape_padded():
     known = SquareOnlyModels()
-    known.remember(FIRST)
+    known.remember(FIRST, "4:5")
     provider = Provider(SQUARE_REPLY, square_only=known)
 
     result = provider.images.generate(
@@ -663,7 +666,7 @@ def test_a_model_known_to_return_squares_is_sent_the_references_of_the_shape_pad
 
 def test_an_edit_for_a_square_only_model_pads_the_image_it_changes():
     known = SquareOnlyModels()
-    known.remember(FIRST)
+    known.remember(FIRST, "4:5")
     provider = Provider(SQUARE_REPLY, square_only=known)
 
     result = provider.images.edit(PORTRAIT_REFERENCE, "brighter", width=1080, height=1350)
@@ -688,19 +691,19 @@ def test_a_square_asset_pads_nothing_and_learns_nothing():
 
     result = provider.images.generate("a post", width=1080, height=1080)
 
-    assert not known.returns_squares(FIRST)
+    assert not known.returns_squares(FIRST, "1:1")
     assert result.params["images_padded"] == 0
 
 
 def test_a_model_that_returns_the_shape_asked_is_forgotten():
     known = SquareOnlyModels()
-    known.remember(FIRST)
+    known.remember(FIRST, "4:5")
     provider = answering(reply_with(data_url(image_bytes((1080, 1350)))))
     provider.images.square_only = known
 
     provider.images.generate("a poster", width=1080, height=1350)
 
-    assert not known.returns_squares(FIRST)
+    assert not known.returns_squares(FIRST, "4:5")
 
 
 def test_the_result_says_whether_the_prompt_had_the_crop_note():
@@ -749,10 +752,20 @@ def test_a_large_padded_image_is_scaled_to_the_longest_side_a_square_only_model_
 def test_the_models_remembered_as_returning_squares_are_bounded():
     known = SquareOnlyModels(limit=2)
     for model in ("a", "b", "c"):
-        known.remember(model)
+        known.remember(model, "4:5")
 
-    assert not known.returns_squares("a")
-    assert known.returns_squares("b") and known.returns_squares("c")
+    assert not known.returns_squares("a", "4:5")
+    assert known.returns_squares("b", "4:5") and known.returns_squares("c", "4:5")
+
+
+def test_a_reply_that_keeps_one_shape_unseats_a_configured_claim_for_every_shape():
+    known = SquareOnlyModels()
+    known.remember(FIRST, EVERY_SHAPE)
+
+    known.forget(FIRST, "16:9")
+
+    assert not known.returns_squares(FIRST, "4:5")
+    assert not known.returns_squares(FIRST, "16:9")
 
 
 def test_a_configured_square_only_model_is_sent_padded_references_on_its_first_image():
@@ -767,10 +780,38 @@ def test_a_configured_square_only_model_is_sent_padded_references_on_its_first_i
     assert result.params["images_padded"] == 1
 
 
-def test_the_file_names_the_role_model_as_returning_squares():
-    router = ModelRouter.from_file(MODELS_YAML, env={})
+def test_a_landscape_edit_is_not_padded_for_a_model_that_was_square_only_for_a_portrait():
+    known = SquareOnlyModels()
+    known.remember(FIRST, "4:5")
+    provider = Provider(SQUARE_REPLY, square_only=known)
 
-    assert FIRST in router.config.provider.image_models_returning_squares
+    result = provider.images.edit(
+        ImageInput(picture((1600, 900)), "image/png"), "brighter", width=1600, height=900
+    )
+
+    [changed] = sent_images(provider.body)
+    assert changed.size == (1600, 900)
+    assert result.params["images_padded"] == 0
+
+
+def test_a_padded_image_is_told_that_its_blurred_strips_are_not_the_picture():
+    known = SquareOnlyModels()
+    known.remember(FIRST, "4:5")
+    provider = Provider(SQUARE_REPLY, square_only=known)
+
+    provider.images.edit(PORTRAIT_REFERENCE, "brighter", width=1080, height=1350)
+
+    _, text = provider.body["messages"][0]["content"]
+    assert PADDING_NOTE in text["text"]
+
+
+def test_an_image_that_was_not_padded_is_not_told_of_strips():
+    provider = Provider(SQUARE_REPLY)
+
+    provider.images.edit(PORTRAIT_REFERENCE, "brighter", width=1080, height=1350)
+
+    _, text = provider.body["messages"][0]["content"]
+    assert PADDING_NOTE not in text["text"]
 
 
 def test_an_unconfigured_model_still_learns_that_it_returns_squares():
@@ -783,4 +824,6 @@ def test_an_unconfigured_model_still_learns_that_it_returns_squares():
     first, second = provider.bodies()
     assert [image.size for image in sent_images(first)] == [(1080, 1350)]
     assert [image.size for image in sent_images(second)] == [(1350, 1350)]
-    assert known.returns_squares("other/drawer") and known.returns_squares(FIRST)
+    assert known.returns_squares("other/drawer", "4:5")
+    assert known.returns_squares(FIRST, "4:5")
+    assert not known.returns_squares(FIRST, "16:9")

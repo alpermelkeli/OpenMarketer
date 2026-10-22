@@ -29,8 +29,9 @@ def test_a_size_without_area_has_no_crop():
 
 def test_the_note_of_a_portrait_names_the_share_of_the_width():
     note = crop_safe_note(1080, 1350)
-    assert note.startswith(CROP_SAFE_LEAD + "80% of the width: keep every word")
-    assert note.endswith("with only background in the outer strips.")
+    assert note.startswith(CROP_SAFE_LEAD + "80% of the width: that central region")
+    assert note.endswith("never draw a border, frame or band around it.")
+    assert "outer strips" not in note
 
 
 def test_the_note_of_a_landscape_names_the_share_of_the_height_rounded_down():
