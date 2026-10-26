@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from openmarketer_core.profile import (
     Evidence,
     FeatureStatus,
+    FontRole,
     Platform,
     ProductProfile,
     ProductType,
@@ -154,3 +155,66 @@ def test_json_schema_export():
     assert schema["required"] == ["product"]
     assert schema["additionalProperties"] is False
     assert {"Feature", "Evidence", "Brand"} <= set(schema["$defs"])
+
+
+# ------------------------------------------------------------- typography
+def with_typography(*typefaces: dict) -> dict:
+    data = example()
+    data["brand"]["typography"] = list(typefaces)
+    return data
+
+
+def test_brand_records_its_typography():
+    p = ProductProfile.model_validate(
+        with_typography(
+            {"family": "IBM Plex Sans", "role": "body"},
+            {"family": "Space_Grotesk", "role": "heading"},
+            {"family": "JetBrains-Mono", "role": "mono"},
+        )
+    )
+    assert [(t.family, t.role) for t in p.brand.typography] == [
+        ("IBM Plex Sans", FontRole.BODY),
+        ("Space_Grotesk", FontRole.HEADING),
+        ("JetBrains-Mono", FontRole.MONO),
+    ]
+
+
+def test_a_profile_stored_without_typography_still_validates():
+    data = example()
+    assert "typography" not in data["brand"]
+    assert ProductProfile.model_validate(data).brand.typography == []
+
+
+@pytest.mark.parametrize(
+    "family",
+    [
+        "",
+        "'Inter'",
+        '"Inter"',
+        "Inter, sans-serif",
+        "Inter;",
+        "var(--font)",
+        " Inter",
+        "Inter ",
+        "Inter/../x",
+        "I" * 65,
+    ],
+)
+def test_a_font_family_with_anything_but_a_name_is_rejected(family):
+    with pytest.raises(ValidationError):
+        ProductProfile.model_validate(with_typography({"family": family}))
+
+
+def test_a_typeface_role_is_optional():
+    p = ProductProfile.model_validate(with_typography({"family": "Inter"}))
+    assert p.brand.typography[0].role is None
+
+
+def test_a_typeface_role_is_an_open_vocabulary():
+    p = ProductProfile.model_validate(with_typography({"family": "Inter", "role": "caption"}))
+    assert p.brand.typography[0].role == "caption"
+
+
+def test_a_typeface_role_must_be_a_slug():
+    with pytest.raises(ValidationError):
+        ProductProfile.model_validate(with_typography({"family": "Inter", "role": "Body Text"}))

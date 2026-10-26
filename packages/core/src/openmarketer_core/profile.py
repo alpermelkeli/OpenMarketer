@@ -33,6 +33,12 @@ Slug = Annotated[str, Field(pattern=r"^[a-z0-9]+(_[a-z0-9]+)*$", max_length=64)]
 FeatureId = Annotated[str, Field(pattern=r"^[a-z0-9]+(-[a-z0-9]+)*$", max_length=64)]
 LanguageTag = Annotated[str, Field(pattern=r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$")]
 HexColor = Annotated[str, Field(pattern=r"^#[0-9A-Fa-f]{6}$")]
+# A font family's name as a stylesheet or a manifest names it ("Inter", "IBM Plex Sans",
+# "Space_Grotesk"): no quotes, commas or other CSS syntax, so a stack is never stored as one name.
+FontFamily = Annotated[
+    str,
+    Field(pattern=r"^[A-Za-z0-9](?:[A-Za-z0-9 _-]*[A-Za-z0-9])?$", min_length=1, max_length=64),
+]
 Confidence = Annotated[float, Field(ge=0.0, le=1.0)]
 
 
@@ -54,6 +60,15 @@ class Platform(StrEnum):
     WEB = "web"
     DESKTOP = "desktop"
     CLI = "cli"
+
+
+class FontRole(StrEnum):
+    """Well-known roles of a typeface. Others (a caption face, a logo face) are just slugs."""
+
+    HEADING = "heading"
+    BODY = "body"
+    DISPLAY = "display"
+    MONO = "mono"
 
 
 class FeatureStatus(StrEnum):
@@ -130,9 +145,17 @@ class Feature(Evidenced):
         return self.status is FeatureStatus.LIVE
 
 
+class Typeface(_Model):
+    """A font family the product declares or loads, with what it is used for when known."""
+
+    family: FontFamily
+    role: Slug | None = None
+
+
 class Brand(Evidenced):
     voice: str | None = None
     palette: list[HexColor] = Field(default_factory=list)
+    typography: list[Typeface] = Field(default_factory=list)
     do_not_mention: list[str] = Field(default_factory=list)
 
     @field_validator("palette")

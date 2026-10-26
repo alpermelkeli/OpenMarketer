@@ -407,6 +407,13 @@
             "title": "Palette",
             "type": "array"
           },
+          "typography": {
+            "items": {
+              "$ref": "#/components/schemas/Typeface"
+            },
+            "title": "Typography",
+            "type": "array"
+          },
           "voice": {
             "anyOf": [
               {
@@ -3800,6 +3807,37 @@
           "changed"
         ],
         "title": "TierSettingResponse",
+        "type": "object"
+      },
+      "Typeface": {
+        "additionalProperties": false,
+        "description": "A font family the product declares or loads, with what it is used for when known.",
+        "properties": {
+          "family": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9 _-]*[A-Za-z0-9])?$",
+            "title": "Family",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "pattern": "^[a-z0-9]+(_[a-z0-9]+)*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          }
+        },
+        "required": [
+          "family"
+        ],
+        "title": "Typeface",
         "type": "object"
       },
       "UnreadableChoiceResponse": {
