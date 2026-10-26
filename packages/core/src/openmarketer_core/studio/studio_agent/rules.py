@@ -1370,7 +1370,7 @@ def edit_plan_tool() -> dict[str, Any]:
 def brand_kit_tool() -> dict[str, Any]:
     return _function(
         BRAND_KIT_TOOL,
-        "Read the brand kit: name, voice, palette, what not to mention, audience, features.",
+        "Read the brand kit: name, voice, palette, fonts, what not to mention, audience, features.",
         {"type": "object", "properties": {}, "additionalProperties": False},
     )
 

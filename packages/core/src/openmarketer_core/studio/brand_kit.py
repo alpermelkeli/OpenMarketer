@@ -2,9 +2,9 @@
 
 ``brand_kit_of`` takes it from a profile: the product's name, what kind of product it is (its
 type and platforms: a profile holds no one-line description, so this is the closest it has),
-the brand's voice, its palette and what must not be mentioned, the primary audience, and the
-descriptions of a few features that are live. A profile says nothing of fonts or logos yet, so
-a kit has neither; a palette the profile does not hold is an empty one, and the request's style
+the brand's voice, its palette, its fonts and what must not be mentioned, the primary audience,
+and the descriptions of a few features that are live. A profile says nothing of logos yet, so a
+kit has none; a palette or fonts the profile does not hold are empty, and the request's style
 notes fill what is missing.
 With no approved profile there is no kit to work to, and ``EMPTY_BRAND_KIT`` is it.
 
@@ -19,10 +19,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from openmarketer_core.profile import FeatureStatus, ProductProfile
+from openmarketer_core.profile import FeatureStatus, ProductProfile, Typeface
 
 MAX_FEATURES = 5
 MAX_PALETTE = 8
+MAX_FONTS = 4
 MAX_DO_NOT_MENTION = 20
 MAX_TEXT_CHARS = 300
 
@@ -35,6 +36,7 @@ class BrandKit:
     kind: str = ""  # what the product is, from its type and platforms: "mobile app on ios"
     voice: str = ""
     palette: tuple[str, ...] = ()
+    fonts: tuple[str, ...] = ()  # a family, with its role when known: "Inter (body)"
     do_not_mention: tuple[str, ...] = ()
     audience: str = ""
     features: tuple[str, ...] = field(default=())
@@ -49,7 +51,7 @@ class BrandKit:
             "do_not_mention": list(self.do_not_mention),
             "audience": self.audience,
             "features": list(self.features),
-            "fonts": [],
+            "fonts": list(self.fonts),
             "logo": None,
         }
 
@@ -71,6 +73,7 @@ def brand_kit_of(profile: ProductProfile | None) -> BrandKit:
         kind=_cut(_kind_of(profile.product.type, profile.product.platforms)),
         voice=_cut(profile.brand.voice or ""),
         palette=tuple(profile.brand.palette[:MAX_PALETTE]),
+        fonts=tuple(_font_of(typeface) for typeface in profile.brand.typography[:MAX_FONTS]),
         do_not_mention=tuple(_cut(term) for term in profile.brand.do_not_mention)[
             :MAX_DO_NOT_MENTION
         ],
@@ -84,6 +87,13 @@ def _kind_of(product_type: str, platforms: Sequence[str]) -> str:
     kind = _words(product_type)
     shown = ", ".join(_words(platform) for platform in platforms)
     return f"{kind} on {shown}" if shown else kind
+
+
+def _font_of(typeface: Typeface) -> str:
+    """``Inter`` used for ``body`` as "Inter (body)", and as "Inter" with no role."""
+    if typeface.role is None:
+        return typeface.family
+    return f"{typeface.family} ({_words(typeface.role)})"
 
 
 def _words(slug: str) -> str:
