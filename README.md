@@ -19,7 +19,7 @@ OpenMarketer is an open-source AI agent that reads the source repository of any 
 > **Status: early development.** The architecture, safety model and roadmap are designed and documented. The first milestone, the repository analyzer, is built: it runs from the command line or as a durable workflow behind a local API, and produces a draft Product Profile that a person reviews, corrects and approves in the dashboard. How good its profiles are has not been measured, and nothing is published yet. See [what exists today](#status).
 
 <p align="center">
-  <img src="docs/design-report/figures/fig_loop.png" alt="The OpenMarketer agent loop" width="640">
+  <img src="docs/design-report/figures/cf4b8220-5aa4-4ea7-bfba-ec8884db53db-2.png" alt="The OpenMarketer agent loop" width="640">
 </p>
 
 ## Why another marketing tool?
