@@ -15,7 +15,9 @@ person watching it (``tool_called`` with a short label of ``TOOL_LABELS``, then
 turn whose caller gave no ``ChatRequests`` is not offered the request actions at all. The
 sentences a failed turn is recorded with (``failure_reason``) and the instruction a
 follow-up turn is given about a research run or a studio run (``follow_up_instruction``) are
-worded here, by code.
+worded here, by code, and so is the check a studio request's copy passes before the caller
+is asked (``term_not_to_mention``): the copy may be the model's own, so the brand's
+``do_not_mention`` is held by code and not only by the prompt.
 
 Nothing here depends on the graph framework (``graph.py`` wires these functions into a
 graph) or on a database (reads reach the model through the ``ChatReads`` port, given to a
@@ -39,6 +41,7 @@ from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.orchestrator.events import TurnEvents
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import TOOL_ANSWERED, TOOL_CALLED, RunEvent
+from openmarketer_core.studio.image_checks import normalized, without_marks
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 
 ROLE = "orchestrator"
@@ -167,19 +170,28 @@ it is queued. Explain that its report can be reviewed once it finishes.
 visual, a story, an Open Graph image or an App Store screenshot. A studio run makes one \
 image for one platform and picks how to make it by itself; you do not choose the technique.
 - The platforms are: `instagram_post`, `instagram_portrait`, `instagram_story`, `x_post`, \
-`linkedin_post`, `og_image` and `app_store_screenshot`. If the operator's wish does not \
-name one clearly, ask which one before starting.
-- The image shows its text exactly as given in `exact_copy`, one line per entry. Take \
-those words **verbatim** from the operator's message, never translated, shortened, \
-corrected or improved. Never invent copy. If the operator wants text on the image but has \
-not given the exact words, ask for them before starting. Propose wording only when the \
-operator explicitly asks for suggestions, and start the run only after they have confirmed \
-the exact words. An image without text has an empty `exact_copy`.
+`linkedin_post`, `og_image` and `app_store_screenshot`. Use the one the operator names; when \
+they name none, use `instagram_post`.
+- The image shows its text exactly as given in `exact_copy`, one line per entry; the studio \
+never writes a word itself. An image without text has an empty `exact_copy`.
+- **What the operator gives is followed exactly.** Words they give for the image go into \
+`exact_copy` verbatim, never translated, shortened, corrected or improved. Their wishes on \
+the look go into `style_notes`, and the platform they name is used. Never change any of it.
+- **What the operator leaves open, you compose.** Do not ask questions to fill the gaps; \
+decide them yourself, grounded in the project's records (the Product Profile, research \
+reports), and fill only what was not given:
+  - choose an angle: which feature, which audience, which idea the image is about;
+  - write the copy yourself, at most two lines: a short headline and an optional subline, in \
+the language of the operator's message unless they ask for another;
+  - write an art direction into `style_notes`: the scene or layout, the mood, the light;
+  - write a `goal` that states the idea of the image, not a repeat of the request.
+- Never put a term the Product Profile's brand says not to mention into the copy.
 - A studio run spends money under the workspace's creative budget: a small image runs at \
 once, a bigger one waits in the project's Approvals until a person approves it. Say so when \
 you start one.
-- When you start a studio run, include its exact run ID and state that it is queued. Its \
-image lands in the project's Studio library, where a person accepts or rejects it.
+- When you start a studio run, state what you chose (the angle, the copy and the platform), \
+include its exact run ID and state that it is queued. Its image lands in the project's Studio \
+library, where a person accepts or rejects it.
 - You cannot approve or reject proposals or images, publish content, change settings, or \
 start any other kind of run.
 - If the operator requests an action you cannot perform, explain the limitation briefly \
@@ -485,6 +497,25 @@ def _research_follow_up(run_id: str, status: str) -> str:
         "record says, and what they can do next, such as asking for the research again. You "
         "cannot start another run in this turn."
     )
+
+
+def term_not_to_mention(exact_copy: Sequence[str], do_not_mention: Sequence[str]) -> str | None:
+    """The first term of the brand's ``do_not_mention`` that the copy names, or ``None``.
+
+    Both are compared as the studio compares copy (``image_checks.normalized``), and without
+    their accents, so a term is found whatever its case, punctuation or marks; it must stand
+    as whole words, so a short term is not found inside a longer word.
+    """
+    copy = f" {_comparable(' '.join(exact_copy))} "
+    for term in do_not_mention:
+        wanted = _comparable(term)
+        if wanted and f" {wanted} " in copy:
+            return term
+    return None
+
+
+def _comparable(text: str) -> str:
+    return without_marks(normalized(text))
 
 
 def _tool_answer(agent: Agent, name: str, arguments: dict[str, Any], context: Any) -> str:

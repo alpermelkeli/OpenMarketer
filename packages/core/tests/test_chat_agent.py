@@ -34,6 +34,7 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
     follow_up_instruction,
     is_wrapping_up,
     submit_schema,
+    term_not_to_mention,
     wrap_up_tool_schemas,
 )
 from openmarketer_core.orchestrator.chat_agent.tools import (
@@ -121,11 +122,20 @@ class FakeReads:
     """The project's records, canned, and what was asked for them.
 
     ``empty`` leaves out the profile, the runs and the proposals: a project nothing was done
-    for yet.
+    for yet. ``do_not_mention`` is what the profile's brand says not to mention, and
+    ``profile_status`` whether that profile is approved.
     """
 
-    def __init__(self, *, empty: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        empty: bool = False,
+        do_not_mention: list[str] | None = None,
+        profile_status: ProfileStatus = ProfileStatus.APPROVED,
+    ) -> None:
         self.empty = empty
+        self.do_not_mention = do_not_mention or []
+        self.profile_status = profile_status
         self.status_calls = 0
         self.profile_calls: list[str | None] = []
         self.proposals_calls = 0
@@ -165,7 +175,7 @@ class FakeReads:
             return None
         return ProfileReading(
             version=3,
-            status=ProfileStatus.APPROVED,
+            status=self.profile_status,
             commit_sha="a" * 40,
             edited_from_version=None,
             created_at=datetime.now(UTC),
@@ -244,6 +254,8 @@ class FakeReads:
             return None
         if section == "product":
             return {"name": "Memoria", "type": "consumer_app"}
+        if section == "brand":
+            return {"voice": "calm", "do_not_mention": self.do_not_mention}
         return {"note": f"the {section} section"}
 
     def _run(self) -> RunReading:
@@ -815,6 +827,81 @@ def test_start_creative_refuses_what_does_not_fit_without_reaching_the_caller(ar
     assert "not-a-uuid" not in answer
 
 
+def test_start_creative_refuses_copy_that_names_a_term_not_to_mention_and_says_which():
+    requests = FakeRequests()
+    reads = FakeReads(do_not_mention=["Competitor App", "free"])
+
+    answer = start_creative(
+        a_context(reads, requests),
+        goal="A post",
+        platform="x_post",
+        exact_copy=["Better than  COMPETITOR-app", "Try it today"],
+    )
+
+    assert answer.startswith("error: exact_copy names 'Competitor App'")
+    assert requests.creatives == []
+
+
+def test_a_term_not_to_mention_is_found_as_whole_words_only():
+    assert term_not_to_mention(["Freedom to remember"], ["free"]) is None
+    assert term_not_to_mention(["Free for students"], ["free"]) == "free"
+
+
+def test_a_term_not_to_mention_is_found_whatever_its_accents():
+    assert term_not_to_mention(["Rakip Uygulama'dan iyi"], ["Rakip Uygulamá"]) is not None
+
+
+def test_start_creative_without_an_approved_profile_checks_no_term():
+    requests = FakeRequests()
+    reads = FakeReads(do_not_mention=["free"], profile_status=ProfileStatus.DRAFT)
+
+    start_creative(
+        a_context(reads, requests), goal="A post", platform="x_post", exact_copy=["Free"]
+    )
+
+    assert [request.exact_copy for request in requests.creatives] == [["Free"]]
+
+
+def test_start_creative_without_a_profile_checks_no_term():
+    requests = FakeRequests()
+
+    start_creative(
+        a_context(FakeReads(empty=True), requests),
+        goal="A post",
+        platform="x_post",
+        exact_copy=["Free"],
+    )
+
+    assert [request.exact_copy for request in requests.creatives] == [["Free"]]
+
+
+def test_start_creative_accepts_copy_that_names_no_term_not_to_mention():
+    requests = FakeRequests()
+    reads = FakeReads(do_not_mention=["Competitor App"])
+
+    answer = start_creative(
+        a_context(reads, requests), goal="A post", platform="x_post", exact_copy=["Remember more"]
+    )
+
+    assert json.loads(answer)["run_id"] == str(STUDIO_RUN_ID)
+    assert [request.exact_copy for request in requests.creatives] == [["Remember more"]]
+
+
+def test_a_refused_copy_is_rewritten_by_the_turn_and_then_started():
+    requests = FakeRequests()
+    model = ScriptedModel(
+        [call("start_creative", goal="A post", platform="x_post", exact_copy=["Free forever"])],
+        [call("start_creative", goal="A post", platform="x_post", exact_copy=["Remember more"])],
+        [call(SUBMIT, answer=f"Started {STUDIO_RUN_ID}.")],
+    )
+
+    answer_message(FakeReads(do_not_mention=["free"]), model, history(), requests=requests)
+
+    first = [m for m in model.requests[1]["messages"] if m["role"] == "tool"][0]["content"]
+    assert first.startswith("error: exact_copy names 'free'")
+    assert [request.exact_copy for request in requests.creatives] == [["Remember more"]]
+
+
 def test_an_unknown_platform_is_a_tool_error_the_turn_reads_and_corrects(reads):
     requests = FakeRequests()
     model = ScriptedModel(
@@ -873,9 +960,21 @@ def test_every_platform_is_named_to_the_model():
         assert platform.value in SYSTEM_PROMPT
 
 
-def test_the_prompt_says_the_copy_is_the_operators_word_for_word():
+def test_the_prompt_says_the_operators_details_are_followed_exactly():
     assert "verbatim" in SYSTEM_PROMPT
-    assert "Never invent copy" in SYSTEM_PROMPT
+    assert "What the operator gives is followed exactly" in SYSTEM_PROMPT
+    assert "Never change any of it" in SYSTEM_PROMPT
+
+
+def test_the_prompt_says_what_the_operator_leaves_open_is_composed_without_asking():
+    assert "What the operator leaves open, you compose" in SYSTEM_PROMPT
+    assert "Do not ask questions" in SYSTEM_PROMPT
+    assert "use `instagram_post`" in SYSTEM_PROMPT
+    assert "at most two lines" in SYSTEM_PROMPT
+
+
+def test_the_prompt_says_the_answer_names_the_choices_the_budget_and_the_library():
+    assert "state what you chose" in SYSTEM_PROMPT
     assert "Approvals" in SYSTEM_PROMPT
     assert "Studio library" in SYSTEM_PROMPT
 
