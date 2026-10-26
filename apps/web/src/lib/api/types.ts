@@ -52,6 +52,7 @@ export type Product = Schemas["Product"];
 export type Feature = Schemas["Feature"];
 export type FeatureStatus = Schemas["FeatureStatus"];
 export type Brand = Schemas["Brand"];
+export type Typeface = Schemas["Typeface"];
 export type Audience = Schemas["Audience"];
 export type BusinessModel = Schemas["BusinessModel"];
 export type BusinessModelType = Schemas["BusinessModelType"];

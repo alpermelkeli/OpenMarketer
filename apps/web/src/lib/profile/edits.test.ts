@@ -21,7 +21,7 @@ const stored: ProductProfile = {
     { ...claim, id: "rooms", description: "Shared rooms", status: "live" },
     { ...claim, id: "sync", description: "Device sync", status: "unknown" },
   ],
-  brand: { ...claim, voice: "Warm", palette: [], do_not_mention: [] },
+  brand: { ...claim, voice: "Warm", palette: [], typography: [], do_not_mention: [] },
   audience: { ...claim, primary: null, pains: [] },
   business_model: { ...claim, type: "unknown", trial_days: null },
   measurement: { ...claim, analytics: [], attribution: null, deep_links: null },
