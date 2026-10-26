@@ -17,6 +17,7 @@ import { OptionSelect } from "./option-select";
 import { PaletteSwatches } from "./palette-swatches";
 import { ProfileSection } from "./profile-section";
 import { NotFound, ProfileValue, TagList, TextList, TextValue } from "./profile-value";
+import { TypographyList } from "./typography-list";
 
 const BUSINESS_MODEL_OPTIONS = BUSINESS_MODEL_TYPES.map((type) => ({
   value: type,
@@ -116,6 +117,9 @@ export function ProfileDocument({ profile, source, editing, onChange }: ProfileD
         </ProfileValue>
         <ProfileValue label="Palette">
           <PaletteSwatches palette={brand?.palette} />
+        </ProfileValue>
+        <ProfileValue label="Typography">
+          <TypographyList typography={brand?.typography} />
         </ProfileValue>
         <ProfileValue label="Do not mention">
           <TextList values={brand?.do_not_mention} />

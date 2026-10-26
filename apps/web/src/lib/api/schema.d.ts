@@ -1310,6 +1310,8 @@ export interface components {
             evidence?: components["schemas"]["Evidence"][];
             /** Palette */
             palette?: string[];
+            /** Typography */
+            typography?: components["schemas"]["Typeface"][];
             /** Voice */
             voice?: string | null;
         };
@@ -2707,6 +2709,16 @@ export interface components {
             source: components["schemas"]["TierModelSource"];
             /** Tier */
             tier: string;
+        };
+        /**
+         * Typeface
+         * @description A font family the product declares or loads, with what it is used for when known.
+         */
+        Typeface: {
+            /** Family */
+            family: string;
+            /** Role */
+            role?: string | null;
         };
         /**
          * UnreadableChoiceResponse

@@ -256,6 +256,56 @@ def test_lists_wrapped_in_an_item_object_are_unwrapped(files):
     assert result.profile == ProductProfile.model_validate(expected)
 
 
+def test_submit_schema_describes_typography():
+    definitions = submit_schema()["function"]["parameters"]["$defs"]
+    assert "typography" in definitions["Brand"]["properties"]
+    assert definitions["Typeface"]["required"] == ["family"]
+
+
+def test_typography_is_accepted_with_the_brand(files):
+    brand = {
+        "palette": ["#1B6EF3"],
+        "typography": [{"family": "Inter", "role": "body"}, {"family": "Fira Code"}],
+        "evidence": [{"file": "app/Theme.kt", "lines": "1"}],
+        "confidence": 0.7,
+    }
+    result = analyze(files, ScriptedModel([call(SUBMIT, **profile(brand=brand))]))
+    assert [(t.family, t.role) for t in result.profile.brand.typography] == [
+        ("Inter", "body"),
+        ("Fira Code", None),
+    ]
+
+
+def typography_profile(typography) -> dict:
+    brand = {
+        "typography": typography,
+        "evidence": [{"file": "app/Theme.kt", "lines": "1"}],
+        "confidence": 0.7,
+    }
+    return profile(brand=brand)
+
+
+def test_typography_sent_as_json_text_is_decoded(files):
+    typography = [{"family": "Inter", "role": "body"}]
+    sent = typography_profile(json.dumps(typography))
+    result = analyze(files, ScriptedModel([call(SUBMIT, **sent)]))
+    assert result.profile == ProductProfile.model_validate(typography_profile(typography))
+
+
+def test_a_typeface_wrapped_in_an_item_object_is_unwrapped(files):
+    typeface = {"family": "Inter", "role": "body"}
+    sent = typography_profile({"item": typeface})
+    result = analyze(files, ScriptedModel([call(SUBMIT, **sent)]))
+    assert result.profile == ProductProfile.model_validate(typography_profile([typeface]))
+
+
+def test_a_rejected_font_family_is_explained_to_the_model(files):
+    sent = typography_profile([{"family": "Inter, sans-serif"}])
+    model = ScriptedModel([call(SUBMIT, **sent)], [call(SUBMIT, **profile())])
+    analyze(files, model)
+    assert "brand.typography.0.family" in model.tool_results()[0]
+
+
 def test_a_section_named_in_another_case_is_read_as_declared(files):
     sent = profile()
     sent["Product"] = sent.pop("product")
