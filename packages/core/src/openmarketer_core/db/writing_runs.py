@@ -135,10 +135,10 @@ class ProfileVersionNotApproved(Exception):
 class WritingRun:
     """One requested writing run and how far it got.
 
-    ``profile_version_id`` is the approved version the run writes from, once chosen;
-    ``content_item_id`` the post it proposed, once stored; ``chat_thread_id`` the chat whose
-    turn asked for the run, which hears back when it ends, ``None`` for a run asked for
-    anywhere else.
+    ``profile_version_id`` is the approved version the run writes from, once chosen, and
+    ``profile_version`` its number, which is what a person is shown; ``content_item_id`` the
+    post it proposed, once stored; ``chat_thread_id`` the chat whose turn asked for the run,
+    which hears back when it ends, ``None`` for a run asked for anywhere else.
     """
 
     id: uuid.UUID
@@ -147,6 +147,7 @@ class WritingRun:
     platform: WritingPlatform
     error: str | None
     profile_version_id: uuid.UUID | None
+    profile_version: int | None
     content_item_id: uuid.UUID | None
     cost_usd: Decimal
     requested_by: str
@@ -197,7 +198,7 @@ def request_writing_run(
     session.add(record)
     session.flush()
     session.refresh(record)
-    return _writing_run(record)
+    return _writing_run(session, record)
 
 
 def mark_run_started(
@@ -228,7 +229,7 @@ def mark_run_started(
         columns["profile_version_id"] = profile_version_id
     if columns:
         _change(session, record, **columns)
-    return _writing_run(record)
+    return _writing_run(session, record)
 
 
 def mark_run_succeeded(
@@ -248,7 +249,7 @@ def mark_run_succeeded(
     if record.status is WritingRunStatus.QUEUED:
         raise WritingRunNotStarted(run_id)
     if record.status is WritingRunStatus.SUCCEEDED:
-        return _writing_run(record)
+        return _writing_run(session, record)
     if record.status is WritingRunStatus.FAILED:
         raise WritingRunFinished(run_id, record.status)
     item_status = session.scalar(
@@ -266,7 +267,7 @@ def mark_run_succeeded(
         cost_usd=cost_usd,
         finished_at=func.now(),
     )
-    return _writing_run(record)
+    return _writing_run(session, record)
 
 
 def mark_run_failed(
@@ -288,7 +289,7 @@ def mark_run_failed(
     if record.status is WritingRunStatus.SUCCEEDED:
         raise WritingRunFinished(run_id, record.status)
     if record.status is WritingRunStatus.FAILED:
-        return _writing_run(record)
+        return _writing_run(session, record)
     if record.content_item_id is not None:
         session.execute(
             update(ContentItemRecord)
@@ -307,14 +308,14 @@ def mark_run_failed(
         cost_usd=cost_usd,
         finished_at=func.now(),
     )
-    return _writing_run(record)
+    return _writing_run(session, record)
 
 
 def writing_run(
     session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, run_id: uuid.UUID
 ) -> WritingRun:
     """The run as it is now."""
-    return _writing_run(_found_run(session, workspace_id, project_id, run_id))
+    return _writing_run(session, _found_run(session, workspace_id, project_id, run_id))
 
 
 def requested_brief(
@@ -369,8 +370,11 @@ def list_writing_runs(
     """
     get_project(session, workspace_id=workspace_id, project_id=project_id)
     query = (
-        select(WritingRunRecord)
+        select(WritingRunRecord, ProductProfileRecord.version)
         .join(Project, Project.id == WritingRunRecord.project_id)
+        .outerjoin(
+            ProductProfileRecord, ProductProfileRecord.id == WritingRunRecord.profile_version_id
+        )
         .where(Project.workspace_id == workspace_id, Project.id == project_id)
     )
     if before is not None:
@@ -378,12 +382,12 @@ def list_writing_runs(
             tuple_(WritingRunRecord.created_at, WritingRunRecord.id)
             < tuple_(before.created_at, before.id)
         )
-    rows = session.scalars(
+    rows = session.execute(
         query.order_by(WritingRunRecord.created_at.desc(), WritingRunRecord.id.desc()).limit(
             rows_to_fetch(limit)
         )
     )
-    runs = [_writing_run(record) for record in rows]
+    runs = [_run_of_version(record, version) for record, version in rows]
     return page_of(runs, limit, lambda last: CreatedPosition(last.created_at, last.id))
 
 
@@ -458,7 +462,18 @@ def _change(session: Session, record: WritingRunRecord, **columns: object) -> No
     session.refresh(record)
 
 
-def _writing_run(record: WritingRunRecord) -> WritingRun:
+def _writing_run(session: Session, record: WritingRunRecord) -> WritingRun:
+    version = None
+    if record.profile_version_id is not None:
+        version = session.scalar(
+            select(ProductProfileRecord.version).where(
+                ProductProfileRecord.id == record.profile_version_id
+            )
+        )
+    return _run_of_version(record, version)
+
+
+def _run_of_version(record: WritingRunRecord, profile_version: int | None) -> WritingRun:
     return WritingRun(
         id=record.id,
         project_id=record.project_id,
@@ -466,6 +481,7 @@ def _writing_run(record: WritingRunRecord) -> WritingRun:
         platform=WritingPlatform(record.platform),
         error=record.error,
         profile_version_id=record.profile_version_id,
+        profile_version=profile_version,
         content_item_id=record.content_item_id,
         cost_usd=record.cost_usd,
         requested_by=record.requested_by,

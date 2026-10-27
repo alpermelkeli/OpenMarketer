@@ -34,12 +34,14 @@ from openmarketer_core.db.research_runs import (
 )
 from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.db.studio_runs import request_studio_run
+from openmarketer_core.db.writing_runs import request_writing_run
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.intake import Snapshot
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import Report
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.writing.brief import WritingBrief
 
 REPOSITORY = "https://example.com/acme/app.git"
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
@@ -460,6 +462,29 @@ def test_project_with_an_unfinished_studio_run_is_not_deleted(client, session):
         {
             "code": "studio_run_unfinished",
             "message": f"project {project_id} has a studio run in progress;"
+            " it can be deleted when the run has finished",
+        },
+    )
+    assert client.get(f"/v1/projects/{project_id}").status_code == 200
+
+
+def test_project_with_an_unfinished_writing_run_is_not_deleted(client, session):
+    project_id = project_created(session, minutes_ago=10)
+    request_writing_run(
+        session,
+        workspace_id=local_workspace_id(session),
+        project_id=uuid.UUID(project_id),
+        brief=WritingBrief.model_validate({"platform": "x", "goal": "introduce"}),
+        requested_by="person",
+    )
+
+    response = client.delete(f"/v1/projects/{project_id}")
+
+    assert (response.status_code, response.json()) == (
+        409,
+        {
+            "code": "writing_run_unfinished",
+            "message": f"project {project_id} has a writing run in progress;"
             " it can be deleted when the run has finished",
         },
     )

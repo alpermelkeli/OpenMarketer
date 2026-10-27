@@ -12,11 +12,13 @@ import pytest
 from temporalio.exceptions import ApplicationError
 from writer_fakes import POST, ScriptedChat, a_draft, a_plan, a_review, one_round_that_passes
 
-from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
+from openmarketer_core.agent_runtime.actions import ActionEffect, ActionOutcome, ActionRequest
+from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.credentials.resolution import ModelKeyNotSet
 from openmarketer_core.db.content_items import settle_content_item
 from openmarketer_core.db.models import ContentItemStatus
+from openmarketer_core.db.proposals import propose_action
 from openmarketer_core.db.session import transaction
 from openmarketer_core.llm import LLMError
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
@@ -212,28 +214,52 @@ async def stored_post(activities, run) -> PublishPost:
     return PublishPost.model_validate((await asked_to_publish(activities, run)).payload)
 
 
+def held(sessions, run, request: ActionRequest) -> uuid.UUID:
+    """The proposal the gate holds ``request`` as, stored as the gate stores it; its id."""
+    with transaction(sessions) as session:
+        return propose_action(
+            session,
+            scope=RunScope(workspace_id=run.workspace_id, project_id=run.project_id),
+            run=graph_run(run),
+            workflow_id=f"writing-{run.run_id}",
+            request=request,
+            effect=ActionEffect.PUBLISHES,
+            wait_seconds=3600,
+        ).id
+
+
 async def test_approved_post_is_recorded_as_a_dry_run_and_sent_nowhere(
     work, activities, writer_database
 ):
     asked = writer_database.requested(started=True)
     payload = await stored_post(activities, asked.run)
 
-    answer = work.publish_post(payload)
+    answer = work.publish_post(payload, "no-proposal")
 
     item = writer_database.item(asked.run)
     assert answer == {"content_item_id": str(item.id), "status": "dry_run"}
     assert item.status is ContentItemStatus.DRY_RUN and item.settled_at is not None
-    # The handler is not given the proposal, so the item names none.
-    assert item.proposal_id is None
+
+
+async def test_post_recorded_names_the_proposal_its_action_was_held_as(
+    work, activities, writer_database, sessions
+):
+    asked = writer_database.requested(started=True)
+    request = await asked_to_publish(activities, asked.run)
+    proposal_id = held(sessions, asked.run, request)
+
+    work.publish_post(PublishPost.model_validate(request.payload), request.action_id)
+
+    assert writer_database.item(asked.run).proposal_id == proposal_id
 
 
 async def test_post_recorded_again_changes_nothing(work, activities, writer_database):
     asked = writer_database.requested(started=True)
     payload = await stored_post(activities, asked.run)
-    work.publish_post(payload)
+    work.publish_post(payload, "no-proposal")
     settled_at = writer_database.item(asked.run).settled_at
 
-    work.publish_post(payload)
+    work.publish_post(payload, "no-proposal")
 
     assert writer_database.item(asked.run).settled_at == settled_at
 
@@ -244,7 +270,9 @@ async def test_post_whose_text_is_not_the_stored_one_is_refused_and_not_recorded
     asked = writer_database.requested(started=True)
     payload = await stored_post(activities, asked.run)
 
-    failure = refused(work.publish_post, payload.model_copy(update={"text": "Something else."}))
+    failure = refused(
+        work.publish_post, payload.model_copy(update={"text": "Something else."}), "no-proposal"
+    )
 
     assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
     assert writer_database.item(asked.run).status is ContentItemStatus.PROPOSED
@@ -264,7 +292,7 @@ async def test_post_settled_another_way_before_is_refused_for_good(
             status=ContentItemStatus.EXPIRED,
         )
 
-    failure = refused(work.publish_post, payload)
+    failure = refused(work.publish_post, payload, "no-proposal")
 
     assert (failure.type, failure.non_retryable) == (steps.RUN_UNAVAILABLE, True)
     assert writer_database.item(asked.run).status is ContentItemStatus.EXPIRED
@@ -277,7 +305,8 @@ async def test_finished_run_reports_identifiers_status_and_cost_and_no_post(
     asked = writer_database.requested(started=True)
     request = await asked_to_publish(activities, asked.run)
     payload = PublishPost.model_validate(request.payload)
-    published = ActionOutcome(request.action_id, True, work.publish_post(payload), "")
+    answer = work.publish_post(payload, request.action_id)
+    published = ActionOutcome(request.action_id, True, answer, "")
 
     output = (await activities.step(asked.run, published)).output
 

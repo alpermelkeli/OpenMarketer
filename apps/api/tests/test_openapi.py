@@ -65,6 +65,11 @@ OPERATIONS = {
         "get",
         "/v1/projects/{project_id}/media-assets/{asset_id}/versions/{version_id}/download",
     ),
+    "startWritingRun": ("post", "/v1/projects/{project_id}/writing-runs"),
+    "listWritingRuns": ("get", "/v1/projects/{project_id}/writing-runs"),
+    "getWritingRun": ("get", "/v1/projects/{project_id}/writing-runs/{run_id}"),
+    "listContentItems": ("get", "/v1/projects/{project_id}/content-items"),
+    "getContentItem": ("get", "/v1/projects/{project_id}/content-items/{item_id}"),
     "listRepositoryImages": ("get", "/v1/projects/{project_id}/repository-images"),
     "uploadRepositoryImage": ("post", "/v1/projects/{project_id}/repository-images"),
     "setRepositoryImageKind": ("patch", "/v1/projects/{project_id}/repository-images/{image_id}"),
@@ -168,6 +173,8 @@ LISTS = {
     "/v1/projects/{project_id}/chats/{chat_id}/events": ("ChatEventListResponse", "events"),
     "/v1/projects/{project_id}/studio-runs": ("StudioRunListResponse", "runs"),
     "/v1/projects/{project_id}/media-assets": ("MediaAssetListResponse", "assets"),
+    "/v1/projects/{project_id}/writing-runs": ("WritingRunListResponse", "runs"),
+    "/v1/projects/{project_id}/content-items": ("ContentItemListResponse", "items"),
     "/v1/proposals": ("ProposalListResponse", "proposals"),
 }
 

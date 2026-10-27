@@ -158,7 +158,8 @@ def registration(parts: WriterParts) -> AgentRegistration:
     @worker.handler(PublishPost)
     def publish_post(payload: PublishPost, context: ActionContext) -> Mapping[str, Any]:
         # The item is the key: it is recorded as a dry run once, and again changes nothing.
-        return work.publish_post(payload)
+        # The action's id finds the proposal the gate held it as, which the item names.
+        return work.publish_post(payload, context.action_id)
 
     graph_steps = AgentSteps(
         agent,

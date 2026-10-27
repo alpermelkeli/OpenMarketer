@@ -148,14 +148,16 @@ def delete(
 
     That is its analyses, the evidence they found, every profile version, its
     proposals, its chats, its research runs with their reports and the pages
-    they fetched, and its studio runs with their assets and every version's
-    image, accepted ones included. Refused while an analysis, a research run or a
-    studio run of the project is queued or running (409 `analysis_already_running`,
-    `research_unfinished`, `studio_run_unfinished`), or a proposal of it waits for
-    a decision. The pages and the images are in the installation's one bucket and
-    are removed through the same store. 503 `storage_unavailable` when an object
-    could not be removed from object storage; the project stays then. The
-    repository is not touched, nor what its runs spent in the month's ledger.
+    they fetched, its studio runs with their assets and every version's image,
+    accepted ones included, and its writing runs with the posts they proposed.
+    Refused while an analysis, a research run, a studio run or a writing run of
+    the project is queued or running (409 `analysis_already_running`,
+    `research_unfinished`, `studio_run_unfinished`, `writing_run_unfinished`), or a
+    proposal of it waits for a decision. The pages and the images are in the
+    installation's one bucket and are removed through the same store. 503
+    `storage_unavailable` when an object could not be removed from object
+    storage; the project stays then. The repository is not touched, nor what its
+    runs spent in the month's ledger.
     """
     for key in delete_project(session, workspace_id=workspace_id, project_id=project_id):
         pages.remove(key)

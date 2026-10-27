@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 from openmarketer_core.db.models import (
     ContentItemRecord,
     ContentItemStatus,
+    ProductProfileRecord,
     Project,
     ProposalRecord,
     WritingRunRecord,
@@ -137,6 +138,7 @@ class ContentItem:
     critic_report: Mapping[str, Any]
     flagged_numbers: tuple[Any, ...]
     profile_version_id: uuid.UUID
+    profile_version: int  # the number of that version, which is what a person is shown
     proposal_id: uuid.UUID | None
     cost_usd: Decimal
     created_at: datetime
@@ -164,7 +166,7 @@ def store_proposed_content_item(
         stored = _found_item(session, workspace_id, project_id, run.content_item_id)
         if stored.text != item.text:
             raise ContentItemStored(run_id)
-        return _content_item(stored)
+        return _content_item(session, stored)
     if run.profile_version_id is None:
         raise ProfileVersionNotChosen(run_id)
     if item.proposal_id is not None:
@@ -193,7 +195,7 @@ def store_proposed_content_item(
         .values(content_item_id=record.id)
     )
     session.refresh(record)
-    return _content_item(record)
+    return _content_item(session, record)
 
 
 def settle_content_item(
@@ -235,14 +237,14 @@ def settle_content_item(
             update(ContentItemRecord).where(ContentItemRecord.id == item_id).values(**columns)
         )
         session.refresh(record)
-    return _content_item(record)
+    return _content_item(session, record)
 
 
 def content_item(
     session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, item_id: uuid.UUID
 ) -> ContentItem:
     """One content item of the project as it is now."""
-    return _content_item(_found_item(session, workspace_id, project_id, item_id))
+    return _content_item(session, _found_item(session, workspace_id, project_id, item_id))
 
 
 def list_content_items(
@@ -259,18 +261,21 @@ def list_content_items(
     page) or at the newest. Raises ``ProjectNotFound`` when the workspace has no such project.
     """
     get_project(session, workspace_id=workspace_id, project_id=project_id)
-    query = _items_of_project(workspace_id, project_id)
+    query = _items_of_project(workspace_id, project_id).add_columns(ProductProfileRecord.version)
+    query = query.join(
+        ProductProfileRecord, ProductProfileRecord.id == ContentItemRecord.profile_version_id
+    )
     if before is not None:
         query = query.where(
             tuple_(ContentItemRecord.created_at, ContentItemRecord.id)
             < tuple_(before.created_at, before.id)
         )
-    rows = session.scalars(
+    rows = session.execute(
         query.order_by(ContentItemRecord.created_at.desc(), ContentItemRecord.id.desc()).limit(
             rows_to_fetch(limit)
         )
     )
-    items = [_content_item(record) for record in rows]
+    items = [_item_of_version(record, version) for record, version in rows]
     return page_of(items, limit, lambda last: CreatedPosition(last.created_at, last.id))
 
 
@@ -340,7 +345,17 @@ def _found_item(
     return record
 
 
-def _content_item(record: ContentItemRecord) -> ContentItem:
+def _content_item(session: Session, record: ContentItemRecord) -> ContentItem:
+    # The item's foreign key keeps its version for as long as the item exists.
+    version = session.execute(
+        select(ProductProfileRecord.version).where(
+            ProductProfileRecord.id == record.profile_version_id
+        )
+    ).scalar_one()
+    return _item_of_version(record, version)
+
+
+def _item_of_version(record: ContentItemRecord, profile_version: int) -> ContentItem:
     return ContentItem(
         id=record.id,
         project_id=record.project_id,
@@ -356,6 +371,7 @@ def _content_item(record: ContentItemRecord) -> ContentItem:
         critic_report=dict(record.critic_report),
         flagged_numbers=tuple(record.flagged_numbers),
         profile_version_id=record.profile_version_id,
+        profile_version=profile_version,
         proposal_id=record.proposal_id,
         cost_usd=record.cost_usd,
         created_at=record.created_at,

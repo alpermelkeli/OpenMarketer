@@ -44,6 +44,7 @@ from openmarketer_core.credentials.resolution import (
 from openmarketer_core.db.analysis_runs import AnalysisAlreadyRunning, AnalysisRunNotFound
 from openmarketer_core.db.chat import ChatNotFound
 from openmarketer_core.db.chat_turns import ChatBusy
+from openmarketer_core.db.content_items import ContentItemNotFound
 from openmarketer_core.db.media_assets import (
     MediaAssetDecided,
     MediaAssetNotFound,
@@ -55,6 +56,7 @@ from openmarketer_core.db.project_removal import (
     ProjectHasUnfinishedResearch,
     ProjectHasUnfinishedRun,
     ProjectHasUnfinishedStudioRun,
+    ProjectHasUnfinishedWritingRun,
 )
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.proposals import ProposalNotFound, ProposalNotPending
@@ -67,6 +69,7 @@ from openmarketer_core.db.studio_runs import (
     StudioRunNotFound,
     StudioRunUnfinished,
 )
+from openmarketer_core.db.writing_runs import WritingRunNotFound
 from openmarketer_core.llm import LLMError
 from openmarketer_core.orchestrator.chat_agent.rules import ChatTurnError
 from openmarketer_core.repository_analysis.intake import IntakeError
@@ -90,6 +93,7 @@ from openmarketer_core.workspace_settings.model_settings import (
     UnknownRole,
     UnknownTier,
 )
+from openmarketer_core.writing.request import WritingNotStarted
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +111,8 @@ class ErrorCode(StrEnum):
     STUDIO_RUN_NOT_FOUND = "studio_run_not_found"
     MEDIA_ASSET_NOT_FOUND = "media_asset_not_found"
     MEDIA_ASSET_VERSION_NOT_FOUND = "media_asset_version_not_found"
+    WRITING_RUN_NOT_FOUND = "writing_run_not_found"
+    CONTENT_ITEM_NOT_FOUND = "content_item_not_found"
     REPOSITORY_IMAGE_NOT_FOUND = "repository_image_not_found"
     CHAT_NOT_FOUND = "chat_not_found"
     PROFILE_NOT_FOUND = "profile_not_found"
@@ -118,6 +124,7 @@ class ErrorCode(StrEnum):
     ANALYSIS_ALREADY_RUNNING = "analysis_already_running"
     RESEARCH_UNFINISHED = "research_unfinished"
     STUDIO_RUN_UNFINISHED = "studio_run_unfinished"
+    WRITING_RUN_UNFINISHED = "writing_run_unfinished"
     MEDIA_ASSET_DECIDED = "media_asset_decided"
     PROFILE_ALREADY_APPROVED = "profile_already_approved"
     PROPOSAL_NOT_PENDING = "proposal_not_pending"
@@ -135,6 +142,7 @@ class ErrorCode(StrEnum):
     ANALYSIS_NOT_STARTED = "analysis_not_started"
     RESEARCH_NOT_STARTED = "research_not_started"
     STUDIO_NOT_STARTED = "studio_not_started"
+    WRITING_NOT_STARTED = "writing_not_started"
     MODEL_UNAVAILABLE = "model_unavailable"
     CHAT_UNANSWERED = "chat_unanswered"
     DATABASE_UNAVAILABLE = "database_unavailable"
@@ -176,6 +184,8 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     StudioRunNotFound: (404, ErrorCode.STUDIO_RUN_NOT_FOUND),
     MediaAssetNotFound: (404, ErrorCode.MEDIA_ASSET_NOT_FOUND),
     MediaAssetVersionNotFound: (404, ErrorCode.MEDIA_ASSET_VERSION_NOT_FOUND),
+    WritingRunNotFound: (404, ErrorCode.WRITING_RUN_NOT_FOUND),
+    ContentItemNotFound: (404, ErrorCode.CONTENT_ITEM_NOT_FOUND),
     RepositoryImageNotFound: (404, ErrorCode.REPOSITORY_IMAGE_NOT_FOUND),
     ChatNotFound: (404, ErrorCode.CHAT_NOT_FOUND),
     ProfileVersionNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
@@ -190,6 +200,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ResearchRunUnfinished: (409, ErrorCode.RESEARCH_UNFINISHED),
     ProjectHasUnfinishedStudioRun: (409, ErrorCode.STUDIO_RUN_UNFINISHED),
     StudioRunUnfinished: (409, ErrorCode.STUDIO_RUN_UNFINISHED),
+    ProjectHasUnfinishedWritingRun: (409, ErrorCode.WRITING_RUN_UNFINISHED),
     MediaAssetDecided: (409, ErrorCode.MEDIA_ASSET_DECIDED),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
     ProposalNotPending: (409, ErrorCode.PROPOSAL_NOT_PENDING),
@@ -206,6 +217,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     AnalysisNotStarted: (503, ErrorCode.ANALYSIS_NOT_STARTED),
     ResearchNotStarted: (503, ErrorCode.RESEARCH_NOT_STARTED),
     StudioNotStarted: (503, ErrorCode.STUDIO_NOT_STARTED),
+    WritingNotStarted: (503, ErrorCode.WRITING_NOT_STARTED),
     PageStoreUnavailable: (503, ErrorCode.STORAGE_UNAVAILABLE),
     AssetStoreUnavailable: (503, ErrorCode.STORAGE_UNAVAILABLE),
     LLMError: (503, ErrorCode.MODEL_UNAVAILABLE),

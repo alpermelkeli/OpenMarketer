@@ -40,9 +40,10 @@ model set from the dashboard is the one the next attempt uses. A key that is set
 credential that is stored and cannot be read (``WORKSPACE_FAILURES``), ends the run in the
 words of its error, which name what to set and hold no value.
 
-The proposal's id is not recorded on the item when the post is recorded as a dry run: a handler
-is given the action's id and its payload, not the proposal, and core has no read of a proposal
-by its action that is scoped to the run's project. The item keeps ``proposal_id`` empty.
+The proposal the gate held ``publish_post`` as is named on the item when the post is recorded
+as a dry run: the handler is given the action's id, and the proposal is read by it within the
+run's project. A post that was rejected or expired is settled by the workflow's ``after``,
+which knows no action's id, so its item names no proposal.
 """
 
 from __future__ import annotations
@@ -72,6 +73,7 @@ from openmarketer_core.db.content_items import (
 from openmarketer_core.db.models import ContentItemStatus
 from openmarketer_core.db.profile_versions import latest_approved_profile
 from openmarketer_core.db.projects import ProjectNotFound
+from openmarketer_core.db.proposals import proposal_of_action
 from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.session import DatabaseError, transaction
 from openmarketer_core.db.writing_runs import (
@@ -245,11 +247,12 @@ class WritingWork:
             raise failure(DATABASE_UNAVAILABLE, steps.DRAFT_NOT_STORED) from None
         return {"content_item_id": str(stored.id)}
 
-    def publish_post(self, payload: PublishPost) -> Mapping[str, Any]:
+    def publish_post(self, payload: PublishPost, action_id: str) -> Mapping[str, Any]:
         """Record the approved post as it would have been sent (``dry_run``); sends nothing.
 
         The post must be the run's own item with the text the person approved, so what is
-        recorded as sent is what was approved. Recording it again changes nothing.
+        recorded as sent is what was approved, and the item names the proposal the gate held
+        ``action_id`` as. Recording it again changes nothing.
         """
         try:
             with transaction(self._sessions) as session:
@@ -271,6 +274,12 @@ class WritingWork:
                     project_id=payload.project_id,
                     item_id=payload.content_item_id,
                     status=ContentItemStatus.DRY_RUN,
+                    proposal_id=proposal_of_action(
+                        session,
+                        workspace_id=payload.workspace_id,
+                        project_id=payload.project_id,
+                        action_id=action_id,
+                    ),
                 )
         except (
             ContentItemNotFound,
@@ -280,6 +289,8 @@ class WritingWork:
             ProjectNotFound,
         ) as e:
             raise failure(steps.RUN_UNAVAILABLE, str(e)) from None
+        except ProposalOfAnotherRun as e:
+            raise failure(steps.WRITING_FAILED, str(e)) from None
         except DatabaseError:
             logger.exception("the post of writing run %s was not recorded", payload.run_id)
             raise failure(DATABASE_UNAVAILABLE, steps.POST_NOT_RECORDED) from None

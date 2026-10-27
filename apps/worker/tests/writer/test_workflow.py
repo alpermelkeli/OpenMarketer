@@ -127,7 +127,11 @@ async def test_approved_post_is_recorded_as_a_dry_run_and_the_run_succeeds(
     assert stored.status is WritingRunStatus.SUCCEEDED
     assert (stored.profile_version_id, stored.content_item_id) == (asked.version_id, item.id)
     assert stored.cost_usd == item.cost_usd == Decimal("0.03")
-    assert (item.status, item.text) == (ContentItemStatus.DRY_RUN, POST)
+    assert (item.status, item.text, item.proposal_id) == (
+        ContentItemStatus.DRY_RUN,
+        POST,
+        proposal.id,
+    )
     assert output["status"] == "dry_run" and output["content_item_id"] == str(item.id)
     assert proposal.payload["text"] == POST
     [settled] = writer_database.proposals(asked.run)

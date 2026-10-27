@@ -189,6 +189,9 @@ def test_the_item_takes_the_runs_profile_version_and_becomes_its_item(session, r
     stored_run = writing_run(session, **run.ids())
     assert stored_run.content_item_id == item.id
     assert item.profile_version_id == stored_run.profile_version_id
+    assert item.profile_version == stored_run.profile_version == 1
+    [listed] = list_content_items(session, **run.scope(), limit=5).items
+    assert listed == item
 
 
 def test_storing_the_same_item_again_gives_back_the_stored_one(session, run):

@@ -91,14 +91,16 @@ export interface paths {
          *
          *     That is its analyses, the evidence they found, every profile version, its
          *     proposals, its chats, its research runs with their reports and the pages
-         *     they fetched, and its studio runs with their assets and every version's
-         *     image, accepted ones included. Refused while an analysis, a research run or a
-         *     studio run of the project is queued or running (409 `analysis_already_running`,
-         *     `research_unfinished`, `studio_run_unfinished`), or a proposal of it waits for
-         *     a decision. The pages and the images are in the installation's one bucket and
-         *     are removed through the same store. 503 `storage_unavailable` when an object
-         *     could not be removed from object storage; the project stays then. The
-         *     repository is not touched, nor what its runs spent in the month's ledger.
+         *     they fetched, its studio runs with their assets and every version's image,
+         *     accepted ones included, and its writing runs with the posts they proposed.
+         *     Refused while an analysis, a research run, a studio run or a writing run of
+         *     the project is queued or running (409 `analysis_already_running`,
+         *     `research_unfinished`, `studio_run_unfinished`, `writing_run_unfinished`), or a
+         *     proposal of it waits for a decision. The pages and the images are in the
+         *     installation's one bucket and are removed through the same store. 503
+         *     `storage_unavailable` when an object could not be removed from object
+         *     storage; the project stays then. The repository is not touched, nor what its
+         *     runs spent in the month's ledger.
          */
         delete: operations["deleteProject"];
         options?: never;
@@ -309,6 +311,46 @@ export interface paths {
          *     The request takes no body; one is a 422.
          */
         post: operations["markChatRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/content-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Items
+         * @description The posts the project's writing runs proposed, newest first, one page at a time.
+         */
+        get: operations["listContentItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/content-items/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Item
+         * @description One post as it is now, with the record of how it was written.
+         */
+        get: operations["getContentItem"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -871,6 +913,58 @@ export interface paths {
          *     deleted again. The request takes no body; one is a 422.
          */
         delete: operations["deleteStudioRun"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/writing-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Runs
+         * @description The project's writing runs as they are now, newest first, one page at a time.
+         */
+        get: operations["listWritingRuns"];
+        put?: never;
+        /**
+         * Start
+         * @description Queue a writing run for the brief and return the run to poll.
+         *
+         *     A worker executes it later: it writes from the project's approved profile, and a brief
+         *     that names a feature the profile does not hold as live ends the run failed, saying so.
+         *     The post it proposes waits for a person on its proposal. 503 `writing_not_started` when
+         *     the run could not be handed to a worker: it is then stored as failed and a new one can be
+         *     started.
+         */
+        post: operations["startWritingRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/writing-runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run
+         * @description The run as it is now, with its brief.
+         *
+         *     Queued, running, succeeded (with its post) or failed.
+         */
+        get: operations["getWritingRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1565,6 +1659,162 @@ export interface components {
             /** Monthly Usd */
             monthly_usd: number | null;
         };
+        /**
+         * ContentItemDetailResponse
+         * @description A post with the record of how it was written, as the worker stored it.
+         */
+        ContentItemDetailResponse: {
+            /**
+             * Alternatives
+             * @description The other variants, each with what the checks and the critic found of it.
+             */
+            alternatives: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Check Report
+             * @description What the code's rules found of the post.
+             */
+            check_report: {
+                [key: string]: unknown;
+            };
+            /**
+             * Claims
+             * @description What the post claims, each with the features and the evidence it rests on.
+             */
+            claims: {
+                [key: string]: unknown;
+            }[];
+            /** Cost Usd */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Critic Report
+             * @description What the critic found of the post.
+             */
+            critic_report: {
+                [key: string]: unknown;
+            };
+            /**
+             * Flagged Numbers
+             * @description Numbers in the post the profile does not hold, for a person to check.
+             */
+            flagged_numbers: string[];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Plan
+             * @description The plan the post was drafted from.
+             */
+            plan: {
+                [key: string]: unknown;
+            };
+            /**
+             * Plan Changes
+             * @description What the code changed in the writer's plan.
+             */
+            plan_changes: string[];
+            platform: components["schemas"]["WritingPlatform"];
+            /**
+             * Profile Version
+             * @description The approved profile version it was written from.
+             */
+            profile_version: number;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Proposal Id
+             * @description The proposal a person decides the post on, once the item names it.
+             */
+            proposal_id: string | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Settled At */
+            settled_at: string | null;
+            /** @description `proposed` while it waits for a person; `dry_run` once approved and recorded as it would have been sent (nothing is sent yet), `rejected`, `expired` or `failed`. */
+            status: components["schemas"]["ContentItemStatus"];
+            /**
+             * Text
+             * @description The post as it would be sent.
+             */
+            text: string;
+        };
+        /** ContentItemListResponse */
+        ContentItemListResponse: {
+            /** Items */
+            items: components["schemas"]["ContentItemResponse"][];
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+        };
+        /**
+         * ContentItemResponse
+         * @description A post a run proposed, without the record of how it was written.
+         */
+        ContentItemResponse: {
+            /** Cost Usd */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            platform: components["schemas"]["WritingPlatform"];
+            /**
+             * Profile Version
+             * @description The approved profile version it was written from.
+             */
+            profile_version: number;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Proposal Id
+             * @description The proposal a person decides the post on, once the item names it.
+             */
+            proposal_id: string | null;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Settled At */
+            settled_at: string | null;
+            /** @description `proposed` while it waits for a person; `dry_run` once approved and recorded as it would have been sent (nothing is sent yet), `rejected`, `expired` or `failed`. */
+            status: components["schemas"]["ContentItemStatus"];
+            /**
+             * Text
+             * @description The post as it would be sent.
+             */
+            text: string;
+        };
+        /**
+         * ContentItemStatus
+         * @enum {string}
+         */
+        ContentItemStatus: "proposed" | "dry_run" | "rejected" | "expired" | "failed";
         /** CreateChatRequest */
         CreateChatRequest: {
             /**
@@ -1653,7 +1903,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "media_asset_decided" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
+        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "writing_run_not_found" | "content_item_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "writing_run_unfinished" | "media_asset_decided" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "writing_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
         EventDetailScalar: string | number | boolean | null;
         EventDetailValue: components["schemas"]["EventDetailScalar"] | components["schemas"]["EventDetailScalar"][];
         /**
@@ -2745,6 +2995,142 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /**
+         * WritingBrief
+         * @description One post the writer is asked to write, for one platform, with how many texts to offer.
+         */
+        WritingBrief: {
+            /** Angle */
+            angle?: string | null;
+            /** Feature */
+            feature?: string | null;
+            goal: components["schemas"]["WritingGoal"];
+            platform: components["schemas"]["WritingPlatform"];
+            /**
+             * Variants
+             * @default 3
+             */
+            variants: number;
+        };
+        /**
+         * WritingGoal
+         * @enum {string}
+         */
+        WritingGoal: "introduce" | "announce" | "angle";
+        /**
+         * WritingPlatform
+         * @enum {string}
+         */
+        WritingPlatform: "x";
+        /** WritingRunDetailResponse */
+        WritingRunDetailResponse: {
+            /** @description What the run was asked to write; null when the stored brief no longer fits the brief's schema, which a later version may have tightened. */
+            brief: components["schemas"]["WritingBrief"] | null;
+            /**
+             * Content Item Id
+             * @description The post the run proposed, once it has stored it.
+             */
+            content_item_id: string | null;
+            /**
+             * Cost Usd
+             * @description What the run's model calls cost, in USD, once it ended.
+             */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            platform: components["schemas"]["WritingPlatform"];
+            /**
+             * Profile Version
+             * @description The approved profile version the run writes from, once it has read it.
+             */
+            profile_version: number | null;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Requested By
+             * @description Who asked for the run: `person`, `orchestrator` (the chat) or `run`.
+             */
+            requested_by: string;
+            /** Started At */
+            started_at: string | null;
+            status: components["schemas"]["WritingRunStatus"];
+        };
+        /** WritingRunListResponse */
+        WritingRunListResponse: {
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+            /** Runs */
+            runs: components["schemas"]["WritingRunResponse"][];
+        };
+        /** WritingRunResponse */
+        WritingRunResponse: {
+            /**
+             * Content Item Id
+             * @description The post the run proposed, once it has stored it.
+             */
+            content_item_id: string | null;
+            /**
+             * Cost Usd
+             * @description What the run's model calls cost, in USD, once it ended.
+             */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            platform: components["schemas"]["WritingPlatform"];
+            /**
+             * Profile Version
+             * @description The approved profile version the run writes from, once it has read it.
+             */
+            profile_version: number | null;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Requested By
+             * @description Who asked for the run: `person`, `orchestrator` (the chat) or `run`.
+             */
+            requested_by: string;
+            /** Started At */
+            started_at: string | null;
+            status: components["schemas"]["WritingRunStatus"];
+        };
+        /**
+         * WritingRunStatus
+         * @enum {string}
+         */
+        WritingRunStatus: "queued" | "running" | "succeeded" | "failed";
     };
     responses: never;
     parameters: never;
@@ -3792,6 +4178,128 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatThreadResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listContentItems: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContentItemListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getContentItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContentItemDetailResponse"];
                 };
             };
             /** @description Forbidden */
@@ -5707,6 +6215,190 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listWritingRuns: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WritingRunListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    startWritingRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WritingBrief"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WritingRunResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getWritingRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WritingRunDetailResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

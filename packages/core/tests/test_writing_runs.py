@@ -209,6 +209,17 @@ def test_a_version_can_be_recorded_after_the_start(session, project):
     assert recorded.profile_version_id == version_id
 
 
+def test_a_run_is_read_and_listed_with_the_number_of_its_version(session, project):
+    waiting = requested(session, project)
+    run = started(session, project)
+    ids = {"workspace_id": project.workspace_id, "project_id": project.project_id}
+
+    assert (waiting.profile_version, run.profile_version) == (None, 1)
+    assert writing_run(session, **scope(project, run.id)).profile_version == 1
+    listed = {r.id: r.profile_version for r in list_writing_runs(session, **ids, limit=5).items}
+    assert listed == {waiting.id: None, run.id: 1}
+
+
 def test_a_draft_version_is_not_written_from(session, project):
     run = requested(session, project)
     draft = profile_version(session, project.project_id, approved=False)
