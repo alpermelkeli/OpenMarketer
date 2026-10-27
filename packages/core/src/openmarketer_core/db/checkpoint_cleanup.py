@@ -61,11 +61,18 @@ from sqlalchemy.sql import Select
 from openmarketer_core.agent_runtime.threads import validate_kind
 from openmarketer_core.db.analysis_runs import ANALYSIS_RUN_THREADS, FINISHED
 from openmarketer_core.db.checkpoint_schema import CHECKPOINT_TABLES_OF_THREADS
-from openmarketer_core.db.models import AnalysisRunRecord, ResearchRunRecord, StudioRunRecord
+from openmarketer_core.db.models import (
+    AnalysisRunRecord,
+    ResearchRunRecord,
+    StudioRunRecord,
+    WritingRunRecord,
+)
 from openmarketer_core.db.research_runs import FINISHED as RESEARCH_FINISHED
 from openmarketer_core.db.research_runs import RESEARCH_RUN_THREADS
 from openmarketer_core.db.studio_runs import FINISHED as STUDIO_FINISHED
 from openmarketer_core.db.studio_runs import STUDIO_RUN_THREADS
+from openmarketer_core.db.writing_runs import FINISHED as WRITING_FINISHED
+from openmarketer_core.db.writing_runs import WRITING_RUN_THREADS
 
 
 def remove_checkpoints_of_analysis_runs(session: Session, *, longest_run: timedelta) -> int:
@@ -199,6 +206,50 @@ def remove_checkpoints_of_studio_runs(session: Session, *, longest_run: timedelt
             or_(
                 StudioRunRecord.started_at.is_(None),
                 StudioRunRecord.started_at > func.now() - longest_run,
+            )
+        )
+        .exists()
+    )
+    return _remove_threads(session, select(threads.c.thread_id).where(~run_in_progress))
+
+
+def remove_checkpoints_of_writing_runs(session: Session, *, longest_run: timedelta) -> int:
+    """Remove the checkpoints writing runs no longer need; say how many threads.
+
+    The writing runs' rule, built like the research runs': among the threads named for a
+    writing run (``writing_runs.run_thread_id``, names that start with
+    ``WRITING_RUN_THREADS``), a thread is kept only while its run is unfinished (``queued`` or
+    ``running``) and was started no longer ago than a run can take. Threads of any other name
+    are not looked at.
+
+    ``longest_run`` is how long after its start a run can still be in progress, the wait for
+    a person's decision on its post included; the caller derives it from how it executes runs.
+    Like the other rules, this is maintenance of the whole database, one statement, and it
+    does not commit.
+    """
+    # The library's tables have no model (see ``checkpoint_schema.py``); only this column is used.
+    tables = [
+        table(name, column("thread_id", Text)) for name in sorted(CHECKPOINT_TABLES_OF_THREADS)
+    ]
+    threads = union(
+        *(
+            select(t.c.thread_id).where(
+                t.c.thread_id.startswith(WRITING_RUN_THREADS, autoescape=True)
+            )
+            for t in tables
+        )
+    ).subquery("thread")
+    run_in_progress = (
+        select(WritingRunRecord.id)
+        # Compared as text, as in the research runs' rule.
+        .where(
+            func.concat(WRITING_RUN_THREADS, cast(WritingRunRecord.id, Text)) == threads.c.thread_id
+        )
+        .where(WritingRunRecord.status.not_in(WRITING_FINISHED))
+        .where(
+            or_(
+                WritingRunRecord.started_at.is_(None),
+                WritingRunRecord.started_at > func.now() - longest_run,
             )
         )
         .exists()

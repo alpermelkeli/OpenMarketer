@@ -20,6 +20,11 @@ from openmarketer_core.db.analysis_runs import (
 )
 from openmarketer_core.db.chat import append_exchange, create_chat
 from openmarketer_core.db.chat_turns import finish_turn, start_turn
+from openmarketer_core.db.content_items import (
+    NewContentItem,
+    settle_content_item,
+    store_proposed_content_item,
+)
 from openmarketer_core.db.evidence_store import save_analysis_of_project
 from openmarketer_core.db.media_assets import NewAssetVersion, accept_asset, add_version
 from openmarketer_core.db.models import (
@@ -29,6 +34,8 @@ from openmarketer_core.db.models import (
     ChatThreadRecord,
     ChatTurnRecord,
     ChatTurnTrigger,
+    ContentItemRecord,
+    ContentItemStatus,
     Evidence,
     MediaAssetRecord,
     MediaAssetVersionRecord,
@@ -43,6 +50,7 @@ from openmarketer_core.db.models import (
     RunEventRecord,
     StudioRunRecord,
     Workspace,
+    WritingRunRecord,
 )
 from openmarketer_core.db.profile_versions import approve_profile_version, save_edited_profile
 from openmarketer_core.db.project_removal import (
@@ -50,6 +58,7 @@ from openmarketer_core.db.project_removal import (
     ProjectHasUnfinishedResearch,
     ProjectHasUnfinishedRun,
     ProjectHasUnfinishedStudioRun,
+    ProjectHasUnfinishedWritingRun,
     delete_project,
 )
 from openmarketer_core.db.projects import ProjectNotFound, create_project
@@ -83,6 +92,9 @@ from openmarketer_core.db.studio_runs import (
 from openmarketer_core.db.studio_runs import (
     request_studio_run,
 )
+from openmarketer_core.db.writing_runs import mark_run_started as mark_writing_started
+from openmarketer_core.db.writing_runs import mark_run_succeeded as mark_writing_succeeded
+from openmarketer_core.db.writing_runs import request_writing_run
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.extraction import ExtractedFact
 from openmarketer_core.repository_analysis.intake import Snapshot
@@ -95,12 +107,14 @@ from openmarketer_core.run_events import TURN_ANSWERED, TURN_STARTED, RunEvent
 from openmarketer_core.studio.asset_store import asset_key
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.writing.brief import WritingBrief
 
 REVIEWER = uuid.UUID("11111111-1111-4111-8111-111111111111")
 PROFILE = ProductProfile.model_validate({"product": {"name": "Example App", "type": "dev_tool"}})
 FACT = ExtractedFact(extractor="manifest", kind="manifest.name", value="app", file="package.json")
 RESEARCH_REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
 ASSET_REQUEST = AssetRequest(goal="Announce the launch", platform=Platform.OG_IMAGE)
+WRITING_BRIEF = WritingBrief.model_validate({"platform": "x", "goal": "introduce"})
 
 
 def new_workspace(session: Session) -> uuid.UUID:
@@ -283,6 +297,68 @@ def proposed(session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID) -
     ).id
 
 
+def writing_run_of(
+    session: Session,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    *,
+    chat_id: uuid.UUID | None = None,
+) -> uuid.UUID:
+    """A queued writing run of the project."""
+    return request_writing_run(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        brief=WRITING_BRIEF,
+        requested_by="person",
+        chat_thread_id=chat_id,
+    ).id
+
+
+def written(
+    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID, *, chat_id: uuid.UUID
+) -> None:
+    """A writing run that proposed a post from an approved version, held as a decided proposal,
+    and succeeded."""
+    scope = {"workspace_id": workspace_id, "project_id": project_id}
+    analysed(session, workspace_id, project_id)
+    approve_profile_version(session, **scope, version=1, approved_by=REVIEWER)
+    version_id = session.scalar(
+        select(ProductProfileRecord.id).where(ProductProfileRecord.project_id == project_id)
+    )
+    run_id = writing_run_of(session, workspace_id, project_id, chat_id=chat_id)
+    mark_writing_started(session, **scope, run_id=run_id, profile_version_id=version_id)
+    proposal = propose_action(
+        session,
+        scope=RunScope(**scope),
+        run=GraphRunRef(kind="writing-run", run_id=run_id),
+        workflow_id=f"writing-{run_id}",
+        request=ActionRequest(
+            action_id=f"writing-run:{run_id}:1",
+            name="publish_post",
+            payload={"run_id": str(run_id)},
+        ),
+        effect=ActionEffect.PUBLISHES,
+        wait_seconds=60,
+    )
+    decide_proposal(session, **scope, proposal_id=proposal.id, approved=True, decided_by=REVIEWER)
+    item = store_proposed_content_item(
+        session,
+        **scope,
+        run_id=run_id,
+        item=NewContentItem(
+            text="Hello.",
+            plan={},
+            check_report={},
+            critic_report={},
+            cost_usd=Decimal(0),
+            proposal_id=proposal.id,
+        ),
+    )
+    settle_content_item(session, **scope, item_id=item.id, status=ContentItemStatus.DRY_RUN)
+    mark_writing_succeeded(session, **scope, run_id=run_id, cost_usd=Decimal(0))
+
+
 def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
     """How many rows each table holds for the project."""
     tables = {
@@ -303,6 +379,8 @@ def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
         "media_asset": MediaAssetRecord.project_id,
         "media_asset_version": MediaAssetVersionRecord.project_id,
         "repository_image": RepositoryImageRecord.project_id,
+        "writing_run": WritingRunRecord.project_id,
+        "content_item": ContentItemRecord.project_id,
     }
     return {
         name: session.scalar(select(func.count()).where(column == project_id)) or 0
@@ -328,6 +406,8 @@ NOTHING = {
     "media_asset": 0,
     "media_asset_version": 0,
     "repository_image": 0,
+    "writing_run": 0,
+    "content_item": 0,
 }
 
 WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message", "chat_turn", "run_event") + (
@@ -338,6 +418,8 @@ WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message", "chat_turn", "run_
     "media_asset",
     "media_asset_version",
     "repository_image",
+    "writing_run",
+    "content_item",
 )
 
 
@@ -495,6 +577,27 @@ def test_project_with_an_unfinished_studio_run_is_not_deleted(session, workspace
         delete_project(session, workspace_id=workspace_id, project_id=project_id)
 
     assert rows_of(session, project_id)["studio_run"] == 1
+
+
+def test_project_is_deleted_with_its_writing_runs_and_their_posts(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    chat = create_chat(session, workspace_id=workspace_id, project_id=project_id)
+    written(session, workspace_id, project_id, chat_id=chat.id)
+    assert rows_of(session, project_id)["content_item"] == 1
+
+    delete_project(session, workspace_id=workspace_id, project_id=project_id)
+
+    assert rows_of(session, project_id) == NOTHING
+
+
+def test_project_with_an_unfinished_writing_run_is_not_deleted(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    writing_run_of(session, workspace_id, project_id)
+
+    with pytest.raises(ProjectHasUnfinishedWritingRun):
+        delete_project(session, workspace_id=workspace_id, project_id=project_id)
+
+    assert rows_of(session, project_id)["writing_run"] == 1
 
 
 def test_approved_and_edited_versions_are_deleted_too(session, workspace_id):
