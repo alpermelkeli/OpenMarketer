@@ -485,6 +485,40 @@ describe("the routes of the studio", () => {
   });
 });
 
+describe("the routes of the writer", () => {
+  const RUNS = ["projects", PROJECT, "writing-runs"];
+  const ITEMS = ["projects", PROJECT, "content-items"];
+  const ITEM = "0b0e6c6e-7777-4888-8999-aaaabbbbcccc";
+
+  it("forward the runs, starting one, and the posts they proposed", () => {
+    expect(allowedApiPath("GET", RUNS)).toBe(`/v1/projects/${PROJECT}/writing-runs`);
+    expect(allowedApiPath("POST", RUNS)).toBe(`/v1/projects/${PROJECT}/writing-runs`);
+    expect(allowedApiPath("GET", [...RUNS, RUN])).toBe(`/v1/projects/${PROJECT}/writing-runs/${RUN}`);
+    expect(allowedApiPath("GET", ITEMS)).toBe(`/v1/projects/${PROJECT}/content-items`);
+    expect(allowedApiPath("GET", [...ITEMS, ITEM])).toBe(`/v1/projects/${PROJECT}/content-items/${ITEM}`);
+  });
+
+  it("page the runs and the posts", () => {
+    expect(allowedApiTarget("GET", RUNS, new URLSearchParams("limit=20"))).toBe(
+      `/v1/projects/${PROJECT}/writing-runs?limit=20`,
+    );
+    expect(allowedApiTarget("GET", ITEMS, new URLSearchParams("cursor=abc"))).toBe(
+      `/v1/projects/${PROJECT}/content-items?cursor=abc`,
+    );
+    expect(() => allowedApiTarget("GET", [...RUNS, RUN], new URLSearchParams("limit=20"))).toThrow();
+  });
+
+  it("do not include changing or deleting a run or a post, or an id of another form", () => {
+    expect(() => allowedApiPath("DELETE", [...RUNS, RUN])).toThrow();
+    expect(() => allowedApiPath("POST", [...RUNS, RUN])).toThrow();
+    expect(() => allowedApiPath("POST", ITEMS)).toThrow();
+    expect(() => allowedApiPath("PATCH", [...ITEMS, ITEM])).toThrow();
+    expect(() => allowedApiPath("DELETE", [...ITEMS, ITEM])).toThrow();
+    expect(() => allowedApiPath("GET", [...RUNS, "latest"])).toThrow();
+    expect(() => allowedApiPath("GET", [...ITEMS, ITEM, "proposal"])).toThrow();
+  });
+});
+
 describe("the routes of the repository's images", () => {
   const IMAGES = ["projects", PROJECT, "repository-images"];
   const IMAGE = "0b0e6c6e-1111-4222-8333-444455556666";

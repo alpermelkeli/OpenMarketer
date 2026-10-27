@@ -46,7 +46,22 @@ export function effectNote(effect: ActionEffect): string {
 const ACTION_LABELS = new Map<string, string>([
   ["generate_image", "Generate an image"],
   ["edit_image", "Edit an image"],
+  ["publish_post", "Publish a post"],
 ]);
+
+/** The run kind of a writing run, whose `publish_post` carries the post it would publish. */
+const WRITING_RUN = "writing-run";
+
+/**
+ * The text of the post a writing run's `publish_post` asks to publish, read from its payload: the
+ * words a person approves are in the proposal itself. Null for any other proposal, and for a
+ * payload without a text. Written by a model: shown as text only.
+ */
+export function proposedPostText(proposal: Pick<Proposal, "action_name" | "run_kind" | "payload">): string | null {
+  if (proposal.action_name !== "publish_post" || proposal.run_kind !== WRITING_RUN) return null;
+  const text = proposal.payload.text;
+  return typeof text === "string" && text !== "" ? text : null;
+}
 
 /** A short name for an action the dashboard knows, or null to show the action's own name only. */
 export function actionLabel(actionName: string): string | null {

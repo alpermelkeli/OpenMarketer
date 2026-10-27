@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { LoadMore } from "@/components/common/load-more";
 import { RequestProblem } from "@/components/common/request-problem";
@@ -25,6 +25,15 @@ export function ApprovalsScreen({ projectId }: ApprovalsScreenProps) {
   const now = useNow(true);
 
   const split = proposals.data === undefined ? undefined : splitByDecision(proposals.data);
+  const loaded = split !== undefined;
+
+  // An address may point at one proposal's card (a post's page links to the one it waits on). The
+  // cards appear only once the list has been read, after the browser looked for the target.
+  useEffect(() => {
+    if (!loaded) return;
+    const target = window.location.hash.slice(1);
+    if (target !== "") document.getElementById(target)?.scrollIntoView({ block: "start" });
+  }, [loaded]);
 
   function open(proposal: Proposal, approved: boolean) {
     decide.reset();

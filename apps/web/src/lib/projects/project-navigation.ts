@@ -6,7 +6,7 @@
 
 import { isProjectId } from "./project-id";
 
-export type ProjectPage = "chat" | "profile" | "analyses" | "research" | "studio" | "approvals";
+export type ProjectPage = "chat" | "profile" | "analyses" | "research" | "studio" | "writing" | "approvals";
 
 /** The project's pages, in the order the sidebar lists them under the project. */
 export const PROJECT_PAGES: readonly {
@@ -17,6 +17,7 @@ export const PROJECT_PAGES: readonly {
   { page: "analyses", label: "Analyses" },
   { page: "research", label: "Research" },
   { page: "studio", label: "Studio" },
+  { page: "writing", label: "Writing" },
   { page: "approvals", label: "Approvals" },
 ];
 
@@ -50,6 +51,21 @@ export function researchHref(projectId: string, runId: string): string {
 /** The address of one of the project's studio runs. */
 export function studioHref(projectId: string, runId: string): string {
   return `${projectPageHref(projectId, "studio")}/${runId}`;
+}
+
+/** The address of one of the project's writing runs, where its post is shown. */
+export function writingHref(projectId: string, runId: string): string {
+  return `${projectPageHref(projectId, "writing")}/${runId}`;
+}
+
+/** The address of one proposal on the project's approvals page. */
+export function proposalHref(projectId: string, proposalId: string): string {
+  return `${projectPageHref(projectId, "approvals")}#${proposalAnchor(proposalId)}`;
+}
+
+/** The id a proposal's card carries on the approvals page, so an address can point at it. */
+export function proposalAnchor(proposalId: string): string {
+  return `proposal-${proposalId}`;
 }
 
 /** The address of one of a project's pages. */

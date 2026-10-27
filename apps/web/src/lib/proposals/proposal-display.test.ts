@@ -11,6 +11,7 @@ import {
   estimateText,
   payloadText,
   proposalStatusDisplay,
+  proposedPostText,
   splitByDecision,
   timeLeftToDecide,
 } from "./proposal-display";
@@ -110,10 +111,32 @@ describe("what an action that spends shows", () => {
     expect(estimateText(null)).toBeNull();
   });
 
-  it("names the studio's actions in words, and no other", () => {
+  it("names the studio's and the writer's actions in words, and no other", () => {
     expect(actionLabel("generate_image")).toBe("Generate an image");
     expect(actionLabel("edit_image")).toBe("Edit an image");
-    expect(actionLabel("publish_post")).toBeNull();
+    expect(actionLabel("publish_post")).toBe("Publish a post");
+    expect(actionLabel("store_draft")).toBeNull();
     expect(actionLabel("constructor")).toBeNull();
+  });
+});
+
+describe("the post a writing run asks to publish", () => {
+  const writing = { ...proposal("a", "pending"), run_kind: "writing-run" };
+
+  it("is the text of its payload, as written", () => {
+    expect(proposedPostText({ ...writing, payload: { content_item_id: "i", text: "<b>v2</b> is out" } })).toBe(
+      "<b>v2</b> is out",
+    );
+  });
+
+  it("is none for a payload without a text", () => {
+    expect(proposedPostText({ ...writing, payload: { text: 3 } })).toBeNull();
+    expect(proposedPostText({ ...writing, payload: { text: "" } })).toBeNull();
+    expect(proposedPostText({ ...writing, payload: {} })).toBeNull();
+  });
+
+  it("is none for another action or another kind of run", () => {
+    expect(proposedPostText({ ...writing, action_name: "generate_image" })).toBeNull();
+    expect(proposedPostText({ ...writing, run_kind: "studio-run" })).toBeNull();
   });
 });

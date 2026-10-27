@@ -8,6 +8,7 @@ import {
   refreshedByStudioRunDeleted,
   refreshedByStudioRunEnd,
   refreshedByWorkspaceEvent,
+  refreshedByWritingRunEnd,
 } from "./query-keys";
 import type { RunEvent } from "./types";
 
@@ -123,6 +124,42 @@ describe("the studio's keys", () => {
     expect(queryKeys.studioRun(PROJECT, "r").slice(0, list.length)).not.toEqual(
       list,
     );
+  });
+});
+
+describe("the writer's keys", () => {
+  it("sit under the project, so deleting the project drops them", () => {
+    const scope = queryKeys.projectScope(PROJECT);
+    for (const key of [
+      queryKeys.writingRuns(PROJECT),
+      queryKeys.writingRun(PROJECT, "r"),
+      queryKeys.contentItems(PROJECT),
+      queryKeys.contentItem(PROJECT, "i"),
+    ]) {
+      expect(key.slice(0, scope.length)).toEqual(scope);
+    }
+  });
+
+  it("keep a run out of the list's key, so polling one does not read the list again", () => {
+    const list = queryKeys.writingRuns(PROJECT);
+    expect(queryKeys.writingRun(PROJECT, "r").slice(0, list.length)).not.toEqual(list);
+  });
+});
+
+describe("what the end of a writing run refreshes", () => {
+  it("is the runs, the posts and its own post, whose state the end settled", () => {
+    expect(refreshedByWritingRunEnd(PROJECT, "i").map((r) => r.queryKey)).toEqual([
+      queryKeys.writingRuns(PROJECT),
+      queryKeys.contentItems(PROJECT),
+      queryKeys.contentItem(PROJECT, "i"),
+    ]);
+  });
+
+  it("is the lists alone for a run that stored no post", () => {
+    expect(refreshedByWritingRunEnd(PROJECT, null).map((r) => r.queryKey)).toEqual([
+      queryKeys.writingRuns(PROJECT),
+      queryKeys.contentItems(PROJECT),
+    ]);
   });
 });
 
