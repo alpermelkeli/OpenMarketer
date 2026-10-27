@@ -19,9 +19,9 @@ a request and its side effect stands here:
   its history.
 - The policy gate (core's ``gate.py``) holds an action that publishes or spends until a person
   approves it (``approval_wait.wait_for_a_person``). One that is rejected, or that nobody
-  decided on in time, does not run: the graph is told so as a failed outcome
-  (``NOT_APPROVED_TEXTS``), as it is told of any action that failed, and may revise what it
-  asked for. The run's ``scope`` says which project the proposal belongs to.
+  decided on in time, does not run: the graph is told so as a failed outcome (core's
+  ``gate.NOT_APPROVED_TEXTS``), as it is told of any action that failed, and may revise what
+  it asked for. The run's ``scope`` says which project the proposal belongs to.
 - An action that spends is weighed by the creative budget first (``_spend``): the activity
   ``reserve_spend`` estimates its cost and reserves it in the ledger, whose decision is the
   gate's verdict. Within the amount one action may spend on its own it runs at once; above it,
@@ -119,6 +119,7 @@ with workflow.unsafe.imports_passed_through():
         UnknownAction,
     )
     from openmarketer_core.agent_runtime.gate import (
+        NOT_APPROVED_TEXTS,
         GateVerdict,
         ProposalStatus,
         RunScope,
@@ -140,7 +141,6 @@ with workflow.unsafe.imports_passed_through():
         DATABASE_UNAVAILABLE,
         INVALID_ACTION_RESULT,
         MAX_ERROR_CHARACTERS,
-        NOT_APPROVED_TEXTS,
         PREPARE_RUN,
         PREPARE_RUN_LIMITS,
         PROPOSAL_REFUSED,

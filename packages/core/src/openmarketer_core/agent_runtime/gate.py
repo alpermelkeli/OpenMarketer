@@ -68,6 +68,16 @@ class ProposalStatus(StrEnum):
     EXPIRED = "expired"  # nobody decided before its deadline, or its run ended first
 
 
+# What a graph is told of an action the gate held that a person did not approve, as the failed
+# outcome's error: the driver tells it, and an agent whose action ended so reads it back (the
+# writer records its post as rejected or expired by these sentences). It goes into the model's
+# context, so the agent can revise what it asked for or give up.
+NOT_APPROVED_TEXTS = {
+    ProposalStatus.REJECTED: "a person rejected the action",
+    ProposalStatus.EXPIRED: "nobody approved the action before its deadline",
+}
+
+
 @dataclass(frozen=True)
 class RunScope:
     """The workspace and the project a run works for, which its proposals belong to."""

@@ -31,6 +31,7 @@ from typing import Annotated, Any, get_args, get_origin
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
 
+from openmarketer_core.agent_runtime.gate import NOT_APPROVED_TEXTS, ProposalStatus
 from openmarketer_core.profile import FeatureId, LanguageTag, ProductProfile
 from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
 from openmarketer_core.writing.failures import WritingError
@@ -78,10 +79,10 @@ MAX_PLAN_CHANGES = 20
 MAX_DRAFT_BYTES = 24 * 1024
 
 # The two sentences the runtime tells a graph of an action the gate held that a person did not
-# approve (the worker's ``NOT_APPROVED_TEXTS``): what a post that was rejected, or that expired,
-# is recorded as.
-REJECTED_OUTCOME = "a person rejected the action"
-EXPIRED_OUTCOME = "nobody approved the action before its deadline"
+# approve (``gate.NOT_APPROVED_TEXTS``): what a post that was rejected, or that expired, is
+# recorded as.
+REJECTED_OUTCOME = NOT_APPROVED_TEXTS[ProposalStatus.REJECTED]
+EXPIRED_OUTCOME = NOT_APPROVED_TEXTS[ProposalStatus.EXPIRED]
 
 
 class NoApprovedProfile(WritingError):

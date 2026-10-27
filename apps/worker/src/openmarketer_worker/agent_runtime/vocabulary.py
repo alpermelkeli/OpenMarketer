@@ -22,7 +22,7 @@ from openmarketer_core.agent_runtime.actions import (
     ActionRequest,
     require_positive,
 )
-from openmarketer_core.agent_runtime.gate import ProposalStatus, RunScope
+from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 
 RUN_GRAPH_STEP = "run_graph_step"
@@ -222,13 +222,6 @@ RETRY_BACKOFF = 2.0
 
 # What the runtime's own step activity says when another attempt holds the run's thread.
 EARLIER_ATTEMPT_RUNNING = "an earlier attempt at the run is still running"
-
-# What the graph is told of an action the gate held that a person did not approve. It goes into
-# the model's context, so the agent can revise what it asked for or give up.
-NOT_APPROVED_TEXTS = {
-    ProposalStatus.REJECTED: "a person rejected the action",
-    ProposalStatus.EXPIRED: "nobody approved the action before its deadline",
-}
 
 # What the graph is told of an action that spends whose estimate the creative budget refused:
 # it would take the month's spending past the workspace's cap, which no person can approve.
