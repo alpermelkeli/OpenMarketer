@@ -35,7 +35,9 @@ from openmarketer_core.agent_runtime.model_input import (
     read_strict_json,
     shown,
 )
+from openmarketer_core.db.models import ProfileStatus
 from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContext, agent
+from openmarketer_core.orchestrator.chat_agent.rules import term_not_to_mention
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
     PROFILE_SECTIONS,
@@ -258,10 +260,13 @@ def start_creative(
     in the project's Studio library for a person to accept. Use it only when the operator asks
     for an image. platform is one of: instagram_post, instagram_portrait, instagram_story,
     x_post, linkedin_post, og_image, app_store_screenshot.
-    exact_copy is every line of text the image must show, word for word as the operator gave
-    it; empty for an image without text. style_notes are the operator's wishes on the look;
-    reference_asset_ids name images of the Studio library to look at. It answers with the new
-    run's id and status; the image is read later."""
+    exact_copy is every line of text the image must show: the operator's words verbatim when
+    they gave some, otherwise at most two short lines you wrote (a headline and an optional
+    subline); empty for an image without text. style_notes are the operator's wishes on the
+    look, or your own art direction where they gave none; goal states the idea of the image.
+    reference_asset_ids name images of the Studio library to look at. A copy that names a
+    term the brand says not to mention is refused. It answers with the new run's id and
+    status; the image is read later."""
     if context.requests is None:
         return "error: starting a studio run is not available here"
     try:
@@ -277,6 +282,12 @@ def start_creative(
         )
     except DoesNotFit as e:
         return f"error: the image request does not fit{fields_phrase(e.fields)}"
+    banned = term_not_to_mention(request.exact_copy, _do_not_mention(context))
+    if banned is not None:
+        return (
+            f"error: exact_copy names {shown(banned)}, which the Product Profile's brand says "
+            "not to mention; write the copy without it"
+        )
     try:
         run = context.requests.start_creative(request)
     except StudioNotStarted as e:
@@ -285,6 +296,16 @@ def start_creative(
         RunEvent(RUN_STARTED, {"run_kind": STUDIO_RUN_KIND, "run_id": str(run.id)})
     )
     return _text({"run_id": str(run.id), "status": run.status, "platform": run.platform})
+
+
+def _do_not_mention(context: ChatTurnContext) -> list[str]:
+    """The terms the approved profile's brand says not to mention; none without one."""
+    reading = context.reads.profile("brand")
+    if reading is None or reading.status != ProfileStatus.APPROVED:
+        return []
+    brand = reading.content if isinstance(reading.content, dict) else {}
+    terms = brand.get("do_not_mention")
+    return [term for term in terms if isinstance(term, str)] if isinstance(terms, list) else []
 
 
 def _uuid_of(value: str) -> uuid.UUID | None:

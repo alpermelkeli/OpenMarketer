@@ -4,6 +4,9 @@ import json
 import subprocess
 import sys
 
+import pytest
+from pydantic import ValidationError
+
 from openmarketer_core.agent_runtime.model_input import read_strict_json
 from openmarketer_core.studio.brand_kit import EMPTY_BRAND_KIT, BrandKit
 from openmarketer_core.studio.image_checks import COPY, WRONG_SIZE
@@ -758,6 +761,35 @@ def test_a_placement_given_line_by_line_is_read_as_text():
 
 def test_a_placement_for_four_lines_has_room():
     assert len(a_brief_with("x" * 1400).copy_placement) == 1400
+
+
+def a_brief_considering(concepts) -> dict:
+    return {
+        "goal": "A launch image.",
+        "concepts": concepts,
+        "visual_concept": "A split frame.",
+        "technique": "generated",
+    }
+
+
+def test_a_brief_keeps_the_concepts_the_director_weighed():
+    concepts = ["A phone on a kitchen table at dawn.", "A split frame.", "A bold headline."]
+    brief = rules.Brief.model_validate(a_brief_considering(concepts))
+    assert brief.concepts == concepts
+
+
+def test_a_brief_weighs_at_most_three_concepts():
+    with pytest.raises(ValidationError):
+        rules.Brief.model_validate(a_brief_considering(["a", "b", "c", "d"]))
+
+
+def test_a_concept_is_bounded():
+    with pytest.raises(ValidationError):
+        rules.Brief.model_validate(a_brief_considering(["x" * (rules.MAX_CONCEPT_CHARS + 1)]))
+
+
+def test_a_brief_without_concepts_reads_as_none_weighed():
+    assert a_brief_with("").concepts == []
 
 
 SORU = ["Soruyu çek, kasana at.", "Sınavdan önce tekrar et"]
