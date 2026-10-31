@@ -209,6 +209,7 @@ async def test_post_is_recorded_with_the_image_version_the_person_approved(
     asked = writer_database.requested(started=True, with_image=True)
     assert asked.image is not None
     request = await asked_to_publish(activities, asked.run)
+    writer_database.held(asked.run, request)
     payload = PublishPost.model_validate(request.payload)
     assert payload.asset_version_id == asked.image.version_id
 
@@ -225,10 +226,14 @@ async def test_post_whose_image_version_is_not_the_stored_one_is_refused_and_not
     work, activities, writer_database
 ):
     asked = writer_database.requested(started=True, with_image=True)
-    payload = PublishPost.model_validate((await asked_to_publish(activities, asked.run)).payload)
+    request = await asked_to_publish(activities, asked.run)
+    writer_database.held(asked.run, request)
+    payload = PublishPost.model_validate(request.payload)
 
     failure = refused(
-        work.publish_post, payload.model_copy(update={"asset_version_id": uuid.uuid4()}), "x"
+        work.publish_post,
+        payload.model_copy(update={"asset_version_id": uuid.uuid4()}),
+        request.action_id,
     )
 
     assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
@@ -240,10 +245,12 @@ async def test_post_whose_image_was_rejected_since_is_refused_and_not_recorded(
 ):
     asked = writer_database.requested(started=True, with_image=True)
     assert asked.image is not None
-    payload = PublishPost.model_validate((await asked_to_publish(activities, asked.run)).payload)
+    request = await asked_to_publish(activities, asked.run)
+    writer_database.held(asked.run, request)
+    payload = PublishPost.model_validate(request.payload)
     writer_database.reject(asked.run, asked.image)
 
-    failure = refused(work.publish_post, payload, "x")
+    failure = refused(work.publish_post, payload, request.action_id)
 
     assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
     assert failure.message == (

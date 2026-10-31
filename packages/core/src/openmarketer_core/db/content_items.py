@@ -26,7 +26,9 @@ item records what the post was written with.
 
 The proposal is the one the gate held the run's ``publish_post`` as, and must be a proposal of
 the same run. It is named when the item is stored or when it is settled, whichever comes first
-knows it, and once.
+knows it, and once. An item is settled ``dry_run`` only with a proposal of its run that a person
+approved, given or named already (``ProposalNotApproved``): recording a post as sent is what a
+person's approval allows, and nothing else does.
 
 Every function is scoped to a workspace and a project, takes a session and never commits; an
 item of another workspace or project is treated as missing. Writes take the workspace lock
@@ -46,6 +48,7 @@ from typing import Any
 from sqlalchemy import Select, func, select, tuple_, update
 from sqlalchemy.orm import Session
 
+from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.db.media_assets import MediaAssetNotFound, MediaAssetVersionNotFound
 from openmarketer_core.db.models import (
     ContentItemRecord,
@@ -115,6 +118,16 @@ class ProposalOfAnotherRun(Exception):
 
     def __init__(self, run_id: uuid.UUID, proposal_id: uuid.UUID) -> None:
         super().__init__(f"proposal {proposal_id} is not the proposal of writing run {run_id}")
+
+
+class ProposalNotApproved(Exception):
+    """The item would be recorded as sent with no proposal of its run that a person approved."""
+
+    def __init__(self, item_id: uuid.UUID) -> None:
+        super().__init__(
+            f"content item {item_id} is recorded as a dry run only with an approved proposal "
+            "of its run"
+        )
 
 
 @dataclass(frozen=True)
@@ -251,9 +264,10 @@ def settle_content_item(
 
     ``status`` is one of ``SETTLED`` (``ValueError`` otherwise). Settling it the same way again
     changes nothing; another way is ``ContentItemSettled``. ``proposal_id``, when given, is
-    recorded if the item names no proposal yet and must be the one it names otherwise. Raises
-    ``ContentItemNotFound``, ``WritingRunFinished`` and ``ProposalOfAnotherRun``. Takes the
-    workspace lock.
+    recorded if the item names no proposal yet and must be the one it names otherwise.
+    ``dry_run`` needs a proposal of the item's run that a person approved, given or named by
+    the item (``ProposalNotApproved``). Raises ``ContentItemNotFound``, ``WritingRunFinished``
+    and ``ProposalOfAnotherRun``. Takes the workspace lock.
     """
     if status not in SETTLED:
         raise ValueError(f"an item is settled as one of {[s.value for s in SETTLED]}")
@@ -265,6 +279,9 @@ def settle_content_item(
         if record.proposal_id is not None:
             raise ProposalOfAnotherRun(record.run_id, proposal_id)
         _require_proposal_of_run(session, project_id, record.run_id, proposal_id)
+    if status is ContentItemStatus.DRY_RUN:
+        approving = proposal_id if proposal_id is not None else record.proposal_id
+        _require_approved_proposal_of_run(session, project_id, record, approving)
     if record.status is not ContentItemStatus.PROPOSED and record.status is not status:
         raise ContentItemSettled(item_id, record.status)
     columns: dict[str, object] = {}
@@ -356,6 +373,27 @@ def _require_proposal_of_run(
     )
     if found is None:
         raise ProposalOfAnotherRun(run_id, proposal_id)
+
+
+def _require_approved_proposal_of_run(
+    session: Session,
+    project_id: uuid.UUID,
+    record: ContentItemRecord,
+    proposal_id: uuid.UUID | None,
+) -> None:
+    found = None
+    if proposal_id is not None:
+        found = session.scalar(
+            select(ProposalRecord.id).where(
+                ProposalRecord.id == proposal_id,
+                ProposalRecord.project_id == project_id,
+                ProposalRecord.run_kind == WRITING_RUN_KIND,
+                ProposalRecord.run_id == record.run_id,
+                ProposalRecord.status == ProposalStatus.APPROVED,
+            )
+        )
+    if found is None:
+        raise ProposalNotApproved(record.id)
 
 
 def _require_version_of_asset(

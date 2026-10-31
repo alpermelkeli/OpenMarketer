@@ -319,10 +319,20 @@ def test_a_first_draft_that_passes_is_proposed_and_recorded_as_a_dry_run():
     assert result.passed_critic and result.rounds == 1
     assert result.profile_version_id == str(VERSION_ID)
     assert [alternative["index"] for alternative in result.alternatives] == [0]
-    assert result.claims[0]["evidence"] == [
-        {"feature_id": "offline-sync", "file": "src/sync.ts", "lines": "10-40"}
+    assert result.claims == [
+        {"statement": "Notes sync after offline use.", "feature_ids": ["offline-sync"]}
     ]
     assert result.cost_usd == pytest.approx(0.03)
+
+
+def test_the_draft_names_the_features_of_its_claims_and_no_file_of_the_repository():
+    chat = ScriptedChat(writer=[a_plan(), a_draft()], critic=[a_report(a_review(0), a_review(1))])
+
+    run = Run(chat)
+
+    [(_, draft), _] = run.asked
+    assert all(set(claim) == {"statement", "feature_ids"} for claim in draft["claims"])
+    assert "src/sync.ts" not in json.dumps(draft)
 
 
 def test_the_writer_and_the_critic_are_sent_no_tools():

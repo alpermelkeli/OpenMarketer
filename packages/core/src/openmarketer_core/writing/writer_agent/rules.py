@@ -45,6 +45,7 @@ from openmarketer_core.profile import FeatureId, LanguageTag, ProductProfile
 from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
 from openmarketer_core.writing.failures import WritingError
 from openmarketer_core.writing.platforms import (
+    NO_LINKS_TOLD,
     PlatformRules,
     hashtags,
     links,
@@ -228,10 +229,10 @@ class WritingResult:
 
     ``chosen`` and each of ``alternatives`` are ``{"index", "variant", "check", "review"}``:
     the variant as written, its code-rule report and the critic's review of it (``None`` when
-    the critic did not review it). ``claims`` are the chosen variant's claims with the evidence
-    of the features they rest on. ``text`` to ``flagged_numbers`` are the draft as
-    ``store_draft`` stored it, as content item ``content_item_id``; the alternatives the draft
-    left out for its size are not among them.
+    the critic did not review it). ``claims`` are the chosen variant's claims with the features
+    they rest on, without their evidence, which the stored content item holds. ``text`` to
+    ``flagged_numbers`` are the draft as ``store_draft`` stored it, as content item
+    ``content_item_id``; the alternatives the draft left out for its size are not among them.
     """
 
     status: PostStatus
@@ -840,7 +841,7 @@ def _check_image_words(variant: Variant, s: Situation) -> list[str]:
 def _told_links(s: Situation) -> str | None:
     if s.platform.allows_links:
         return None
-    return "No link or web address of any kind, not even a bare domain such as example.com."
+    return NO_LINKS_TOLD
 
 
 def _check_links(variant: Variant, s: Situation) -> list[str]:
@@ -1100,13 +1101,15 @@ def post_status(succeeded: bool, error: str) -> PostStatus:
 
 
 def claims_with_evidence(
-    variant: Mapping[str, Any], context: Mapping[str, Any]
+    claims: Sequence[Mapping[str, Any]], context: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
-    """The claims of ``variant``, each with the evidence of the features it rests on.
+    """``claims``, each with the evidence of the features it rests on in ``context``.
 
     At most ``MAX_CLAIM_EVIDENCE`` locations per claim, in the order of its features, and none
     whose path is longer than ``MAX_EVIDENCE_FILE_CHARS``: the person is shown where to look,
-    not every line the analysis cited.
+    not every line the analysis cited. The draft carries no evidence, as its paths are the
+    repository's and the draft enters the workflow's history: the handler that stores it adds
+    the evidence from the profile version the run recorded.
     """
     evidence = {feature["id"]: feature["evidence"] for feature in context["features"]}
     return [
@@ -1120,7 +1123,7 @@ def claims_with_evidence(
                 if len(item["file"]) <= MAX_EVIDENCE_FILE_CHARS
             ][:MAX_CLAIM_EVIDENCE],
         }
-        for claim in variant["claims"]
+        for claim in claims
     ]
 
 
@@ -1135,11 +1138,12 @@ def draft_of(
     context: Mapping[str, Any],
     cost_usd: float,
 ) -> dict[str, Any]:
-    """The draft the person reviews, as its content item stores it.
+    """The draft the person reviews, as ``store_draft`` carries it to its content item.
 
     ``text`` is the chosen variant's; each of ``alternatives`` is ``{"index", "variant",
     "check", "review"}``, the review ``None`` when the critic did not review it; ``claims`` are
-    the chosen variant's with their evidence; ``critic_report`` is the chosen variant's review,
+    the chosen variant's, each its statement and feature ids, without evidence (see
+    ``claims_with_evidence``); ``critic_report`` is the chosen variant's review,
     which it always has (``decide`` proposes no variant the critic did not review). The ids of
     the brief's asset, its version and its research run are the writing context's
     (``post_inputs``), ``None`` for those it did not name.
@@ -1160,7 +1164,10 @@ def draft_of(
             for index in range(len(variants))
             if index != chosen
         ],
-        "claims": claims_with_evidence(variant, context),
+        "claims": [
+            {"statement": claim["statement"], "feature_ids": list(claim["feature_ids"])}
+            for claim in variant["claims"]
+        ],
         "check_report": dict(checks[chosen]),
         "critic_report": reviews[chosen],
         "flagged_numbers": list(checks[chosen]["flagged_numbers"]),

@@ -16,8 +16,11 @@ graph imports; importing it is what puts them on ``agent``.
   draft again gives back the stored item, so repeating it is harmless (keyed by the action's
   id). Its payload carries the draft, model-written text included, as the studio's operations
   carry a prompt: every field is bounded, and the whole weighs ``rules.MAX_DRAFT_BYTES`` at
-  most, because every payload enters the workflow's history. It names the brief's asset, the
-  version of it the post was written for and the research run, when the brief named them.
+  most, because every payload enters the workflow's history. For that reason too it carries no
+  evidence of a claim, which names files of the repository: each claim names the features it
+  rests on, and the handler stores the evidence of those features in the profile version the
+  run recorded. It names the brief's asset, the version of it the post was written for and the
+  research run, when the brief named them.
   ``PublishPost`` publishes, so the policy gate holds it as a proposal until a person approves
   or rejects it; its payload names the content item and carries the text and the image's
   version, so what the person approves is in the proposal itself. In the first step of the
@@ -140,10 +143,6 @@ PostText = Annotated[str, StringConstraints(min_length=1, max_length=rules.MAX_T
 RuleName = Annotated[str, StringConstraints(min_length=1, max_length=40)]
 Finding = Annotated[str, StringConstraints(max_length=rules.MAX_FINDING_CHARS)]
 FlaggedNumber = Annotated[str, StringConstraints(max_length=rules.MAX_NUMBER_CHARS)]
-EvidenceFile = Annotated[
-    str, StringConstraints(min_length=1, max_length=rules.MAX_EVIDENCE_FILE_CHARS)
-]
-EvidenceLines = Annotated[str, StringConstraints(max_length=24)]
 ClaimStatement = Annotated[str, StringConstraints(min_length=1, max_length=rules.MAX_CLAIM_CHARS)]
 PlanChange = Annotated[str, StringConstraints(max_length=rules.MAX_NOTE_CHARS)]
 
@@ -174,18 +173,15 @@ class CheckReport(_Payload):
     flagged_numbers: list[FlaggedNumber] = Field(max_length=rules.MAX_FLAGGED_NUMBERS)
 
 
-class ClaimEvidence(_Payload):
-    """Where in the repository the feature a claim rests on was found."""
+class DraftClaim(_Payload):
+    """A claim of the post and the features it rests on, without their evidence.
 
-    feature_id: FeatureId
-    file: EvidenceFile
-    lines: EvidenceLines | None = None
+    The evidence names files of the repository, which stay out of the workflow's history:
+    ``store_draft``'s handler adds it from the profile version the run recorded.
+    """
 
-
-class EvidencedClaim(_Payload):
     statement: ClaimStatement
     feature_ids: list[FeatureId] = Field(max_length=rules.MAX_CLAIM_FEATURES)
-    evidence: list[ClaimEvidence] = Field(max_length=rules.MAX_CLAIM_EVIDENCE)
 
 
 class Alternative(_Payload):
@@ -209,7 +205,8 @@ class Alternative(_Payload):
 class StoreDraft(_Payload):
     """Store the draft of this run as its content item, ``proposed``; answers its id.
 
-    The fields are what ``db/content_items.NewContentItem`` stores, the cost as a number.
+    The fields are what ``db/content_items.NewContentItem`` stores, the cost as a number, but
+    for the claims' evidence, which the handler adds (``DraftClaim``).
     """
 
     workspace_id: uuid.UUID
@@ -219,7 +216,7 @@ class StoreDraft(_Payload):
     plan: Plan
     plan_changes: list[PlanChange] = Field(max_length=rules.MAX_PLAN_CHANGES)
     alternatives: list[Alternative] = Field(max_length=rules.MAX_SUBMITTED_VARIANTS)
-    claims: list[EvidencedClaim] = Field(max_length=rules.MAX_CLAIMS)
+    claims: list[DraftClaim] = Field(max_length=rules.MAX_CLAIMS)
     check_report: CheckReport
     critic_report: VariantReview
     flagged_numbers: list[FlaggedNumber] = Field(max_length=rules.MAX_FLAGGED_NUMBERS)

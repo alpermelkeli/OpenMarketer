@@ -111,6 +111,11 @@ def test_links_mentions_and_a_third_hashtag_fail():
     assert failures(variant("#a #b")) == []
 
 
+def test_a_bare_domain_under_any_top_level_domain_fails_as_a_link():
+    assert failures(variant("Try evil.top, it is fast.")) == ["no_links"]
+    assert failures(variant("Try evil\u3002com, it is fast.")) == ["no_links"]
+
+
 def test_a_language_is_one_of_the_profiles_or_a_region_of_one():
     assert failures(variant(language="tr")) == []
     assert failures(variant(language="en-US")) == []
@@ -324,3 +329,21 @@ def test_the_writer_is_told_a_finding_is_never_a_claim_and_the_critic_fails_it_o
 
     assert "It is never a claim about the product" in writer
     assert "facts fails when the text presents a finding" in critic
+
+
+def test_claims_take_the_evidence_of_their_features_in_the_writing_context():
+    context = {
+        "features": [
+            {"id": "offline-sync", "evidence": [{"file": "src/sync.ts", "lines": "10-40"}]},
+            {"id": "tags", "evidence": [{"file": "x" * (rules.MAX_EVIDENCE_FILE_CHARS + 1)}]},
+        ]
+    }
+    claims = [{"statement": "Syncs offline.", "feature_ids": ["offline-sync", "tags", "gone"]}]
+
+    assert rules.claims_with_evidence(claims, context) == [
+        {
+            "statement": "Syncs offline.",
+            "feature_ids": ["offline-sync", "tags", "gone"],
+            "evidence": [{"feature_id": "offline-sync", "file": "src/sync.ts", "lines": "10-40"}],
+        }
+    ]

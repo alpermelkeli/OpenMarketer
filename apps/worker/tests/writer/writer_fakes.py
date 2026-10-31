@@ -16,11 +16,19 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
+from openmarketer_core.agent_runtime.gate import RunScope
+from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.content_items import ContentItem, content_item
 from openmarketer_core.db.media_assets import NewAssetVersion, add_version, reject_asset
 from openmarketer_core.db.models import AssetTechnique, ProductProfileRecord, Project, Workspace
 from openmarketer_core.db.profile_versions import approve_profile_version
-from openmarketer_core.db.proposals import ActionProposal, decide_proposal, list_proposals
+from openmarketer_core.db.proposals import (
+    ActionProposal,
+    decide_proposal,
+    list_proposals,
+    propose_action,
+)
 from openmarketer_core.db.research_runs import mark_run_started as mark_research_started
 from openmarketer_core.db.research_runs import mark_run_succeeded as mark_research_succeeded
 from openmarketer_core.db.research_runs import request_research_run
@@ -44,7 +52,7 @@ from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
 from openmarketer_core.writing.request import REQUESTED_BY_A_PERSON
-from openmarketer_core.writing.workflow_contract import WritingRunInput
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND, WritingRunInput
 from openmarketer_core.writing.writer_agent import rules
 from openmarketer_worker.writer.policy import WriterPolicy
 
@@ -276,6 +284,37 @@ class WriterDatabase:
                     session, workspace_id=run.workspace_id, project_id=run.project_id, limit=5
                 ).items
             )
+
+    def held(
+        self,
+        run: WritingRunInput,
+        request: ActionRequest,
+        *,
+        approved: bool | None = True,
+        kind: str = WRITING_RUN_KIND,
+    ) -> uuid.UUID:
+        """The proposal the gate holds ``request`` as, stored as the gate stores it for a run of
+        ``kind``, and decided as ``approved`` says (``None`` leaves it pending); its id."""
+        with transaction(self.sessions) as session:
+            proposal = propose_action(
+                session,
+                scope=RunScope(workspace_id=run.workspace_id, project_id=run.project_id),
+                run=GraphRunRef(kind=kind, run_id=run.run_id),
+                workflow_id=f"writing-{run.run_id}",
+                request=request,
+                effect=ActionEffect.PUBLISHES,
+                wait_seconds=3600,
+            )
+            if approved is not None:
+                decide_proposal(
+                    session,
+                    workspace_id=run.workspace_id,
+                    project_id=run.project_id,
+                    proposal_id=proposal.id,
+                    approved=approved,
+                    decided_by=PERSON,
+                )
+        return proposal.id
 
     def decide(self, run: WritingRunInput, proposal: ActionProposal, *, approved: bool) -> None:
         with transaction(self.sessions) as session:

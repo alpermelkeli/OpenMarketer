@@ -35,7 +35,7 @@ from openmarketer_core.db.models import (
     WritingRunRecord,
     WritingRunStatus,
 )
-from openmarketer_core.db.proposals import propose_action
+from openmarketer_core.db.proposals import decide_proposal, propose_action
 from openmarketer_core.db.research_runs import mark_run_failed as mark_research_failed
 from openmarketer_core.db.research_runs import mark_run_started as mark_research_started
 from openmarketer_core.db.research_runs import mark_run_succeeded as mark_research_succeeded
@@ -311,6 +311,14 @@ def proposed_post(
             wait_seconds=3600,
         )
         if settled:
+            # A post is recorded as sent only once a person approved it.
+            decide_proposal(
+                session,
+                **ids(scope),
+                proposal_id=proposal.id,
+                approved=True,
+                decided_by=uuid.uuid4(),
+            )
             settle_content_item(
                 session,
                 **ids(scope),

@@ -22,13 +22,13 @@ from openmarketer_core.db.proposals import (
     ActionProposal,
     ProposalNotFound,
     ProposalNotPending,
+    approves_request,
     decide_proposal,
     get_proposal,
     list_proposals,
     list_waiting_proposals,
     pending_proposal_of_run,
     proposal_of_action,
-    proposal_status_of_action,
     propose_action,
     settle_proposal,
 )
@@ -246,20 +246,87 @@ def test_settling_an_action_with_no_proposal_is_refused(session, scope):
         settle_proposal(session, scope=scope, action_id="writer-run:r:9", deadline_passed=False)
 
 
-def test_status_of_an_action_is_read_by_its_key(session, scope):
-    proposal = propose(session, scope, action_id="writer-run:r:1")
+def approved_request(session: Session, scope: RunScope, **changes: Any) -> ActionRequest:
+    """A request of a run of ``writer-run`` that a person approved, as it was proposed."""
+    run_id = uuid.uuid4()
+    request = ActionRequest(f"writer-run:{run_id}:1", "publish_post", {"text": "v2 is out"})
+    propose_action(
+        session,
+        scope=scope,
+        run=GraphRunRef(kind="writer-run", run_id=run_id),
+        workflow_id=f"write-{run_id}",
+        request=request,
+        effect=ActionEffect.PUBLISHES,
+        wait_seconds=DAY,
+    )
+    proposal = proposal_of_action(session, **scope_of(scope), action_id=request.action_id)
+    assert proposal is not None
     decide(session, scope, proposal, approved=True)
+    return ActionRequest(
+        changes.get("action_id", request.action_id),
+        changes.get("name", request.name),
+        changes.get("payload", request.payload),
+    )
 
-    assert proposal_status_of_action(session, "writer-run:r:1") is ProposalStatus.APPROVED
-    assert proposal_status_of_action(session, "writer-run:r:2") is None
+
+def test_request_a_person_approved_as_it_was_proposed_is_approved(session, scope):
+    request = approved_request(session, scope)
+    assert approves_request(session, request, run_kind="writer-run")
+
+
+def test_request_whose_proposal_is_pending_or_rejected_is_not_approved(session, scope):
+    pending = propose(session, scope)
+    rejected = propose(session, scope)
+    decide(session, scope, rejected, approved=False)
+
+    for proposal in (pending, rejected):
+        stored = session.get(ProposalRecord, proposal.id)
+        request = ActionRequest(stored.action_id, proposal.action_name, proposal.payload)
+        assert not approves_request(session, request, run_kind="writer-run")
+
+
+def test_request_with_no_proposal_is_not_approved(session):
+    request = ActionRequest(f"writer-run:{uuid.uuid4()}:1", "publish_post", {"text": "v2"})
+    assert not approves_request(session, request, run_kind="writer-run")
+
+
+def test_approved_key_with_another_action_name_approves_nothing(session, scope):
+    request = approved_request(session, scope, name="delete_everything")
+    assert not approves_request(session, request, run_kind="writer-run")
+
+
+def test_approved_key_with_another_payload_approves_nothing(session, scope):
+    request = approved_request(session, scope, payload={"text": "something else"})
+    assert not approves_request(session, request, run_kind="writer-run")
+
+
+def test_approved_request_of_another_kind_of_run_is_not_approved(session, scope):
+    request = approved_request(session, scope)
+    assert not approves_request(session, request, run_kind="studio-run")
+
+
+def test_approved_proposal_of_another_run_than_the_key_names_approves_nothing(session, scope):
+    # The proposal is stored for one run; a key naming another run's thread is not its request.
+    run_id, other_run = uuid.uuid4(), uuid.uuid4()
+    request = ActionRequest(f"writer-run:{other_run}:1", "publish_post", {"text": "v2 is out"})
+    stored = propose_action(
+        session,
+        scope=scope,
+        run=GraphRunRef(kind="writer-run", run_id=run_id),
+        workflow_id=f"write-{run_id}",
+        request=request,
+        effect=ActionEffect.PUBLISHES,
+        wait_seconds=DAY,
+    )
+    decide(session, scope, stored, approved=True)
+
+    assert not approves_request(session, request, run_kind="writer-run")
 
 
 def test_proposal_of_an_action_is_read_by_its_key_within_its_project(session, scope):
     proposal = propose(session, scope, action_id="writer-run:r:1")
 
-    assert proposal_of_action(session, **scope_of(scope), action_id="writer-run:r:1") == (
-        proposal.id
-    )
+    assert proposal_of_action(session, **scope_of(scope), action_id="writer-run:r:1") == (proposal)
     assert proposal_of_action(session, **scope_of(scope), action_id="writer-run:r:2") is None
 
 
