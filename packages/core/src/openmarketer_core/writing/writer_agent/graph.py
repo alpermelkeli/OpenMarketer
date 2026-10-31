@@ -68,14 +68,24 @@ Problems = Callable[[Any], list[str]]
 
 @dataclass
 class _Spent:
-    """What the model calls of one node cost, and the model that answered last."""
+    """What the model calls of one node cost, the model that answered last, and whether its
+    last answer was cut off by the role's length limit."""
 
     cost_usd: float = 0.0
     model: str = ""
+    cut_off: bool = False
 
     def add(self, reply: ChatReply) -> None:
         self.cost_usd += reply.cost_usd
         self.model = reply.model or self.model
+        self.cut_off = reply.finish_reason == "length"
+
+    def unread(self, what: str) -> str:
+        """Why ``what`` could not be read, worded for the person who reads the run."""
+        if self.cut_off:
+            cut = "the answer was cut off by the model's length limit, twice"
+            return f"{what}: {cut}; {rules.CUT_OFF_HINT}"
+        return f"{what} could not be read after two attempts"
 
     def update(self, state: WriterState) -> dict[str, Any]:
         return {
@@ -183,7 +193,7 @@ def plan(state: WriterState, context: WriterContext) -> dict[str, Any]:
         spent=spent,
     )
     if submitted is None:
-        raise WritingError("the writer did not answer a readable plan after two attempts")
+        raise WritingError(spent.unread("the writer's plan"))
     held = rules.held_plan(submitted, brief, state["writing_context"])
     return {"plan": held.plan, "plan_changes": held.changes, **spent.update(state)}
 
@@ -202,7 +212,7 @@ def draft(state: WriterState, context: WriterContext) -> dict[str, Any]:
         spent=spent,
     )
     if submitted is None:
-        raise WritingError("the writer did not answer readable variants after two attempts")
+        raise WritingError(spent.unread("the writer's variants"))
     variants, notes = _variants_of(submitted, brief.variants, 1)
     return {
         "round": 1,
@@ -256,7 +266,7 @@ def critique(state: WriterState, context: WriterContext) -> dict[str, Any]:
         problems=lambda report: rules.critic_problems(report, sent),
     )
     if submitted is None:
-        note = f"round {state['round']}: the critic's report was unreadable"
+        note = f"round {state['round']}: " + spent.unread("the critic's report")
         return {"critique": {}, "notes": [*state["notes"], note], **spent.update(state)}
     return {"critique": submitted.model_dump(mode="json"), **spent.update(state)}
 
@@ -314,7 +324,7 @@ def revise(state: WriterState, context: WriterContext) -> dict[str, Any]:
     )
     if submitted is None:
         variants = state["variants"]
-        notes = [f"round {round_no + 1}: the rewrite was unreadable; the variants are kept"]
+        notes = [f"round {round_no + 1}: {spent.unread('the rewrite')}; the variants are kept"]
     else:
         variants, notes = _variants_of(submitted, brief.variants, round_no + 1)
     return {

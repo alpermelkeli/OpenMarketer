@@ -111,7 +111,7 @@ roles:
   writer:                        # posts, captions, threads, ad copy in brand voice
     tier: balanced
     temperature: 0.8
-    max_tokens: 2048
+    max_tokens: 16384              # thinking counts against this cap: at 2048 a reasoning model spent it all on a draft's reasoning and wrote nothing, twice
   reply_drafter:                 # replies to the project's own audience
     tier: balanced
     temperature: 0.5
@@ -138,6 +138,7 @@ roles:
   critic:                        # pre-approval quality check against brand voice and facts
     tier: balanced
     temperature: 0.0
+    max_tokens: 16384              # a review of every variant on five criteria, plus a thinking model's reasoning
     requires: [structured_output]
   analyst:                       # interprets metrics, writes the weekly report and proactive digests
     tier: balanced
