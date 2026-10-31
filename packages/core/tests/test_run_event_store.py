@@ -24,6 +24,7 @@ from openmarketer_core.db.run_events import (
     latest_events_of_chat,
 )
 from openmarketer_core.db.studio_runs import request_studio_run
+from openmarketer_core.db.writing_runs import request_writing_run
 from openmarketer_core.orchestrator.chat_agent.definitions import CHAT_TURN_KIND
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
@@ -37,6 +38,8 @@ from openmarketer_core.run_events import (
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+from openmarketer_core.writing.brief import WritingBrief
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
 ASSET_REQUEST = AssetRequest(goal="Announce the launch", platform=Platform.X_POST)
@@ -95,6 +98,17 @@ def studio_run_of(session: Session, scope: RunScope, chat_id: uuid.UUID | None) 
         workspace_id=scope.workspace_id,
         project_id=scope.project_id,
         request=ASSET_REQUEST,
+        requested_by="orchestrator",
+        chat_thread_id=chat_id,
+    ).id
+
+
+def writing_run_of(session: Session, scope: RunScope, chat_id: uuid.UUID | None) -> uuid.UUID:
+    return request_writing_run(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        brief=WritingBrief.model_validate({"platform": "x", "goal": "introduce"}),
         requested_by="orchestrator",
         chat_thread_id=chat_id,
     ).id
@@ -197,6 +211,26 @@ def test_a_chat_does_not_read_the_events_of_another_chats_studio_run(session, sc
     record(session, scope, STUDIO_RUN_KIND, studio_run_of(session, scope, other_chat), TOOL_CALLED)
     record(session, scope, STUDIO_RUN_KIND, studio_run_of(session, scope, None), TOOL_CALLED)
     record(session, scope, RESEARCH_RUN_KIND, studio_run_of(session, scope, chat_id), SEARCHED)
+
+    assert read(session, scope, chat_id) == []
+
+
+def test_a_chat_reads_the_events_of_the_writing_runs_it_asked_for(session, scope, chat_id):
+    turn_id = turn_of(session, scope, chat_id)
+    run_id = writing_run_of(session, scope, chat_id)
+    record(session, scope, CHAT_TURN_KIND, turn_id, TURN_STARTED)
+    record(session, scope, WRITING_RUN_KIND, run_id, TOOL_CALLED)
+
+    assert kinds(read(session, scope, chat_id)) == [TURN_STARTED, TOOL_CALLED]
+
+
+def test_a_chat_does_not_read_the_events_of_another_chats_writing_run(session, scope, chat_id):
+    other_chat = new_chat(session, scope)
+    record(
+        session, scope, WRITING_RUN_KIND, writing_run_of(session, scope, other_chat), TOOL_CALLED
+    )
+    record(session, scope, WRITING_RUN_KIND, writing_run_of(session, scope, None), TOOL_CALLED)
+    record(session, scope, STUDIO_RUN_KIND, writing_run_of(session, scope, chat_id), TOOL_CALLED)
 
     assert read(session, scope, chat_id) == []
 

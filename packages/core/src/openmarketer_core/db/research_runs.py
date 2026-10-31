@@ -59,6 +59,7 @@ from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.db.chat import require_chat
 from openmarketer_core.db.models import (
     RUN_ERROR_MAX_LENGTH,
+    ContentItemRecord,
     Project,
     ResearchPageRecord,
     ResearchReportRecord,
@@ -118,6 +119,15 @@ class ResearchRunUnfinished(Exception):
     def __init__(self, run_id: uuid.UUID, status: ResearchRunStatus) -> None:
         super().__init__(
             f"research run {run_id} is still {status.value}; it can be deleted when it has finished"
+        )
+
+
+class ResearchRunUsedByPost(Exception):
+    """A post of the project drew on the run's findings; the run stays as long as the post."""
+
+    def __init__(self, run_id: uuid.UUID) -> None:
+        super().__init__(
+            f"research run {run_id} informed a post; it is kept as long as the post is"
         )
 
 
@@ -355,11 +365,18 @@ def delete_research_run(
     ``ResearchRunNotFound`` when the workspace has no such run of the project,
     and ``ResearchRunUnfinished`` while the run is queued or running: the
     worker would store pages or a report for a run that is gone, and nothing
-    here stops its workflow.
+    here stops its workflow. A run a content item names is
+    ``ResearchRunUsedByPost``: the item is the record of what a post drew on,
+    and is deleted only with its project.
     """
     record = _run_to_change(session, workspace_id, project_id, run_id)
     if record.status not in FINISHED:
         raise ResearchRunUnfinished(run_id, record.status)
+    used = select(ContentItemRecord.id).where(
+        ContentItemRecord.project_id == project_id, ContentItemRecord.research_run_id == run_id
+    )
+    if session.scalar(select(used.exists())):
+        raise ResearchRunUsedByPost(run_id)
     keys = tuple(
         session.scalars(
             select(ResearchPageRecord.storage_key).where(

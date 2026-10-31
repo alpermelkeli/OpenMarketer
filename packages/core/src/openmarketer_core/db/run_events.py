@@ -1,15 +1,15 @@
 """Run events: storing what runs did, and reading them back for a chat, a run or a workspace.
 
-Any kind of run appends its events (``openmarketer_core.run_events``) here,
-named by its kind and id as a proposal names its run. A chat thread's events
-are those of its turns (kind ``CHAT_TURN_KIND``) and of the research and studio
-runs it asked for (kinds ``RESEARCH_RUN_KIND`` and ``STUDIO_RUN_KIND``, the runs
-whose ``chat_thread_id`` is the thread), in the order they were stored. The latest event
-of one kind of one run is read back by ``latest_event_of_run``, for what a run recorded
-nowhere else (the reason a studio run was handed to a person). A workspace reads every
-event of every one of its projects (``events_of_workspace``): the dashboard follows that
-stream to tell the person wherever they are that something of a run happened, such as an
-action the policy gate held for them.
+Any kind of run appends its events (``openmarketer_core.run_events``) here, named by its
+kind and id as a proposal names its run. A chat thread's events are those of its turns (kind
+``CHAT_TURN_KIND``) and of the research, studio and writing runs it asked for (kinds
+``RESEARCH_RUN_KIND``, ``STUDIO_RUN_KIND`` and ``WRITING_RUN_KIND``, the runs whose
+``chat_thread_id`` is the thread), in the order they were stored. The latest event of one
+kind of one run is read back by ``latest_event_of_run``, for what a run recorded nowhere
+else (the reason a studio run was handed to a person). A workspace reads every event of
+every one of its projects (``events_of_workspace``): the dashboard follows that stream to
+tell the person wherever they are that something of a run happened, such as an action the
+policy gate held for them.
 
 The identifier of an event is the cursor a reader continues from: it reads the
 events after the last one it has (``events_of_chat``), so it must never find a
@@ -25,7 +25,7 @@ a chat the project does not have is ``ChatNotFound``. Appending does not check
 that the run exists: a run is named without a foreign key, and the caller is
 the run itself. Events are never changed; they are deleted with their project
 (``db/project_removal.py``), and a chat's turns' events with the chat
-(``db/chat.py``), while the events of a research or studio run stay when the
+(``db/chat.py``), while the events of a research, studio or writing run stay when the
 chat that asked for it is deleted: they are the run's.
 """
 
@@ -47,6 +47,7 @@ from openmarketer_core.db.models import (
     ResearchRunRecord,
     RunEventRecord,
     StudioRunRecord,
+    WritingRunRecord,
 )
 from openmarketer_core.db.pages import MAX_PAGE_SIZE, Page, page_of, rows_to_fetch
 from openmarketer_core.db.projects import get_project
@@ -55,6 +56,7 @@ from openmarketer_core.orchestrator.chat_agent.definitions import CHAT_TURN_KIND
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import JsonValue, RunEvent
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 
 @dataclass(frozen=True)
@@ -240,6 +242,9 @@ def _events_of_chat(project_id: uuid.UUID, chat_id: uuid.UUID) -> Select[RunEven
     studio_runs = select(StudioRunRecord.id).where(
         StudioRunRecord.project_id == project_id, StudioRunRecord.chat_thread_id == chat_id
     )
+    writing_runs = select(WritingRunRecord.id).where(
+        WritingRunRecord.project_id == project_id, WritingRunRecord.chat_thread_id == chat_id
+    )
     return select(RunEventRecord).where(
         RunEventRecord.project_id == project_id,
         or_(
@@ -251,6 +256,10 @@ def _events_of_chat(project_id: uuid.UUID, chat_id: uuid.UUID) -> Select[RunEven
             and_(
                 RunEventRecord.run_kind == STUDIO_RUN_KIND,
                 RunEventRecord.run_id.in_(studio_runs),
+            ),
+            and_(
+                RunEventRecord.run_kind == WRITING_RUN_KIND,
+                RunEventRecord.run_id.in_(writing_runs),
             ),
         ),
     )

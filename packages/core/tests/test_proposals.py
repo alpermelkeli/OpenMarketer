@@ -26,6 +26,7 @@ from openmarketer_core.db.proposals import (
     get_proposal,
     list_proposals,
     list_waiting_proposals,
+    pending_proposal_of_run,
     proposal_of_action,
     proposal_status_of_action,
     propose_action,
@@ -273,6 +274,49 @@ def test_proposal_of_an_action_of_another_project_or_workspace_is_none(session, 
 
 def scope_of(scope: RunScope) -> dict[str, uuid.UUID]:
     return {"workspace_id": scope.workspace_id, "project_id": scope.project_id}
+
+
+def test_the_pending_proposal_a_run_waits_on_is_read_by_its_run(session, scope):
+    proposal = propose(session, scope)
+
+    assert (
+        pending_proposal_of_run(
+            session, **scope_of(scope), run_kind=proposal.run_kind, run_id=proposal.run_id
+        )
+        == proposal.id
+    )
+
+
+def test_a_run_whose_proposal_was_decided_waits_on_nothing(session, scope):
+    proposal = propose(session, scope)
+    decide(session, scope, proposal, approved=True)
+
+    assert (
+        pending_proposal_of_run(
+            session, **scope_of(scope), run_kind=proposal.run_kind, run_id=proposal.run_id
+        )
+        is None
+    )
+
+
+def test_the_pending_proposal_of_another_project_workspace_or_kind_is_none(session, scope):
+    proposal = propose(session, scope)
+    sibling = second_project(session, scope.workspace_id)
+    stranger = new_scope(session)
+
+    for other in (sibling, RunScope(stranger.workspace_id, scope.project_id)):
+        assert (
+            pending_proposal_of_run(
+                session, **scope_of(other), run_kind=proposal.run_kind, run_id=proposal.run_id
+            )
+            is None
+        )
+    assert (
+        pending_proposal_of_run(
+            session, **scope_of(scope), run_kind="studio-run", run_id=proposal.run_id
+        )
+        is None
+    )
 
 
 def test_list_can_hold_the_proposals_of_one_status_only(session, scope):

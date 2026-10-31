@@ -283,6 +283,33 @@ def proposal_of_action(
     )
 
 
+def pending_proposal_of_run(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    run_kind: str,
+    run_id: uuid.UUID,
+) -> uuid.UUID | None:
+    """The id of the proposal run ``run_id`` of ``run_kind`` waits on, or ``None``.
+
+    A run waits on one held action at a time, so it has at most one pending proposal; the
+    newest is answered should it have more. A run of another project or workspace is treated
+    as one that waits on nothing.
+    """
+    return session.scalar(
+        _proposals_of_project(workspace_id, project_id)
+        .where(
+            ProposalRecord.run_kind == run_kind,
+            ProposalRecord.run_id == run_id,
+            ProposalRecord.status == ProposalStatus.PENDING,
+        )
+        .order_by(ProposalRecord.created_at.desc(), ProposalRecord.id.desc())
+        .limit(1)
+        .with_only_columns(ProposalRecord.id)
+    )
+
+
 def get_proposal(
     session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, proposal_id: uuid.UUID
 ) -> ActionProposal:
