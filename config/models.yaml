@@ -136,8 +136,9 @@ roles:
     requires: [structured_output, vision]
 
   critic:                        # pre-approval quality check against brand voice and facts
-    tier: balanced
+    tier: strong                   # a different model from the writer's (balanced) on purpose: a model reviewing its own text judges it less independently
     temperature: 0.0
+    max_tokens: 16384              # a review of every variant on five criteria, plus a thinking model's reasoning
     requires: [structured_output]
   analyst:                       # interprets metrics, writes the weekly report and proactive digests
     tier: balanced

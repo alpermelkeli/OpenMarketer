@@ -23,6 +23,7 @@ from openmarketer_core.db.analysis_runs import (
     analysis_run,
     list_analysis_runs,
 )
+from openmarketer_core.db.content_items import ContentItem, content_item
 from openmarketer_core.db.media_assets import (
     MediaAsset,
     MediaAssetVersion,
@@ -30,7 +31,7 @@ from openmarketer_core.db.media_assets import (
     list_media_assets,
     media_asset,
 )
-from openmarketer_core.db.models import StudioRunStatus
+from openmarketer_core.db.models import ContentItemStatus, StudioRunStatus
 from openmarketer_core.db.profile_versions import (
     ProfileVersion,
     latest_approved_profile,
@@ -42,6 +43,7 @@ from openmarketer_core.db.proposals import (
     ProposalNotFound,
     get_proposal,
     list_proposals,
+    pending_proposal_of_run,
     pending_proposals_summary,
 )
 from openmarketer_core.db.research_runs import (
@@ -64,6 +66,13 @@ from openmarketer_core.db.studio_runs import (
     requested_asset,
 )
 from openmarketer_core.db.studio_runs import studio_run as stored_studio_run
+from openmarketer_core.db.writing_runs import (
+    WritingRun,
+    WritingRunNotFound,
+    list_writing_runs,
+    requested_brief,
+)
+from openmarketer_core.db.writing_runs import writing_run as stored_writing_run
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
     PROFILE_SECTIONS,
@@ -78,10 +87,15 @@ from openmarketer_core.orchestrator.reads import (
     RunReading,
     StudioRunReading,
     UnknownProfileSection,
+    WritingPostReading,
+    WritingRunReading,
 )
 from openmarketer_core.run_events import ESCALATED
 from openmarketer_core.studio.requests import AssetRequest, StoredAssetRequestInvalid
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+from openmarketer_core.writing.brief import StoredWritingBriefInvalid
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
+from openmarketer_core.writing.writer_agent.rules import critic_passes
 
 
 @dataclass
@@ -240,6 +254,68 @@ class PostgresChatReads:
         )
         return [_media_asset(item) for item in page.items]
 
+    def recent_writing_runs(self, limit: int) -> Sequence[WritingRunReading]:
+        page = list_writing_runs(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            limit=min(limit, MAX_LISTED_RECORDS),
+        )
+        return [writing_run_reading(run, self._brief_of(run.id)) for run in page.items]
+
+    def writing_run(self, run_id: uuid.UUID) -> WritingRunReading | None:
+        try:
+            run = stored_writing_run(
+                self.session,
+                workspace_id=self.workspace_id,
+                project_id=self.project_id,
+                run_id=run_id,
+            )
+        except WritingRunNotFound:
+            return None
+        return writing_run_reading(run, self._brief_of(run.id), post=self._post_of(run))
+
+    def _brief_of(self, run_id: uuid.UUID) -> dict[str, Any] | None:
+        try:
+            brief = requested_brief(
+                self.session,
+                workspace_id=self.workspace_id,
+                project_id=self.project_id,
+                run_id=run_id,
+            )
+        except StoredWritingBriefInvalid:
+            return None
+        return brief.model_dump(mode="json")
+
+    def _post_of(self, run: WritingRun) -> WritingPostReading | None:
+        if run.content_item_id is None:
+            return None
+        item = content_item(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            item_id=run.content_item_id,
+        )
+        return _post(item, self._waiting_proposal_of(item))
+
+    def _waiting_proposal_of(self, item: ContentItem) -> uuid.UUID | None:
+        """The proposal a person decides the post through, while the post waits for it.
+
+        The item names its proposal once the run knows it, which may be only when it is
+        settled; until then it is the proposal the item's run waits on.
+        """
+        if item.status is not ContentItemStatus.PROPOSED:
+            return None
+        if item.proposal_id is not None:
+            return item.proposal_id
+        return pending_proposal_of_run(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            run_kind=WRITING_RUN_KIND,
+            run_id=item.run_id,
+        )
+
     def _request_of(self, run_id: uuid.UUID) -> AssetRequest | None:
         try:
             return requested_asset(
@@ -309,6 +385,52 @@ def studio_run_reading(
         review=review,
         review_reason=review_reason,
     )
+
+
+def writing_run_reading(
+    run: WritingRun, brief: dict[str, Any] | None, *, post: WritingPostReading | None = None
+) -> WritingRunReading:
+    """A writing run as the chat reads it, with the brief it was stored with, if it fits."""
+    return WritingRunReading(
+        id=run.id,
+        status=run.status,
+        platform=run.platform.value,
+        brief=brief,
+        requested_by=run.requested_by,
+        error=run.error,
+        profile_version=run.profile_version,
+        cost_usd=float(run.cost_usd),
+        created_at=run.created_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        post=post,
+    )
+
+
+def _post(item: ContentItem, waiting_proposal_id: uuid.UUID | None) -> WritingPostReading:
+    return WritingPostReading(
+        id=item.id,
+        text=item.text,
+        status=item.status,
+        passed_critic=_passed_critic(item.critic_report),
+        proposal_id=waiting_proposal_id,
+        asset_id=item.asset_id,
+        asset_version_id=item.asset_version_id,
+        created_at=item.created_at,
+        settled_at=item.settled_at,
+    )
+
+
+def _passed_critic(report: Mapping[str, Any]) -> bool | None:
+    """Whether the critic passed the post, by the writer's own rule; ``None`` if unreadable.
+
+    The report is JSON the worker stored; one that does not have the shape the rule reads is
+    not a verdict either way.
+    """
+    try:
+        return critic_passes(report)
+    except (KeyError, TypeError):
+        return None
 
 
 def _review(version: MediaAssetVersion) -> AssetReviewReading:

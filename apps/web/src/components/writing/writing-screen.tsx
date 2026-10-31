@@ -9,9 +9,17 @@ import { RequestProblem } from "@/components/common/request-problem";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useProfileVersion } from "@/lib/api/profiles";
 import { useProject } from "@/lib/api/projects";
+import { useResearches } from "@/lib/api/research";
+import { useMediaAssets } from "@/lib/api/studio";
 import { useContentItems, useStartWritingRun, useWritingRuns } from "@/lib/api/writing";
 import { projectPageHref, writingHref } from "@/lib/projects/project-navigation";
-import { announceableFeatures, briefProblems } from "@/lib/writing/brief-form";
+import {
+  announceableFeatures,
+  attachableAssets,
+  briefProblems,
+  offeredOf,
+  usableResearchRuns,
+} from "@/lib/writing/brief-form";
 import { isWritingRunFinished } from "@/lib/writing/status";
 
 import { FollowedWritingRun } from "./followed-writing-run";
@@ -33,6 +41,8 @@ export function WritingScreen({ projectId }: WritingScreenProps) {
   const runs = useWritingRuns(projectId);
   const posts = useContentItems(projectId);
   const start = useStartWritingRun(projectId);
+  const library = useMediaAssets(projectId);
+  const researches = useResearches(projectId);
 
   const noApprovedProfile = project.data !== undefined && approvedVersion === null;
   const features = noApprovedProfile
@@ -139,8 +149,35 @@ export function WritingScreen({ projectId }: WritingScreenProps) {
             onRetry={() => void approved.refetch()}
           />
         )}
+        {library.error !== null && (
+          <RequestProblem
+            title="The Studio library could not be read, so no image can be offered"
+            error={library.error}
+            onRetry={() => void library.refetch()}
+          />
+        )}
+        {researches.error !== null && (
+          <RequestProblem
+            title="The project's research could not be read, so none can be offered"
+            error={researches.error}
+            onRetry={() => void researches.refetch()}
+          />
+        )}
         <NewPostForm
+          projectId={projectId}
           features={features}
+          assets={offeredOf(library.data, library.error !== null, attachableAssets)}
+          moreAssets={{
+            hasMore: library.hasNextPage,
+            loading: library.isFetchingNextPage,
+            onLoadMore: () => void library.fetchNextPage(),
+          }}
+          researchRuns={offeredOf(researches.data, researches.error !== null, usableResearchRuns)}
+          moreResearchRuns={{
+            hasMore: researches.hasNextPage,
+            loading: researches.isFetchingNextPage,
+            onLoadMore: () => void researches.fetchNextPage(),
+          }}
           problems={briefProblems(start.error)}
           pending={start.isPending}
           onSubmit={(brief) =>

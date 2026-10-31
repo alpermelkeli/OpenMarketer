@@ -17,9 +17,16 @@ A person decides on an asset once its run has ended: a draft is accepted or reje
 and deciding the same again changes nothing (``MediaAssetDecided`` otherwise). A decision takes
 the workspace lock like every person's write of a workspace.
 
+A post may go with an asset of the library (``usable_asset``, ``asset_for_post``): one that was
+not rejected, whose run has ended and left it an image, and, while it is a draft, whose run
+ended with it (succeeded, or waits for a person). The writer reads what the asset's run was
+asked, its goal and exact words, and never its image. The visual concept the studio's director
+chose is not stored outside the run's checkpoints, so it is not part of that reading.
+
 Every function is scoped to a workspace and a project, takes a session and never commits; an
 asset or version of another workspace or project is treated as missing. Assets are deleted
-with their run or their project, never on their own (``db/studio_runs.py``).
+with their run or their project, never on their own (``db/studio_runs.py``); a run whose asset
+a post names is not deleted.
 """
 
 from __future__ import annotations
@@ -48,10 +55,12 @@ from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_f
 from openmarketer_core.db.projects import get_project
 from openmarketer_core.db.studio_runs import (
     FINISHED,
+    WITH_ASSET,
     StudioRunFinished,
     StudioRunNotFound,
     StudioRunNotStarted,
     StudioRunUnfinished,
+    requested_asset,
 )
 from openmarketer_core.db.workspace_lock import wait_for_other_writes
 from openmarketer_core.studio.asset_store import ASSETS_PREFIX, EXTENSIONS
@@ -84,6 +93,22 @@ class MediaAssetDecided(Exception):
     def __init__(self, asset_id: uuid.UUID, status: MediaAssetStatus) -> None:
         self.status = status
         super().__init__(f"media asset {asset_id} has already been {status.value}")
+
+
+class AssetNotUsable(Exception):
+    """The asset cannot go with a post; ``reason`` says why, in words a person reads."""
+
+    def __init__(self, asset_id: uuid.UUID, reason: str) -> None:
+        self.asset_id = asset_id
+        self.reason = reason
+        super().__init__(f"media asset {asset_id} cannot go with a post: {reason}")
+
+
+# Why an asset cannot go with a post.
+ASSET_REJECTED = "a person rejected it"
+ASSET_UNFINISHED = "its studio run is still making it"
+ASSET_WITHOUT_IMAGE = "it has no image"
+ASSET_OF_FAILED_RUN = "its studio run failed and nobody accepted it"
 
 
 class MediaAssetVersionReviewed(Exception):
@@ -128,6 +153,23 @@ class MediaAsset:
     decided_by: uuid.UUID | None
     decided_at: datetime | None
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class AssetForPost:
+    """An asset as the writer sees it: which image it stands for, and what its run was asked.
+
+    ``version_id`` is the asset's current version, the image the post goes with; ``goal`` and
+    ``exact_copy`` are what the studio run was asked, words someone wrote, to be read as data.
+    Nothing of the image itself is here.
+    """
+
+    id: uuid.UUID
+    version_id: uuid.UUID
+    status: MediaAssetStatus
+    platform: Platform
+    goal: str
+    exact_copy: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -272,6 +314,40 @@ def media_asset(
     if record is None:
         raise MediaAssetNotFound(project_id, asset_id)
     return _asset(record)
+
+
+def usable_asset(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, asset_id: uuid.UUID
+) -> MediaAsset:
+    """The asset, if a post can go with it as it is now (see the module).
+
+    Raises ``MediaAssetNotFound`` when the project has no such asset, and ``AssetNotUsable``
+    with the reason otherwise.
+    """
+    record, _ = _usable_asset(session, workspace_id, project_id, asset_id)
+    return _asset(record)
+
+
+def asset_for_post(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, asset_id: uuid.UUID
+) -> AssetForPost:
+    """The asset as the writer is shown it, if a post can go with it.
+
+    Raises ``MediaAssetNotFound``, ``AssetNotUsable`` (as ``usable_asset``) and
+    ``StoredAssetRequestInvalid`` when its run's stored request no longer fits its schema.
+    """
+    record, version_id = _usable_asset(session, workspace_id, project_id, asset_id)
+    request = requested_asset(
+        session, workspace_id=workspace_id, project_id=project_id, run_id=record.run_id
+    )
+    return AssetForPost(
+        id=record.id,
+        version_id=version_id,
+        status=record.status,
+        platform=Platform(record.platform),
+        goal=request.goal,
+        exact_copy=tuple(request.exact_copy),
+    )
 
 
 def list_media_assets(
@@ -420,6 +496,31 @@ def _decide(
     )
     session.refresh(record)
     return _asset(record)
+
+
+def _usable_asset(
+    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID, asset_id: uuid.UUID
+) -> tuple[MediaAssetRecord, uuid.UUID]:
+    """The asset a post can go with, and its current version."""
+    found = session.execute(
+        _assets_of_project(workspace_id, project_id)
+        .add_columns(StudioRunRecord.status)
+        .join(StudioRunRecord, StudioRunRecord.id == MediaAssetRecord.run_id)
+        .where(MediaAssetRecord.id == asset_id)
+    ).one_or_none()
+    if found is None:
+        raise MediaAssetNotFound(project_id, asset_id)
+    record, run_status = found
+    if record.status is MediaAssetStatus.REJECTED:
+        raise AssetNotUsable(asset_id, ASSET_REJECTED)
+    if run_status not in FINISHED:
+        raise AssetNotUsable(asset_id, ASSET_UNFINISHED)
+    version_id = record.current_version_id
+    if version_id is None:
+        raise AssetNotUsable(asset_id, ASSET_WITHOUT_IMAGE)
+    if record.status is MediaAssetStatus.DRAFT and run_status not in WITH_ASSET:
+        raise AssetNotUsable(asset_id, ASSET_OF_FAILED_RUN)
+    return record, version_id
 
 
 def _running_run(

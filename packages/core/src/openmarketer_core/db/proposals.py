@@ -20,11 +20,14 @@ person watching it sees the action wait and how it ended; a call that changes no
 nothing.
 
 Every function is scoped to a workspace and a project but two: ``list_waiting_proposals``,
-which is the workspace's own view of what waits across its projects, and
-``proposal_status_of_action``, with which the worker's ``run_action`` checks, from the action's
-idempotency key alone, that an action held by the gate was approved before it runs it. The key
-is the runtime's (``ActionRequest.action_id``), never a value a request chose. Functions take a
-session and never commit.
+which is the workspace's own view of what waits across its projects, and ``approves_request``,
+with which the worker's ``run_action`` checks that an action held by the gate was approved
+before it runs it. That check is not scoped, as ``run_action`` knows no project, so it finds the
+proposal by the action's idempotency key (``ActionRequest.action_id``) and counts it only when
+it holds the very request: the action's name, its payload as it was stored, the agent's kind
+and the run whose thread the key names. A key alone approves nothing: a request that reuses an
+approved key with another name or payload, or for another run, is not approved. Functions take
+a session and never commit.
 
 This module decides nothing about which actions need a proposal (the gate does) or who may
 decide (the API's identity does): the decider is whatever user id the caller authenticated.
@@ -45,6 +48,7 @@ from sqlalchemy.orm import Session
 from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.agent_runtime.gate import ProposalStatus, RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
+from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.db.models import Project, ProposalRecord
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.projects import get_project
@@ -258,27 +262,64 @@ def settle_proposal(
     return record.status
 
 
-def proposal_status_of_action(session: Session, action_id: str) -> ProposalStatus | None:
-    """Where the proposal of ``action_id`` stands, or ``None`` when the action has none.
+def approves_request(session: Session, request: ActionRequest, *, run_kind: str) -> bool:
+    """Whether a person approved ``request`` itself, as an action of a run of ``run_kind``.
 
-    Not scoped, as the module's docstring says: it is how ``run_action`` checks an approval.
+    Not scoped, as the module's docstring says: the proposal stored under the request's key
+    counts only when it is ``approved`` and holds the request's name and payload, is of a run
+    of ``run_kind``, and is the run's whose thread the key names (``<kind>:<run id>:...``).
     """
-    return session.scalar(
-        select(ProposalRecord.status).where(ProposalRecord.action_id == action_id)
+    record = session.scalar(
+        select(ProposalRecord).where(ProposalRecord.action_id == request.action_id)
+    )
+    return (
+        record is not None
+        and record.status is ProposalStatus.APPROVED
+        and record.action_name == request.name
+        and record.payload == request.payload
+        and record.run_kind == run_kind
+        and request.action_id.startswith(f"{thread_id(run_kind, record.run_id)}:")
     )
 
 
 def proposal_of_action(
     session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, action_id: str
-) -> uuid.UUID | None:
-    """The id of the proposal the gate held ``action_id`` as, or ``None`` when it held none.
+) -> ActionProposal | None:
+    """The proposal the gate held ``action_id`` as, or ``None`` when it held none.
 
     An action of another project or workspace is treated as one with no proposal. It is how a
-    handler that runs once its action was approved names the proposal in what it records.
+    handler that runs once its action was approved checks the proposal and names it in what it
+    records: what it was asked, by which run, and where it stands are the caller's to compare.
+    """
+    record = session.scalar(
+        _proposals_of_project(workspace_id, project_id).where(ProposalRecord.action_id == action_id)
+    )
+    return None if record is None else _proposal(record)
+
+
+def pending_proposal_of_run(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    run_kind: str,
+    run_id: uuid.UUID,
+) -> uuid.UUID | None:
+    """The id of the proposal run ``run_id`` of ``run_kind`` waits on, or ``None``.
+
+    A run waits on one held action at a time, so it has at most one pending proposal; the
+    newest is answered should it have more. A run of another project or workspace is treated
+    as one that waits on nothing.
     """
     return session.scalar(
         _proposals_of_project(workspace_id, project_id)
-        .where(ProposalRecord.action_id == action_id)
+        .where(
+            ProposalRecord.run_kind == run_kind,
+            ProposalRecord.run_id == run_id,
+            ProposalRecord.status == ProposalStatus.PENDING,
+        )
+        .order_by(ProposalRecord.created_at.desc(), ProposalRecord.id.desc())
+        .limit(1)
         .with_only_columns(ProposalRecord.id)
     )
 

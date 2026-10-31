@@ -263,7 +263,7 @@ A workflow runs one run of one agent. The agent's nodes call roles, use tools an
 \begin{description}
   \item[Ordinary.] Runs as one activity, under its own time limit and retries, and returns a small outcome. Cloning a repository and publishing a post are ordinary actions.
   \item[Start a run.] Creates the record of another agent's run and starts its workflow, keyed by the action's identifier so that a retry finds the same run, and returns the run's identifier without waiting for it. Its effect is internal, and a policy rule caps how many runs one run may start. The planner starts the week's writing runs this way and ends; their results reach the next week's plan through the database, not as a return value.
-  \item[Run and wait.] Starts another agent's run as a child workflow and waits for it with no graph running, as a run waits for an approval. The child's result comes back as the action's outcome. The writer asks the researcher for findings and the creative studio for an image this way, because its next step needs them. The child keeps its own actions and its own approvals.
+  \item[Run and wait.] Starts another agent's run as a child workflow and waits for it with no graph running, as a run waits for an approval. The child's result comes back as the action's outcome. The orchestrator's task runs the steps of its plan this way (Section~\ref{sec:tasks}), because its review needs each result. The child keeps its own actions and its own approvals. The agents that make content do not use it: the writer does not start the researcher or the studio; what a post needs from them is the task's to arrange, and reaches the writer in its brief (Section~\ref{sec:writer}).
 \end{description}
 The rule: a run waits when the next step of its graph needs the result, and starts a run when someone else, or a later run, uses the result.
 
@@ -307,10 +307,10 @@ A prompt is not part of a role, for three reasons. One role serves several agent
 \midrule
 \endhead
 Repository analyzer (built) & a person, through the API & repository to a draft Product Profile & \texttt{repo\_analyzer} (explore and draft) & clone the repository (internal)\\
-Writer (Section~\ref{sec:writer}) & a person; the planner, the repository watcher, the orchestrator & brief to post: text, and an image when needed & \texttt{writer} (plan, draft, revise), \texttt{critic} (critique) & \texttt{research} (run and wait); \texttt{illustrate} (run and wait); \texttt{publish\_post} (publishes)\\
-Creative studio (Section~\ref{sec:studio}) & a person; the orchestrator, the planner (start a run); the writer (run and wait) & request to media asset in the library & \texttt{creative\_director} (brief), \texttt{studio} (produce), \texttt{asset\_verifier} (verify) & sandbox runs (internal); image, video and voice generation and edits (spends)\\
+Writer (Section~\ref{sec:writer}) & a person; the planner, the repository watcher, the orchestrator's task & brief to post: text, and the brief's image when it names one & \texttt{writer} (plan, draft, revise), \texttt{critic} (critique) & \texttt{publish\_post} (publishes)\\
+Creative studio (Section~\ref{sec:studio}) & a person; the orchestrator, the planner (start a run); the orchestrator's task (run and wait) & request to media asset in the library & \texttt{creative\_director} (brief), \texttt{studio} (produce), \texttt{asset\_verifier} (verify) & sandbox runs (internal); image, video and voice generation and edits (spends)\\
 Planner & a weekly schedule; a person & profile, playbook and metrics to a plan and its briefs & \texttt{planner} (plan) & \texttt{research} (run and wait); start writing and studio runs (start a run)\\
-Researcher (Section~\ref{sec:researcher}) & a person; the orchestrator; another agent's \texttt{research} action (run and wait) & questions to findings with sources & \texttt{researcher} (scope, synthesize), \texttt{reader} (read) & search, fetch a page (internal)\\
+Researcher (Section~\ref{sec:researcher}) & a person; the orchestrator; the planner's or the orchestrator's task's \texttt{research} action (run and wait) & questions to findings with sources & \texttt{researcher} (scope, synthesize), \texttt{reader} (read) & search, fetch a page (internal)\\
 Reply drafter & a new comment or message on the project's accounts & comment to reply & \texttt{reader} (read), \texttt{reply\_drafter} (draft), \texttt{critic} (critique) & \texttt{post\_reply} (publishes)\\
 Analyst & a schedule & metrics to a report and a digest & \texttt{analyst} (interpret, write) & send a notification (internal)\\
 Orchestrator (Section~\ref{sec:console}) & a chat message; a task started from a chat turn & a question or request to an answer, a run, a directive or a task; a task to finished runs and a summary & \texttt{orchestrator} (chat turn; the task's plan and review) & start a run (start a run); the task's steps (run and wait); confirm a plan that can spend (held for a person when it can); store a directive, follow up (internal)\\
@@ -598,7 +598,8 @@ The dashboard contains a chat with an \emph{orchestrator agent}. It is the singl
 \endhead
 Status question & ``How did last week's posts perform?'' & Read tools fetch metrics and plan; the answer cites numbers and links to the records.\\
 Explanation & ``Why did you propose pausing that ad set?'' & The agent opens the proposal and explains its rationale, evidence and the profile version it used.\\
-One-off request & ``Write a post announcing offline mode.'' ``Make a poster for the launch.'' & The orchestrator starts a writing run, or a studio run on its own (Section~\ref{sec:terms}). A post's proposal appears in the chat as an approval card; a poster appears in the library with a link.\\
+One-off request & ``Make a poster for the launch.'' & The orchestrator starts a studio run on its own (Section~\ref{sec:terms}); the poster appears in the library with a link.\\
+Post & ``Write a post announcing offline mode.'' & A task (Section~\ref{sec:tasks}), even for one post: its plan decides whether the post needs an image. With one, the studio first, then the writer with that asset; without, the writer only. The post's proposal appears in the chat as an approval card.\\
 Research & ``What did our competitors post last month?'' & The orchestrator starts a researcher run; the report appears in the chat with its sources.\\
 Request for several agents & ``Research what competitors posted, write three posts on it, put a poster on one.'' & The orchestrator starts a task (Section~\ref{sec:tasks}): it plans the steps, has a plan that spends approved, runs the agents, reviews each result and reports in the chat when it is done.\\
 Standing instruction & ``Never post on Sundays.'' & A draft policy rule is shown as readable text and as a CEL rule; it becomes active only after the operator confirms.\\
@@ -617,6 +618,8 @@ The orchestrator has two halves. The \emph{chat turn} answers one message, quick
 \textbf{The chat turn.} A turn is a loop over read tools, not a fixed graph: for each message the model chooses what to read and in which order (the status of runs, proposals and their reasons, metrics, reports, project memory, directives), up to a fixed number of tool calls per turn. It then answers, starts one run of an agent of the catalogue, stores a directive, or starts a task. Reading is free to vary because it has no side effects; doing is limited to the request actions.
 
 \textbf{The task.} A request such as ``Find out what our competitors posted last month, write three posts on it, and put a poster on one of them'' is a task: a run of the orchestrator with a workflow of its own, like every agent's (Figure~\ref{fig:task}).
+
+\textbf{A post request is a task.} Even ``write a post announcing offline mode'' may need two agents: whether the post needs an image is a decision of planning, so the chat turn never starts the writer directly. The task's plan decides it. With an image, the plan has two steps: the studio makes the image, and the writer writes the post with that asset in its brief (Section~\ref{sec:writer}); one approval of the post then covers the text and the image. Without one, the plan has the writer only. Research works the same way: a researcher step first, and its run named in the writer's brief. The writer starts no other agent, so this coordination is the task's.
 
 \fig{fig_task}{Orchestrator task. The orchestrator plans the task as structured output; code checks the plan, and a plan whose steps can spend waits for a person's approval; the steps run as runs of the catalogue's agents while the task waits with no graph running; after each one finishes, the orchestrator reviews the result and continues, changes the plan within its scope, asks the person, or finishes with a report.}{fig:task}
 
@@ -806,12 +809,14 @@ These points need review by a qualified professional before any hosted offering:
 \section{Writer: From an Approved Profile to an Approved Post}\label{sec:writer}
 
 \subsection{Purpose and scope}
-The writer turns a brief into a social-media post for one platform, in the project's brand voice, and hands it to the policy gate as a proposal. A post is its text and, when it needs one, an image. The writer always writes the text itself. It decides first what the post needs, and asks other agents for what it cannot make: the researcher for findings (Section~\ref{sec:researcher}) and the creative studio for an image (Section~\ref{sec:studio}). Its claims about the product rest only on facts of the approved Product Profile. It is the first agent with an action that publishes, so it is also the first user of the approval flow (Section~\ref{sec:safety}).
+The writer turns a brief into a social-media post for one platform, in the project's brand voice, and hands it to the policy gate as a proposal. A post is its text and, when the brief gives one, an image. The writer always writes the text itself, and makes nothing else: an image is an asset the creative studio made (Section~\ref{sec:studio}), and findings are a report the researcher stored (Section~\ref{sec:researcher}), each named by the brief. Its claims about the product rest only on facts of the approved Product Profile. It is the first agent with an action that publishes, so it is also the first user of the approval flow (Section~\ref{sec:safety}).
+
+\textbf{The writer starts no other agent.} It asks no other agent for anything: it has no run-and-wait action (Section~\ref{sec:terms}). Coordinating several agents is the orchestrator's: a post request is a task (Section~\ref{sec:tasks}), whose plan decides whether the post needs an image or research first; if it does, the task runs the studio or the researcher, then the writer with the result in its brief. The writer's graph therefore holds only the writer's own work, and what a post needs from other agents reaches it as data in the brief.
 
 The first version writes single text posts for X (open question 1) and runs in \emph{dry-run}: an approved post is recorded exactly as it would be sent, and nothing is sent until the owner turns publishing on for the project. How the rest is added is described at the end of this section.
 
 \subsection{The brief}
-A brief is a small record. A person creates it in the dashboard; the planner, the repository watcher (Section~\ref{sec:profile}) and the orchestrator (Section~\ref{sec:console}) create the same record.
+A brief is a small record. A person creates it in the dashboard; the planner, the repository watcher (Section~\ref{sec:profile}) and the orchestrator's task (Section~\ref{sec:tasks}) create the same record.
 
 \begin{longtable}{@{}p{3.0cm}p{12.3cm}@{}}
 \toprule
@@ -822,9 +827,8 @@ A brief is a small record. A person creates it in the dashboard; the planner, th
 \texttt{goal} & \texttt{introduce} the product, \texttt{announce} a feature, or \texttt{angle}: a direction in a person's own words.\\
 \texttt{feature} & For an announcement: the feature's identifier in the profile. It must be \texttt{live}.\\
 \texttt{angle} & For \texttt{angle}: the person's text, at most a few sentences.\\
-\texttt{image} & \texttt{none}, \texttt{required}, or \texttt{auto} to let the plan decide.\\
-\texttt{asset} & An asset from the project's library to use as the image, such as a poster the studio made earlier. When it is given, no new image is made.\\
-\texttt{research} & \texttt{none}, or \texttt{auto} to let the plan ask questions.\\
+\texttt{asset} & An asset from the project's library to use as the image, such as a poster the studio made earlier, or the one a task's earlier step made for this post. When it is given, no new image is made; without it the post is text only. It must be the project's and not rejected; the post's approval covers the asset's current version.\\
+\texttt{research\_run\_id} & A finished research run of the project whose findings the post may draw on, as quoted data. Without it the writer uses no findings.\\
 \texttt{variants} & How many texts to write, three by default and five at most.\\
 \bottomrule
 \end{longtable}
@@ -832,24 +836,22 @@ A brief is a small record. A person creates it in the dashboard; the planner, th
 A brief is data. It cannot choose the profile version, raise a limit or change the platform's rules.
 
 \subsection{The graph}
-Writing is a LangGraph graph (Figure~\ref{fig:writer}). It plans first, then runs the same loop as the creative studio: produce, verify, decide, revise. The writer has no tools: what it needs from outside it asks for as actions, and the research and the image are each a run of another agent that the writer waits for.
+Writing is a LangGraph graph (Figure~\ref{fig:writer}). It plans first, then runs the same loop as the creative studio: produce, verify, decide, revise. The writer has no tools, and its only actions are its own post's: the image and the findings arrive with the brief, never from a run the writer starts.
 
-\fig{fig_writer}{Writer graph. Code builds the writing context; the writer plans the post as structured output, which code holds to the brief; research and an image are asked from other agents only when the plan needs them; the text is drafted without tools and checked by code rules and a different model; the image is made only for a text that passed; a person approves, edits or rejects the post; it is published (or, in dry-run, recorded) and stored.}{fig:writer}
+\fig{fig_writer}{Writer graph. Code builds the writing context, with the image and the findings the brief names as quoted data; the writer plans the post as structured output, which code holds to the brief; the text is drafted without tools and checked by code rules and a different model; a person approves, edits or rejects the post; it is published (or, in dry-run, recorded) and stored. The writer starts no other agent.}{fig:writer}
 
 \begin{longtable}{@{}p{2.3cm}p{3.2cm}p{9.8cm}@{}}
 \toprule
 \textbf{Node} & \textbf{Done by} & \textbf{What it does}\\
 \midrule
 \endhead
-\texttt{prepare} & code & Reads the project's approved profile version and keeps its identifier in the state for the whole run, as the analyzer keeps the commit. Builds the \emph{writing context}: product, voice, audience, do-not-mention list, the platform's rules, and the \texttt{live} features with their evidence. A brief that names a feature that is not live, or a project without an approved profile, ends the run here.\\
-\texttt{plan} & \texttt{writer} & Decides what the post needs, as structured output: the angle, the features it rests on, the format, at most three research questions, and whether it needs an image, with what the image shows and the words on it. Code then holds the plan to the brief and the project (below).\\
-\texttt{research} & action & Only when the plan has questions: asks the researcher for findings, as a run-and-wait action, and continues with them.\\
-\texttt{draft} & \texttt{writer} & Writes the texts from the writing context, the plan and the findings. The output is structured: for each variant its text, its angle, and the claims it makes, each claim naming the features it rests on.\\
+\texttt{prepare} & code & Reads the project's approved profile version and keeps its identifier in the state for the whole run, as the analyzer keeps the commit. Builds the \emph{writing context}: product, voice, audience, do-not-mention list, the platform's rules, and the \texttt{live} features with their evidence. When the brief names an asset, it adds what the asset was asked to be (its goal and the words on it) and keeps the asset's current version, never the image itself; when it names a research run, it adds the run's checked findings with their sources, bounded. A brief that names a feature that is not live, an asset or a research run that cannot be used, or a project without an approved profile, ends the run here.\\
+\texttt{plan} & \texttt{writer} & Decides what the post says, as structured output: the angle, the features it rests on and the format. Code then holds the plan to the brief and the project (below).\\
+\texttt{draft} & \texttt{writer} & Writes the texts from the writing context, the plan and the brief's findings, to go with the brief's image when it has one. The output is structured: for each variant its text, its angle, and the claims it makes, each claim naming the features it rests on.\\
 \texttt{check} & code & Runs the code rules on every variant (below).\\
 \texttt{critique} & \texttt{critic} & Reads the variants that kept the code rules against the writing context. Returns a structured report per variant (pass or fail per criterion, severity, edit suggestions, and whether it makes a risky claim) and ranks the variants that pass.\\
 \texttt{decide} & code & A variant passes when it keeps every code rule and the critic passes it. One passes: go on. None passes and rounds and cost are left: revise. At the limit: go on with the best variant that keeps every code rule and makes no risky claim, marked as not passing the critic; if there is none, the run ends as failed.\\
-\texttt{revise} & \texttt{writer} & Takes the findings, or a person's note after a rejection, and decides as structured output what to redo: the text, the image, or both. Rewrites the text and returns to \texttt{check}, or goes back to \texttt{illustrate} with a changed image plan.\\
-\texttt{illustrate} & action & Only when the plan has an image and the brief names no asset: asks the creative studio for it, as a run-and-wait action, after a text passed, so that nothing is spent on a text that fails. The request carries the image plan and its exact words. The studio returns an asset, or none: the post then goes without an image, or the run ends as failed if the brief required one.\\
+\texttt{revise} & \texttt{writer} & Takes the findings of the checks, or a person's note after a rejection, rewrites the text and returns to \texttt{check}. It never changes the image: a different image is a new studio run, which the orchestrator's task or a person starts.\\
 \texttt{propose} & action & Asks for the action \texttt{publish\_post}, with the text and the image. Its effect is \emph{publishes}, so the gate holds it as a proposal (below).\\
 \texttt{record} & code & After the action's outcome, stores the content item and ends the run.\\
 \bottomrule
@@ -857,14 +859,12 @@ Writing is a LangGraph graph (Figure~\ref{fig:writer}). It plans first, then run
 
 \textbf{The plan is checked by code.} The plan is a model's output, so it is read strictly against its schema and then held to the brief and the project before anything is asked for:
 \begin{itemize}
-  \item The brief's choices win: \texttt{image: none} and \texttt{research: none} drop what the plan asked for, and \texttt{image: required} makes an image part of the plan.
-  \item An image is kept only when the platform takes one, and only when the creative studio and the project's creative budget are available (Section~\ref{sec:studio}); otherwise it is dropped and the reason is stored.
-  \item At most three research questions, and only when the researcher is available.
-  \item The plan can only choose among the actions the writer declares. It cannot add one, change the platform or raise a limit.
+  \item Features that are not live features of the writing context are dropped; an announcement rests on the feature it announces first; at most three features.
+  \item The plan cannot ask for an action, change the platform, add an image or raise a limit.
 \end{itemize}
 A plan the code changed is still used, and the change is shown to the person with the proposal.
 
-\textbf{Findings are data.} What the researcher returns was read from untrusted pages. The writer receives it as quoted findings with their sources. Findings may shape the angle, such as what people are discussing this week, but a claim about the product still has to name a live feature of the profile: a finding is never the evidence of a claim.
+\textbf{Findings and the image are data.} The findings of the brief's research run were read from untrusted pages. The writer receives them as quoted findings with their sources, each source by its site and never its address, so a post has no link to copy; a finding whose every page raised an injection flag is left out. Of the image it receives what the studio was asked (its goal and its words), written by a person or a model, also as quoted data. Findings may shape the angle, such as what people are discussing this week, but a claim about the product still has to name a live feature of the profile: a finding is never the evidence of a claim.
 
 \subsection{Checks}
 Every variant is checked by code first and then by a model that is not the writer's.
@@ -881,49 +881,48 @@ Critic (\texttt{critic}) & Brand voice; facts against the writing context, inclu
 
 The rules are written once, in the writer's rules module, which produces both the text the prompt gives the model and the functions that check the result, so the two cannot drift apart. The prompt is there so that first drafts pass and rounds are few; the code is the control (D1). Links and mentions are left out entirely at first: the profile has neither, and an allow-list of the project's own links and accounts, entered by a person in the project's settings, can come later. The profile never adds to it, because it is drafted from repository text.
 
-The checks have different weight. A code rule is a hard rule: a variant that breaks one is never proposed. A risky claim is a hard finding as well: the variant is revised, and one that still makes a risky claim at the round limit is never proposed. When the gate has risk levels (Section~\ref{sec:safety}), a risky claim will make the action L2 instead: a person may then publish the post themselves, and the agent never does. The rest of the critic's judgement is advice: at the round limit a person may still see a variant the critic failed, together with the critic's report. The critic is a different model from the writer on purpose (D11), and the router warns when \texttt{writer} and \texttt{critic} resolve to the same model. The image is checked by the studio's own verifier before it comes back.
+The checks have different weight. A code rule is a hard rule: a variant that breaks one is never proposed. A risky claim is a hard finding as well: the variant is revised, and one that still makes a risky claim at the round limit is never proposed. When the gate has risk levels (Section~\ref{sec:safety}), a risky claim will make the action L2 instead: a person may then publish the post themselves, and the agent never does. The rest of the critic's judgement is advice: at the round limit a person may still see a variant the critic failed, together with the critic's report. The critic is a different model from the writer on purpose (D11), and the router warns when \texttt{writer} and \texttt{critic} resolve to the same model. The image was checked by the studio's own verifier when it was made; the writer's code rules add one for it: the text is never just the words on the image repeated.
 
 \subsection{The approval round}
 The proposal carries everything a person needs to decide without opening anything else: the proposed text and its alternatives, the image and the studio's verifier report, the angle, each claim with the evidence of the features it rests on, the findings with their sources, the reports of the code rules and of the critic, what the code changed in the plan, and the profile version. The person can:
 \begin{itemize}
-  \item \textbf{Approve} the post, or approve it with one of the alternative texts. The image does not depend on which text is chosen: its words come from the plan, not from a variant.
+  \item \textbf{Approve} the post, or approve it with one of the alternative texts. The image does not depend on which text is chosen: it is the brief's.
   \item \textbf{Edit and approve.} The edited text is a new payload: it passes the code rules again before the approval is stored, and an edit that breaks one is refused with the findings. The difference between the proposed and the approved text is stored as a learning signal (F9).
-  \item \textbf{Reject with a note.} The note goes back to the graph as the reason of the outcome, and \texttt{revise} redoes the text, the image or both if rounds are left. The new post is a new proposal.
+  \item \textbf{Reject with a note.} The note goes back to the graph as the reason of the outcome, and \texttt{revise} redoes the text if rounds are left; a different image is a new studio run, then a new writing run. The new post is a new proposal.
   \item \textbf{Reject}, or let the proposal expire. Nothing is published; expiry counts as a rejection.
 \end{itemize}
 
 \subsection{Running on Temporal}
 The writer has its own workflow and task queue, like every agent (Section~\ref{sec:graphs}), and does not know who started it. Its thread is named for the writing run. The graph runs in steps that end where it asks for an action:
 \begin{enumerate}
-  \item \texttt{prepare} and \texttt{plan}; the graph pauses at \texttt{research} if the plan has questions. The workflow starts a researcher run as a child workflow and waits.
-  \item \texttt{draft} to \texttt{decide}, with revisions; the graph pauses at \texttt{illustrate} if the plan has an image. The workflow starts a studio run as a child workflow and waits.
+  \item \texttt{prepare} to \texttt{decide}, with revisions.
   \item \texttt{propose}; the graph pauses at \texttt{publish\_post}. The workflow puts it through the gate, stores the proposal and waits for a person's decision with no graph running. An approved \texttt{publish\_post} runs as an activity. Its handler calls the platform's connector with the action's identifier as the key that makes the post happen once, and keeps the platform's identifier of the post.
   \item \texttt{record}, or \texttt{revise} after a rejection with a note.
 \end{enumerate}
-A step that is not needed is not taken: a text post without research runs \texttt{prepare} to \texttt{propose} in one step. Limits live in the state, so they hold across attempts: rounds (three by default), variants, steps, and a cost cap per brief. The cap covers the writer's own model calls; the research and the image count against their own runs' caps and, for the image, the creative budget.
+No step waits for another agent, so a post runs \texttt{prepare} to \texttt{propose} in one step. Limits live in the state, so they hold across attempts: rounds (three by default), variants, steps, and a cost cap per brief. The cap covers the writer's own model calls; the research and the image were paid for by their own runs, under their own caps and, for the image, the creative budget.
 
 \subsection{Safety}
 \begin{itemize}
-  \item \textbf{The writer reads only approved data and quoted findings.} Its prompt holds the writing context, the brief and, when there are any, the researcher's findings as quoted data with their sources. Never repository files, comments, raw web pages or anyone's messages (Section~\ref{sec:security}). Feature descriptions were drafted from repository text and then reviewed by a person; they are still placed in the prompt as quoted data.
-  \item \textbf{No tools, no credentials.} An injected instruction has nothing to call. What the writer produces is a plan and text. The plan can only ask for the writer's declared actions, after code has checked it, and the text reaches the world only through a proposal.
+  \item \textbf{The writer reads only approved data and quoted findings.} Its prompt holds the writing context, the brief and, when the brief names them, the research run's findings with their sources and what the image was asked to be, as quoted data. Never repository files, comments, raw web pages or anyone's messages (Section~\ref{sec:security}). Feature descriptions were drafted from repository text and then reviewed by a person; they are still placed in the prompt as quoted data.
+  \item \textbf{No tools, no credentials.} An injected instruction has nothing to call. What the writer produces is a plan and text. The plan asks for no action, and the text reaches the world only through a proposal.
   \item \textbf{Rules are code.} Unreleased features and the do-not-mention list are enforced in \texttt{prepare} and \texttt{check}, and again by the gate's content filter on the action's payload. Telling the model about them in the prompt is a convenience, not the control (D1).
   \item \textbf{A person's note is input, not authority.} It is written by an authenticated user, but to the writer it is only text: it cannot change the platform, the limits or the profile version.
   \item \textbf{Risk levels.} The gate does not have risk levels yet: every action that publishes waits for a person, which is the design's L1. The writer therefore depends on none. A risky claim keeps a variant from being proposed, and when risk levels come, it will make the action L2 instead, which a person may publish and the agent may not. Only then can the owner let organic posts from the approved calendar run automatically (L0).
 \end{itemize}
 
 \subsection{What is stored}
-Each run ends with a \texttt{content\_item}: the platform, the text as published (or as it would have been), its status (\texttt{published}, \texttt{dry\_run}, \texttt{rejected}, \texttt{expired} or \texttt{failed}), the plan and what code changed in it, the profile version, the claims and their evidence, the image's asset, the research report, both reports, the person's edit, the cost, the proposal and the platform's identifier of the post. The model calls are kept in \texttt{llm\_call}. This is the record the connector's \texttt{publish} receives (Section~\ref{sec:oss}) and the one analytics later attaches metrics to.
+Each run ends with a \texttt{content\_item}: the platform, the text as published (or as it would have been), its status (\texttt{published}, \texttt{dry\_run}, \texttt{rejected}, \texttt{expired} or \texttt{failed}), the plan and what code changed in it, the profile version, the claims and their evidence, the image's asset and the version the person approved, the research run it drew on, both reports, the person's edit, the cost, the proposal and the platform's identifier of the post. The model calls are kept in \texttt{llm\_call}. This is the record the connector's \texttt{publish} receives (Section~\ref{sec:oss}) and the one analytics later attaches metrics to.
 
 \subsection{Building it in steps}
 \begin{enumerate}
-  \item \textbf{Text posts.} The whole graph, with \texttt{image} and \texttt{research} held at \texttt{none} by code, so \texttt{plan} still runs but can ask for neither. This needs nothing that is not built: the gate as it is, and dry-run publishing.
-  \item \textbf{Research}, once the researcher exists: the plan may ask questions.
-  \item \textbf{Images}, once the creative studio exists, which first needs the gate's budget ledger and automatic small spends (Section~\ref{sec:studio}). A brief may name an asset of the library before then.
+  \item \textbf{Text posts.} The whole graph. This needs nothing that is not built: the gate as it is, and dry-run publishing.
+  \item \textbf{Ready inputs}: a brief may name an asset of the library and a finished research run.
+  \item \textbf{Posts as tasks}: the orchestrator's task plans a post request, runs the studio or the researcher first when the post needs them, and then the writer with their results.
   \item \textbf{Live publishing} through the X connector, \textbf{threads}, and \textbf{scheduled posts}: the brief gets a time, and after the approval the workflow waits with a timer before \texttt{publish\_post} runs.
 \end{enumerate}
 
 \subsection{Measuring it}
-On a set of recurring briefs across golden profiles: the share of first drafts that pass, rounds per proposal, how often the plan asks for an image or research and how often code drops it, cost per approved post, the approval rate, how much people edit (the difference between proposed and approved text), and agreement between the critic and people. The content-quality rubric of the evaluation section (brand voice, factual accuracy against the profile, platform fit) scores the result.
+On a set of recurring briefs across golden profiles: the share of first drafts that pass, rounds per proposal, how often code changes the plan, cost per approved post, the approval rate, how much people edit (the difference between proposed and approved text), and agreement between the critic and people. The content-quality rubric of the evaluation section (brand voice, factual accuracy against the profile, platform fit) scores the result.
 
 % ---------------------------------------------------------------- researcher
 \section{Researcher: Sourced Findings from Public Sources}\label{sec:researcher}
@@ -931,7 +930,7 @@ On a set of recurring briefs across golden profiles: the share of first drafts t
 \subsection{Purpose and who starts it}
 The researcher answers questions from public sources and returns \emph{findings}: short statements, each with the sources it was read from. It publishes nothing and spends only its own model and search costs. It can be started three ways, and does the same work each time:
 \begin{itemize}
-  \item \textbf{By another agent, as an action.} An agent that needs research declares the run-and-wait action \texttt{research} (Section~\ref{sec:terms}): its graph asks for it with its questions, the workflow runs the researcher as a child workflow, and the findings come back as the action's outcome. The writer asks what people are saying about a topic before choosing an angle; the planner asks what competitors posted before planning a week.
+  \item \textbf{By another agent, as an action.} An agent that needs research declares the run-and-wait action \texttt{research} (Section~\ref{sec:terms}): its graph asks for it with its questions, the workflow runs the researcher as a child workflow, and the findings come back as the action's outcome. The planner asks what competitors posted before planning a week. The writer does not ask: a post that needs findings is a task, which runs the researcher first and names the run in the writer's brief (Section~\ref{sec:writer}).
   \item \textbf{By a person}, from the dashboard: the result is a research report in the project.
   \item \textbf{By the orchestrator}, from a chat request such as ``What did our competitors post last month?'' (Section~\ref{sec:console}).
 \end{itemize}
@@ -987,7 +986,7 @@ C. Direct generation and editing & An image model produces the whole image; the 
 \bottomrule
 \end{longtable}
 
-A studio run can be started on its own, by a person or the orchestrator (a poster for a launch), by the planner, or by the writer, which waits for it as a child (Section~\ref{sec:terms}). The request carries the exact words of the asset: the studio never writes the text of a post. The studio publishes nothing and proposes nothing. Its asset goes into the project's library, where a person accepts, downloads or rejects it, or asks for another round; when the writer asked for it, it also goes back to the writer, which proposes it together with its post. Publishing an asset is always a post, through the writer and the gate. Its first node, with the \texttt{creative\_director} role, turns the request into a \emph{brief} for each asset (goal, platform sizes, exact copy, brand-kit constraints and a first technique choice). The brand kit comes from the approved Product Profile: palette, fonts, logo, screenshots and the do-not-mention list.
+A studio run can be started on its own, by a person or the orchestrator (a poster for a launch), by the planner, or by the orchestrator's task, which waits for it as a child (Section~\ref{sec:terms}) and then hands the asset to a writing run. The request carries the exact words of the asset: the studio never writes the text of a post. The studio publishes nothing and proposes nothing. Its asset goes into the project's library, where a person accepts, downloads or rejects it, or asks for another round; when it was made for a post, the task names it in the writer's brief, and the writer proposes it together with its post. Publishing an asset is always a post, through the writer and the gate. Its first node, with the \texttt{creative\_director} role, turns the request into a \emph{brief} for each asset (goal, platform sizes, exact copy, brand-kit constraints and a first technique choice). The brand kit comes from the approved Product Profile: palette, fonts, logo, screenshots and the do-not-mention list.
 
 \subsection{The production graph}
 Production is a LangGraph graph (Figure~\ref{fig:creative}) with a loop: produce, verify, decide, edit.

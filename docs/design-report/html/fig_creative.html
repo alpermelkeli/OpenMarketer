@@ -1,6 +1,6 @@
 <!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="common.css"><style>.dw{position:absolute;z-index:10;background:#1b1b1b;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}.dw>div{position:absolute;inset:2px;background:#FFF1C2;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);display:flex;align-items:center;justify-content:center;text-align:center;font-weight:700;font-size:17px;color:#000}.tn{font-weight:700}</style></head><body>
 <div id="canvas" style="width:1136px;height:1330px">
-<div class="card abs" id="br" style="background:#DCEBFA"><b>1 · Brief <span class="chip">creative_director</span></b><span class="s">from the request of a person, the orchestrator, the planner or the writer, which carries the exact words; a structured brief: goal, platform sizes, exact copy, brand kit constraints (palette, fonts, logo, do-not-mention) and a technique plan per asset</span></div>
+<div class="card abs" id="br" style="background:#DCEBFA"><b>1 · Brief <span class="chip">creative_director</span></b><span class="s">from the request of a person, the orchestrator (or its task) or the planner, which carries the exact words; a structured brief: goal, platform sizes, exact copy, brand kit constraints (palette, fonts, logo, do-not-mention) and a technique plan per asset</span></div>
 
 <div class="layer orch abs" id="LP"><div class="lt">2 · Produce <small>the studio role picks a technique and each operation</small></div></div>
 <div class="card abs" id="ta"><b>A · Code composition</b><span class="s">Python in a sandbox, or HTML rendered to PNG. Exact text, layouts, logos, device frames, charts.</span></div>
@@ -13,7 +13,7 @@
 <div class="card abs" id="v2"><b>Visual verifier <span class="chip">asset_verifier</span></b><span class="s">looks at the image like a reviewer: legibility at thumbnail size, brand fit, malformed text or hands, misleading or risky content. Returns a structured report with severity and concrete edit suggestions.</span></div>
 
 <div class="dw" id="dc"><div>Pass?</div></div>
-<div class="card abs" id="fin" style="background:#DDF1DD"><b>5 · Finalize</b><span class="s">save the asset version with code, prompts, parameters, verifier report and cost; put it in the library for a person to accept; when the writer asked, also return it to the writer, which proposes it with its post</span></div>
+<div class="card abs" id="fin" style="background:#DDF1DD"><b>5 · Finalize</b><span class="s">save the asset version with code, prompts, parameters, verifier report and cost; put it in the library for a person to accept; when a task asked for it for a post, the task names it in the writer's brief, and the writer proposes it with its post</span></div>
 <div class="card abs" id="ed" style="background:#FFF1C2"><b>4 · Edit plan <span class="chip">returns to Produce</span></b><span class="s">tweak code parameters, regenerate the background, inpaint a region, recompose, upscale, or switch technique after a repeated failure</span></div>
 <div class="card abs" id="es" style="background:#F8D9D9"><b>Escalate to a human</b><span class="s">iteration, cost or time limit reached: show the best candidate with the verifier report and the options</span></div>
 </div>

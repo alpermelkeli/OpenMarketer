@@ -429,6 +429,8 @@ class ResearchRunRecord(Base):
         ),
         CheckConstraint("requested_by IN ('person', 'orchestrator', 'run')", name="requested_by"),
         CheckConstraint(f"max_sources BETWEEN 1 AND {MAX_SOURCES}", name="max_sources"),
+        # Lets a content item reference the research it drew on together with its project.
+        UniqueConstraint("id", "project_id"),
     )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
@@ -594,6 +596,8 @@ class MediaAssetRecord(Base):
     __table_args__ = (
         # Lets a studio run reference its final asset together with the run.
         UniqueConstraint("id", "run_id"),
+        # Lets a content item reference its image together with its project.
+        UniqueConstraint("id", "project_id"),
         ForeignKeyConstraint(
             ["current_version_id", "id"],
             ["media_asset_version.id", "media_asset_version.asset_id"],
@@ -797,7 +801,11 @@ class ContentItemRecord(Base):
     and the critic's findings; ``flagged_numbers`` the numbers of the text the profile does
     not hold. All of it is JSON written by the worker and shown to the person; nothing reads it
     back as a rule. ``profile_version_id`` is the run's, and ``proposal_id`` the proposal the
-    gate held ``publish_post`` as, when it was stored.
+    gate held ``publish_post`` as, when it was stored. ``asset_id`` and ``asset_version_id``
+    are the image of the project's library the post goes with, both or neither, the version
+    being one of that asset's; ``research_run_id`` the research run of the project whose
+    findings the post drew on. Each is named together with the project, so it is the
+    project's, and its run cannot be deleted while an item names it.
 
     An item is ``proposed`` until it is settled, once: ``dry_run`` when the person approved it
     (nothing is sent anywhere yet), ``rejected``, ``expired``, or ``failed`` when the run ended
@@ -815,6 +823,17 @@ class ContentItemRecord(Base):
         CheckConstraint(f"platform IN ({_WRITING_PLATFORM_SLUGS})", name="platform"),
         CheckConstraint("char_length(text) > 0", name="text"),
         CheckConstraint("(status = 'proposed') = (settled_at IS NULL)", name="settled_at"),
+        ForeignKeyConstraint(
+            ["asset_id", "project_id"], ["media_asset.id", "media_asset.project_id"]
+        ),
+        ForeignKeyConstraint(
+            ["asset_version_id", "asset_id"],
+            ["media_asset_version.id", "media_asset_version.asset_id"],
+        ),
+        ForeignKeyConstraint(
+            ["research_run_id", "project_id"], ["research_run.id", "research_run.project_id"]
+        ),
+        CheckConstraint("(asset_id IS NULL) = (asset_version_id IS NULL)", name="asset_version_id"),
         CheckConstraint("cost_usd >= 0", name="cost_usd"),
         # The content of a project reads newest first in this order.
         Index("ix_content_item_project_id_created_at", "project_id", "created_at", "id"),
@@ -837,6 +856,9 @@ class ContentItemRecord(Base):
     flagged_numbers: Mapped[list[Any]] = mapped_column(JSONB)
     profile_version_id: Mapped[uuid.UUID]
     proposal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("proposal.id"))
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    asset_version_id: Mapped[uuid.UUID | None]
+    research_run_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
     # A plain string: ``text`` is the column above in this class's body.
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), server_default="0")
     created_at: Mapped[datetime] = _created_at()

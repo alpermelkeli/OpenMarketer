@@ -1026,6 +1026,32 @@
             "title": "Alternatives",
             "type": "array"
           },
+          "asset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Studio asset whose image the post goes with; null for a post alone.",
+            "title": "Asset Id"
+          },
+          "asset_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The version of that asset the post goes with, the image a person approves with the text; null exactly when `asset_id` is.",
+            "title": "Asset Version Id"
+          },
           "check_report": {
             "additionalProperties": true,
             "description": "What the code's rules found of the post.",
@@ -1109,6 +1135,19 @@
             "description": "The proposal a person decides the post on, once the item names it.",
             "title": "Proposal Id"
           },
+          "research_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The research run whose findings the post drew on; null when none.",
+            "title": "Research Run Id"
+          },
           "run_id": {
             "format": "uuid",
             "title": "Run Id",
@@ -1145,6 +1184,9 @@
           "text",
           "profile_version",
           "proposal_id",
+          "asset_id",
+          "asset_version_id",
+          "research_run_id",
           "cost_usd",
           "created_at",
           "settled_at",
@@ -1193,6 +1235,32 @@
         "additionalProperties": false,
         "description": "A post a run proposed, without the record of how it was written.",
         "properties": {
+          "asset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Studio asset whose image the post goes with; null for a post alone.",
+            "title": "Asset Id"
+          },
+          "asset_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The version of that asset the post goes with, the image a person approves with the text; null exactly when `asset_id` is.",
+            "title": "Asset Version Id"
+          },
           "cost_usd": {
             "title": "Cost Usd",
             "type": "number"
@@ -1233,6 +1301,19 @@
             "description": "The proposal a person decides the post on, once the item names it.",
             "title": "Proposal Id"
           },
+          "research_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The research run whose findings the post drew on; null when none.",
+            "title": "Research Run Id"
+          },
           "run_id": {
             "format": "uuid",
             "title": "Run Id",
@@ -1269,6 +1350,9 @@
           "text",
           "profile_version",
           "proposal_id",
+          "asset_id",
+          "asset_version_id",
+          "research_run_id",
           "cost_usd",
           "created_at",
           "settled_at"
@@ -1547,6 +1631,10 @@
           "studio_run_unfinished",
           "writing_run_unfinished",
           "media_asset_decided",
+          "media_asset_not_usable",
+          "research_not_usable",
+          "studio_run_used_by_post",
+          "research_used_by_post",
           "profile_already_approved",
           "proposal_not_pending",
           "proposal_pending",
@@ -4195,6 +4283,18 @@
             ],
             "title": "Angle"
           },
+          "asset": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset"
+          },
           "feature": {
             "anyOf": [
               {
@@ -4213,6 +4313,18 @@
           },
           "platform": {
             "$ref": "#/components/schemas/WritingPlatform"
+          },
+          "research_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Run Id"
           },
           "variants": {
             "default": 3,
@@ -8492,7 +8604,7 @@
     },
     "/v1/projects/{project_id}/researches/{run_id}": {
       "delete": {
-        "description": "Delete a finished run with its report and the pages it fetched, for good.\n\n409 `research_unfinished` while the run is queued or running: the worker\nwould store pages or a report for a run that is gone. 503\n`storage_unavailable` when the pages' objects could not be removed from\nobject storage; the run stays then, and can be deleted again. The request\ntakes no body; one is a 422.",
+        "description": "Delete a finished run with its report and the pages it fetched, for good.\n\n409 `research_unfinished` while the run is queued or running: the worker\nwould store pages or a report for a run that is gone, and 409\n`research_used_by_post` while a post of the project drew on its findings:\nthe post is the record of what it drew on, and is deleted only with its\nproject. 503\n`storage_unavailable` when the pages' objects could not be removed from\nobject storage; the run stays then, and can be deleted again. The request\ntakes no body; one is a 422.",
         "operationId": "deleteResearch",
         "parameters": [
           {
@@ -8927,7 +9039,7 @@
     },
     "/v1/projects/{project_id}/studio-runs/{run_id}": {
       "delete": {
-        "description": "Delete a finished run with its assets and every version's image, for good.\n\nAn accepted asset goes too. 409 `studio_run_unfinished` while the run is queued or\nrunning: the worker would store images for a run that is gone. 503 `storage_unavailable`\nwhen the images could not be removed from object storage; the run stays then, and can be\ndeleted again. The request takes no body; one is a 422.",
+        "description": "Delete a finished run with its assets and every version's image, for good.\n\nAn accepted asset goes too. 409 `studio_run_unfinished` while the run is queued or\nrunning: the worker would store images for a run that is gone, and 409\n`studio_run_used_by_post` while a post of the project goes with one of its assets: the post\nis the record of what it went with, and is deleted only with its project. 503\n`storage_unavailable` when the images could not be removed from object storage; the run\nstays then, and can be deleted again. The request takes no body; one is a 422.",
         "operationId": "deleteStudioRun",
         "parameters": [
           {
@@ -9194,7 +9306,7 @@
         ]
       },
       "post": {
-        "description": "Queue a writing run for the brief and return the run to poll.\n\nA worker executes it later: it writes from the project's approved profile, and a brief\nthat names a feature the profile does not hold as live ends the run failed, saying so.\nThe post it proposes waits for a person on its proposal. 503 `writing_not_started` when\nthe run could not be handed to a worker: it is then stored as failed and a new one can be\nstarted.",
+        "description": "Queue a writing run for the brief and return the run to poll.\n\nA worker executes it later: it writes from the project's approved profile, and a brief\nthat names a feature the profile does not hold as live ends the run failed, saying so.\nThe post it proposes waits for a person on its proposal.\n\nThe brief may name `asset`, an image of the project's Studio library the post goes with,\nand `research_run_id`, a research run of the project whose findings it may draw on. One\nthe project does not have is a 404 (`media_asset_not_found`, `research_not_found`); 409\n`media_asset_not_usable` when the asset was rejected, has no image or is still being\nmade, and 409 `research_not_usable` when the research run has not succeeded. 503\n`writing_not_started` when\nthe run could not be handed to a worker: it is then stored as failed and a new one can be\nstarted.",
         "operationId": "startWritingRun",
         "parameters": [
           {
@@ -9248,6 +9360,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {

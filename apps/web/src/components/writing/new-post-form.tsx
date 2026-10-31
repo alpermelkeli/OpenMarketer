@@ -7,14 +7,32 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { Feature, WritingBrief, WritingGoal } from "@/lib/api/types";
+import type { Feature, MediaAsset, ResearchRun, WritingBrief, WritingGoal } from "@/lib/api/types";
 import { fieldProblems, type FormProblems } from "@/lib/settings/form-problems";
-import { EMPTY_BRIEF, VARIANT_OPTIONS, writingBriefOf, type BriefForm } from "@/lib/writing/brief-form";
+import {
+  EMPTY_BRIEF,
+  VARIANT_OPTIONS,
+  writingBriefOf,
+  type BriefForm,
+  type Offered,
+} from "@/lib/writing/brief-form";
 import { GOAL_OPTIONS } from "@/lib/writing/status";
 
+import { PostImageChoice } from "./post-image-choice";
+import { PostResearchChoice } from "./post-research-choice";
+
+type MoreOf = { hasMore: boolean; loading: boolean; onLoadMore: () => void };
+
 type NewPostFormProps = {
+  projectId: string;
   /** The live features of the approved profile, which an announcement can name; null while read. */
   features: readonly Feature[] | null;
+  /** The library's images a post can go with. */
+  assets: Offered<MediaAsset>;
+  moreAssets: MoreOf;
+  /** The project's research runs that succeeded. */
+  researchRuns: Offered<ResearchRun>;
+  moreResearchRuns: MoreOf;
   problems: FormProblems;
   pending: boolean;
   onSubmit: (brief: WritingBrief) => void;
@@ -22,8 +40,21 @@ type NewPostFormProps = {
 
 const VARIANT_ITEMS = VARIANT_OPTIONS.map((n) => ({ value: String(n), label: String(n) }));
 
-/** What the writer is asked for: a goal, the feature or the angle it needs, and how many texts. */
-export function NewPostForm({ features, problems, pending, onSubmit }: NewPostFormProps) {
+/**
+ * What the writer is asked for: a goal, the feature or the angle it needs, how many texts, and, if
+ * a person wants them, an image of the library for the post to go with and research to draw on.
+ */
+export function NewPostForm({
+  projectId,
+  features,
+  assets,
+  moreAssets,
+  researchRuns,
+  moreResearchRuns,
+  problems,
+  pending,
+  onSubmit,
+}: NewPostFormProps) {
   const id = useId();
   const [form, setForm] = useState<BriefForm>(EMPTY_BRIEF);
   const goalProblems = fieldProblems(problems, "goal");
@@ -164,12 +195,34 @@ export function NewPostForm({ features, problems, pending, onSubmit }: NewPostFo
         </div>
       )}
 
+      <PostImageChoice
+        id={id}
+        projectId={projectId}
+        assets={assets}
+        value={form.asset}
+        onChange={(asset) => setForm({ ...form, asset })}
+        problems={fieldProblems(problems, "asset")}
+        disabled={pending}
+        more={moreAssets}
+      />
+
+      <PostResearchChoice
+        id={id}
+        projectId={projectId}
+        runs={researchRuns}
+        value={form.researchRunId}
+        onChange={(researchRunId) => setForm({ ...form, researchRunId })}
+        problems={fieldProblems(problems, "research_run_id")}
+        disabled={pending}
+        more={moreResearchRuns}
+      />
+
       <FieldErrors id={`${id}-form-errors`} messages={problems.form} />
       <div className="grid gap-2">
         <p className="text-sm text-pretty text-muted-foreground">
           The run writes from the approved profile: it plans the post, writes the texts, checks them in code and has
-          the critic read them, then asks you in Approvals to approve the best one. Nothing is sent to X: an approved
-          post is recorded as a dry run.
+          the critic read them, then asks you in Approvals to approve the best one, with its image when one is chosen.
+          Nothing is sent to X: an approved post is recorded as a dry run.
         </p>
         <div>
           <Button type="submit" disabled={pending}>

@@ -5,6 +5,7 @@ own, committed, since a route commits its own transaction. Runs and their conten
 stored with the core functions the worker calls; no workflow runs and no model is called.
 """
 
+import dataclasses
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -24,7 +25,9 @@ from openmarketer_core.db.content_items import (
     settle_content_item,
     store_proposed_content_item,
 )
+from openmarketer_core.db.media_assets import NewAssetVersion, add_version, reject_asset
 from openmarketer_core.db.models import (
+    AssetTechnique,
     ContentItemStatus,
     ProductProfileRecord,
     Project,
@@ -32,13 +35,26 @@ from openmarketer_core.db.models import (
     WritingRunRecord,
     WritingRunStatus,
 )
-from openmarketer_core.db.proposals import propose_action
+from openmarketer_core.db.proposals import decide_proposal, propose_action
+from openmarketer_core.db.research_runs import mark_run_failed as mark_research_failed
+from openmarketer_core.db.research_runs import mark_run_started as mark_research_started
+from openmarketer_core.db.research_runs import mark_run_succeeded as mark_research_succeeded
+from openmarketer_core.db.research_runs import request_research_run
+from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.db.session import session_factory, transaction
+from openmarketer_core.db.studio_runs import mark_run_needs_review as mark_studio_needs_review
+from openmarketer_core.db.studio_runs import mark_run_started as mark_studio_started
+from openmarketer_core.db.studio_runs import request_studio_run
 from openmarketer_core.db.writing_runs import (
     mark_run_started,
     mark_run_succeeded,
     request_writing_run,
 )
+from openmarketer_core.research.questions import ResearchRequest
+from openmarketer_core.research.research_agent.rules import Report
+from openmarketer_core.studio.asset_store import asset_key
+from openmarketer_core.studio.platforms import Platform
+from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
 from openmarketer_core.writing.brief import WritingBrief
 from openmarketer_core.writing.workflow_contract import (
@@ -67,6 +83,10 @@ ITEM = NewContentItem(
     flagged_numbers=["3x"],
     cost_usd=Decimal("0.021"),
 )
+ASSET_REQUEST = AssetRequest(
+    goal="Announce offline sync", exact_copy=["Offline sync is here"], platform=Platform.X_POST
+)
+RESEARCH_REQUEST = ResearchRequest(questions=["How do note apps announce offline sync?"])
 
 
 class RecordingWorkflows:
@@ -83,6 +103,13 @@ class RecordingWorkflows:
 
     async def tell_decided(self, workflow_id: str, proposal_id: uuid.UUID) -> None:
         raise AssertionError("these tests tell no run of a decision")
+
+
+@dataclass(frozen=True)
+class LibraryImage:
+    studio_run_id: uuid.UUID
+    asset_id: uuid.UUID
+    version_id: uuid.UUID
 
 
 @dataclass(frozen=True)
@@ -161,6 +188,77 @@ def queued_run(sessions: sessionmaker[Session], scope: RunScope) -> uuid.UUID:
         ).id
 
 
+def library_image(
+    sessions: sessionmaker[Session], scope: RunScope, *, rejected: bool = False
+) -> LibraryImage:
+    """A finished studio run with one asset of one version, left for review or rejected."""
+    with transaction(sessions) as session:
+        run = request_studio_run(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            request=ASSET_REQUEST,
+            requested_by="person",
+        )
+        run_scope = {**ids(scope), "run_id": run.id}
+        mark_studio_started(session, **run_scope)
+        version_id = uuid.uuid4()
+        version = add_version(
+            session,
+            **run_scope,
+            version_id=version_id,
+            action_id=f"studio-run:{run.id}:1",
+            version=NewAssetVersion(
+                round=1,
+                technique=AssetTechnique.GENERATED,
+                storage_key=asset_key(**run_scope, version_id=version_id, mime="image/png"),
+                mime="image/png",
+                width=1080,
+                height=1080,
+                size_bytes=2048,
+                cost_usd=Decimal("0.04"),
+            ),
+        )
+        mark_studio_needs_review(
+            session, **run_scope, final_version_id=version.id, cost_usd=Decimal("0.04")
+        )
+        if rejected:
+            reject_asset(session, **ids(scope), asset_id=version.asset_id, decided_by=LOCAL_USER_ID)
+    return LibraryImage(run.id, version.asset_id, version.id)
+
+
+def research_run(
+    sessions: sessionmaker[Session], scope: RunScope, *, succeeded: bool = True
+) -> uuid.UUID:
+    """A finished research run of the project: succeeded with a report of no findings, or failed."""
+    with transaction(sessions) as session:
+        run = request_research_run(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            request=RESEARCH_REQUEST,
+            requested_by="person",
+        )
+        run_scope = {**ids(scope), "run_id": run.id}
+        mark_research_started(session, **run_scope)
+        if not succeeded:
+            mark_research_failed(session, **run_scope, error="the search service was unreachable")
+            return run.id
+        report = save_research_report(
+            session,
+            **run_scope,
+            report=Report(
+                questions=list(RESEARCH_REQUEST.questions),
+                findings=[],
+                notes=[],
+                cost_usd=0.01,
+                model="fake/model",
+            ),
+        )
+        mark_research_succeeded(session, **run_scope, report_id=report.id)
+        return run.id
+
+
 def approved_version(session: Session, project_id: uuid.UUID) -> uuid.UUID:
     """An approved version of the project's profile: inserted as a draft, approved by UPDATE."""
     number = 1 + len(
@@ -184,7 +282,11 @@ def approved_version(session: Session, project_id: uuid.UUID) -> uuid.UUID:
 
 
 def proposed_post(
-    sessions: sessionmaker[Session], scope: RunScope, *, settled: bool = False
+    sessions: sessionmaker[Session],
+    scope: RunScope,
+    *,
+    settled: bool = False,
+    item: NewContentItem = ITEM,
 ) -> StoredPost:
     """A run that read the profile's first version and proposed its post, held by the gate.
 
@@ -194,7 +296,7 @@ def proposed_post(
     with transaction(sessions) as session:
         version_id = approved_version(session, scope.project_id)
         mark_run_started(session, **ids(scope), run_id=run_id, profile_version_id=version_id)
-        item = store_proposed_content_item(session, **ids(scope), run_id=run_id, item=ITEM)
+        stored = store_proposed_content_item(session, **ids(scope), run_id=run_id, item=item)
         proposal = propose_action(
             session,
             scope=scope,
@@ -203,21 +305,29 @@ def proposed_post(
             request=ActionRequest(
                 action_id=f"{WRITING_RUN_KIND}:{run_id}:publish",
                 name="publish_post",
-                payload={"run_id": str(run_id), "content_item_id": str(item.id)},
+                payload={"run_id": str(run_id), "content_item_id": str(stored.id)},
             ),
             effect=ActionEffect.PUBLISHES,
             wait_seconds=3600,
         )
         if settled:
+            # A post is recorded as sent only once a person approved it.
+            decide_proposal(
+                session,
+                **ids(scope),
+                proposal_id=proposal.id,
+                approved=True,
+                decided_by=uuid.uuid4(),
+            )
             settle_content_item(
                 session,
                 **ids(scope),
-                item_id=item.id,
+                item_id=stored.id,
                 status=ContentItemStatus.DRY_RUN,
                 proposal_id=proposal.id,
             )
             mark_run_succeeded(session, **ids(scope), run_id=run_id, cost_usd=Decimal("0.03"))
-    return StoredPost(run_id=run_id, item_id=item.id, proposal_id=proposal.id)
+    return StoredPost(run_id=run_id, item_id=stored.id, proposal_id=proposal.id)
 
 
 # ------------------------------------------------------------------------------- start
@@ -288,6 +398,75 @@ def test_start_for_a_project_of_another_workspace_is_not_found(
     assert workflows.started == []
 
 
+def test_start_takes_an_image_of_the_library_and_a_succeeded_research_run(
+    client: TestClient, services, scope, sessions, workflows
+):
+    image = library_image(sessions, scope)
+    research_id = research_run(sessions, scope)
+    brief = {**BRIEF, "asset": str(image.asset_id), "research_run_id": str(research_id)}
+
+    response = client.post(runs_url(scope), json=brief)
+
+    assert response.status_code == 202
+    run = client.get(runs_url(scope, f"/{response.json()['id']}")).json()
+    assert (run["brief"]["asset"], run["brief"]["research_run_id"]) == (
+        str(image.asset_id),
+        str(research_id),
+    )
+    assert len(workflows.started) == 1
+
+
+def test_start_with_an_asset_the_project_does_not_have_is_not_found(
+    client: TestClient, services, scope, sessions, workflows
+):
+    with transaction(sessions) as session:
+        sibling = new_project(session, scope.workspace_id)
+    image = library_image(sessions, sibling)
+
+    response = client.post(runs_url(scope), json={**BRIEF, "asset": str(image.asset_id)})
+
+    assert (response.status_code, response.json()["code"]) == (404, "media_asset_not_found")
+    assert workflows.started == []
+
+
+def test_start_with_a_rejected_asset_is_a_conflict(
+    client: TestClient, services, scope, sessions, workflows
+):
+    image = library_image(sessions, scope, rejected=True)
+
+    response = client.post(runs_url(scope), json={**BRIEF, "asset": str(image.asset_id)})
+
+    assert (response.status_code, response.json()["code"]) == (409, "media_asset_not_usable")
+    assert "rejected" in response.json()["message"]
+    assert workflows.started == []
+    assert client.get(runs_url(scope)).json()["runs"] == []
+
+
+def test_start_with_a_research_run_the_project_does_not_have_is_not_found(
+    client: TestClient, services, scope, sessions, workflows
+):
+    with transaction(sessions) as session:
+        sibling = new_project(session, scope.workspace_id)
+    research_id = research_run(sessions, sibling)
+
+    response = client.post(runs_url(scope), json={**BRIEF, "research_run_id": str(research_id)})
+
+    assert (response.status_code, response.json()["code"]) == (404, "research_not_found")
+    assert workflows.started == []
+
+
+def test_start_with_a_research_run_that_failed_is_a_conflict(
+    client: TestClient, services, scope, sessions, workflows
+):
+    research_id = research_run(sessions, scope, succeeded=False)
+
+    response = client.post(runs_url(scope), json={**BRIEF, "research_run_id": str(research_id)})
+
+    assert (response.status_code, response.json()["code"]) == (409, "research_not_usable")
+    assert workflows.started == []
+    assert client.get(runs_url(scope)).json()["runs"] == []
+
+
 # --------------------------------------------------------------------------------- runs
 
 
@@ -312,7 +491,13 @@ def test_a_run_is_read_with_its_brief(client: TestClient, services, scope, sessi
 
     brief = client.get(runs_url(scope, f"/{run_id}")).json()["brief"]
 
-    assert brief == {**BRIEF, "feature": None, "variants": 3}
+    assert brief == {
+        **BRIEF,
+        "feature": None,
+        "variants": 3,
+        "asset": None,
+        "research_run_id": None,
+    }
 
 
 def test_a_stored_brief_that_no_longer_fits_is_answered_as_none(
@@ -391,6 +576,9 @@ def test_an_item_is_read_with_the_record_of_how_it_was_written(
         "text": POST,
         "profile_version": 1,
         "proposal_id": None,
+        "asset_id": None,
+        "asset_version_id": None,
+        "research_run_id": None,
         "cost_usd": 0.021,
         "created_at": item["created_at"],
         "settled_at": None,
@@ -402,6 +590,54 @@ def test_an_item_is_read_with_the_record_of_how_it_was_written(
         "critic_report": dict(ITEM.critic_report),
         "flagged_numbers": ["3x"],
     }
+
+
+def test_an_item_names_its_image_and_its_research_in_the_list_and_alone(
+    client: TestClient, services, scope, sessions
+):
+    image = library_image(sessions, scope)
+    research_id = research_run(sessions, scope)
+    item = dataclasses.replace(
+        ITEM,
+        asset_id=image.asset_id,
+        asset_version_id=image.version_id,
+        research_run_id=research_id,
+    )
+    post = proposed_post(sessions, scope, item=item)
+
+    [listed] = client.get(items_url(scope)).json()["items"]
+    one = client.get(items_url(scope, f"/{post.item_id}")).json()
+
+    expected = (str(image.asset_id), str(image.version_id), str(research_id))
+    for body in (listed, one):
+        assert (body["asset_id"], body["asset_version_id"], body["research_run_id"]) == expected
+
+
+def test_a_studio_run_whose_image_goes_with_a_post_is_not_deleted(
+    client: TestClient, services, scope, sessions
+):
+    image = library_image(sessions, scope)
+    item = dataclasses.replace(ITEM, asset_id=image.asset_id, asset_version_id=image.version_id)
+    proposed_post(sessions, scope, item=item)
+
+    url = f"/v1/projects/{scope.project_id}/studio-runs/{image.studio_run_id}"
+    response = client.delete(url)
+
+    assert (response.status_code, response.json()["code"]) == (409, "studio_run_used_by_post")
+    assert client.get(url).status_code == 200
+
+
+def test_a_research_run_a_post_drew_on_is_not_deleted(
+    client: TestClient, services, scope, sessions
+):
+    research_id = research_run(sessions, scope)
+    proposed_post(sessions, scope, item=dataclasses.replace(ITEM, research_run_id=research_id))
+
+    url = f"/v1/projects/{scope.project_id}/researches/{research_id}"
+    response = client.delete(url)
+
+    assert (response.status_code, response.json()["code"]) == (409, "research_used_by_post")
+    assert client.get(url).status_code == 200
 
 
 def test_a_settled_item_names_its_proposal_and_how_it_ended(

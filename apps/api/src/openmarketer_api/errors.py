@@ -46,6 +46,7 @@ from openmarketer_core.db.chat import ChatNotFound
 from openmarketer_core.db.chat_turns import ChatBusy
 from openmarketer_core.db.content_items import ContentItemNotFound
 from openmarketer_core.db.media_assets import (
+    AssetNotUsable,
     MediaAssetDecided,
     MediaAssetNotFound,
     MediaAssetVersionNotFound,
@@ -61,13 +62,18 @@ from openmarketer_core.db.project_removal import (
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
 from openmarketer_core.db.proposals import ProposalNotFound, ProposalNotPending
 from openmarketer_core.db.repository_images import RepositoryImageNotFound, TooManyPersonImages
-from openmarketer_core.db.research_runs import ResearchRunNotFound, ResearchRunUnfinished
-from openmarketer_core.db.research_store import ResearchReportNotFound
+from openmarketer_core.db.research_runs import (
+    ResearchRunNotFound,
+    ResearchRunUnfinished,
+    ResearchRunUsedByPost,
+)
+from openmarketer_core.db.research_store import ResearchReportNotFound, ResearchRunNotUsable
 from openmarketer_core.db.session import DatabaseError
 from openmarketer_core.db.studio_runs import (
     ReferenceAssetNotFound,
     StudioRunNotFound,
     StudioRunUnfinished,
+    StudioRunUsedByPost,
 )
 from openmarketer_core.db.writing_runs import WritingRunNotFound
 from openmarketer_core.llm import LLMError
@@ -126,6 +132,10 @@ class ErrorCode(StrEnum):
     STUDIO_RUN_UNFINISHED = "studio_run_unfinished"
     WRITING_RUN_UNFINISHED = "writing_run_unfinished"
     MEDIA_ASSET_DECIDED = "media_asset_decided"
+    MEDIA_ASSET_NOT_USABLE = "media_asset_not_usable"
+    RESEARCH_NOT_USABLE = "research_not_usable"
+    STUDIO_RUN_USED_BY_POST = "studio_run_used_by_post"
+    RESEARCH_USED_BY_POST = "research_used_by_post"
     PROFILE_ALREADY_APPROVED = "profile_already_approved"
     PROPOSAL_NOT_PENDING = "proposal_not_pending"
     PROPOSAL_PENDING = "proposal_pending"
@@ -202,6 +212,10 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     StudioRunUnfinished: (409, ErrorCode.STUDIO_RUN_UNFINISHED),
     ProjectHasUnfinishedWritingRun: (409, ErrorCode.WRITING_RUN_UNFINISHED),
     MediaAssetDecided: (409, ErrorCode.MEDIA_ASSET_DECIDED),
+    AssetNotUsable: (409, ErrorCode.MEDIA_ASSET_NOT_USABLE),
+    ResearchRunNotUsable: (409, ErrorCode.RESEARCH_NOT_USABLE),
+    StudioRunUsedByPost: (409, ErrorCode.STUDIO_RUN_USED_BY_POST),
+    ResearchRunUsedByPost: (409, ErrorCode.RESEARCH_USED_BY_POST),
     ProfileAlreadyApproved: (409, ErrorCode.PROFILE_ALREADY_APPROVED),
     ProposalNotPending: (409, ErrorCode.PROPOSAL_NOT_PENDING),
     ProjectHasPendingProposal: (409, ErrorCode.PROPOSAL_PENDING),

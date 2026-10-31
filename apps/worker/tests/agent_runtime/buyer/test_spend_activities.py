@@ -12,9 +12,11 @@ from temporalio.testing import ActivityEnvironment
 from buyer.definitions import KIND
 from buyer.rig import Desk
 from buyer.wiring import Studio, wire
-from openmarketer_core.agent_runtime.actions import ActionRequest
+from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.models import LedgerEntryKind
+from openmarketer_core.db.proposals import decide_proposal, propose_action
+from openmarketer_core.db.session import transaction
 from openmarketer_worker.agent_runtime.vocabulary import (
     ACTION_NOT_APPROVED,
     RESERVE_SPEND,
@@ -183,3 +185,53 @@ async def test_spend_the_budget_let_through_runs(registration, scope, studio: St
 
     assert outcome.succeeded
     assert studio.made == [("small", spend.request.action_id)]
+
+
+def approve(sessions, scope, spend: SpendInput, request: ActionRequest | None = None) -> None:
+    """A person approves ``request`` (the spend's own by default), proposed for the spend's run."""
+    with transaction(sessions) as session:
+        proposal = propose_action(
+            session,
+            scope=scope,
+            run=spend.run,
+            workflow_id=f"buyer-{spend.run.run_id}",
+            request=request or spend.request,
+            effect=ActionEffect.SPENDS,
+            wait_seconds=3600,
+        )
+        decide_proposal(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            proposal_id=proposal.id,
+            approved=True,
+            decided_by=uuid.uuid4(),
+        )
+
+
+async def test_spend_a_person_approved_runs(registration, scope, sessions, studio: Studio):
+    spend = spend_of(scope, size="large")
+    reserve(registration, spend)
+    approve(sessions, scope, spend)
+
+    outcome = await ActivityEnvironment().run(
+        activity_named(registration, RUN_ACTION), spend.request
+    )
+
+    assert outcome.succeeded
+    assert studio.made == [("large", spend.request.action_id)]
+
+
+async def test_approval_of_another_payload_under_the_spends_key_lets_nothing_run(
+    registration, scope, sessions, studio: Studio
+):
+    spend = spend_of(scope, size="large")
+    reserve(registration, spend)
+    approved = ActionRequest(spend.request.action_id, spend.request.name, {"size": "small"})
+    approve(sessions, scope, spend, approved)
+
+    with pytest.raises(ApplicationError) as refused:
+        await ActivityEnvironment().run(activity_named(registration, RUN_ACTION), spend.request)
+
+    assert (refused.value.type, refused.value.non_retryable) == (ACTION_NOT_APPROVED, True)
+    assert studio.made == []

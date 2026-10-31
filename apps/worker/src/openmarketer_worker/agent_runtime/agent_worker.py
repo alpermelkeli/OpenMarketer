@@ -369,7 +369,7 @@ class AgentWorker:
                 f"action {held[0]!r} of agent {self._agent.kind!r} waits for a person's approval: "
                 "give registration the database sessions its proposals are stored with"
             )
-        return ProposalActivities(sessions)
+        return ProposalActivities(sessions, kind=self._agent.kind)
 
     def _budget_of(
         self, sessions: sessionmaker[Session] | None, environ: Mapping[str, str] | None

@@ -243,7 +243,7 @@ def test_a_run_succeeds_once_its_item_is_settled(session, project):
         workspace_id=project.workspace_id,
         project_id=project.project_id,
         item_id=item.id,
-        status=ContentItemStatus.DRY_RUN,
+        status=ContentItemStatus.REJECTED,
     )
 
     finished = mark_run_succeeded(session, **scope(project, run.id), cost_usd=Decimal("0.12"))

@@ -6,14 +6,19 @@ for:
 
 - ``initial_state``: what a run starts from, which is the run's own brief;
 - ``context``: what the nodes of one attempt are given: a chat model of the attempt's own,
-  which answers the roles ``writer`` and ``critic``, the run's limits, and the reading of the
-  project's approved profile, which records the version the run writes from on the run;
+  which answers the roles ``writer`` and ``critic``, the run's limits, the reading of the
+  project's approved profile, which records the version the run writes from on the run, and
+  the readings of the asset and the research run the brief may name, each within the run's
+  project and as it is now (a person may have rejected the asset since the run was asked);
 - ``record_progress``: storing the events of each node as it ends (``progress.py`` in core);
 - ``store_draft``: the handler of the action ``store_draft``: the draft stored as the run's
-  content item, ``proposed``;
+  content item, ``proposed``, with the asset, its version and the research run it was written
+  with;
 - ``publish_post``: the handler of the action ``publish_post``, which runs only once a person
   approved the post at the policy gate. In the writer's first step it sends nothing anywhere:
-  it records the post as it would have been sent (``dry_run``), and holds no credential;
+  it records the post as it would have been sent (``dry_run``), and holds no credential. What
+  it records is what the person approved: the stored text and the stored image's version, and
+  an image nobody rejected since;
 - ``finish``: the small projection of the graph's result that the workflow's ``after`` settles.
 
 ``WordedSteps`` wraps the steps of the graph so that what a writing run fails with leaves the
@@ -42,8 +47,11 @@ words of its error, which name what to set and hold no value.
 
 The proposal the gate held ``publish_post`` as is named on the item when the post is recorded
 as a dry run: the handler is given the action's id, and the proposal is read by it within the
-run's project. A post that was rejected or expired is settled by the workflow's ``after``,
-which knows no action's id, so its item names no proposal.
+run's project. The handler does not take the runtime's check of the approval as enough: it
+records the post only when that proposal is the run's own ``publish_post``, approved, with the
+very payload it was asked to record, and it never records a post with no proposal. A post that
+was rejected or expired is settled by the workflow's ``after``, which knows no action's id, so
+its item names no proposal.
 """
 
 from __future__ import annotations
@@ -57,6 +65,8 @@ from typing import Any
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome
+from openmarketer_core.agent_runtime.gate import ProposalStatus
+from openmarketer_core.agent_runtime.model_input import DoesNotFit, read_strict_json
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
 from openmarketer_core.credentials.resolution import CredentialUnreadable, ModelKeyNotSet
 from openmarketer_core.db.content_items import (
@@ -65,15 +75,34 @@ from openmarketer_core.db.content_items import (
     ContentItemStored,
     NewContentItem,
     ProfileVersionNotChosen,
+    ProposalNotApproved,
     ProposalOfAnotherRun,
     content_item,
     settle_content_item,
     store_proposed_content_item,
 )
+from openmarketer_core.db.media_assets import (
+    AssetNotUsable,
+    MediaAssetNotFound,
+    MediaAssetVersionNotFound,
+    asset_for_post,
+    usable_asset,
+)
 from openmarketer_core.db.models import ContentItemStatus
-from openmarketer_core.db.profile_versions import latest_approved_profile
+from openmarketer_core.db.profile_versions import (
+    ProfileVersionNotFound,
+    latest_approved_profile,
+    profile_version,
+)
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.proposals import proposal_of_action
+from openmarketer_core.db.research_runs import ResearchRunNotFound
+from openmarketer_core.db.research_store import (
+    ResearchReportNotFound,
+    ResearchRunNotUsable,
+    StoredResearchReportInvalid,
+    research_findings_for_post,
+)
 from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.session import DatabaseError, transaction
 from openmarketer_core.db.writing_runs import (
@@ -84,16 +113,20 @@ from openmarketer_core.db.writing_runs import (
     WritingRunVersionChosen,
     mark_run_started,
     run_to_execute,
+    writing_run,
 )
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatModel, ChatReply, LLMError
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.run_events import RunEvent
+from openmarketer_core.studio.requests import StoredAssetRequestInvalid
 from openmarketer_core.workspace_settings.model_settings import StoredModelChoiceInvalid
 from openmarketer_core.writing.brief import StoredWritingBriefInvalid
 from openmarketer_core.writing.failures import WRITING_FAILURES
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND, WritingRunInput
+from openmarketer_core.writing.writer_agent import rules
 from openmarketer_core.writing.writer_agent.definitions import (
+    PUBLISH_POST,
     ApprovedProfile,
     PublishPost,
     StoreDraft,
@@ -102,7 +135,13 @@ from openmarketer_core.writing.writer_agent.definitions import (
     initial_state,
     result_of,
 )
-from openmarketer_core.writing.writer_agent.rules import Limits
+from openmarketer_core.writing.writer_agent.rules import (
+    Limits,
+    PostImage,
+    PostImageNotUsable,
+    ResearchFindings,
+    ResearchNotUsable,
+)
 from openmarketer_worker.agent_runtime.activities import AgentGraph
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess
 from openmarketer_worker.agent_runtime.vocabulary import DATABASE_UNAVAILABLE, MAX_ERROR_CHARACTERS
@@ -115,6 +154,14 @@ logger = logging.getLogger(__name__)
 # key is set nowhere, a stored value does not open, or a stored model choice breaks a rule. None
 # passes by itself, and each is worded for whoever asked for the post.
 WORKSPACE_FAILURES = (ModelKeyNotSet, CredentialUnreadable, StoredModelChoiceInvalid)
+
+# Why the brief's asset or research run cannot be used, in the writer's words; an asset a post
+# cannot go with says why itself (``AssetNotUsable.reason``).
+NO_SUCH_ASSET = "the project has no such asset"
+ASSET_REQUEST_UNREADABLE = "the request of its studio run does not fit its schema"
+NO_SUCH_RESEARCH_RUN = "the project has no such run"
+RESEARCH_WITHOUT_REPORT = "it has no report"
+FINDINGS_UNREADABLE = "its stored findings do not fit their schema"
 
 NEWER_VERSION_APPROVED = (
     "a newer version of the product profile was approved while the run was starting: "
@@ -183,6 +230,8 @@ class WritingWork:
             model=ModelOfTheAttempt(lambda: self._new_model(found.workspace_id)),
             limits=self._limits,
             approved_profile=lambda: self._approved_profile(found),
+            post_image=lambda asset_id: self._post_image(found, asset_id),
+            research_findings=lambda run_id: self._research_findings(found, run_id),
         )
 
     def record_progress(self, run: GraphRunRef, events: Sequence[RunEvent]) -> None:
@@ -209,23 +258,27 @@ class WritingWork:
     def store_draft(self, payload: StoreDraft) -> Mapping[str, Any]:
         """Store the run's draft as its content item, ``proposed``; answers the item's id.
 
-        The item takes the version the run recorded when it read the profile. A draft the run
-        stored before is given back, so a repeat stores one; another draft for the same run is
-        refused for good.
+        The item takes the version the run recorded when it read the profile, and each claim
+        the evidence of its features in that version: the payload carries none, as its paths
+        would enter the workflow's history. A draft the run stored before is given back, so a
+        repeat stores one; another draft for the same run is refused for good.
         """
-        item = NewContentItem(
-            text=payload.text,
-            plan=payload.plan.model_dump(mode="json"),
-            check_report=payload.check_report.model_dump(mode="json"),
-            critic_report=payload.critic_report.model_dump(mode="json"),
-            cost_usd=Decimal(str(payload.cost_usd)),
-            plan_changes=list(payload.plan_changes),
-            alternatives=[shown.model_dump(mode="json") for shown in payload.alternatives],
-            claims=[claim.model_dump(mode="json") for claim in payload.claims],
-            flagged_numbers=list(payload.flagged_numbers),
-        )
         try:
             with transaction(self._sessions) as session:
+                item = NewContentItem(
+                    text=payload.text,
+                    plan=payload.plan.model_dump(mode="json"),
+                    check_report=payload.check_report.model_dump(mode="json"),
+                    critic_report=payload.critic_report.model_dump(mode="json"),
+                    cost_usd=Decimal(str(payload.cost_usd)),
+                    plan_changes=list(payload.plan_changes),
+                    alternatives=[shown.model_dump(mode="json") for shown in payload.alternatives],
+                    claims=_claims_with_evidence(session, payload),
+                    flagged_numbers=list(payload.flagged_numbers),
+                    asset_id=payload.asset_id,
+                    asset_version_id=payload.asset_version_id,
+                    research_run_id=payload.research_run_id,
+                )
                 stored = store_proposed_content_item(
                     session,
                     workspace_id=payload.workspace_id,
@@ -240,7 +293,15 @@ class WritingWork:
             ProjectNotFound,
         ) as e:
             raise failure(steps.RUN_UNAVAILABLE, str(e)) from None
-        except (ProfileVersionNotChosen, ContentItemStored, ProposalOfAnotherRun) as e:
+        except (
+            ProfileVersionNotChosen,
+            ProfileVersionNotFound,
+            ContentItemStored,
+            ProposalOfAnotherRun,
+            MediaAssetNotFound,
+            MediaAssetVersionNotFound,
+            ResearchRunNotFound,
+        ) as e:
             raise failure(steps.WRITING_FAILED, str(e)) from None
         except DatabaseError:
             logger.exception("the draft of writing run %s was not stored", payload.run_id)
@@ -250,9 +311,13 @@ class WritingWork:
     def publish_post(self, payload: PublishPost, action_id: str) -> Mapping[str, Any]:
         """Record the approved post as it would have been sent (``dry_run``); sends nothing.
 
-        The post must be the run's own item with the text the person approved, so what is
-        recorded as sent is what was approved, and the item names the proposal the gate held
-        ``action_id`` as. Recording it again changes nothing.
+        The post must be the run's own item with the text and the image's version the person
+        approved, so what is recorded as sent is what was approved, and the item names the
+        proposal the gate held ``action_id`` as: one of this project, approved, of this run's
+        ``publish_post``, with this very payload. Without such a proposal the post is refused
+        for good and nothing is recorded. An image a person rejected since, or that a
+        post cannot go with any more, is not sent with it: the post is refused for good.
+        Recording it again changes nothing.
         """
         try:
             with transaction(self._sessions) as session:
@@ -262,24 +327,25 @@ class WritingWork:
                     project_id=payload.project_id,
                     item_id=payload.content_item_id,
                 )
-                if stored.run_id != payload.run_id or stored.text != payload.text:
+                if (stored.run_id, stored.text, stored.asset_version_id) != (
+                    payload.run_id,
+                    payload.text,
+                    payload.asset_version_id,
+                ):
                     raise failure(
                         steps.WRITING_FAILED,
                         f"the approved post is not content item {payload.content_item_id} "
                         f"of writing run {payload.run_id} as it was stored",
                     )
+                if stored.asset_id is not None:
+                    _require_usable_image(session, payload, stored.asset_id)
                 settled = settle_content_item(
                     session,
                     workspace_id=payload.workspace_id,
                     project_id=payload.project_id,
                     item_id=payload.content_item_id,
                     status=ContentItemStatus.DRY_RUN,
-                    proposal_id=proposal_of_action(
-                        session,
-                        workspace_id=payload.workspace_id,
-                        project_id=payload.project_id,
-                        action_id=action_id,
-                    ),
+                    proposal_id=_approved_proposal(session, payload, action_id),
                 )
         except (
             ContentItemNotFound,
@@ -289,7 +355,7 @@ class WritingWork:
             ProjectNotFound,
         ) as e:
             raise failure(steps.RUN_UNAVAILABLE, str(e)) from None
-        except ProposalOfAnotherRun as e:
+        except (ProposalOfAnotherRun, ProposalNotApproved) as e:
             raise failure(steps.WRITING_FAILED, str(e)) from None
         except DatabaseError:
             logger.exception("the post of writing run %s was not recorded", payload.run_id)
@@ -336,12 +402,121 @@ class WritingWork:
             raise failure(steps.RUN_UNAVAILABLE, str(e)) from None
         return ApprovedProfile(version_id=approved.id, profile=approved.profile)
 
+    def _post_image(self, run: WritingRunToExecute, asset_id: uuid.UUID) -> PostImage:
+        """The brief's asset as the writer reads it, if a post can go with it now."""
+        try:
+            with transaction(self._sessions) as session:
+                return asset_for_post(
+                    session,
+                    workspace_id=run.workspace_id,
+                    project_id=run.project_id,
+                    asset_id=asset_id,
+                )
+        except MediaAssetNotFound:
+            raise PostImageNotUsable(asset_id, NO_SUCH_ASSET) from None
+        except AssetNotUsable as e:
+            raise PostImageNotUsable(asset_id, e.reason) from None
+        except StoredAssetRequestInvalid:
+            raise PostImageNotUsable(asset_id, ASSET_REQUEST_UNREADABLE) from None
+
+    def _research_findings(self, run: WritingRunToExecute, run_id: uuid.UUID) -> ResearchFindings:
+        """The findings of the brief's research run the writer is shown, if it succeeded."""
+        try:
+            with transaction(self._sessions) as session:
+                return research_findings_for_post(
+                    session,
+                    workspace_id=run.workspace_id,
+                    project_id=run.project_id,
+                    run_id=run_id,
+                    limit=rules.MAX_POST_FINDINGS,
+                    quotes_per_source=rules.MAX_SITE_QUOTES,
+                )
+        except ResearchRunNotFound:
+            raise ResearchNotUsable(run_id, NO_SUCH_RESEARCH_RUN) from None
+        except ResearchRunNotUsable as e:
+            raise ResearchNotUsable(run_id, f"it is {e.status.value}, not succeeded") from None
+        except ResearchReportNotFound:
+            raise ResearchNotUsable(run_id, RESEARCH_WITHOUT_REPORT) from None
+        except StoredResearchReportInvalid:
+            raise ResearchNotUsable(run_id, FINDINGS_UNREADABLE) from None
+
     def _run_to_execute(self, run: GraphRunRef) -> WritingRunToExecute:
         with transaction(self._sessions) as session:
             found = run_to_execute(session, run.run_id)
         if found is None:
             raise failure(steps.RUN_UNAVAILABLE, f"there is no writing run {run.run_id}")
         return found
+
+
+def _claims_with_evidence(session: Session, draft: StoreDraft) -> list[dict[str, Any]]:
+    """The draft's claims, each with the evidence of its features in the run's profile version.
+
+    Raises ``ProfileVersionNotChosen`` for a run that recorded no version, and what
+    ``writing_run`` and ``profile_version`` raise for a run or version the project does not have.
+    """
+    run = writing_run(
+        session, workspace_id=draft.workspace_id, project_id=draft.project_id, run_id=draft.run_id
+    )
+    if run.profile_version is None:
+        raise ProfileVersionNotChosen(draft.run_id)
+    version = profile_version(
+        session,
+        workspace_id=draft.workspace_id,
+        project_id=draft.project_id,
+        version=run.profile_version,
+    )
+    return rules.claims_with_evidence(
+        [claim.model_dump(mode="json") for claim in draft.claims],
+        rules.writing_context(version.profile),
+    )
+
+
+def _approved_proposal(session: Session, post: PublishPost, action_id: str) -> uuid.UUID:
+    """The proposal ``post`` was approved as, held by the gate as ``action_id``; or refused.
+
+    It must be of the post's project, approved, of the post's writing run and of its
+    ``publish_post``, and hold the very payload the handler was given: an approval of anything
+    else records nothing.
+    """
+    proposal = proposal_of_action(
+        session, workspace_id=post.workspace_id, project_id=post.project_id, action_id=action_id
+    )
+    if (
+        proposal is None
+        or proposal.status is not ProposalStatus.APPROVED
+        or proposal.run_kind != WRITING_RUN_KIND
+        or proposal.run_id != post.run_id
+        or proposal.action_name != PUBLISH_POST
+        or _payload_of(proposal.payload) != post
+    ):
+        raise failure(
+            steps.WRITING_FAILED,
+            f"the post of writing run {post.run_id} has no proposal a person approved as it is",
+        )
+    return proposal.id
+
+
+def _payload_of(stored: Mapping[str, Any]) -> PublishPost | None:
+    """The payload a proposal holds, as ``publish_post`` reads it; ``None`` if it is not one."""
+    try:
+        return read_strict_json(PublishPost, stored)
+    except DoesNotFit:
+        return None
+
+
+def _require_usable_image(session: Session, post: PublishPost, asset_id: uuid.UUID) -> None:
+    """Refuse for good to record ``post`` when its image cannot go with a post any more."""
+    try:
+        usable_asset(
+            session, workspace_id=post.workspace_id, project_id=post.project_id, asset_id=asset_id
+        )
+    except MediaAssetNotFound:
+        reason = NO_SUCH_ASSET
+    except AssetNotUsable as e:
+        reason = e.reason
+    else:
+        return
+    raise failure(steps.WRITING_FAILED, str(PostImageNotUsable(asset_id, reason)))
 
 
 class WordedSteps:

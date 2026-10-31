@@ -15,16 +15,19 @@ from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.agent_runtime.langgraph_agent import compile_agent
 from openmarketer_core.db.models import (
     AnalysisRunStatus,
+    ContentItemStatus,
     MediaAssetStatus,
     ProfileStatus,
     ProjectStatus,
     ResearchRunStatus,
     StudioRunStatus,
+    WritingRunStatus,
 )
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContext, agent
 from openmarketer_core.orchestrator.chat_agent.graph import answer_message
 from openmarketer_core.orchestrator.chat_agent.rules import (
+    REQUEST_ACTIONS,
     SUBMIT,
     SYSTEM_PROMPT,
     TOOL_LABELS,
@@ -39,11 +42,13 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
 )
 from openmarketer_core.orchestrator.chat_agent.tools import (
     get_studio_run,
+    get_writing_run,
     list_analysis_runs,
     list_media_assets,
     list_pending_proposals,
     list_research_runs,
     list_studio_runs,
+    list_writing_runs,
     read_profile,
     read_research_report,
     start_creative,
@@ -63,6 +68,8 @@ from openmarketer_core.orchestrator.reads import (
     RunReading,
     StudioRunReading,
     UnknownProfileSection,
+    WritingPostReading,
+    WritingRunReading,
 )
 from openmarketer_core.orchestrator.requests import ResearchNotStarted, StudioNotStarted
 from openmarketer_core.research.questions import ResearchRequest
@@ -71,6 +78,7 @@ from openmarketer_core.run_events import RUN_STARTED, TOOL_ANSWERED, TOOL_CALLED
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 PROJECT_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
 RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
@@ -78,6 +86,13 @@ PROPOSAL_ID = uuid.UUID("00000000-0000-4000-8000-000000000003")
 RESEARCH_RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000004")
 STUDIO_RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000005")
 ASSET_ID = uuid.UUID("00000000-0000-4000-8000-000000000006")
+WRITING_RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000007")
+POST_ID = uuid.UUID("00000000-0000-4000-8000-000000000008")
+# The approved profile's features: one live, one not.
+FEATURES = [
+    {"id": "offline-sync", "description": "Works offline", "status": "live"},
+    {"id": "dark-mode", "description": "A dark theme", "status": "unreleased"},
+]
 
 
 def call(name: str, **arguments) -> dict:
@@ -147,6 +162,8 @@ class FakeReads:
         self.studio_limits: list[int] = []
         self.studio_calls: list[uuid.UUID] = []
         self.asset_limits: list[int] = []
+        self.writing_limits: list[int] = []
+        self.writing_calls: list[uuid.UUID] = []
 
     def project_status(self) -> ProjectStatusReading:
         self.status_calls += 1
@@ -249,9 +266,32 @@ class FakeReads:
             )
         ]
 
+    def recent_writing_runs(self, limit: int) -> list[WritingRunReading]:
+        self.writing_limits.append(limit)
+        return [] if self.empty else [writing_run_reading()]
+
+    def writing_run(self, run_id: uuid.UUID) -> WritingRunReading | None:
+        self.writing_calls.append(run_id)
+        if self.empty or run_id != WRITING_RUN_ID:
+            return None
+        post = WritingPostReading(
+            id=POST_ID,
+            text="Memoria now works offline.",
+            status=ContentItemStatus.PROPOSED,
+            passed_critic=True,
+            proposal_id=PROPOSAL_ID,
+            asset_id=None,
+            asset_version_id=None,
+            created_at=datetime.now(UTC),
+            settled_at=None,
+        )
+        return writing_run_reading(WritingRunStatus.RUNNING, post=post)
+
     def _content(self, section: str | None) -> object | None:
         if section is None:
             return None
+        if section == "features":
+            return FEATURES
         if section == "product":
             return {"name": "Memoria", "type": "consumer_app"}
         if section == "brand":
@@ -344,6 +384,29 @@ def studio_run_reading(
         finished_at=None if queued else now,
         review=review,
         review_reason=review_reason,
+    )
+
+
+def writing_run_reading(
+    status: WritingRunStatus = WritingRunStatus.SUCCEEDED,
+    *,
+    post: WritingPostReading | None = None,
+) -> WritingRunReading:
+    now = datetime.now(UTC)
+    queued = status is WritingRunStatus.QUEUED
+    return WritingRunReading(
+        id=WRITING_RUN_ID,
+        status=status,
+        platform="x",
+        brief={"platform": "x", "goal": "announce", "feature": "offline-sync", "variants": 3},
+        requested_by="orchestrator",
+        error=None,
+        profile_version=None if queued else 3,
+        cost_usd=0.0 if queued else 0.04,
+        created_at=now,
+        started_at=None if queued else now,
+        finished_at=None,
+        post=post,
     )
 
 
@@ -735,6 +798,8 @@ def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
         "get_studio_run",
         "list_media_assets",
         "start_creative",
+        "list_writing_runs",
+        "get_writing_run",
     ]
     assert submit_schema()["function"]["name"] == SUBMIT
     by_name = {schema["function"]["name"]: schema for schema in schemas}
@@ -1054,6 +1119,140 @@ def test_a_research_follow_up_is_still_told_to_read_the_report():
 def test_a_follow_up_on_another_kind_of_run_is_refused():
     with pytest.raises(ValueError):
         follow_up_instruction("analysis-run", str(RUN_ID), "succeeded")
+
+
+def test_an_image_request_is_still_started_in_the_studio(reads):
+    requests = FakeRequests()
+    model = ScriptedModel(
+        [call("start_creative", goal="A launch poster", platform="instagram_post")],
+        [call(SUBMIT, answer=f"Started `{STUDIO_RUN_ID}`.")],
+    )
+
+    answer_message(
+        reads,
+        model,
+        [{"role": "user", "content": "Make a poster for the launch."}],
+        requests=requests,
+    )
+
+    assert [request.goal for request in requests.creatives] == ["A launch poster"]
+
+
+def test_a_request_for_several_agents_is_answered_without_starting_anything(reads):
+    requests = FakeRequests()
+    events = RecordedEvents()
+    model = ScriptedModel(
+        [
+            call(
+                SUBMIT,
+                answer="Research and then an image from it will be handled as a task. "
+                "Shall I start the research and the image separately?",
+            )
+        ],
+    )
+
+    turn = answer_message(
+        reads,
+        model,
+        [{"role": "user", "content": "Research competitors, then make an image of it."}],
+        requests=requests,
+        events=events,
+    )
+
+    assert "task" in turn.answer
+    assert (requests.creatives, requests.started) == ([], [])
+    assert RUN_STARTED not in [event.kind for event in events.events]
+
+
+def test_a_post_request_starts_nothing_and_points_to_the_writing_screen(reads):
+    requests = FakeRequests()
+    events = RecordedEvents()
+    model = ScriptedModel(
+        [
+            call(
+                SUBMIT,
+                answer="Posts will be handled as a task; until then, start one from the "
+                "project's Writing screen.",
+            )
+        ],
+    )
+
+    turn = answer_message(
+        reads,
+        model,
+        [{"role": "user", "content": "Write a tweet announcing the product."}],
+        requests=requests,
+        events=events,
+    )
+
+    offered = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
+    assert "Writing screen" in turn.answer
+    assert not [name for name in offered if "writ" in name and name.startswith("start")]
+    assert (requests.creatives, requests.started) == ([], [])
+    assert RUN_STARTED not in [event.kind for event in events.events]
+
+
+def test_the_chat_has_no_request_action_for_the_writer():
+    names = {schema["function"]["name"] for schema in agent.tool_schemas()}
+    assert "start_writing" not in names
+    assert REQUEST_ACTIONS == {"start_research", "start_creative"}
+
+
+def test_a_follow_up_on_a_writing_run_is_refused():
+    with pytest.raises(ValueError):
+        follow_up_instruction(WRITING_RUN_KIND, str(WRITING_RUN_ID), "succeeded")
+
+
+def test_the_prompt_says_a_post_starts_nothing_and_where_one_is_started():
+    assert 'A post, a tweet, or "introduce / announce the product" **starts nothing here.**' in (
+        SYSTEM_PROMPT
+    )
+    assert "posts will be handled as a task" in SYSTEM_PROMPT
+    assert "a post is started from the project's Writing screen" in SYSTEM_PROMPT
+    assert "start_writing" not in SYSTEM_PROMPT
+
+
+def test_the_prompt_routes_images_and_research_to_their_runs():
+    assert "App Store screenshot is the **studio**: `start_creative`" in SYSTEM_PROMPT
+    assert "is **research**: `start_research`" in SYSTEM_PROMPT
+
+
+def test_the_prompt_says_a_request_for_several_agents_starts_nothing_yet():
+    assert "**starts nothing.**" in SYSTEM_PROMPT
+    assert "handled as a task" in SYSTEM_PROMPT
+    assert "parts you can start (research, an image) separately" in SYSTEM_PROMPT
+
+
+def test_list_writing_runs_bounds_the_limit_and_carries_the_brief(reads):
+    [run] = json.loads(list_writing_runs(a_context(reads, None), limit=500))
+
+    assert reads.writing_limits == [MAX_LISTED_RECORDS]
+    assert run["brief"]["feature"] == "offline-sync"
+    assert run["post"] is None
+
+
+def test_get_writing_run_reads_the_post_and_the_proposal_it_waits_on(reads):
+    run = json.loads(get_writing_run(a_context(reads, None), str(WRITING_RUN_ID)))
+
+    assert run["post"]["text"] == "Memoria now works offline."
+    assert run["post"]["passed_critic"] is True
+    assert run["post"]["proposal_id"] == str(PROPOSAL_ID)
+
+
+def test_get_writing_run_refuses_a_non_uuid_and_names_a_missing_run(reads):
+    context = a_context(reads, None)
+
+    assert get_writing_run(context, "latest").startswith("error: run_id must be a UUID")
+    missing = uuid.uuid4()
+    assert get_writing_run(context, str(missing)) == (
+        f"error: no writing run {missing} in this project"
+    )
+
+
+def test_no_writing_runs_is_a_plain_sentence():
+    assert list_writing_runs(a_context(FakeReads(empty=True), None)) == (
+        "The project has no writing runs."
+    )
 
 
 # ------------------------------------------------------------------- graph

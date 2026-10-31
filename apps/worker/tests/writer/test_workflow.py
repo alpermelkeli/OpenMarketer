@@ -138,6 +138,28 @@ async def test_approved_post_is_recorded_as_a_dry_run_and_the_run_succeeds(
     assert settled.status is ProposalStatus.APPROVED
 
 
+async def test_approved_post_with_an_image_and_research_is_recorded_with_both(
+    serving, start, writer_database
+):
+    asked = writer_database.requested(with_image=True, with_research=True)
+    assert asked.image is not None
+    async with serving():
+        handle = await start(asked.run)
+        proposal = await pending_proposal(writer_database, asked.run)
+        output = await decided(writer_database, handle, asked.run, approved=True)
+
+    item = writer_database.item(asked.run)
+    assert writer_database.run(asked.run).status is WritingRunStatus.SUCCEEDED
+    assert output["status"] == "dry_run"
+    assert (item.status, item.asset_id, item.asset_version_id, item.research_run_id) == (
+        ContentItemStatus.DRY_RUN,
+        asked.image.asset_id,
+        asked.image.version_id,
+        asked.research_run_id,
+    )
+    assert proposal.payload["asset_version_id"] == str(asked.image.version_id)
+
+
 async def test_rejected_post_is_recorded_rejected_and_the_run_succeeds_without_sending_it(
     serving, start, writer_database
 ):
