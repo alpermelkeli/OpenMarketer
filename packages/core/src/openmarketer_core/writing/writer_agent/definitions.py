@@ -9,18 +9,23 @@ graph imports; importing it is what puts them on ``agent``.
   approved profile into it, with the version's id, so every later step and every later attempt
   writes from that version, whatever a person approves meanwhile.
 - ``WriterContext`` is what a node needs that is not state: the model of the attempt, which
-  answers the roles ``writer`` and ``critic``, the limits, and the project's approved profile,
-  read only when ``prepare`` asks for it.
+  answers the roles ``writer`` and ``critic``, the limits, and three readings ``prepare`` asks
+  for: the project's approved profile, and the asset and the research run a brief may name.
 - The two actions. ``StoreDraft`` is internal: it stores the draft the person will review as
   the run's content item, ``proposed``, and answers ``{"content_item_id"}``; storing the same
   draft again gives back the stored item, so repeating it is harmless (keyed by the action's
   id). Its payload carries the draft, model-written text included, as the studio's operations
   carry a prompt: every field is bounded, and the whole weighs ``rules.MAX_DRAFT_BYTES`` at
-  most, because every payload enters the workflow's history. ``PublishPost`` publishes, so the
-  policy gate holds it as a proposal until a person approves or rejects it; its payload names
-  the content item and carries the text, so what the person approves is in the proposal
-  itself. In the first step of the writer its handler records the post as it would have been
-  sent (``dry_run``) and sends nothing; repeating it is harmless, keyed by the action's id.
+  most, because every payload enters the workflow's history. It names the brief's asset, the
+  version of it the post was written for and the research run, when the brief named them.
+  ``PublishPost`` publishes, so the policy gate holds it as a proposal until a person approves
+  or rejects it; its payload names the content item and carries the text and the image's
+  version, so what the person approves is in the proposal itself. In the first step of the
+  writer its handler records the post as it would have been sent (``dry_run``) and sends
+  nothing; repeating it is harmless, keyed by the action's id.
+
+The ids of the inputs are left out of a payload that has none (``_absent``), so a thread that
+asked for an action before they existed asks for the same one when its node runs again.
 """
 
 import uuid
@@ -40,7 +45,9 @@ from openmarketer_core.writing.writer_agent import rules
 from openmarketer_core.writing.writer_agent.rules import (
     Limits,
     Plan,
+    PostImage,
     PostStatus,
+    ResearchFindings,
     Variant,
     VariantReview,
     WritingResult,
@@ -109,13 +116,21 @@ class WriterContext:
 
     ``model`` answers the roles ``writer`` and ``critic`` (the router resolves each to its own
     model). ``approved_profile`` reads the project's approved profile, or gives ``None`` when it
-    has none; only ``prepare`` calls it, once per run unless an attempt dies before its
-    checkpoint. A context serves one attempt, in one thread.
+    has none. ``post_image`` reads an asset of the project's Studio library as the writer reads
+    it (never its image), and raises ``rules.PostImageNotUsable`` when the project has no such
+    asset or a post cannot go with it; ``research_findings`` reads a succeeded research run of
+    the project with the first ``rules.MAX_POST_FINDINGS`` findings of its report, each source
+    with ``rules.MAX_SITE_QUOTES`` quotes, and raises ``rules.ResearchNotUsable`` when the
+    project has no such run or it has not succeeded. Only ``prepare`` calls them, the last two
+    only for a brief that names one, once per run unless an attempt dies before its checkpoint.
+    A context serves one attempt, in one thread.
     """
 
     model: ChatModel
     limits: Limits
     approved_profile: Callable[[], ApprovedProfile | None]
+    post_image: Callable[[uuid.UUID], PostImage]
+    research_findings: Callable[[uuid.UUID], ResearchFindings]
 
 
 agent = Agent(WRITING_RUN_KIND, state=WriterState, context=WriterContext)
@@ -135,6 +150,14 @@ PlanChange = Annotated[str, StringConstraints(max_length=rules.MAX_NOTE_CHARS)]
 
 class _Payload(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+def _absent(value: uuid.UUID | None) -> bool:
+    return value is None
+
+
+# The id of a ready input of the brief, left out of the payload when the brief named none.
+InputId = Annotated[uuid.UUID | None, Field(exclude_if=_absent)]
 
 
 class RuleFinding(_Payload):
@@ -201,6 +224,9 @@ class StoreDraft(_Payload):
     critic_report: VariantReview
     flagged_numbers: list[FlaggedNumber] = Field(max_length=rules.MAX_FLAGGED_NUMBERS)
     cost_usd: Annotated[float, Field(ge=0)]
+    asset_id: InputId = None
+    asset_version_id: InputId = None
+    research_run_id: InputId = None
 
 
 @agent.action(
@@ -212,13 +238,15 @@ class StoreDraft(_Payload):
     effect=ActionEffect.PUBLISHES,
 )
 class PublishPost(_Payload):
-    """Publish the post of this run: its content item, with the text the person approves."""
+    """Publish the post of this run: its content item, with the text and the version of the
+    image the person approves (none for a post without one)."""
 
     workspace_id: uuid.UUID
     project_id: uuid.UUID
     run_id: uuid.UUID
     content_item_id: uuid.UUID
     text: PostText
+    asset_version_id: InputId = None
 
 
 def initial_state(run: WritingRunInput, brief: WritingBrief) -> WriterState:

@@ -10,14 +10,16 @@ the policy gate. The state holds plain data only.
                                   +----- revise <------+
 
 ``prepare`` reads the project's approved profile, keeps its version's id and builds the
-writing context from it; a project without one, or a brief that announces a feature that is
-not live, ends the run here. ``plan`` has the writer plan the post, which code holds to the
-brief and the project; ``draft`` has it write the variants, without tools. ``check`` runs the
-code rules on every variant; ``critique`` has the critic, another role, review those that kept
-them; ``decide`` applies ``rules.decide``, and ends the run when nothing can be proposed;
-``revise`` has the writer rewrite from the findings, for another round. ``store`` asks for
-``store_draft``, which stores the draft the person will review as the run's content item, and
-keeps the item's id; ``propose`` asks for ``publish_post`` with that id and the text: the gate
+writing context from it, with the asset and the research run the brief names, read through the
+context and kept as bounded data; a project without a profile, a brief that announces a feature
+that is not live, or an asset or a research run that cannot be used, ends the run here.
+``plan`` has the writer plan the post, which code holds to the brief and the project; ``draft``
+has it write the variants, without tools. ``check`` runs the code rules on every variant;
+``critique`` has the critic, another role, review those that kept them; ``decide`` applies
+``rules.decide``, and ends the run when nothing can be proposed; ``revise`` has the writer
+rewrite from the findings, for another round. ``store`` asks for ``store_draft``, which stores
+the draft the person will review as the run's content item, and keeps the item's id;
+``propose`` asks for ``publish_post`` with that id, the text and the image's version: the gate
 holds it until a person decides, and a rejection or an expiry comes back as the outcome. Each
 action is asked for by a node of its own. ``record`` sets the result, which whoever runs the
 graph stores.
@@ -156,16 +158,32 @@ def _variants_of(
 # --------------------------------------------------------------------------------- nodes
 @agent.node(start=True)
 def prepare(state: WriterState, context: WriterContext) -> dict[str, Any]:
-    """Keep the approved profile's version and build the writing context from it."""
+    """Keep the approved profile's version and build the writing context from it, with the
+    brief's asset and research when it names them.
+
+    Raises ``PostImageNotUsable`` or ``ResearchNotUsable`` (the context's readings raise them)
+    when what the brief names cannot be used any more: the request checked it, and a person may
+    have rejected the asset since.
+    """
+    brief = _brief(state)
     approved = context.approved_profile()
     if approved is None:
         raise NoApprovedProfile()
-    problem = rules.announced_feature_problem(_brief(state), approved.profile)
+    problem = rules.announced_feature_problem(brief, approved.profile)
     if problem is not None:
         raise FeatureNotPublishable(problem)
+    writing_context = rules.writing_context(approved.profile)
+    notes = state["notes"]
+    if brief.asset is not None:
+        writing_context["image"] = rules.image_context(context.post_image(brief.asset))
+    if brief.research_run_id is not None:
+        research = rules.research_context(context.research_findings(brief.research_run_id))
+        writing_context["research"] = research.research
+        notes = [*notes, *research.notes]
     return {
         "profile_version_id": str(approved.version_id),
-        "writing_context": rules.writing_context(approved.profile),
+        "writing_context": writing_context,
+        "notes": notes,
     }
 
 
@@ -372,11 +390,13 @@ def store(state: WriterState, context: WriterContext) -> dict[str, Any]:
 @agent.node
 def propose(state: WriterState, context: WriterContext) -> dict[str, Any]:
     """Ask for ``publish_post``: the gate holds it as a proposal until a person decides."""
+    asset_version_id = state["draft"].get("asset_version_id")
     outcome = request_action(
         PublishPost(
             **_run_ids(state),
             content_item_id=uuid.UUID(state["content_item_id"]),
             text=state["draft"]["text"],
+            asset_version_id=uuid.UUID(asset_version_id) if asset_version_id else None,
         )
     )
     status = rules.post_status(outcome.succeeded, outcome.error)
@@ -416,6 +436,10 @@ def record(state: WriterState) -> dict[str, Any]:
         "cost_usd": state["cost_usd"],
         "model": state["model"],
         "notes": state["notes"],
+        # A draft stored before the brief had inputs names none.
+        "asset_id": draft.get("asset_id"),
+        "asset_version_id": draft.get("asset_version_id"),
+        "research_run_id": draft.get("research_run_id"),
     }
     return {"result": result}
 
