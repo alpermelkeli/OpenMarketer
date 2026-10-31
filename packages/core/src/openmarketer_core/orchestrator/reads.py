@@ -26,11 +26,13 @@ from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.agent_runtime.model_input import shown
 from openmarketer_core.db.models import (
     AnalysisRunStatus,
+    ContentItemStatus,
     MediaAssetStatus,
     ProfileStatus,
     ProjectStatus,
     ResearchRunStatus,
     StudioRunStatus,
+    WritingRunStatus,
 )
 
 # The sections of a Product Profile (the fields of ``profile.ProductProfile``), in order.
@@ -197,6 +199,51 @@ class MediaAssetReading:
 
 
 @dataclass(frozen=True)
+class WritingPostReading:
+    """The post a writing run proposed, and where a person's decision on it stands.
+
+    ``text`` is the post as it would be sent; ``passed_critic`` whether the critic passed it,
+    ``None`` when the stored review does not say. ``proposal_id`` is the proposal a person
+    decides it through, while the post waits for that decision, and ``None`` once it is
+    settled (``status`` then says how). ``asset_id`` and ``asset_version_id`` are the image of
+    the Studio library the post goes with, and the version of it the person approves with it.
+    """
+
+    id: uuid.UUID
+    text: str
+    status: ContentItemStatus
+    passed_critic: bool | None
+    proposal_id: uuid.UUID | None
+    asset_id: uuid.UUID | None
+    asset_version_id: uuid.UUID | None
+    created_at: datetime
+    settled_at: datetime | None
+
+
+@dataclass(frozen=True)
+class WritingRunReading:
+    """One writing run of the project: the brief it was asked, and how far it got.
+
+    ``brief`` is the stored brief as JSON data, ``None`` when it no longer fits its schema.
+    ``post`` is the post the run proposed; ``None`` until it stored one, and where a listing
+    leaves it out.
+    """
+
+    id: uuid.UUID
+    status: WritingRunStatus
+    platform: str
+    brief: dict[str, Any] | None
+    requested_by: str
+    error: str | None
+    profile_version: int | None
+    cost_usd: float
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    post: WritingPostReading | None = None
+
+
+@dataclass(frozen=True)
 class ProjectStatusReading:
     """Where the project stands: what it is, its review state, and its latest work."""
 
@@ -278,4 +325,15 @@ class ChatReads(Protocol):
 
         ``MAX_LISTED_RECORDS`` bounds it further.
         """
+        ...
+
+    def recent_writing_runs(self, limit: int) -> Sequence[WritingRunReading]:
+        """The project's writing runs, newest first, at most ``limit`` records, without posts.
+
+        ``MAX_LISTED_RECORDS`` bounds it further.
+        """
+        ...
+
+    def writing_run(self, run_id: uuid.UUID) -> WritingRunReading | None:
+        """One writing run of the project with its post, or ``None`` if there is none."""
         ...

@@ -4,28 +4,37 @@ The chat agent's read tools answer from the project's records and change nothing
 action* is the other kind the design gives it (the report's "Read tools and request actions
 are separate"): it asks whoever runs the turn to create a record and start a run. This module
 is the port such a tool reaches (``ChatRequests``) and the ways it fails
-(``ResearchNotStarted``, ``StudioNotStarted``). Two kinds of run can be started: a research
-run and a run of the creative studio, which makes one image. The adapter is the API's
+(``ResearchNotStarted``, ``StudioNotStarted``, ``WritingNotStarted``). Three kinds of run can
+be started, each by itself: a research run, a run of the creative studio, which makes one
+image, and a writing run, which writes one post and proposes it. A request that needs several
+of them together is not one the chat makes: coordinating agents is a task's (the chat starts
+no agent for another). The adapter is the API's
 (``openmarketer_api.chat_requests``), which holds the database and the workflow server; a
 turn whose caller gave no port answers that starting runs is not available.
 
-The answer is the run as the chat reads runs (``ResearchRunReading``, ``StudioRunReading``),
+The answer is the run as the chat reads runs (``ResearchRunReading``, ``StudioRunReading``,
+``WritingRunReading``),
 so a turn can say the new run's id and status at once; what the run finds is read later with
 the read tools. This module imports no database, workflow engine or framework, and neither
 does the chat agent: the port answers in plain records.
 
 A request is read strictly before it reaches the port (``chat_agent.tools``), against the same
-``ResearchRequest`` or ``AssetRequest`` a person's request is: the port never sees what did
-not fit.
+``ResearchRequest``, ``AssetRequest`` or ``WritingBrief`` a person's request is: the port never
+sees what did not fit.
 """
 
 from __future__ import annotations
 
 from typing import Protocol
 
-from openmarketer_core.orchestrator.reads import ResearchRunReading, StudioRunReading
+from openmarketer_core.orchestrator.reads import (
+    ResearchRunReading,
+    StudioRunReading,
+    WritingRunReading,
+)
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.writing.brief import WritingBrief
 
 
 class ResearchNotStarted(Exception):
@@ -51,6 +60,19 @@ class StudioNotStarted(Exception):
         super().__init__(reason)
 
 
+class WritingNotStarted(Exception):
+    """The turn's caller could not start a writing run: nothing is running for it.
+
+    Raised with a sentence of the caller's that holds no value, for the tool to answer with:
+    a run whose workflow could not be started, or an asset or a research run the brief names
+    that the project cannot lend it (not its own, a rejected image, research that did not
+    succeed).
+    """
+
+    def __init__(self, reason: str = "the post could not be started") -> None:
+        super().__init__(reason)
+
+
 class ChatRequests(Protocol):
     """What a chat turn may ask the process that runs it to do, besides reading."""
 
@@ -70,5 +92,16 @@ class ChatRequests(Protocol):
         reference asset is not the project's (nothing is stored then) or a run was stored but
         no workflow could be started for it (it is recorded as failed by then);
         ``ProjectNotFound`` when the turn's project is gone while it is answered.
+        """
+        ...
+
+    def start_writing(self, brief: WritingBrief) -> WritingRunReading:
+        """Create a writing run for the turn's project and start its workflow.
+
+        Answers with the run as it is now, newly queued. Raises ``WritingNotStarted`` when the
+        brief's asset or research run is not one the project can lend a post (nothing is stored
+        then) or a run was stored but no workflow could be started for it (it is recorded as
+        failed by then); ``ProjectNotFound`` when the turn's project is gone while it is
+        answered.
         """
         ...
