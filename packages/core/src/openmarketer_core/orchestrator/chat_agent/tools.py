@@ -5,22 +5,19 @@ and never with what a model sent. Problems (a section that does not exist, an id
 that does not name anything) are text the model can correct from. No read tool writes
 anything or asks for an action.
 
-``start_research``, ``start_creative`` and ``start_writing`` are the other kind: *request
-actions*. Each asks the turn's caller (``ChatTurnContext.requests``) to create a run for the
-project and start it (a research run, a studio run that makes one image, a writing run that
-writes one post and proposes it), and answers with the run's id and status; it writes nothing
-itself and starts no workflow, and a caller that gave no port is told that starting runs is
-not available. A run that was started is recorded for the person watching the turn
-(``run_started``, through ``ChatTurnContext.events``), so the chat can follow the run's own
-progress. What it sends is read strictly against ``ResearchRequest``, ``AssetRequest`` or
-``WritingBrief`` first, so a request that does not fit is refused with the fields at fault
-and never their values. A brief's optional fields a model sent as empty text (a weak model
-copies the defaults back) are read as not given.
+``start_research`` and ``start_creative`` are the other kind: *request actions*. Each asks
+the turn's caller (``ChatTurnContext.requests``) to create a run for the project and start it
+(a research run, a studio run that makes one image), and answers with the run's id and
+status; it writes nothing itself and starts no workflow, and a caller that gave no port is
+told that starting runs is not available. A run that was started is recorded for the person
+watching the turn (``run_started``, through ``ChatTurnContext.events``), so the chat can
+follow the run's own progress. What it sends is read strictly against ``ResearchRequest`` or
+``AssetRequest`` first, so a request that does not fit is refused with the fields at fault
+and never their values.
 
-Before a post is asked for, code holds the brief to the approved profile, as the writer's
-``prepare`` will: there must be one, and the feature an announcement names must be one of its
-live features (``rules.feature_not_announceable``). The writer checks again when it runs; the
-check here only spares the operator a run that would fail at once.
+Writing runs are read only (``list_writing_runs``, ``get_writing_run``): the chat starts no
+post. A post is a task's, whose plan decides whether it needs an image first; until there are
+tasks, a person starts a post from the project's Writing screen.
 
 Everything a read tool answers with that a person, a model or a web page wrote (a research
 finding, a studio run's goal and copy, the verifier's notes) is the project's data, and the
@@ -44,27 +41,18 @@ from openmarketer_core.agent_runtime.model_input import (
 )
 from openmarketer_core.db.models import ProfileStatus
 from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContext, agent
-from openmarketer_core.orchestrator.chat_agent.rules import (
-    feature_not_announceable,
-    term_not_to_mention,
-)
+from openmarketer_core.orchestrator.chat_agent.rules import term_not_to_mention
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
     PROFILE_SECTIONS,
     UnknownProfileSection,
 )
-from openmarketer_core.orchestrator.requests import (
-    ResearchNotStarted,
-    StudioNotStarted,
-    WritingNotStarted,
-)
+from openmarketer_core.orchestrator.requests import ResearchNotStarted, StudioNotStarted
 from openmarketer_core.research.questions import DEFAULT_MAX_SOURCES, ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import RUN_STARTED, RunEvent
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
-from openmarketer_core.writing.brief import DEFAULT_VARIANTS, WritingBrief, WritingPlatform
-from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 # The most a tool answer is; a profile with many features is the long one.
 MAX_ANSWER_CHARS = 6000
@@ -339,77 +327,6 @@ def get_writing_run(context: ChatTurnContext, run_id: str) -> str:
     if found is None:
         return f"error: no writing run {wanted} in this project"
     return _text(asdict(found))
-
-
-@agent.tool
-def start_writing(
-    context: ChatTurnContext,
-    goal: str,
-    feature: str | None = None,
-    angle: str | None = None,
-    variants: int = DEFAULT_VARIANTS,
-    asset: str | None = None,
-    research_run_id: str | None = None,
-) -> str:
-    """Start a writing run of this project: it writes one post for X from the approved
-    Product Profile and proposes it. The post waits in the project's Approvals until a person
-    approves or rejects it; nothing is sent to X (dry run). Use it only when the operator asks
-    for a post or a tweet, or to introduce or announce the product.
-    goal is one of: introduce (the product as a whole), announce (one live feature, whose id
-    goes in feature), angle (a direction, which goes in angle: the operator's words verbatim
-    when they gave some). feature is given only to announce and angle only for an angle.
-    variants is how many texts the writer offers, 1 to 5. asset is the id of an image of the
-    Studio library the post goes with (not a rejected one); research_run_id a succeeded
-    research run whose findings the post may use. Give either only when the operator refers to
-    one. It answers with the new run's id and status; the post is read later."""
-    if context.requests is None:
-        return "error: starting a writing run is not available here"
-    try:
-        brief = read_strict_json(
-            WritingBrief,
-            {
-                "platform": WritingPlatform.X.value,
-                "goal": goal,
-                "feature": _given(feature),
-                "angle": _given(angle),
-                "variants": variants,
-                "asset": _given(asset),
-                "research_run_id": _given(research_run_id),
-            },
-        )
-    except DoesNotFit as e:
-        return f"error: the post's brief does not fit{fields_phrase(e.fields)}"
-    problem = _brief_problem(context, brief)
-    if problem is not None:
-        return f"error: {problem}"
-    try:
-        run = context.requests.start_writing(brief)
-    except WritingNotStarted as e:
-        return f"error: {e}"
-    context.events.record(
-        RunEvent(RUN_STARTED, {"run_kind": WRITING_RUN_KIND, "run_id": str(run.id)})
-    )
-    return _text({"run_id": str(run.id), "status": run.status, "platform": run.platform})
-
-
-def _given(value: str | None) -> str | None:
-    """An optional field of a brief, ``None`` when a model sent it empty."""
-    if value is None or not value.strip():
-        return None
-    return value
-
-
-def _brief_problem(context: ChatTurnContext, brief: WritingBrief) -> str | None:
-    """Why the writer would refuse ``brief`` at once, read from the approved profile."""
-    reading = context.reads.profile("features")
-    if reading is None or reading.status != ProfileStatus.APPROVED:
-        return (
-            "the project has no approved Product Profile, and a post is written from one; "
-            "tell the operator to approve the profile first"
-        )
-    if brief.feature is None:
-        return None
-    return feature_not_announceable(brief.feature, reading.content)
 
 
 def _do_not_mention(context: ChatTurnContext) -> list[str]:

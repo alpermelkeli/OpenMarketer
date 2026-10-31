@@ -875,7 +875,6 @@ class ChatTurnTrigger(StrEnum):
     MESSAGE = "message"  # the operator wrote a message
     RESEARCH_FINISHED = "research_finished"  # a research run the thread started has ended
     STUDIO_FINISHED = "studio_finished"  # a studio run the thread started has ended
-    WRITING_FINISHED = "writing_finished"  # a writing run the thread started has ended
 
 
 class ChatTurnStatus(StrEnum):
@@ -940,9 +939,9 @@ class ChatMessageRecord(Base):
 class ChatTurnRecord(Base):
     """One turn of the orchestrator in a chat thread, from its start to its answer or failure.
 
-    A turn answers the operator's message, or follows up on a research run, a studio run or a
-    writing run the thread started (``research_run_id``, ``studio_run_id`` or
-    ``writing_run_id``, each set exactly for its trigger). A thread
+    A turn answers the operator's message, or follows up on a research run or a studio run
+    the thread started (``research_run_id`` or ``studio_run_id``, each set exactly for its
+    trigger). A thread
     has at most one running turn; a failed turn keeps why, worded for the
     operator.
     """
@@ -956,10 +955,6 @@ class ChatTurnRecord(Base):
         CheckConstraint(
             "(trigger = 'studio_finished') = (studio_run_id IS NOT NULL)",
             name="studio_run_id",
-        ),
-        CheckConstraint(
-            "(trigger = 'writing_finished') = (writing_run_id IS NOT NULL)",
-            name="writing_run_id",
         ),
         CheckConstraint("(status = 'failed') = (error IS NOT NULL)", name="error"),
         CheckConstraint(f"char_length(error) <= {CHAT_TURN_ERROR_MAX_LENGTH}", name="error_length"),
@@ -981,7 +976,6 @@ class ChatTurnRecord(Base):
     # each kind of run a chat can start, so that a CHECK can tie each to its trigger.
     research_run_id: Mapped[uuid.UUID | None] = mapped_column()
     studio_run_id: Mapped[uuid.UUID | None] = mapped_column()
-    writing_run_id: Mapped[uuid.UUID | None] = mapped_column()
     status: Mapped[ChatTurnStatus] = mapped_column(
         _enum(ChatTurnStatus, "status"), server_default=ChatTurnStatus.RUNNING.value
     )

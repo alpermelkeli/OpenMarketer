@@ -8,12 +8,7 @@ item's project; ``media_asset`` and ``research_run`` gain a unique ``(id, projec
 A CHECK holds the asset and its version to both or neither. Autogenerate created the foreign
 keys before the unique constraints they rest on, and wrote no CHECK; both are put right here.
 
-``chat_turn`` gains ``writing_run_id`` and the trigger ``writing_finished``: a chat follows up
-on a writing run it started as it does on a research or a studio run. Autogenerate does not see
-a changed CHECK of an enum, so the trigger's is replaced by hand, as in the studio's revision.
-
-The downgrade forgets which image and research each post used, and drops the follow-up turns
-on writing runs with their events; the messages they wrote stay, without their turn.
+The downgrade forgets which image and research each post used.
 
 Revision ID: 2530b8dce085
 Revises: 6afb465902a5
@@ -71,36 +66,9 @@ def upgrade() -> None:
         "content_item",
         "(asset_id IS NULL) = (asset_version_id IS NULL)",
     )
-    op.add_column("chat_turn", sa.Column("writing_run_id", sa.Uuid(), nullable=True))
-    op.drop_constraint(op.f("ck_chat_turn_trigger"), "chat_turn", type_="check")
-    op.create_check_constraint(
-        op.f("ck_chat_turn_trigger"),
-        "chat_turn",
-        "trigger IN ('message', 'research_finished', 'studio_finished', 'writing_finished')",
-    )
-    op.create_check_constraint(
-        op.f("ck_chat_turn_writing_run_id"),
-        "chat_turn",
-        "(trigger = 'writing_finished') = (writing_run_id IS NOT NULL)",
-    )
 
 
 def downgrade() -> None:
-    writing_turns = "SELECT id FROM chat_turn WHERE trigger = 'writing_finished'"
-    op.execute(f"UPDATE chat_message SET turn_id = NULL WHERE turn_id IN ({writing_turns})")
-    op.execute(
-        "DELETE FROM run_event WHERE run_kind = 'orchestrator-chat'"
-        f" AND run_id IN ({writing_turns})"
-    )
-    op.execute("DELETE FROM chat_turn WHERE trigger = 'writing_finished'")
-    op.drop_constraint(op.f("ck_chat_turn_writing_run_id"), "chat_turn", type_="check")
-    op.drop_constraint(op.f("ck_chat_turn_trigger"), "chat_turn", type_="check")
-    op.create_check_constraint(
-        op.f("ck_chat_turn_trigger"),
-        "chat_turn",
-        "trigger IN ('message', 'research_finished', 'studio_finished')",
-    )
-    op.drop_column("chat_turn", "writing_run_id")
     op.drop_constraint(op.f("ck_content_item_asset_version_id"), "content_item", type_="check")
     op.drop_constraint(
         op.f("fk_content_item_research_run_id_research_run"), "content_item", type_="foreignkey"

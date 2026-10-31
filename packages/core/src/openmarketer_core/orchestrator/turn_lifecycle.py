@@ -1,8 +1,7 @@
 """One turn of a chat from its start to its outcome: what every kind of turn does around the agent.
 
 A turn of the chat agent, whether it answers the operator's message (``ask.py``) or follows
-up on a research run, a studio run or a writing run the chat started (``follow_up.py``), goes
-the same way:
+up on a research run or a studio run the chat started (``follow_up.py``), goes the same way:
 
 1. One transaction starts the turn (``db/chat_turns.start_turn``: ``ChatBusy`` while another
    turn of the chat runs), reads the chat's conversation and records ``turn_started``. It is
@@ -59,7 +58,6 @@ class TurnOf:
     trigger: ChatTurnTrigger
     research_run_id: uuid.UUID | None = None
     studio_run_id: uuid.UUID | None = None
-    writing_run_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -106,7 +104,6 @@ def _start(sessions: sessionmaker[Session], turn_of: TurnOf) -> tuple[uuid.UUID,
             trigger=turn_of.trigger,
             research_run_id=turn_of.research_run_id,
             studio_run_id=turn_of.studio_run_id,
-            writing_run_id=turn_of.writing_run_id,
         )
         history = chat_history(
             session,

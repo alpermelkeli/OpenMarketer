@@ -14,17 +14,15 @@ person watching it (``tool_called`` with a short label of ``TOOL_LABELS``, then
 ``tool_answered``) through the ``TurnEvents`` port; the model never reads those events. A
 turn whose caller gave no ``ChatRequests`` is not offered the request actions at all. The
 sentences a failed turn is recorded with (``failure_reason``) and the instruction a
-follow-up turn is given about a research run, a studio run or a writing run
-(``follow_up_instruction``) are worded here, by code, and so are the checks a request passes
-before the caller is asked: a studio request's copy (``term_not_to_mention``: the copy may be
-the model's own, so the brand's ``do_not_mention`` is held by code and not only by the
-prompt) and the feature a post announces (``feature_not_announceable``: a live feature of the
-approved profile, as the writer will require).
+follow-up turn is given about a research run or a studio run (``follow_up_instruction``) are
+worded here, by code, and so is the check a studio request's copy passes before the caller
+is asked (``term_not_to_mention``): the copy may be the model's own, so the brand's
+``do_not_mention`` is held by code and not only by the prompt.
 
-Which agent a request goes to, and that a request needing several agents together starts
-none of them, is the prompt's: the model reads what the operator asked for. Nothing here
-lets one run start another; coordinating agents is a task's, which the chat does not make
-yet.
+Which run a request starts, and that a post or a request needing several agents together
+starts none, is the prompt's: the model reads what the operator asked for. The chat has no
+request action for the writer, so code holds that a post is never started here: a post is a
+task's, which the chat does not make yet. Nothing here lets one run start another.
 
 Nothing here depends on the graph framework (``graph.py`` wires these functions into a
 graph) or on a database (reads reach the model through the ``ChatReads`` port, given to a
@@ -46,18 +44,16 @@ from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.agent_runtime.tools import InvalidToolArguments, UnknownTool
 from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.orchestrator.events import TurnEvents
-from openmarketer_core.profile import FeatureStatus
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import TOOL_ANSWERED, TOOL_CALLED, RunEvent
 from openmarketer_core.studio.image_checks import normalized, without_marks
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
-from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 ROLE = "orchestrator"
 SUBMIT = "submit_answer"
 # The tools that ask the turn's caller for work instead of reading the project: the reading
 # budget ignores them, and a turn out of budget keeps them.
-REQUEST_ACTIONS = frozenset({"start_research", "start_creative", "start_writing"})
+REQUEST_ACTIONS = frozenset({"start_research", "start_creative"})
 WRAP_UP_CALLS = 2  # the last model calls are reserved for finishing the turn
 WRAP_UP_TOOL_SHARE = 0.75  # of the reading budget; submitting costs no read
 WRAP_UP_COST_SHARE = 0.7  # of the cost limit; the rest pays for the submission itself
@@ -65,7 +61,6 @@ MAX_SHOWN_SCHEMA_PROBLEMS = 12
 MAX_HISTORY_CHARS = 24_000  # a longer conversation has its older messages summarised
 KEEP_RECENT_MESSAGES = 12  # the newest messages, kept word for word when they are
 TOOL_ERROR_PREFIX = "error:"  # how a tool answers that it could not do what was asked
-LIVE = FeatureStatus.LIVE.value  # the status of a feature a post may announce
 
 # What the person watching a turn reads while a tool runs: one short line per tool.
 TOOL_LABELS: Mapping[str, str] = {
@@ -84,13 +79,12 @@ TOOL_LABELS: Mapping[str, str] = {
     "start_creative": "Starting an image in the studio",
     "list_writing_runs": "Listing the writing runs",
     "get_writing_run": "Reading a writing run",
-    "start_writing": "Starting a post",
 }
 UNKNOWN_TOOL_LABEL = "Calling a tool"
 # What an event names a tool the agent does not have by: the name is what the model wrote.
 UNKNOWN_TOOL = "unknown"
 # The kinds of run a chat follows up on once they have ended.
-FOLLOWED_RUN_KINDS = (RESEARCH_RUN_KIND, STUDIO_RUN_KIND, WRITING_RUN_KIND)
+FOLLOWED_RUN_KINDS = (RESEARCH_RUN_KIND, STUDIO_RUN_KIND)
 
 # The sentences a failed turn is recorded with, for the operator: fixed, so that nothing a
 # model or a provider wrote reaches the screen.
@@ -144,8 +138,7 @@ findings as bullets.
 - **Research results:** Summarize the main takeaway, then list important findings with \
 their sources and confidence levels.
 - **Run updates:** Clearly state the run's status and its ID. If a research run has been \
-queued, explain that its report will be available when the run completes; if a writing run \
-has been queued, that its post will wait in Approvals for a person.
+queued, explain that its report will be available when the run completes.
 - **Comparisons:** Use a compact Markdown table when it makes differences easier to \
 understand.
 - **Pending proposals:** Identify each relevant proposal by ID, briefly explain what it \
@@ -179,18 +172,19 @@ sentence.
 
 ### Which run a request starts
 
-- A post, a tweet, or "introduce / announce the product" is **writing**: \
-`start_writing`.
+- A post, a tweet, or "introduce / announce the product" **starts nothing here.** Say in \
+one sentence that posts will be handled as a task, and that until then a post is started \
+from the project's Writing screen. You may still answer questions about the project's \
+writing runs and their posts.
 - An image, a poster, a visual, a story, an Open Graph image or an App Store screenshot is \
 the **studio**: `start_creative`.
 - A question about the world outside the project (competitors, the market, what people say) \
 is **research**: `start_research`.
 - Each run is one agent doing one thing. **A request that needs several agents together** \
-(a post with a new image, research and then posts written from it, an image and its caption) \
-**starts nothing.** Say in one sentence that requests like this will be handled as a task, \
-and offer to start the parts separately if the operator wants; start them only once the \
-operator says so. A post may use an image that is already in the Studio library or a \
-research run that already succeeded: that is one run, not several.
+(research and then an image made from it, an image and its caption) **starts nothing.** Say \
+in one sentence that requests like this will be handled as a task, and offer to start the \
+parts you can start (research, an image) separately if the operator wants; start them only \
+once the operator says so.
 
 ### Research
 
@@ -228,28 +222,6 @@ you start one.
 - When you start a studio run, state what you chose (the angle, the copy and the platform), \
 include its exact run ID and state that it is queued. Its image lands in the project's Studio \
 library, where a person accepts or rejects it.
-
-### Posts
-
-- You may start **a writing run** when the operator asks for a post. A writing run writes \
-one post for X from the approved Product Profile, has it checked by code and by a critic, \
-and proposes it. A post is written only from an approved profile.
-- **What the operator gives is followed exactly here too.** The goal, the feature, the angle \
-and the number of variants they name are used as they are; an angle in their own words goes \
-into `angle` verbatim, never translated, shortened or improved.
-- **What the operator leaves open, you decide** from the records, without asking:
-  - the `goal`: `introduce` for the product as a whole, `announce` when the request is \
-about one feature, `angle` when it is about an idea or a direction;
-  - for `announce`, a feature that is **live** in the approved profile, by its id;
-  - for `angle`, the angle itself, in one or two sentences grounded in the profile;
-  - `variants`: 3.
-- Give `asset` only when the operator refers to an image of the Studio library (a draft or \
-accepted one, never a rejected one), and `research_run_id` only when they refer to a \
-research run that succeeded. Take both ids from the records.
-- When you start a writing run, state what you chose (the goal, and the feature or the \
-angle), include its exact run ID and state that it is queued. Say that the post will wait in \
-the project's Approvals, and in this chat, for a person to approve or reject it, and that \
-nothing is sent to X: approving it records the post as it would have been sent.
 
 ### What you cannot do
 
@@ -535,8 +507,6 @@ def follow_up_instruction(run_kind: str, run_id: str, status: str) -> str:
         return _research_follow_up(run_id, status)
     if run_kind == STUDIO_RUN_KIND:
         return _studio_follow_up(run_id, status)
-    if run_kind == WRITING_RUN_KIND:
-        return _writing_follow_up(run_id, status)
     raise ValueError(f"a chat does not follow up on runs of kind {run_kind!r}")
 
 
@@ -547,32 +517,6 @@ def _studio_follow_up(run_id: str, status: str) -> str:
         f"and run_id {run_id}. {_STUDIO_OUTCOMES.get(status, '')} Name the Studio library in "
         "words and write no link or address: the dashboard links it. Do not repeat the "
         "image's copy as if it were your own words. You cannot start another run in this turn."
-    )
-
-
-# What the instruction of a writing follow-up says of each way a writing run can end. A run
-# succeeds only once its post is settled, so the follow-up comes after a person's decision.
-_WRITING_OUTCOMES: Mapping[str, str] = {
-    "succeeded": (
-        "Its post was settled; the post's status says how: dry_run means a person approved it "
-        "and it was recorded as it would have been sent, and nothing was sent to X; rejected "
-        "means a person rejected it; expired means nobody decided before its deadline, which "
-        "counts as a rejection. Tell the operator which, with the post's text."
-    ),
-    "failed": (
-        "It ended without a post a person decided on. Say why, as the run's error says, and "
-        "what the operator can do next, such as asking for the post again."
-    ),
-}
-
-
-def _writing_follow_up(run_id: str, status: str) -> str:
-    return (
-        f"[Written by OpenMarketer, not by the operator.] The writing run {run_id} that you "
-        f"started in this chat has ended with status {status}. Read it with get_writing_run "
-        f"and run_id {run_id}. {_WRITING_OUTCOMES.get(status, '')} Name Approvals in words and "
-        "write no link or address: the dashboard links it. Quote the post as the post, not as "
-        "your own words. You cannot start another run in this turn."
     )
 
 
@@ -600,30 +544,6 @@ def term_not_to_mention(exact_copy: Sequence[str], do_not_mention: Sequence[str]
         wanted = _comparable(term)
         if wanted and f" {wanted} " in copy:
             return term
-    return None
-
-
-def feature_not_announceable(feature: str, features: object) -> str | None:
-    """Why a post cannot announce ``feature``, or ``None`` when it can.
-
-    ``features`` is the approved profile's ``features`` section as JSON data, a list of
-    features with their ``id`` and ``status``; a feature can be announced when it is there and
-    ``live``, as the writer requires. ``feature`` has been read as a ``FeatureId`` already,
-    so it is a slug and safe to name. The answer names the live features to choose from,
-    which the profile holds, so the model can correct the brief.
-    """
-    listed = [f for f in features if isinstance(f, dict)] if isinstance(features, list) else []
-    live = [f["id"] for f in listed if f.get("status") == LIVE and isinstance(f.get("id"), str)]
-    choose = (
-        f"the live features are: {', '.join(live)}"
-        if live
-        else "the approved profile has no live feature, so write an introduction or an angle"
-    )
-    found = next((f for f in listed if f.get("id") == feature), None)
-    if found is None:
-        return f"the approved Product Profile has no feature '{feature}'; {choose}"
-    if found.get("status") != LIVE:
-        return f"the feature '{feature}' is not live, and only a live one is announced; {choose}"
     return None
 
 

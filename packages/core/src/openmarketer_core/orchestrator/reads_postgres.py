@@ -43,6 +43,7 @@ from openmarketer_core.db.proposals import (
     ProposalNotFound,
     get_proposal,
     list_proposals,
+    pending_proposal_of_run,
     pending_proposals_summary,
 )
 from openmarketer_core.db.research_runs import (
@@ -301,26 +302,18 @@ class PostgresChatReads:
         """The proposal a person decides the post through, while the post waits for it.
 
         The item names its proposal once the run knows it, which may be only when it is
-        settled; until then the proposal is found among the project's pending ones.
+        settled; until then it is the proposal the item's run waits on.
         """
         if item.status is not ContentItemStatus.PROPOSED:
             return None
         if item.proposal_id is not None:
             return item.proposal_id
-        pending = list_proposals(
+        return pending_proposal_of_run(
             self.session,
             workspace_id=self.workspace_id,
             project_id=self.project_id,
-            limit=MAX_LISTED_RECORDS,
-            status=ProposalStatus.PENDING,
-        )
-        return next(
-            (
-                proposal.id
-                for proposal in pending.items
-                if proposal.run_kind == WRITING_RUN_KIND and proposal.run_id == item.run_id
-            ),
-            None,
+            run_kind=WRITING_RUN_KIND,
+            run_id=item.run_id,
         )
 
     def _request_of(self, run_id: uuid.UUID) -> AssetRequest | None:
