@@ -107,6 +107,18 @@ class ContentItemResponse(BaseModel):
     proposal_id: uuid.UUID | None = Field(
         description="The proposal a person decides the post on, once the item names it."
     )
+    asset_id: uuid.UUID | None = Field(
+        description="The Studio asset whose image the post goes with; null for a post alone."
+    )
+    asset_version_id: uuid.UUID | None = Field(
+        description=(
+            "The version of that asset the post goes with, the image a person approves with "
+            "the text; null exactly when `asset_id` is."
+        )
+    )
+    research_run_id: uuid.UUID | None = Field(
+        description="The research run whose findings the post drew on; null when none."
+    )
     cost_usd: float
     created_at: datetime
     settled_at: datetime | None
@@ -166,6 +178,9 @@ def _item_response(item: ContentItem) -> ContentItemResponse:
         text=item.text,
         profile_version=item.profile_version,
         proposal_id=item.proposal_id,
+        asset_id=item.asset_id,
+        asset_version_id=item.asset_version_id,
+        research_run_id=item.research_run_id,
         cost_usd=float(item.cost_usd),
         created_at=item.created_at,
         settled_at=item.settled_at,
@@ -190,7 +205,7 @@ def _item_detail_response(item: ContentItem) -> ContentItemDetailResponse:
     operation_id="startWritingRun",
     status_code=202,
     response_model=WritingRunResponse,
-    responses=problems(404, 503),
+    responses=problems(404, 409, 503),
 )
 def start(
     project_id: uuid.UUID,
@@ -203,7 +218,14 @@ def start(
 
     A worker executes it later: it writes from the project's approved profile, and a brief
     that names a feature the profile does not hold as live ends the run failed, saying so.
-    The post it proposes waits for a person on its proposal. 503 `writing_not_started` when
+    The post it proposes waits for a person on its proposal.
+
+    The brief may name `asset`, an image of the project's Studio library the post goes with,
+    and `research_run_id`, a research run of the project whose findings it may draw on. One
+    the project does not have is a 404 (`media_asset_not_found`, `research_not_found`); 409
+    `media_asset_not_usable` when the asset was rejected, has no image or is still being
+    made, and 409 `research_not_usable` when the research run has not succeeded. 503
+    `writing_not_started` when
     the run could not be handed to a worker: it is then stored as failed and a new one can be
     started.
     """

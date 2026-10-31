@@ -824,7 +824,10 @@ export interface paths {
          * @description Delete a finished run with its report and the pages it fetched, for good.
          *
          *     409 `research_unfinished` while the run is queued or running: the worker
-         *     would store pages or a report for a run that is gone. 503
+         *     would store pages or a report for a run that is gone, and 409
+         *     `research_used_by_post` while a post of the project drew on its findings:
+         *     the post is the record of what it drew on, and is deleted only with its
+         *     project. 503
          *     `storage_unavailable` when the pages' objects could not be removed from
          *     object storage; the run stays then, and can be deleted again. The request
          *     takes no body; one is a 422.
@@ -908,9 +911,11 @@ export interface paths {
          * @description Delete a finished run with its assets and every version's image, for good.
          *
          *     An accepted asset goes too. 409 `studio_run_unfinished` while the run is queued or
-         *     running: the worker would store images for a run that is gone. 503 `storage_unavailable`
-         *     when the images could not be removed from object storage; the run stays then, and can be
-         *     deleted again. The request takes no body; one is a 422.
+         *     running: the worker would store images for a run that is gone, and 409
+         *     `studio_run_used_by_post` while a post of the project goes with one of its assets: the post
+         *     is the record of what it went with, and is deleted only with its project. 503
+         *     `storage_unavailable` when the images could not be removed from object storage; the run
+         *     stays then, and can be deleted again. The request takes no body; one is a 422.
          */
         delete: operations["deleteStudioRun"];
         options?: never;
@@ -937,7 +942,14 @@ export interface paths {
          *
          *     A worker executes it later: it writes from the project's approved profile, and a brief
          *     that names a feature the profile does not hold as live ends the run failed, saying so.
-         *     The post it proposes waits for a person on its proposal. 503 `writing_not_started` when
+         *     The post it proposes waits for a person on its proposal.
+         *
+         *     The brief may name `asset`, an image of the project's Studio library the post goes with,
+         *     and `research_run_id`, a research run of the project whose findings it may draw on. One
+         *     the project does not have is a 404 (`media_asset_not_found`, `research_not_found`); 409
+         *     `media_asset_not_usable` when the asset was rejected, has no image or is still being
+         *     made, and 409 `research_not_usable` when the research run has not succeeded. 503
+         *     `writing_not_started` when
          *     the run could not be handed to a worker: it is then stored as failed and a new one can be
          *     started.
          */
@@ -1672,6 +1684,16 @@ export interface components {
                 [key: string]: unknown;
             }[];
             /**
+             * Asset Id
+             * @description The Studio asset whose image the post goes with; null for a post alone.
+             */
+            asset_id: string | null;
+            /**
+             * Asset Version Id
+             * @description The version of that asset the post goes with, the image a person approves with the text; null exactly when `asset_id` is.
+             */
+            asset_version_id: string | null;
+            /**
              * Check Report
              * @description What the code's rules found of the post.
              */
@@ -1738,6 +1760,11 @@ export interface components {
              */
             proposal_id: string | null;
             /**
+             * Research Run Id
+             * @description The research run whose findings the post drew on; null when none.
+             */
+            research_run_id: string | null;
+            /**
              * Run Id
              * Format: uuid
              */
@@ -1767,6 +1794,16 @@ export interface components {
          * @description A post a run proposed, without the record of how it was written.
          */
         ContentItemResponse: {
+            /**
+             * Asset Id
+             * @description The Studio asset whose image the post goes with; null for a post alone.
+             */
+            asset_id: string | null;
+            /**
+             * Asset Version Id
+             * @description The version of that asset the post goes with, the image a person approves with the text; null exactly when `asset_id` is.
+             */
+            asset_version_id: string | null;
             /** Cost Usd */
             cost_usd: number;
             /**
@@ -1795,6 +1832,11 @@ export interface components {
              * @description The proposal a person decides the post on, once the item names it.
              */
             proposal_id: string | null;
+            /**
+             * Research Run Id
+             * @description The research run whose findings the post drew on; null when none.
+             */
+            research_run_id: string | null;
             /**
              * Run Id
              * Format: uuid
@@ -1903,7 +1945,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "writing_run_not_found" | "content_item_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "writing_run_unfinished" | "media_asset_decided" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "writing_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
+        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "writing_run_not_found" | "content_item_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "writing_run_unfinished" | "media_asset_decided" | "media_asset_not_usable" | "research_not_usable" | "studio_run_used_by_post" | "research_used_by_post" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "writing_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
         EventDetailScalar: string | number | boolean | null;
         EventDetailValue: components["schemas"]["EventDetailScalar"] | components["schemas"]["EventDetailScalar"][];
         /**
@@ -3002,10 +3044,14 @@ export interface components {
         WritingBrief: {
             /** Angle */
             angle?: string | null;
+            /** Asset */
+            asset?: string | null;
             /** Feature */
             feature?: string | null;
             goal: components["schemas"]["WritingGoal"];
             platform: components["schemas"]["WritingPlatform"];
+            /** Research Run Id */
+            research_run_id?: string | null;
             /**
              * Variants
              * @default 3
@@ -6340,6 +6386,15 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
