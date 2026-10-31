@@ -16,7 +16,7 @@ not refused but flagged, for the critic and for the person.
 A brief may name two ready inputs, which no agent of this run makes: an asset of the project's
 Studio library the post goes with, and a finished research run whose findings the post may draw
 on. ``prepare`` reads each through the context and keeps it in the writing context, bounded, as
-data: of the asset what its run was asked (its goal, the words on it, its visual idea), never
+data: of the asset what its run was asked (its goal and the words on it), never
 the image, which the writer cannot see; of the research its findings with the sites and quotes
 they rest on. A finding is never a claim's evidence: the claims rule still asks every claim for
 a live feature of the profile, and a number a finding gives is flagged like any other.
