@@ -43,6 +43,7 @@ from openmarketer_api.routes import (
     repository_images,
     research,
     studio,
+    writing,
 )
 from openmarketer_api.settings import Settings
 from openmarketer_api.temporal_workflows import TemporalWorkflows
@@ -74,6 +75,7 @@ def create_app() -> FastAPI:
         analyses,
         research,
         studio,
+        writing,
         repository_images,
         profiles,
         proposals,

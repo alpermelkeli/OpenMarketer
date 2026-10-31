@@ -1013,6 +1013,280 @@
         "title": "ChosenCreativeBudgetResponse",
         "type": "object"
       },
+      "ContentItemDetailResponse": {
+        "additionalProperties": false,
+        "description": "A post with the record of how it was written, as the worker stored it.",
+        "properties": {
+          "alternatives": {
+            "description": "The other variants, each with what the checks and the critic found of it.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Alternatives",
+            "type": "array"
+          },
+          "check_report": {
+            "additionalProperties": true,
+            "description": "What the code's rules found of the post.",
+            "title": "Check Report",
+            "type": "object"
+          },
+          "claims": {
+            "description": "What the post claims, each with the features and the evidence it rests on.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Claims",
+            "type": "array"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "critic_report": {
+            "additionalProperties": true,
+            "description": "What the critic found of the post.",
+            "title": "Critic Report",
+            "type": "object"
+          },
+          "flagged_numbers": {
+            "description": "Numbers in the post the profile does not hold, for a person to check.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Flagged Numbers",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "plan": {
+            "additionalProperties": true,
+            "description": "The plan the post was drafted from.",
+            "title": "Plan",
+            "type": "object"
+          },
+          "plan_changes": {
+            "description": "What the code changed in the writer's plan.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Plan Changes",
+            "type": "array"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/WritingPlatform"
+          },
+          "profile_version": {
+            "description": "The approved profile version it was written from.",
+            "title": "Profile Version",
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "proposal_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The proposal a person decides the post on, once the item names it.",
+            "title": "Proposal Id"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "settled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ContentItemStatus",
+            "description": "`proposed` while it waits for a person; `dry_run` once approved and recorded as it would have been sent (nothing is sent yet), `rejected`, `expired` or `failed`."
+          },
+          "text": {
+            "description": "The post as it would be sent.",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "run_id",
+          "platform",
+          "status",
+          "text",
+          "profile_version",
+          "proposal_id",
+          "cost_usd",
+          "created_at",
+          "settled_at",
+          "plan",
+          "plan_changes",
+          "alternatives",
+          "claims",
+          "check_report",
+          "critic_report",
+          "flagged_numbers"
+        ],
+        "title": "ContentItemDetailResponse",
+        "type": "object"
+      },
+      "ContentItemListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ContentItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the last page; otherwise the `cursor` of the next request.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "ContentItemListResponse",
+        "type": "object"
+      },
+      "ContentItemResponse": {
+        "additionalProperties": false,
+        "description": "A post a run proposed, without the record of how it was written.",
+        "properties": {
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/WritingPlatform"
+          },
+          "profile_version": {
+            "description": "The approved profile version it was written from.",
+            "title": "Profile Version",
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "proposal_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The proposal a person decides the post on, once the item names it.",
+            "title": "Proposal Id"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "settled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ContentItemStatus",
+            "description": "`proposed` while it waits for a person; `dry_run` once approved and recorded as it would have been sent (nothing is sent yet), `rejected`, `expired` or `failed`."
+          },
+          "text": {
+            "description": "The post as it would be sent.",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "run_id",
+          "platform",
+          "status",
+          "text",
+          "profile_version",
+          "proposal_id",
+          "cost_usd",
+          "created_at",
+          "settled_at"
+        ],
+        "title": "ContentItemResponse",
+        "type": "object"
+      },
+      "ContentItemStatus": {
+        "enum": [
+          "proposed",
+          "dry_run",
+          "rejected",
+          "expired",
+          "failed"
+        ],
+        "title": "ContentItemStatus",
+        "type": "string"
+      },
       "CreateChatRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1258,6 +1532,8 @@
           "studio_run_not_found",
           "media_asset_not_found",
           "media_asset_version_not_found",
+          "writing_run_not_found",
+          "content_item_not_found",
           "repository_image_not_found",
           "chat_not_found",
           "profile_not_found",
@@ -1269,6 +1545,7 @@
           "analysis_already_running",
           "research_unfinished",
           "studio_run_unfinished",
+          "writing_run_unfinished",
           "media_asset_decided",
           "profile_already_approved",
           "proposal_not_pending",
@@ -1286,6 +1563,7 @@
           "analysis_not_started",
           "research_not_started",
           "studio_not_started",
+          "writing_not_started",
           "model_unavailable",
           "chat_unanswered",
           "database_unavailable",
@@ -3899,6 +4177,349 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WritingBrief": {
+        "additionalProperties": false,
+        "description": "One post the writer is asked to write, for one platform, with how many texts to offer.",
+        "properties": {
+          "angle": {
+            "anyOf": [
+              {
+                "maxLength": 600,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Angle"
+          },
+          "feature": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feature"
+          },
+          "goal": {
+            "$ref": "#/components/schemas/WritingGoal"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/WritingPlatform"
+          },
+          "variants": {
+            "default": 3,
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Variants",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "platform",
+          "goal"
+        ],
+        "title": "WritingBrief",
+        "type": "object"
+      },
+      "WritingGoal": {
+        "enum": [
+          "introduce",
+          "announce",
+          "angle"
+        ],
+        "title": "WritingGoal",
+        "type": "string"
+      },
+      "WritingPlatform": {
+        "enum": [
+          "x"
+        ],
+        "title": "WritingPlatform",
+        "type": "string"
+      },
+      "WritingRunDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "brief": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WritingBrief"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the run was asked to write; null when the stored brief no longer fits the brief's schema, which a later version may have tightened."
+          },
+          "content_item_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The post the run proposed, once it has stored it.",
+            "title": "Content Item Id"
+          },
+          "cost_usd": {
+            "description": "What the run's model calls cost, in USD, once it ended.",
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/WritingPlatform"
+          },
+          "profile_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The approved profile version the run writes from, once it has read it.",
+            "title": "Profile Version"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "requested_by": {
+            "description": "Who asked for the run: `person`, `orchestrator` (the chat) or `run`.",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WritingRunStatus"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "status",
+          "platform",
+          "requested_by",
+          "error",
+          "profile_version",
+          "content_item_id",
+          "cost_usd",
+          "created_at",
+          "started_at",
+          "finished_at",
+          "brief"
+        ],
+        "title": "WritingRunDetailResponse",
+        "type": "object"
+      },
+      "WritingRunListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on the last page; otherwise the `cursor` of the next request.",
+            "title": "Next Cursor"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/WritingRunResponse"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "next_cursor"
+        ],
+        "title": "WritingRunListResponse",
+        "type": "object"
+      },
+      "WritingRunResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "content_item_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The post the run proposed, once it has stored it.",
+            "title": "Content Item Id"
+          },
+          "cost_usd": {
+            "description": "What the run's model calls cost, in USD, once it ended.",
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/WritingPlatform"
+          },
+          "profile_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The approved profile version the run writes from, once it has read it.",
+            "title": "Profile Version"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "requested_by": {
+            "description": "Who asked for the run: `person`, `orchestrator` (the chat) or `run`.",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WritingRunStatus"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "status",
+          "platform",
+          "requested_by",
+          "error",
+          "profile_version",
+          "content_item_id",
+          "cost_usd",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "WritingRunResponse",
+        "type": "object"
+      },
+      "WritingRunStatus": {
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed"
+        ],
+        "title": "WritingRunStatus",
+        "type": "string"
       }
     }
   },
@@ -4212,7 +4833,7 @@
     },
     "/v1/projects/{project_id}": {
       "delete": {
-        "description": "Delete the project with everything stored about it, for good.\n\nThat is its analyses, the evidence they found, every profile version, its\nproposals, its chats, its research runs with their reports and the pages\nthey fetched, and its studio runs with their assets and every version's\nimage, accepted ones included. Refused while an analysis, a research run or a\nstudio run of the project is queued or running (409 `analysis_already_running`,\n`research_unfinished`, `studio_run_unfinished`), or a proposal of it waits for\na decision. The pages and the images are in the installation's one bucket and\nare removed through the same store. 503 `storage_unavailable` when an object\ncould not be removed from object storage; the project stays then. The\nrepository is not touched, nor what its runs spent in the month's ledger.",
+        "description": "Delete the project with everything stored about it, for good.\n\nThat is its analyses, the evidence they found, every profile version, its\nproposals, its chats, its research runs with their reports and the pages\nthey fetched, its studio runs with their assets and every version's image,\naccepted ones included, and its writing runs with the posts they proposed.\nRefused while an analysis, a research run, a studio run or a writing run of\nthe project is queued or running (409 `analysis_already_running`,\n`research_unfinished`, `studio_run_unfinished`, `writing_run_unfinished`), or a\nproposal of it waits for a decision. The pages and the images are in the\ninstallation's one bucket and are removed through the same store. 503\n`storage_unavailable` when an object could not be removed from object\nstorage; the project stays then. The repository is not touched, nor what its\nruns spent in the month's ledger.",
         "operationId": "deleteProject",
         "parameters": [
           {
@@ -5537,6 +6158,190 @@
         "summary": "Mark Read",
         "tags": [
           "chat"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/content-items": {
+      "get": {
+        "description": "The posts the project's writing runs proposed, newest first, one page at a time.",
+        "operationId": "listContentItems",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The most items one response may hold.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most items one response may hold.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+              "maxLength": 200,
+              "title": "Cursor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentItemListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Items",
+        "tags": [
+          "writing"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/content-items/{item_id}": {
+      "get": {
+        "description": "One post as it is now, with the record of how it was written.",
+        "operationId": "getContentItem",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentItemDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Item",
+        "tags": [
+          "writing"
         ]
       }
     },
@@ -8286,6 +9091,272 @@
         "summary": "Get Run",
         "tags": [
           "studio"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/writing-runs": {
+      "get": {
+        "description": "The project's writing runs as they are now, newest first, one page at a time.",
+        "operationId": "listWritingRuns",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The most items one response may hold.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "The most items one response may hold.",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "`next_cursor` of the previous page, unchanged. Leave out for the first page.",
+              "maxLength": 200,
+              "title": "Cursor",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WritingRunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Runs",
+        "tags": [
+          "writing"
+        ]
+      },
+      "post": {
+        "description": "Queue a writing run for the brief and return the run to poll.\n\nA worker executes it later: it writes from the project's approved profile, and a brief\nthat names a feature the profile does not hold as live ends the run failed, saying so.\nThe post it proposes waits for a person on its proposal. 503 `writing_not_started` when\nthe run could not be handed to a worker: it is then stored as failed and a new one can be\nstarted.",
+        "operationId": "startWritingRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WritingBrief"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WritingRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Start",
+        "tags": [
+          "writing"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/writing-runs/{run_id}": {
+      "get": {
+        "description": "The run as it is now, with its brief.\n\nQueued, running, succeeded (with its post) or failed.",
+        "operationId": "getWritingRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WritingRunDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Run",
+        "tags": [
+          "writing"
         ]
       }
     },

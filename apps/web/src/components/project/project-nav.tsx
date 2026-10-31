@@ -5,6 +5,7 @@ import {
   CheckSquareIcon,
   FileTextIcon,
   ImageIcon,
+  PenLineIcon,
   PlayCircleIcon,
   PlusIcon,
   TelescopeIcon,
@@ -33,6 +34,7 @@ const PAGE_ICONS = {
   analyses: PlayCircleIcon,
   research: TelescopeIcon,
   studio: ImageIcon,
+  writing: PenLineIcon,
   approvals: CheckSquareIcon,
 };
 

@@ -39,6 +39,16 @@ export const queryKeys = {
     ["projects", "one", projectId, "studio-runs", "list"] as const,
   studioRun: (projectId: string, runId: string) =>
     ["projects", "one", projectId, "studio-runs", "run", runId] as const,
+  writingRuns: (projectId: string) =>
+    ["projects", "one", projectId, "writing-runs", "list"] as const,
+  writingRun: (projectId: string, runId: string) =>
+    ["projects", "one", projectId, "writing-runs", "run", runId] as const,
+  /** The posts the project's writing runs proposed. */
+  contentItems: (projectId: string) =>
+    ["projects", "one", projectId, "content-items", "list"] as const,
+  /** One post with the record of how it was written. */
+  contentItem: (projectId: string, itemId: string) =>
+    ["projects", "one", projectId, "content-items", "one", itemId] as const,
   /** The project's library: the assets its studio runs made. */
   mediaAssets: (projectId: string) =>
     ["projects", "one", projectId, "media-assets", "list"] as const,
@@ -109,6 +119,15 @@ export function refreshedByStudioRunEnd(projectId: string): Refresh[] {
     { queryKey: queryKeys.mediaAssets(projectId) },
     { queryKey: queryKeys.creativeBudget() },
   ];
+}
+
+/**
+ * What a writing run that has just ended makes out of date: the list of runs, the posts, and its
+ * own post, whose state the end settled (approved as a dry run, rejected or expired).
+ */
+export function refreshedByWritingRunEnd(projectId: string, contentItemId: string | null): Refresh[] {
+  const lists = [{ queryKey: queryKeys.writingRuns(projectId) }, { queryKey: queryKeys.contentItems(projectId) }];
+  return contentItemId === null ? lists : [...lists, { queryKey: queryKeys.contentItem(projectId, contentItemId) }];
 }
 
 /** What a decision on an asset makes out of date: the library that lists its state. The asset itself is set from the answer. */

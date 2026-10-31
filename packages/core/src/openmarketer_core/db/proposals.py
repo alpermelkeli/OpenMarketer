@@ -268,6 +268,21 @@ def proposal_status_of_action(session: Session, action_id: str) -> ProposalStatu
     )
 
 
+def proposal_of_action(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, action_id: str
+) -> uuid.UUID | None:
+    """The id of the proposal the gate held ``action_id`` as, or ``None`` when it held none.
+
+    An action of another project or workspace is treated as one with no proposal. It is how a
+    handler that runs once its action was approved names the proposal in what it records.
+    """
+    return session.scalar(
+        _proposals_of_project(workspace_id, project_id)
+        .where(ProposalRecord.action_id == action_id)
+        .with_only_columns(ProposalRecord.id)
+    )
+
+
 def get_proposal(
     session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, proposal_id: uuid.UUID
 ) -> ActionProposal:

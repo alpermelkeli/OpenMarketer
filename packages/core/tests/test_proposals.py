@@ -26,6 +26,7 @@ from openmarketer_core.db.proposals import (
     get_proposal,
     list_proposals,
     list_waiting_proposals,
+    proposal_of_action,
     proposal_status_of_action,
     propose_action,
     settle_proposal,
@@ -250,6 +251,28 @@ def test_status_of_an_action_is_read_by_its_key(session, scope):
 
     assert proposal_status_of_action(session, "writer-run:r:1") is ProposalStatus.APPROVED
     assert proposal_status_of_action(session, "writer-run:r:2") is None
+
+
+def test_proposal_of_an_action_is_read_by_its_key_within_its_project(session, scope):
+    proposal = propose(session, scope, action_id="writer-run:r:1")
+
+    assert proposal_of_action(session, **scope_of(scope), action_id="writer-run:r:1") == (
+        proposal.id
+    )
+    assert proposal_of_action(session, **scope_of(scope), action_id="writer-run:r:2") is None
+
+
+def test_proposal_of_an_action_of_another_project_or_workspace_is_none(session, scope):
+    propose(session, scope, action_id="writer-run:r:1")
+    sibling = second_project(session, scope.workspace_id)
+    stranger = new_scope(session)
+
+    for other in (sibling, RunScope(stranger.workspace_id, scope.project_id)):
+        assert proposal_of_action(session, **scope_of(other), action_id="writer-run:r:1") is None
+
+
+def scope_of(scope: RunScope) -> dict[str, uuid.UUID]:
+    return {"workspace_id": scope.workspace_id, "project_id": scope.project_id}
 
 
 def test_list_can_hold_the_proposals_of_one_status_only(session, scope):

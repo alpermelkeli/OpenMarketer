@@ -43,6 +43,21 @@ export type RepositoryImageSource = Schemas["RepositoryImageSource"];
 export type RepositoryImageUpload = Schemas["RepositoryImageUpload"];
 export type RepositoryImageKindChoice = Schemas["RepositoryImageKindChoice"];
 
+export type WritingRun = Schemas["WritingRunResponse"];
+/** One run as its own route serves it: the run with the brief it was given. */
+export type WritingRunDetail = Schemas["WritingRunDetailResponse"];
+export type WritingRunList = Schemas["WritingRunListResponse"];
+export type WritingRunStatus = Schemas["WritingRunStatus"];
+export type WritingBrief = Schemas["WritingBrief"];
+export type WritingGoal = Schemas["WritingGoal"];
+export type WritingPlatform = Schemas["WritingPlatform"];
+/** A post a writing run proposed, without the record of how it was written. */
+export type ContentItem = Schemas["ContentItemResponse"];
+/** A post with the record of how it was written: its plan, alternatives, claims and reports. */
+export type ContentItemDetail = Schemas["ContentItemDetailResponse"];
+export type ContentItemList = Schemas["ContentItemListResponse"];
+export type ContentItemStatus = Schemas["ContentItemStatus"];
+
 export type ProfileVersion = Schemas["ProfileVersionResponse"];
 export type ProfileVersionSummary = Schemas["ProfileVersionSummaryResponse"];
 export type ProfileVersionList = Schemas["ProfileVersionListResponse"];

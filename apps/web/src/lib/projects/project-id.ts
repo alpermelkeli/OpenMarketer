@@ -21,6 +21,11 @@ export function isStudioRunId(value: string): boolean {
   return UUID.test(value);
 }
 
+/** A writing run's identifier is a UUID too, so it is checked the same way. */
+export function isWritingRunId(value: string): boolean {
+  return UUID.test(value);
+}
+
 /** A media asset's identifier, and each of its versions', is a UUID too. */
 export function isMediaAssetId(value: string): boolean {
   return UUID.test(value);

@@ -1,9 +1,9 @@
 """Tables for projects, repository evidence, Product Profile versions, analysis runs and the
 product images they found in the repository, research runs and their reports and pages, studio
-runs and the media assets they made, stored credentials, the settings a workspace chose from
-the dashboard, the proposals of actions that wait for a person, the operator's chat threads
-about a project with their turns, the events runs record for the person watching them, and the
-budget ledger of what runs spend.
+runs and the media assets they made, writing runs and the content items they proposed, stored
+credentials, the settings a workspace chose from the dashboard, the proposals of actions that
+wait for a person, the operator's chat threads about a project with their turns, the events
+runs record for the person watching them, and the budget ledger of what runs spend.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project; ``credential`` and
@@ -51,6 +51,7 @@ from openmarketer_core.repository_analysis.repository_images.selection import (
 )
 from openmarketer_core.research.questions import MAX_SOURCES
 from openmarketer_core.studio.platforms import PLATFORMS
+from openmarketer_core.writing.brief import WritingPlatform
 
 
 class ProjectStatus(StrEnum):
@@ -90,6 +91,21 @@ class StudioRunStatus(StrEnum):
     SUCCEEDED = "succeeded"  # its asset passed every check
     NEEDS_REVIEW = "needs_review"  # a limit was hit; its best candidate waits for a person
     FAILED = "failed"
+
+
+class WritingRunStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"  # its post was proposed and the proposal settled
+    FAILED = "failed"
+
+
+class ContentItemStatus(StrEnum):
+    PROPOSED = "proposed"  # waits for a person's decision
+    DRY_RUN = "dry_run"  # approved, and recorded as it would have been sent
+    REJECTED = "rejected"
+    EXPIRED = "expired"  # nobody decided in time; counts as a rejection
+    FAILED = "failed"  # the run ended without settling it
 
 
 class MediaAssetStatus(StrEnum):
@@ -699,6 +715,132 @@ class ProposalRecord(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     decided_by: Mapped[uuid.UUID | None]
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ----------------------------------------------------------------- writing
+_WRITING_PLATFORM_SLUGS = ", ".join(f"'{platform.value}'" for platform in WritingPlatform)
+
+
+class WritingRunRecord(Base):
+    """One requested run of the writer, from the brief to its outcome.
+
+    Like research, a project may have several writing runs at once. The brief (``brief``, a
+    ``WritingBrief`` as JSON) is stored with the run and checked again when the run starts.
+    ``profile_version_id`` is the approved profile version the run's ``prepare`` chose, kept
+    for the whole run; it must be a version of the same project. ``content_item_id`` is the
+    post the run proposed, which must be the run's own; a succeeded run always has one, and a
+    run that failed after proposing keeps it. ``cost_usd`` is what the run's model calls cost,
+    recorded when it ends.
+    """
+
+    __tablename__ = "writing_run"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["profile_version_id", "project_id"],
+            ["product_profile.id", "product_profile.project_id"],
+        ),
+        ForeignKeyConstraint(
+            ["content_item_id", "id"],
+            ["content_item.id", "content_item.run_id"],
+            # The item names its run as well; the cycle is closed after both tables exist.
+            use_alter=True,
+        ),
+        CheckConstraint(
+            "status <> 'succeeded' OR content_item_id IS NOT NULL", name="content_item_id"
+        ),
+        CheckConstraint(
+            "content_item_id IS NULL OR profile_version_id IS NOT NULL", name="profile_version_id"
+        ),
+        CheckConstraint("(status = 'failed') = (error IS NOT NULL)", name="error"),
+        CheckConstraint(f"char_length(error) <= {RUN_ERROR_MAX_LENGTH}", name="error_length"),
+        # A run can fail before a worker picks it up, so a failed run may have no start.
+        CheckConstraint(
+            "status = 'failed' OR (status = 'queued') = (started_at IS NULL)", name="started_at"
+        ),
+        CheckConstraint(
+            "(status IN ('succeeded', 'failed')) = (finished_at IS NOT NULL)", name="finished_at"
+        ),
+        CheckConstraint("requested_by IN ('person', 'orchestrator', 'run')", name="requested_by"),
+        CheckConstraint(f"platform IN ({_WRITING_PLATFORM_SLUGS})", name="platform"),
+        CheckConstraint("cost_usd >= 0", name="cost_usd"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    status: Mapped[WritingRunStatus] = mapped_column(
+        _enum(WritingRunStatus, "status"), server_default=WritingRunStatus.QUEUED.value
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str] = mapped_column(Text, server_default="person")
+    brief: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    platform: Mapped[str] = mapped_column(Text)
+    profile_version_id: Mapped[uuid.UUID | None]
+    content_item_id: Mapped[uuid.UUID | None]
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), server_default=text("0"))
+    # The chat thread whose turn asked for the run, which the run reports back to; null for a
+    # run asked for anywhere else.
+    chat_thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chat_thread.id"), index=True
+    )
+    created_at: Mapped[datetime] = _created_at()
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ContentItemRecord(Base):
+    """The post a writing run proposed, the record of how it was written, and how it ended.
+
+    One per run. ``text`` is the chosen variant, as it would be sent; ``alternatives`` the
+    other variants the person reads beside it. ``plan`` is the plan the post was drafted from
+    and ``plan_changes`` what code changed in it; ``claims`` the claims of the chosen text,
+    each with the features it rests on; ``check_report`` and ``critic_report`` the code rules'
+    and the critic's findings; ``flagged_numbers`` the numbers of the text the profile does
+    not hold. All of it is JSON written by the worker and shown to the person; nothing reads it
+    back as a rule. ``profile_version_id`` is the run's, and ``proposal_id`` the proposal the
+    gate held ``publish_post`` as, when it was stored.
+
+    An item is ``proposed`` until it is settled, once: ``dry_run`` when the person approved it
+    (nothing is sent anywhere yet), ``rejected``, ``expired``, or ``failed`` when the run ended
+    without settling it.
+    """
+
+    __tablename__ = "content_item"
+    __table_args__ = (
+        # Lets a writing run reference its item together with the run.
+        UniqueConstraint("id", "run_id"),
+        ForeignKeyConstraint(
+            ["profile_version_id", "project_id"],
+            ["product_profile.id", "product_profile.project_id"],
+        ),
+        CheckConstraint(f"platform IN ({_WRITING_PLATFORM_SLUGS})", name="platform"),
+        CheckConstraint("char_length(text) > 0", name="text"),
+        CheckConstraint("(status = 'proposed') = (settled_at IS NULL)", name="settled_at"),
+        CheckConstraint("cost_usd >= 0", name="cost_usd"),
+        # The content of a project reads newest first in this order.
+        Index("ix_content_item_project_id_created_at", "project_id", "created_at", "id"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("writing_run.id"), unique=True)
+    platform: Mapped[str] = mapped_column(Text)
+    text: Mapped[str] = mapped_column(Text)
+    status: Mapped[ContentItemStatus] = mapped_column(
+        _enum(ContentItemStatus, "status"), server_default=ContentItemStatus.PROPOSED.value
+    )
+    plan: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    plan_changes: Mapped[list[Any]] = mapped_column(JSONB)
+    alternatives: Mapped[list[Any]] = mapped_column(JSONB)
+    claims: Mapped[list[Any]] = mapped_column(JSONB)
+    check_report: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    critic_report: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    flagged_numbers: Mapped[list[Any]] = mapped_column(JSONB)
+    profile_version_id: Mapped[uuid.UUID]
+    proposal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("proposal.id"))
+    # A plain string: ``text`` is the column above in this class's body.
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), server_default="0")
+    created_at: Mapped[datetime] = _created_at()
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # ------------------------------------------------------------------- chat

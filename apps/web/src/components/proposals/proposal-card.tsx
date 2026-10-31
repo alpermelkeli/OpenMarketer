@@ -1,6 +1,7 @@
 "use client";
 
-import { CheckIcon, XIcon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, XIcon } from "lucide-react";
+import Link from "next/link";
 
 import { StatusPill } from "@/components/common/status-pill";
 import { Button } from "@/components/ui/button";
@@ -12,8 +13,10 @@ import {
   estimateText,
   payloadText,
   proposalStatusDisplay,
+  proposedPostText,
   timeLeftToDecide,
 } from "@/lib/proposals/proposal-display";
+import { proposalAnchor, writingHref } from "@/lib/projects/project-navigation";
 
 type ProposalCardProps = {
   proposal: Proposal;
@@ -28,9 +31,11 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
   const waiting = proposal.status === "pending";
   const label = actionLabel(proposal.action_name);
   const estimate = estimateText(proposal.estimate_usd);
+  const post = proposedPostText(proposal);
 
   return (
     <article
+      id={proposalAnchor(proposal.id)}
       aria-label={`Proposal ${shortId(proposal.id)}`}
       className={
         waiting
@@ -48,6 +53,26 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
         {estimate !== null && <p className="font-mono text-sm tabular-nums">{estimate}</p>}
         <p className="ml-auto text-sm text-muted-foreground">Asked {formatDateTime(proposal.created_at)}</p>
       </div>
+
+      {post !== null && (
+        <div className="grid gap-2">
+          <p className="text-2xs tracking-widest text-muted-foreground uppercase">The post, exactly as it would be sent</p>
+          {/* Written by a model: text only, never HTML or Markdown. */}
+          <blockquote className="max-w-prose border-l-2 border-warning/60 pl-4 text-base text-pretty break-words whitespace-pre-wrap">
+            {post}
+          </blockquote>
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+            <span>The writer sends nothing to X yet: an approved post is recorded as a dry run.</span>
+            <Link
+              href={writingHref(proposal.project_id, proposal.run_id)}
+              className="inline-flex items-center gap-1 rounded-sm text-brand underline-offset-4 hover:underline"
+            >
+              Its claims, checks and alternatives
+              <ArrowRightIcon aria-hidden="true" className="size-3.5" />
+            </Link>
+          </p>
+        </div>
+      )}
 
       <div className="grid gap-1.5">
         <p className="text-2xs tracking-widest text-muted-foreground uppercase">What the agent asks</p>
