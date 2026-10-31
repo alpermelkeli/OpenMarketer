@@ -83,7 +83,8 @@ class _Spent:
     def unread(self, what: str) -> str:
         """Why ``what`` could not be read, worded for the person who reads the run."""
         if self.cut_off:
-            return f"{what} was cut off by the model's length limit, twice: {rules.CUT_OFF_HINT}"
+            cut = "the answer was cut off by the model's length limit, twice"
+            return f"{what}: {cut}; {rules.CUT_OFF_HINT}"
         return f"{what} could not be read after two attempts"
 
     def update(self, state: WriterState) -> dict[str, Any]:

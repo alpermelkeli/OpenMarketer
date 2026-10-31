@@ -563,7 +563,9 @@ def test_variants_cut_off_twice_end_the_run_saying_to_raise_the_limit():
     with pytest.raises(WritingError) as failed:
         Run(chat)
 
-    assert "variants was cut off by the model's length limit, twice" in str(failed.value)
+    assert "variants: the answer was cut off by the model's length limit, twice" in str(
+        failed.value
+    )
     assert rules.CUT_OFF_HINT in str(failed.value)
 
 
