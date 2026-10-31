@@ -17,6 +17,10 @@ const ADVICE: Partial<Record<ApiErrorCode, string>> = {
   internal_error: "The API ran into an error it did not expect. Its log has the details.",
   project_not_found: "The API has no project with this ID.",
   chat_not_found: "The project has no chat with this ID.",
+  studio_run_used_by_post:
+    "A post of this project goes with this run's image, so the run is kept as long as the post is. It is deleted only with the project.",
+  research_used_by_post:
+    "A post of this project drew on this run's findings, so the run is kept as long as the post is. It is deleted only with the project.",
   model_key_not_set:
     "No key of the model provider is set, so the orchestrator cannot answer. Store one in Settings, under Credentials.",
 };
