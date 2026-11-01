@@ -48,6 +48,12 @@ CRITIC_ROLE = "critic"
 
 # How many times a node asks for a submission again after one that did not fit.
 SUBMISSION_ATTEMPTS = 2
+# What a person is told when a role's answers were cut off by its length limit: a model that
+# reasons spends the limit on its reasoning and writes nothing, so the limit is the fix.
+CUT_OFF_HINT = (
+    "raise max_tokens of its role in config/models.yaml or the workspace's model settings, "
+    "or choose a model for it that reasons less"
+)
 
 MAX_ANGLE_CHARS = 300
 MAX_PLAN_FEATURES = 3

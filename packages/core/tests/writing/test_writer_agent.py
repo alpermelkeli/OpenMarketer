@@ -546,7 +546,33 @@ def test_an_answer_that_does_not_fit_is_told_so_and_asked_once_more():
 def test_two_unreadable_plans_end_the_run():
     chat = ScriptedChat(writer=[text("I would rather not."), text("{}")], critic=[])
 
-    with pytest.raises(WritingError, match="readable plan"):
+    with pytest.raises(WritingError, match="plan could not be read after two attempts"):
+        Run(chat)
+
+
+def cut_off() -> ChatReply:
+    """An answer a reasoning model left empty when it hit the role's length limit."""
+    return ChatReply(
+        message={"role": "assistant"}, model="vendor/m", cost_usd=0.01, finish_reason="length"
+    )
+
+
+def test_variants_cut_off_twice_end_the_run_saying_to_raise_the_limit():
+    chat = ScriptedChat(writer=[a_plan(), cut_off(), cut_off()], critic=[])
+
+    with pytest.raises(WritingError) as failed:
+        Run(chat)
+
+    assert "variants: the answer was cut off by the model's length limit, twice" in str(
+        failed.value
+    )
+    assert rules.CUT_OFF_HINT in str(failed.value)
+
+
+def test_a_cut_off_answer_then_an_unreadable_one_is_worded_as_unreadable():
+    chat = ScriptedChat(writer=[a_plan(), cut_off(), text("{}")], critic=[])
+
+    with pytest.raises(WritingError, match="variants could not be read after two attempts"):
         Run(chat)
 
 
