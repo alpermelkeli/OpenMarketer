@@ -519,6 +519,28 @@ describe("the routes of the writer", () => {
   });
 });
 
+describe("the routes of the orchestrator's tasks", () => {
+  const TASKS = ["projects", PROJECT, "tasks"];
+  const TASK = "0b0e6c6e-2222-4333-8444-555566667777";
+
+  it("forward reading one task", () => {
+    expect(allowedApiPath("GET", [...TASKS, TASK])).toBe(`/v1/projects/${PROJECT}/tasks/${TASK}`);
+  });
+
+  it("take no query parameter on one task", () => {
+    expect(() => allowedApiTarget("GET", [...TASKS, TASK], new URLSearchParams("limit=20"))).toThrow();
+  });
+
+  it("do not include the list, starting, changing or deleting a task, or an id of another form", () => {
+    expect(() => allowedApiPath("GET", TASKS)).toThrow();
+    expect(() => allowedApiPath("POST", TASKS)).toThrow();
+    expect(() => allowedApiPath("POST", [...TASKS, TASK])).toThrow();
+    expect(() => allowedApiPath("PATCH", [...TASKS, TASK])).toThrow();
+    expect(() => allowedApiPath("DELETE", [...TASKS, TASK])).toThrow();
+    expect(() => allowedApiPath("GET", [...TASKS, "latest"])).toThrow();
+  });
+});
+
 describe("the routes of the repository's images", () => {
   const IMAGES = ["projects", PROJECT, "repository-images"];
   const IMAGE = "0b0e6c6e-1111-4222-8333-444455556666";

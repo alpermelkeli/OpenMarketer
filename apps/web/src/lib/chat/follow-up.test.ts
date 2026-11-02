@@ -13,3 +13,10 @@ describe("how a follow-up turn is worded", () => {
     expect(followUpWording("studio_finished").failed).toBe("The orchestrator could not review the studio’s image");
   });
 });
+
+describe("how a follow-up on a task is worded", () => {
+  it("names the task's report", () => {
+    expect(followUpWording("task_finished").failed).toBe("The orchestrator could not report on the task");
+    expect(followUpWording("task_finished").stillThere).toBe("The task’s report is still in its card in this chat.");
+  });
+});

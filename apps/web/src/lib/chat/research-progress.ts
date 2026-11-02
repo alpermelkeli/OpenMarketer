@@ -50,8 +50,12 @@ export function outcomeText(status: ProgressStatus): string | null {
     : `Finished with ${count(status.findings, "checked finding", "checked findings")}.`;
 }
 
-/** Where the action the policy gate held stands, as a sentence of the run's card. */
+/**
+ * Where the action the policy gate held stands, as a sentence of the run's card. A task's plan to
+ * confirm (effect `confirms`) is worded as one.
+ */
 export function proposalText(proposal: RunProposal): string {
+  if (proposal.effect === "confirms") return confirmationText(proposal);
   switch (proposal.status) {
     case "waiting":
       return `The run asked to run ${proposal.actionName} and waits for your decision. Nothing runs until you decide.`;
@@ -61,6 +65,19 @@ export function proposalText(proposal: RunProposal): string {
       return `You rejected ${proposal.actionName}; it did not run.`;
     case "expired":
       return `Nobody decided on ${proposal.actionName} before its deadline, or the run stopped waiting; it did not run.`;
+  }
+}
+
+function confirmationText(proposal: RunProposal): string {
+  switch (proposal.status) {
+    case "waiting":
+      return "The task asks you to confirm its plan and waits. Nothing of the plan runs until you decide; rejected, the task ends without running it.";
+    case "approved":
+      return "You confirmed the plan; the task runs it.";
+    case "rejected":
+      return "The plan was rejected; the task ended without running it.";
+    case "expired":
+      return "Nobody confirmed the plan before its deadline, or the task stopped waiting; none of it ran.";
   }
 }
 
