@@ -69,6 +69,8 @@ OPERATIONS = {
     "listWritingRuns": ("get", "/v1/projects/{project_id}/writing-runs"),
     "getWritingRun": ("get", "/v1/projects/{project_id}/writing-runs/{run_id}"),
     "listContentItems": ("get", "/v1/projects/{project_id}/content-items"),
+    "listTasks": ("get", "/v1/projects/{project_id}/tasks"),
+    "getTask": ("get", "/v1/projects/{project_id}/tasks/{task_id}"),
     "getContentItem": ("get", "/v1/projects/{project_id}/content-items/{item_id}"),
     "listRepositoryImages": ("get", "/v1/projects/{project_id}/repository-images"),
     "uploadRepositoryImage": ("post", "/v1/projects/{project_id}/repository-images"),
@@ -175,6 +177,7 @@ LISTS = {
     "/v1/projects/{project_id}/media-assets": ("MediaAssetListResponse", "assets"),
     "/v1/projects/{project_id}/writing-runs": ("WritingRunListResponse", "runs"),
     "/v1/projects/{project_id}/content-items": ("ContentItemListResponse", "items"),
+    "/v1/projects/{project_id}/tasks": ("TaskListResponse", "tasks"),
     "/v1/proposals": ("ProposalListResponse", "proposals"),
 }
 

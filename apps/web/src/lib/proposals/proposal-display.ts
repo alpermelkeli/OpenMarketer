@@ -25,6 +25,7 @@ const EFFECT_LABEL: Record<ActionEffect, string> = {
   publishes: "Publishes",
   spends: "Spends money",
   internal: "Internal",
+  confirms: "Confirm a plan",
 };
 
 export function effectLabel(effect: ActionEffect): string {
@@ -35,6 +36,7 @@ const EFFECT_NOTE: Record<ActionEffect, string> = {
   publishes: "It puts something in front of other people.",
   spends: "It costs money.",
   internal: "It works for the run itself.",
+  confirms: "The task waits for this before it runs anything.",
 };
 
 /** What approving an action with `effect` lets happen, as a sentence. */

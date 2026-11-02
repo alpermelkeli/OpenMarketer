@@ -34,7 +34,9 @@ from openmarketer_core.db.research_runs import (
 )
 from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.db.studio_runs import request_studio_run
+from openmarketer_core.db.tasks import request_task_run
 from openmarketer_core.db.writing_runs import request_writing_run
+from openmarketer_core.orchestrator.task.plan import TaskRequest
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.repository_analysis.intake import Snapshot
 from openmarketer_core.research.questions import ResearchRequest
@@ -486,6 +488,29 @@ def test_project_with_an_unfinished_writing_run_is_not_deleted(client, session):
             "code": "writing_run_unfinished",
             "message": f"project {project_id} has a writing run in progress;"
             " it can be deleted when the run has finished",
+        },
+    )
+    assert client.get(f"/v1/projects/{project_id}").status_code == 200
+
+
+def test_project_with_an_unfinished_task_is_not_deleted(client, session):
+    project_id = project_created(session, minutes_ago=10)
+    request_task_run(
+        session,
+        workspace_id=local_workspace_id(session),
+        project_id=uuid.UUID(project_id),
+        request=TaskRequest(request="Post about offline mode", understanding="One post for X."),
+        requested_by="orchestrator",
+    )
+
+    response = client.delete(f"/v1/projects/{project_id}")
+
+    assert (response.status_code, response.json()) == (
+        409,
+        {
+            "code": "task_unfinished",
+            "message": f"project {project_id} has a task in progress; it can be deleted when"
+            " the task has finished",
         },
     )
     assert client.get(f"/v1/projects/{project_id}").status_code == 200

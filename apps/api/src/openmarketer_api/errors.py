@@ -57,6 +57,7 @@ from openmarketer_core.db.project_removal import (
     ProjectHasUnfinishedResearch,
     ProjectHasUnfinishedRun,
     ProjectHasUnfinishedStudioRun,
+    ProjectHasUnfinishedTask,
     ProjectHasUnfinishedWritingRun,
 )
 from openmarketer_core.db.projects import ProjectAlreadyExists, ProjectNotFound
@@ -75,6 +76,7 @@ from openmarketer_core.db.studio_runs import (
     StudioRunUnfinished,
     StudioRunUsedByPost,
 )
+from openmarketer_core.db.tasks import TaskNotFound
 from openmarketer_core.db.writing_runs import WritingRunNotFound
 from openmarketer_core.llm import LLMError
 from openmarketer_core.orchestrator.chat_agent.rules import ChatTurnError
@@ -119,6 +121,7 @@ class ErrorCode(StrEnum):
     MEDIA_ASSET_VERSION_NOT_FOUND = "media_asset_version_not_found"
     WRITING_RUN_NOT_FOUND = "writing_run_not_found"
     CONTENT_ITEM_NOT_FOUND = "content_item_not_found"
+    TASK_NOT_FOUND = "task_not_found"
     REPOSITORY_IMAGE_NOT_FOUND = "repository_image_not_found"
     CHAT_NOT_FOUND = "chat_not_found"
     PROFILE_NOT_FOUND = "profile_not_found"
@@ -131,6 +134,7 @@ class ErrorCode(StrEnum):
     RESEARCH_UNFINISHED = "research_unfinished"
     STUDIO_RUN_UNFINISHED = "studio_run_unfinished"
     WRITING_RUN_UNFINISHED = "writing_run_unfinished"
+    TASK_UNFINISHED = "task_unfinished"
     MEDIA_ASSET_DECIDED = "media_asset_decided"
     MEDIA_ASSET_NOT_USABLE = "media_asset_not_usable"
     RESEARCH_NOT_USABLE = "research_not_usable"
@@ -196,6 +200,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     MediaAssetVersionNotFound: (404, ErrorCode.MEDIA_ASSET_VERSION_NOT_FOUND),
     WritingRunNotFound: (404, ErrorCode.WRITING_RUN_NOT_FOUND),
     ContentItemNotFound: (404, ErrorCode.CONTENT_ITEM_NOT_FOUND),
+    TaskNotFound: (404, ErrorCode.TASK_NOT_FOUND),
     RepositoryImageNotFound: (404, ErrorCode.REPOSITORY_IMAGE_NOT_FOUND),
     ChatNotFound: (404, ErrorCode.CHAT_NOT_FOUND),
     ProfileVersionNotFound: (404, ErrorCode.PROFILE_NOT_FOUND),
@@ -211,6 +216,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ProjectHasUnfinishedStudioRun: (409, ErrorCode.STUDIO_RUN_UNFINISHED),
     StudioRunUnfinished: (409, ErrorCode.STUDIO_RUN_UNFINISHED),
     ProjectHasUnfinishedWritingRun: (409, ErrorCode.WRITING_RUN_UNFINISHED),
+    ProjectHasUnfinishedTask: (409, ErrorCode.TASK_UNFINISHED),
     MediaAssetDecided: (409, ErrorCode.MEDIA_ASSET_DECIDED),
     AssetNotUsable: (409, ErrorCode.MEDIA_ASSET_NOT_USABLE),
     ResearchRunNotUsable: (409, ErrorCode.RESEARCH_NOT_USABLE),
