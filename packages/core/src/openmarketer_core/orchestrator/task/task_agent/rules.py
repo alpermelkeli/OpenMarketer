@@ -583,33 +583,43 @@ def _resolved(
 
 
 def step_outcome(agent: str, result: Mapping[str, Any]) -> dict[str, Any]:
-    """What a finished run of ``agent`` gave, from its final state, as the task keeps it.
+    """What a finished run of ``agent`` gave, as the task keeps it.
 
-    The run's own code wrote the state; it is read defensively all the same, and a part that
-    is missing is left out.
+    ``result`` is what the runtime answered the run action with: the small projection the
+    child's ``finish`` reported (the worker's research, studio and writing runs report their
+    parts at the top, the cost of a post as text), with the run's id. A part may also sit under
+    ``result``, as a run's final state keeps it. The run's own code wrote it; it is read
+    defensively all the same, and a part that is missing is left out.
     """
+    ended = _mapping(result.get("result"))
+
+    def part(key: str) -> Any:
+        found = result.get(key)
+        return ended.get(key) if found is None else found
+
     if agent == TaskAgentName.RESEARCH:
-        findings = [item for item in _list(result.get("findings")) if isinstance(item, dict)]
+        listed = result.get("findings")
+        findings = [item for item in _list(listed) if isinstance(item, dict)]
+        counted = listed if isinstance(listed, int) and not isinstance(listed, bool) else None
         return {
-            "findings": len(findings),
+            "findings": max(counted, 0) if counted is not None else len(findings),
             "statements": [
                 str(finding.get("statement", ""))[:MAX_SHOWN_FINDING_CHARS]
                 for finding in findings[:MAX_SHOWN_FINDINGS]
             ],
             "cost_usd": _cost(result),
         }
-    ended = _mapping(result.get("result"))
     if agent == TaskAgentName.STUDIO:
         return {
-            "asset_id": str(result.get("asset_id") or ""),
-            "final_version_id": str(ended.get("final_version_id") or ""),
-            "needs_review": bool(ended.get("needs_review", False)),
+            "asset_id": str(part("asset_id") or ""),
+            "final_version_id": str(part("final_version_id") or part("version_id") or ""),
+            "needs_review": part("needs_review") is True,
             "cost_usd": _cost(result),
         }
     return {
-        "content_item_id": str(ended.get("content_item_id") or result.get("content_item_id") or ""),
-        "post_status": str(ended.get("status") or result.get("status") or ""),
-        "text": str(ended.get("text") or "")[:MAX_SHOWN_POST_CHARS],
+        "content_item_id": str(part("content_item_id") or ""),
+        "post_status": str(part("status") or ""),
+        "text": str(part("text") or "")[:MAX_SHOWN_POST_CHARS],
         "cost_usd": _cost(result),
     }
 
@@ -624,6 +634,11 @@ def _list(value: Any) -> list[Any]:
 
 def _cost(result: Mapping[str, Any]) -> float:
     cost = result.get("cost_usd")
+    if isinstance(cost, str):  # a run that counts exactly reports the text of a decimal
+        try:
+            cost = float(cost)
+        except ValueError:
+            return 0.0
     if isinstance(cost, bool) or not isinstance(cost, int | float) or not math.isfinite(cost):
         return 0.0
     return max(float(cost), 0.0)

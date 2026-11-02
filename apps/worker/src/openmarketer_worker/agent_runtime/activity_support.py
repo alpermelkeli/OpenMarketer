@@ -12,6 +12,8 @@
   history cannot hold.
 - ``CheckpointAccess`` and ``checkpoints_in`` reach the checkpoints of a run by its thread, and
   ``forget_quietly`` forgets them without ever failing the activity that does it.
+- ``ModelOfTheAttempt`` is the chat model of one attempt, made for the run's workspace the
+  first time a node asks it something, so a step that asks no model resolves no key.
 
 Every function that logs takes a ``subject`` (``"campaign run <id>"``) to name the work. The
 helpers that take ``FailureTexts`` hold no words of their own: an agent gives its own. None
@@ -39,6 +41,7 @@ from openmarketer_core.graph_checkpoints.postgres import (
     forget_checkpoints,
     run_checkpoints,
 )
+from openmarketer_core.llm import ChatModel, ChatReply
 from openmarketer_worker.agent_runtime.vocabulary import (
     DATABASE_UNAVAILABLE,
     UNEXPECTED,
@@ -190,3 +193,29 @@ def forget_quietly(checkpoints: CheckpointAccess, thread_id: str, *, subject: st
         logger.warning(
             "checkpoints of %s were not forgotten, the cleanup removes them: %s", subject, e
         )
+
+
+class ModelOfTheAttempt:
+    """The chat model of one attempt, made the first time a node asks it something.
+
+    A step that asks no model makes none, and so resolves no key.
+    """
+
+    def __init__(self, make: Callable[[], ChatModel]) -> None:
+        self._make = make
+        self._model: ChatModel | None = None
+
+    def chat(
+        self,
+        role: str,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+    ) -> ChatReply:
+        if self._model is None:
+            self._model = self._make()
+        return self._model.chat(role, messages, tools=tools, tool_choice=tool_choice)
+
+    def __repr__(self) -> str:
+        return "ModelOfTheAttempt()"

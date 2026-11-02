@@ -116,7 +116,7 @@ from openmarketer_core.db.writing_runs import (
     writing_run,
 )
 from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.llm import ChatModel, ChatReply, LLMError
+from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.run_events import RunEvent
 from openmarketer_core.studio.requests import StoredAssetRequestInvalid
@@ -143,7 +143,7 @@ from openmarketer_core.writing.writer_agent.rules import (
     ResearchNotUsable,
 )
 from openmarketer_worker.agent_runtime.activities import AgentGraph
-from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess
+from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, ModelOfTheAttempt
 from openmarketer_worker.agent_runtime.vocabulary import DATABASE_UNAVAILABLE, MAX_ERROR_CHARACTERS
 from openmarketer_worker.writer import steps
 from openmarketer_worker.writer.activities import failure
@@ -167,32 +167,6 @@ NEWER_VERSION_APPROVED = (
     "a newer version of the product profile was approved while the run was starting: "
     "request the post again"
 )
-
-
-class ModelOfTheAttempt:
-    """The chat model of one attempt, made the first time a node asks it something.
-
-    A step that asks no model makes none, and so resolves no key.
-    """
-
-    def __init__(self, make: Callable[[], ChatModel]) -> None:
-        self._make = make
-        self._model: ChatModel | None = None
-
-    def chat(
-        self,
-        role: str,
-        messages: list[dict[str, Any]],
-        *,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
-    ) -> ChatReply:
-        if self._model is None:
-            self._model = self._make()
-        return self._model.chat(role, messages, tools=tools, tool_choice=tool_choice)
-
-    def __repr__(self) -> str:
-        return "ModelOfTheAttempt()"
 
 
 class WritingWork:

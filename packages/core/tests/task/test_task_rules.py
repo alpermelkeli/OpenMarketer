@@ -8,6 +8,7 @@ from openmarketer_core.orchestrator.task.task_agent.rules import (
     needs_confirmation,
     plan_problems,
     project_of,
+    step_outcome,
 )
 from openmarketer_core.profile import ProductProfile
 
@@ -108,3 +109,38 @@ def test_a_change_is_confirmed_when_it_raises_the_scope_in_force():
 
     assert needs_confirmation(plan_of(post(), max_steps=5), limits=TaskLimits(), accepted=accepted)
     assert not needs_confirmation(plan_of(post()), limits=TaskLimits(), accepted=accepted)
+
+
+# What the worker's runs answer a run action with: the projection of each run's ``finish``,
+# with the id of the run the runtime made.
+def test_a_studio_runs_projection_gives_its_asset_and_whether_it_waits_for_a_person():
+    answered = {
+        "asset_id": "a1",
+        "version_id": "v1",
+        "needs_review": True,
+        "rounds": 2,
+        "cost_usd": 0.12,
+        "run_id": "r1",
+    }
+
+    assert step_outcome("studio", answered) == {
+        "asset_id": "a1",
+        "final_version_id": "v1",
+        "needs_review": True,
+        "cost_usd": 0.12,
+    }
+
+
+def test_a_writing_runs_projection_gives_its_post_and_how_it_ended_with_its_cost_as_text():
+    answered = {"status": "rejected", "content_item_id": "c1", "cost_usd": "0.031", "run_id": "r"}
+
+    outcome = step_outcome("writing", answered)
+
+    assert (outcome["content_item_id"], outcome["post_status"]) == ("c1", "rejected")
+    assert outcome["cost_usd"] == 0.031
+
+
+def test_a_research_runs_projection_gives_how_many_findings_its_report_holds():
+    answered = {"report_id": "p1", "findings": 3, "run_id": "r1"}
+
+    assert step_outcome("research", answered) == {"findings": 3, "statements": [], "cost_usd": 0.0}

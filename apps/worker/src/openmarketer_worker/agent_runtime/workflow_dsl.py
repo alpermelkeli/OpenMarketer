@@ -66,14 +66,14 @@ it reaches the agent's declarations (``definitions.py``) and never the graph or 
 Nothing here records anything on a run, holds an agent's words or reads an agent's settings:
 that is the hooks' and the agent's.
 
-An agent with an action the policy gate may hold for a person (``ActionEffect.PUBLISHES`` or
-``SPENDS``), or with an action that starts another agent's run (``Agent.action(run=...)``),
-gives ``scope_of``, which says from the input which workspace and project a run works for: its
-proposals, its spends and its child runs belong there. The decorator refuses such an agent's
-workflow without it. Every workflow it makes hears the signal ``PROPOSAL_DECIDED_SIGNAL`` (the
-method ``proposal_decided``, which it writes as it writes ``run``), so that the API can wake a
-run that waits for a person (``approval_wait.py``); the signal carries an id, never the
-decision.
+An agent with an action the policy gate may hold for a person (``ActionEffect.PUBLISHES``,
+``SPENDS`` or ``CONFIRMS``), or with an action that starts another agent's run
+(``Agent.action(run=...)``), gives ``scope_of``, which says from the input which workspace and
+project a run works for: its proposals, its spends and its child runs belong there. The decorator
+refuses such an agent's workflow without it. Every workflow it makes hears the signal
+``PROPOSAL_DECIDED_SIGNAL`` (the method ``proposal_decided``, which it writes as it writes ``run``),
+so that the API can wake a run that waits for a person (``approval_wait.py``); the signal carries an
+id, never the decision.
 
 The class is marked with the agent it was made for (``agent_of``), so that the worker's
 registration refuses the workflow of another agent. Temporal accepts a ``run`` method only when

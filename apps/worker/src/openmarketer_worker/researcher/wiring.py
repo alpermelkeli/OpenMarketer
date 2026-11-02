@@ -56,7 +56,10 @@ from openmarketer_core.research.research_agent.definitions import (
 )
 from openmarketer_core.research.research_agent.graph import recursion_limit
 from openmarketer_core.research.web_search import SearchEngine, SearxngSearch
-from openmarketer_core.research.workflow_contract import RESEARCH_TASK_QUEUE
+from openmarketer_core.research.workflow_contract import (
+    RESEARCH_LONGEST_RUN_SECONDS,
+    RESEARCH_TASK_QUEUE,
+)
 from openmarketer_core.tracing import Tracing
 from openmarketer_worker import AgentRegistration
 from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, checkpoints_in
@@ -74,6 +77,7 @@ from openmarketer_worker.researcher.research import ResearchWork, WordedSteps
 from openmarketer_worker.researcher.retention import page_retention_task
 from openmarketer_worker.researcher.settings import ResearcherSettings
 from openmarketer_worker.researcher.workflow import Research
+from openmarketer_worker.settings import require_a_run_within
 from openmarketer_worker.workspace_settings import WorkspaceSettings
 
 
@@ -160,7 +164,15 @@ def _decisions_of_workspace(
 
 
 def registration(parts: ResearcherParts) -> AgentRegistration:
-    """What the worker registers to run research with ``parts``."""
+    """What the worker registers to run research with ``parts``.
+
+    Raises ``SettingsError`` when a run can last longer than a task that waits for one counts.
+    """
+    require_a_run_within(
+        longest_research_seconds(parts.policy, parts.limits),
+        RESEARCH_LONGEST_RUN_SECONDS,
+        runs="research",
+    )
     work = ResearchWork(
         parts.sessions,
         parts.checkpoints,

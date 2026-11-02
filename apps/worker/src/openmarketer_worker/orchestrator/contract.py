@@ -1,16 +1,16 @@
 """What the workflows of runs a chat starts and ``ChatFollowUp`` agree on: names and input.
 
-A research run or a studio run that a chat started tells that chat when it ends by starting
-the follow-up workflow as a child it abandons (``researcher/workflow.py``,
-``creative_studio/workflow.py``). Those workflows are the worker's and nothing else starts the
-follow-up, so the names are kept in the worker, here, in a module the workflow sandbox can
-load: plain values, with no import of the workflow engine, the database or an activity. The
-API would need them in core only if it ever started one.
+A research run, a studio run or an orchestrator task that a chat started tells that chat when it
+ends by starting the follow-up workflow as a child it abandons (``researcher/workflow.py``,
+``creative_studio/workflow.py``, ``orchestrator_task/workflow.py``). Those workflows are the
+worker's and nothing else starts the follow-up, so the names are kept in the worker, here, in a
+module the workflow sandbox can load: plain values, with no import of the workflow engine, the
+database or an activity. The API would need them in core only if it ever started one.
 
-The input names the chat, the kind of the run (core's ``RESEARCH_RUN_KIND`` or
-``STUDIO_RUN_KIND``) and the run, and nothing else: the history is stored and readable, so
-no message, report, image or credential belongs in it. Its annotations are real types, not text,
-because Temporal decodes the input from them: hence no ``from __future__ import annotations``.
+The input names the chat, the kind of the run (core's ``RESEARCH_RUN_KIND``, ``STUDIO_RUN_KIND`` or
+``TASK_RUN_KIND``) and the run, and nothing else: the history is stored and readable, so no message,
+report, image or credential belongs in it. Its annotations are real types, not text, because
+Temporal decodes the input from them: hence no ``from __future__ import annotations``.
 """
 
 import uuid

@@ -80,3 +80,19 @@ def positive_number(environ: Mapping[str, str], name: str, default: float) -> fl
     if number < 1:
         raise SettingsError(f"{name} must be a number of at least 1, not {text!r}")
     return number
+
+
+def require_a_run_within(longest_seconds: float, ceiling_seconds: float, *, runs: str) -> None:
+    """Refuse settings with which a run of ``runs`` can last longer than its contract's ceiling.
+
+    The ceiling is what an orchestrator's task that waits for such a run counts on
+    (``RunTarget.longest_seconds``); a run that may last longer would outlive the task's own
+    bound, and its checkpoints would be removed while it waits. Raises ``SettingsError``.
+    """
+    if longest_seconds > ceiling_seconds:
+        day = 24 * 60 * 60
+        raise SettingsError(
+            f"with these settings a {runs} run can last {longest_seconds / day:.1f} days, "
+            f"longer than the {ceiling_seconds / day:.0f} days a task waits for one: "
+            "lower its timeouts or attempts"
+        )
