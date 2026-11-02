@@ -10,16 +10,32 @@ type TurnActivityProps = {
   steps: readonly TurnStep[];
 };
 
-/** A turn being answered: what it is doing, and each tool it has called, as they happen. */
+/**
+ * A turn being answered: what it is doing, and each tool it has called, as they happen. The steps
+ * are open while the turn runs and the person can fold them: folded, the line shows the step the
+ * turn is on.
+ */
 export function TurnActivity({ heading, steps }: TurnActivityProps) {
+  const current = steps.at(-1) ?? null;
+  const stepsLabel = `Steps (${steps.length})`;
   return (
     // Polite, so a screen reader hears each step without being interrupted.
     <div role="status" aria-live="polite" className="grid gap-2 text-sm text-muted-foreground">
       <p className="flex items-center gap-2">
-        {steps.length === 0 && <Spinner />}
+        <Spinner />
         {heading}
       </p>
-      {steps.length > 0 && <StepList steps={steps} live />}
+      {current !== null && (
+        <details open className="group text-xs">
+          <summary className="w-fit cursor-pointer rounded-sm hover:text-foreground">
+            <span className="inline-flex min-w-0 items-center gap-1.5 group-open:hidden">
+              <span className="min-w-0 break-words">{current.label}</span>
+            </span>
+            <span className="hidden group-open:inline">{stepsLabel}</span>
+          </summary>
+          <StepList steps={steps} live className="mt-2 text-sm" />
+        </details>
+      )}
     </div>
   );
 }
