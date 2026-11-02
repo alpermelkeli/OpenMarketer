@@ -5,19 +5,19 @@ and never with what a model sent. Problems (a section that does not exist, an id
 that does not name anything) are text the model can correct from. No read tool writes
 anything or asks for an action.
 
-``start_research`` and ``start_creative`` are the other kind: *request actions*. Each asks
-the turn's caller (``ChatTurnContext.requests``) to create a run for the project and start it
-(a research run, a studio run that makes one image), and answers with the run's id and
-status; it writes nothing itself and starts no workflow, and a caller that gave no port is
-told that starting runs is not available. A run that was started is recorded for the person
-watching the turn (``run_started``, through ``ChatTurnContext.events``), so the chat can
-follow the run's own progress. What it sends is read strictly against ``ResearchRequest`` or
-``AssetRequest`` first, so a request that does not fit is refused with the fields at fault
-and never their values.
+``start_research``, ``start_creative`` and ``start_task`` are the other kind: *request actions*.
+Each asks the turn's caller (``ChatTurnContext.requests``) to create a run for the project and
+start it (a research run, a studio run that makes one image, an orchestrator task that plans and
+runs several agents), and answers with the run's id and status; it writes nothing itself and
+starts no workflow, and a caller that gave no port is told that starting runs is not available.
+A run that was started is recorded for the person watching the turn (``run_started``, through
+``ChatTurnContext.events``), so the chat can follow the run's own progress. What it sends is
+read strictly against ``ResearchRequest``, ``AssetRequest`` or ``TaskRequest`` first, so a
+request that does not fit is refused with the fields at fault and never their values.
 
 Writing runs are read only (``list_writing_runs``, ``get_writing_run``): the chat starts no
-post. A post is a task's, whose plan decides whether it needs an image first; until there are
-tasks, a person starts a post from the project's Writing screen.
+writing run itself. A post is a task's (``start_task``), whose plan decides whether it needs an
+image first. Tasks are read with ``list_tasks`` and ``get_task``.
 
 Everything a read tool answers with that a person, a model or a web page wrote (a research
 finding, a studio run's goal and copy, the verifier's notes) is the project's data, and the
@@ -47,7 +47,13 @@ from openmarketer_core.orchestrator.reads import (
     PROFILE_SECTIONS,
     UnknownProfileSection,
 )
-from openmarketer_core.orchestrator.requests import ResearchNotStarted, StudioNotStarted
+from openmarketer_core.orchestrator.requests import (
+    ResearchNotStarted,
+    StudioNotStarted,
+    TaskNotStarted,
+)
+from openmarketer_core.orchestrator.task.plan import TaskRequest
+from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
 from openmarketer_core.research.questions import DEFAULT_MAX_SOURCES, ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import RUN_STARTED, RunEvent
@@ -326,6 +332,57 @@ def get_writing_run(context: ChatTurnContext, run_id: str) -> str:
     found = context.reads.writing_run(wanted)
     if found is None:
         return f"error: no writing run {wanted} in this project"
+    return _text(asdict(found))
+
+
+@agent.tool
+def start_task(context: ChatTurnContext, request: str, understanding: str) -> str:
+    """Start an orchestrator task of this project: it plans the steps, has a plan that can
+    spend confirmed by the operator, runs the agents one after another, reviews each result
+    and reports in this chat when it is done. Use it for a post (the task decides whether the
+    post needs an image) and for any request that needs several agents together. request is
+    the operator's request in their own words, verbatim; understanding is one paragraph of
+    what you understood they want, with what the project's records add to it. It answers
+    with the new task's id and status; its report comes later in this chat."""
+    if context.requests is None:
+        return "error: starting a task is not available here"
+    try:
+        asked = read_strict_json(TaskRequest, {"request": request, "understanding": understanding})
+    except DoesNotFit as e:
+        return f"error: the task request does not fit{fields_phrase(e.fields)}"
+    try:
+        task = context.requests.start_task(asked)
+    except TaskNotStarted as e:
+        return f"error: {e}"
+    context.events.record(
+        RunEvent(RUN_STARTED, {"run_kind": TASK_RUN_KIND, "run_id": str(task.id)})
+    )
+    return _text({"task_id": str(task.id), "status": task.status})
+
+
+@agent.tool
+def list_tasks(context: ChatTurnContext, limit: int = 10) -> str:
+    """The project's orchestrator tasks, newest first, at most limit of them: the goal of
+    each plan, its status, what its own model calls cost, who asked for it and why one
+    failed. Each has an id whose plan, steps and report you can read with get_task."""
+    tasks = context.reads.recent_tasks(max(1, min(limit, MAX_LISTED_RECORDS)))
+    if not tasks:
+        return "The project has no tasks."
+    return _text([asdict(task) for task in tasks])
+
+
+@agent.tool
+def get_task(context: ChatTurnContext, task_id: str) -> str:
+    """One orchestrator task in full: the operator's request, its plan, how often the plan
+    changed, each step it ran with the run it started and how that ended, and the report of a
+    finished task (its summary and the ids of the posts, assets and research runs). task_id
+    comes from a listed task or a started one."""
+    wanted = _uuid_of(task_id)
+    if wanted is None:
+        return "error: task_id must be a UUID; take one from a listed task"
+    found = context.reads.task(wanted)
+    if found is None:
+        return f"error: no task {wanted} in this project"
     return _text(asdict(found))
 
 

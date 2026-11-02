@@ -58,6 +58,7 @@ class TurnOf:
     trigger: ChatTurnTrigger
     research_run_id: uuid.UUID | None = None
     studio_run_id: uuid.UUID | None = None
+    task_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,7 @@ def _start(sessions: sessionmaker[Session], turn_of: TurnOf) -> tuple[uuid.UUID,
             trigger=turn_of.trigger,
             research_run_id=turn_of.research_run_id,
             studio_run_id=turn_of.studio_run_id,
+            task_id=turn_of.task_id,
         )
         history = chat_history(
             session,

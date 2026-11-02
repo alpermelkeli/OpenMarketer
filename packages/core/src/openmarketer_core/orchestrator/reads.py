@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -32,6 +32,8 @@ from openmarketer_core.db.models import (
     ProjectStatus,
     ResearchRunStatus,
     StudioRunStatus,
+    TaskStatus,
+    TaskStepOutcome,
     WritingRunStatus,
 )
 
@@ -244,6 +246,49 @@ class WritingRunReading:
 
 
 @dataclass(frozen=True)
+class TaskStepReading:
+    """One step of a task that was dispatched: its agent, the run it started, how that ended.
+
+    ``step`` is the step's id in the task's plan; ``outcome`` the run's final status, ``None``
+    while it runs. The run is read in full with the read tool of its agent.
+    """
+
+    step: str
+    agent: str
+    run_id: uuid.UUID
+    outcome: TaskStepOutcome | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+@dataclass(frozen=True)
+class TaskReading:
+    """One orchestrator task of the project: what it was asked and how far it got.
+
+    ``goal`` is its plan's goal, ``None`` before it has a plan. ``plan`` (the plan in force as
+    JSON data), ``plan_changes`` (how often it changed), ``steps`` and ``report`` (the report a
+    finished task ended with, as JSON data: its summary and the ids of what it made) are
+    ``None`` and empty where a listing leaves them out. ``cost_usd`` is the task's own model
+    calls; each run it started has its own.
+    """
+
+    id: uuid.UUID
+    status: TaskStatus
+    goal: str | None
+    requested_by: str
+    error: str | None
+    cost_usd: float
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    request: str | None = None
+    plan: dict[str, Any] | None = None
+    plan_changes: int = 0
+    steps: list[TaskStepReading] = field(default_factory=list)
+    report: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class ProjectStatusReading:
     """Where the project stands: what it is, its review state, and its latest work."""
 
@@ -336,4 +381,16 @@ class ChatReads(Protocol):
 
     def writing_run(self, run_id: uuid.UUID) -> WritingRunReading | None:
         """One writing run of the project with its post, or ``None`` if there is none."""
+        ...
+
+    def recent_tasks(self, limit: int) -> Sequence[TaskReading]:
+        """The project's orchestrator tasks, newest first, at most ``limit`` records, each
+        without its plan, steps and report.
+
+        ``MAX_LISTED_RECORDS`` bounds it further.
+        """
+        ...
+
+    def task(self, task_id: uuid.UUID) -> TaskReading | None:
+        """One task of the project with its request, plan, steps and report, or ``None``."""
         ...

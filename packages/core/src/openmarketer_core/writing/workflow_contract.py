@@ -25,6 +25,12 @@ WRITING_TASK_QUEUE = "openmarketer-writing"
 # It is here, with no import beside it, because the agent's declarations are loaded by the
 # workflow and must not load the database with them.
 WRITING_RUN_KIND = "writing-run"
+# The longest a writing run's workflow may last, for a run that waits for one as a child
+# (``RunTarget.longest_seconds``, the orchestrator's task). The worker computes the real bound
+# from its settings (``policy.longest_writing_seconds``, four and a half days with the defaults)
+# and refuses to start when that is longer than this ceiling, so the parent never waits past what
+# it counted.
+WRITING_LONGEST_RUN_SECONDS: float = 14 * 24 * 60 * 60
 
 
 @dataclass(frozen=True)
