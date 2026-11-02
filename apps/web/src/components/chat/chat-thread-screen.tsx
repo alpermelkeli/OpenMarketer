@@ -75,10 +75,10 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
 
   const end = useRef<HTMLDivElement>(null);
   const shown = timeline.length + (submission === null ? 0 : 1) + (otherTurn === null ? 0 : 1);
-  useEffect(
-    () => end.current?.scrollIntoView({ block: "end" }),
-    [shown, submission?.status, liveTurn?.steps.length],
-  );
+  // In braces: a browser whose scrollIntoView returns a promise would otherwise hand React a clean-up that is not a function.
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: "end" });
+  }, [shown, submission?.status, liveTurn?.steps.length]);
 
   if (chat.error) {
     return <RequestProblem title="This chat could not be read" error={chat.error} onRetry={() => chat.refetch()} />;
