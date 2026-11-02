@@ -18,6 +18,8 @@ import {
 } from "@/lib/proposals/proposal-display";
 import { proposalAnchor, writingHref } from "@/lib/projects/project-navigation";
 
+import { ProposedPostImage } from "./proposed-post-image";
+
 type ProposalCardProps = {
   proposal: Proposal;
   now: number;
@@ -61,6 +63,7 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
           <blockquote className="max-w-prose border-l-2 border-warning/60 pl-4 text-base text-pretty break-words whitespace-pre-wrap">
             {post}
           </blockquote>
+          <ProposedPostImage proposal={proposal} />
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
             <span>The writer sends nothing to X yet: an approved post is recorded as a dry run.</span>
             <Link

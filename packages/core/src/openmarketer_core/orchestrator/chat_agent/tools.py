@@ -15,6 +15,10 @@ follow the run's own progress. What it sends is read strictly against ``Research
 ``AssetRequest`` first, so a request that does not fit is refused with the fields at fault
 and never their values.
 
+Writing runs are read only (``list_writing_runs``, ``get_writing_run``): the chat starts no
+post. A post is a task's, whose plan decides whether it needs an image first; until there are
+tasks, a person starts a post from the project's Writing screen.
+
 Everything a read tool answers with that a person, a model or a web page wrote (a research
 finding, a studio run's goal and copy, the verifier's notes) is the project's data, and the
 system prompt tells the model to read it as such.
@@ -296,6 +300,33 @@ def start_creative(
         RunEvent(RUN_STARTED, {"run_kind": STUDIO_RUN_KIND, "run_id": str(run.id)})
     )
     return _text({"run_id": str(run.id), "status": run.status, "platform": run.platform})
+
+
+@agent.tool
+def list_writing_runs(context: ChatTurnContext, limit: int = 10) -> str:
+    """The project's recent writing runs, newest first, at most limit of them: the brief each
+    was asked (goal, feature, angle, variants, the image and the research it was given), its
+    status, what it cost, who asked for it and why one failed. Each has an id whose run and
+    post you can read with get_writing_run."""
+    runs = context.reads.recent_writing_runs(max(1, min(limit, MAX_LISTED_RECORDS)))
+    if not runs:
+        return "The project has no writing runs."
+    return _text([asdict(run) for run in runs])
+
+
+@agent.tool
+def get_writing_run(context: ChatTurnContext, run_id: str) -> str:
+    """One writing run in full: its brief, status and cost, and the post it proposed: the
+    text, whether the critic passed it, whether it waits for a person (with the proposal a
+    person decides it through) or how it was settled. run_id comes from a listed writing
+    run."""
+    wanted = _uuid_of(run_id)
+    if wanted is None:
+        return "error: run_id must be a UUID; take one from a listed writing run"
+    found = context.reads.writing_run(wanted)
+    if found is None:
+        return f"error: no writing run {wanted} in this project"
+    return _text(asdict(found))
 
 
 def _do_not_mention(context: ChatTurnContext) -> list[str]:

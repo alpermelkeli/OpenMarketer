@@ -34,9 +34,10 @@ not JSON, for good: a step's outcome over ``MAX_STEP_BYTES`` and an action's ove
 checked after the handler ran, so a retry would run it again.
 
 An action the policy gate holds for a person (``held_actions``) runs only when ``is_approved``
-says a person approved that very action: the workflow waits for the approval before it asks for
-the action, and this is the check that holds when a workflow did not (``ACTION_NOT_APPROVED``,
-which ends the run). An action that spends (``spending_actions``) runs only when
+says a person approved that very request (its name, payload and run, not its key alone): the
+workflow waits for the approval before it asks for the action, and this is the check that
+holds when a workflow did not (``ACTION_NOT_APPROVED``, which ends the run). An action that
+spends (``spending_actions``) runs only when
 ``is_cleared_to_spend`` says the creative budget holds a reservation for it, approved by a
 person if the budget asked for one (``spend_activities.SpendActivities.is_cleared``), with the
 same failure.
@@ -168,9 +169,9 @@ class RuntimeActivities:
         texts: FailureTexts,
         on_run_end: Callable[[GraphRunRef], None] | None = None,
         held_actions: Collection[str] = (),
-        is_approved: Callable[[str], bool] | None = None,
+        is_approved: Callable[[ActionRequest], bool] | None = None,
         spending_actions: Collection[str] = (),
-        is_cleared_to_spend: Callable[[str], bool] | None = None,
+        is_cleared_to_spend: Callable[[ActionRequest], bool] | None = None,
         run_routes: RunRoutes | None = None,
     ) -> None:
         """The activities of the agent whose runs are of ``kind``, in its ``texts``.
@@ -178,9 +179,9 @@ class RuntimeActivities:
         ``texts`` word what a step or a forgetting cannot word otherwise; the agent's stored
         errors say what its own texts say. ``on_run_end`` is called with each run that is
         forgotten. ``held_actions`` are the names of the actions the gate holds for a person,
-        and ``is_approved`` says, blocking, whether a person approved an action by its id.
+        and ``is_approved`` says, blocking, whether a person approved a request itself.
         ``spending_actions`` are the names of the actions that spend, and ``is_cleared_to_spend``
-        says, blocking, whether the creative budget let an action's spend through, by its id.
+        says, blocking, whether the creative budget let a request's spend through.
         ``run_routes`` are the actions that start another agent's run, with the callable that
         creates each child run's record; without them a request for such an action is refused.
         Raises ``ValueError`` for a ``kind`` that cannot name a thread, for held actions with no
@@ -314,7 +315,7 @@ class RuntimeActivities:
 
     async def _require_approval(self, request: ActionRequest, subject: str) -> None:
         is_approved = self._is_approved
-        if is_approved is not None and await asyncio.to_thread(is_approved, request.action_id):
+        if is_approved is not None and await asyncio.to_thread(is_approved, request):
             return
         logger.warning("%s was refused: a person has not approved it", subject)
         raise ApplicationError(
@@ -325,7 +326,7 @@ class RuntimeActivities:
 
     async def _require_a_cleared_spend(self, request: ActionRequest, subject: str) -> None:
         is_cleared = self._is_cleared_to_spend
-        if is_cleared is not None and await asyncio.to_thread(is_cleared, request.action_id):
+        if is_cleared is not None and await asyncio.to_thread(is_cleared, request):
             return
         logger.warning("%s was refused: the creative budget did not let its spend through", subject)
         raise ApplicationError(

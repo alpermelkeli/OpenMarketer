@@ -5,7 +5,9 @@ left until its deadline; ``settle_proposal`` reads where it stands and expires i
 deadline passed (``approval_wait.py`` calls both). ``is_approved`` is not an activity: it is how
 ``run_action`` checks, before it runs the handler of an action the gate holds, that a person
 approved that very action, so that a workflow that skipped the gate (one started by hand on the
-workflow server, say) still runs nothing a person did not approve.
+workflow server, say) still runs nothing a person did not approve. An approval is of a request,
+not of a key: the proposal must hold the request's name and payload and be of a run of this
+agent's kind whose thread the key names (core's ``approves_request``).
 
 They hold no rule: the proposal's transitions are core's ``db/proposals.py``. Each activity is
 one short transaction and safe to repeat: storing the same action again returns the proposal
@@ -28,12 +30,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from openmarketer_core.agent_runtime.actions import ActionEffect
-from openmarketer_core.agent_runtime.gate import ProposalStatus
+from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.proposals import (
     ProposalNotFound,
-    proposal_status_of_action,
+    approves_request,
     propose_action,
     settle_proposal,
 )
@@ -53,8 +54,10 @@ logger = logging.getLogger(__name__)
 
 
 class ProposalActivities:
-    def __init__(self, sessions: sessionmaker[Session]) -> None:
+    def __init__(self, sessions: sessionmaker[Session], *, kind: str) -> None:
+        """The gate's activities for the agent whose runs are of ``kind``."""
         self._sessions = sessions
+        self._kind = kind
 
     @activity.defn(name=PROPOSE_ACTION)
     def propose_action(self, proposal: ProposalInput) -> ProposalHeld:
@@ -91,10 +94,10 @@ class ProposalActivities:
                 )
             return status.value
 
-    def is_approved(self, action_id: str) -> bool:
-        """Whether a person approved the proposal of ``action_id``. It blocks."""
+    def is_approved(self, request: ActionRequest) -> bool:
+        """Whether a person approved ``request`` itself, for a run of this agent. It blocks."""
         with transaction(self._sessions) as session:
-            return proposal_status_of_action(session, action_id) is ProposalStatus.APPROVED
+            return approves_request(session, request, run_kind=self._kind)
 
 
 @contextmanager

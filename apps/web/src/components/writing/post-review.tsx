@@ -2,11 +2,13 @@ import { ArrowRightIcon, LockIcon } from "lucide-react";
 import Link from "next/link";
 
 import { StatusPill } from "@/components/common/status-pill";
+import { VersionImage } from "@/components/studio/version-image";
 import type { ContentItem, Proposal } from "@/lib/api/types";
 import { formatDateTime } from "@/lib/format";
-import { projectPageHref, proposalHref } from "@/lib/projects/project-navigation";
+import { projectPageHref, proposalHref, researchHref } from "@/lib/projects/project-navigation";
 import { formatCost } from "@/lib/studio/status";
 import { cn } from "@/lib/utils";
+import { postImageOf } from "@/lib/writing/attachments";
 import { postLengthOf, type CheckReport, type Review } from "@/lib/writing/record";
 import { postStatusDisplay, writingPlatformLabel } from "@/lib/writing/status";
 
@@ -23,13 +25,15 @@ type PostReviewProps = {
 
 /**
  * The post the run proposed: the text exactly as it would be sent, its length on X, what became of
- * it, and what the code and the critic found of it. A post that waits is drawn as a draft, an
+ * it, and what the code and the critic found of it; with the image it was proposed with, the version
+ * a person approves with the text, and a link to the research it drew on. A post that waits is drawn as a draft, an
  * approved one with a solid border and a lock. The text was written by a model: shown as text only.
  */
 export function PostReview({ post, check, review, flaggedNumbers, waitingOn }: PostReviewProps) {
   const status = postStatusDisplay(post.status);
   const length = postLengthOf(check);
   const approved = post.status === "dry_run";
+  const image = postImageOf(post);
 
   return (
     <section aria-labelledby="post" className="grid gap-5 border-t pt-8">
@@ -54,6 +58,16 @@ export function PostReview({ post, check, review, flaggedNumbers, waitingOn }: P
           </p>
         )}
         <blockquote className="text-base text-pretty break-words whitespace-pre-wrap">{post.text}</blockquote>
+        {image !== null && (
+          <VersionImage
+            projectId={post.project_id}
+            assetId={image.assetId}
+            versionId={image.versionId}
+            alt="The image the post goes with, the version it was proposed with"
+            sizes="(min-width: 768px) 36rem, 100vw"
+            className="overflow-hidden rounded-sm border"
+          />
+        )}
         <figcaption className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span>{writingPlatformLabel(post.platform)}</span>
           {length === null ? (
@@ -68,11 +82,24 @@ export function PostReview({ post, check, review, flaggedNumbers, waitingOn }: P
           <span>
             From profile version <span className="font-mono tabular-nums">{post.profile_version}</span>
           </span>
+          <span>{image === null ? "Text alone, no image" : "With the image above"}</span>
           <span>
             Cost <span className="font-mono tabular-nums">{formatCost(post.cost_usd)}</span>
           </span>
         </figcaption>
       </figure>
+
+      {post.research_run_id !== null && (
+        <p className="text-sm">
+          <Link
+            href={researchHref(post.project_id, post.research_run_id)}
+            className="inline-flex items-center gap-1 rounded-sm text-brand underline-offset-4 hover:underline"
+          >
+            The research report it drew on
+            <ArrowRightIcon aria-hidden="true" className="size-3.5" />
+          </Link>
+        </p>
+      )}
 
       {post.status === "proposed" && (
         <p className="text-sm">

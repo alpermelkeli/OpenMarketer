@@ -19,8 +19,11 @@ from temporalio.worker import Worker
 from announcer.definitions import KIND
 from announcer.rig import Desk
 from announcer.wiring import wire
-from openmarketer_core.agent_runtime.actions import ActionRequest
+from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.agent_runtime.gate import PROPOSAL_DECIDED_SIGNAL, ProposalStatus
+from openmarketer_core.agent_runtime.steps import GraphRunRef
+from openmarketer_core.db.proposals import decide_proposal, propose_action
+from openmarketer_core.db.session import transaction
 from openmarketer_worker.agent_runtime.vocabulary import (
     ACTION_NOT_APPROVED,
     PROPOSE_ACTION,
@@ -159,4 +162,75 @@ async def test_held_action_that_nobody_approved_is_refused_by_the_activity_itsel
 
     assert refused.value.type == ACTION_NOT_APPROVED
     assert refused.value.non_retryable
+    assert board.published == []
+
+
+def approved_as(sessions, scope, run_id: uuid.UUID, request: ActionRequest) -> None:
+    """A person approves ``request``, proposed as the gate proposes it for run ``run_id``."""
+    with transaction(sessions) as session:
+        proposal = propose_action(
+            session,
+            scope=scope,
+            run=GraphRunRef(kind=KIND, run_id=run_id),
+            workflow_id=f"announcer-{run_id}",
+            request=request,
+            effect=ActionEffect.PUBLISHES,
+            wait_seconds=3600,
+        )
+        decide_proposal(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            proposal_id=proposal.id,
+            approved=True,
+            decided_by=uuid.uuid4(),
+        )
+
+
+async def run_action_of(board, checkpoints, sessions, request: ActionRequest):
+    registration = wire(board, checkpoints, sessions)
+    run_action = next(a for a in registration.activities if a.__name__ == RUN_ACTION)
+    return await ActivityEnvironment().run(run_action, request)
+
+
+async def test_held_action_a_person_approved_is_run_by_the_activity(
+    board, checkpoints, sessions, scope
+):
+    run_id = uuid.uuid4()
+    request = ActionRequest(f"{KIND}:{run_id}:1", "announce", {"text": "v2 is out"})
+    approved_as(sessions, scope, run_id, request)
+
+    outcome = await run_action_of(board, checkpoints, sessions, request)
+
+    assert outcome.succeeded
+    assert board.published == [("v2 is out", request.action_id)]
+
+
+@pytest.mark.parametrize(
+    ("name", "payload"), [("announce", {"text": "something else"}), ("retract", {"text": "v2"})]
+)
+async def test_approval_under_the_same_key_of_another_request_runs_nothing(
+    board, checkpoints, sessions, scope, name, payload
+):
+    run_id = uuid.uuid4()
+    request = ActionRequest(f"{KIND}:{run_id}:1", "announce", {"text": "v2 is out"})
+    approved_as(sessions, scope, run_id, ActionRequest(request.action_id, name, payload))
+
+    with pytest.raises(ApplicationError) as refused:
+        await run_action_of(board, checkpoints, sessions, request)
+
+    assert (refused.value.type, refused.value.non_retryable) == (ACTION_NOT_APPROVED, True)
+    assert board.published == []
+
+
+async def test_approval_of_another_run_than_the_key_names_runs_nothing(
+    board, checkpoints, sessions, scope
+):
+    request = ActionRequest(f"{KIND}:{uuid.uuid4()}:1", "announce", {"text": "v2 is out"})
+    approved_as(sessions, scope, uuid.uuid4(), request)
+
+    with pytest.raises(ApplicationError) as refused:
+        await run_action_of(board, checkpoints, sessions, request)
+
+    assert refused.value.type == ACTION_NOT_APPROVED
     assert board.published == []

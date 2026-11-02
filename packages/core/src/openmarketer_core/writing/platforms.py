@@ -16,9 +16,15 @@ as their characters. The emoji ranges are an approximation of Unicode's pictogra
 wide enough that a single code point outside them is weighed 2 all the same.
 
 Links and mentions are left out entirely: the profile has neither, and an allow-list of the
-project's own links and accounts, entered by a person, can come later. A link is a web address
-with a scheme, one that starts with ``www.``, or a bare domain under a common top-level domain,
-since X links those too.
+project's own links and accounts, entered by a person, can come later. The rule is wide rather
+than a list of top-level domains, since new ones keep appearing and X links a bare domain under
+any of them: the text is first read as an address would be (NFKC, so full-width letters and
+dots become plain ones; the ideographic full stops read as a dot; invisible format characters
+and combining marks dropped), and then a link is anything with a scheme, anything that starts
+with ``www.``, and any ``label.label`` whose last label is two or more letters of any script, or
+a punycode label. It refuses product names written with a dot, such as "Node.js": telling them
+from a domain would take a list again, and the writer is told to write such a name without its
+dot. It also refuses a full stop with no space after it, between two words of any script.
 
 This module reaches no database and no network, and knows no platform's API.
 """
@@ -67,16 +73,26 @@ _EMOJI_WITH_PRESENTATION = frozenset("©®‼⁉™ℹ")
 
 HASHTAG = re.compile(r"(?:^|(?<=[^\w&]))[#＃](?=\w*[^\W\d_])\w+")
 MENTION = re.compile(r"(?:^|(?<=[^\w@＠!#$%&*]))[@＠][A-Za-z0-9_]{1,15}")
-_TOP_LEVEL_DOMAINS = (
-    "com|net|org|io|ai|app|dev|co|me|xyz|so|sh|gg|tv|ly|to|us|uk|de|fr|es|it|nl|eu|ca|au|in|"
-    "jp|cn|ru|br|tr|info|biz|tech|site|online|cloud|page|link|store|shop|blog|news|design|"
-    "studio|world|live|life|today|space|fun|tools|software|email|club|pro|one"
-)
+# Dots an address may be written with that NFKC leaves as they are: the ideographic full stop
+# (U+3002), its half-width form (U+FF61, which NFKC turns into U+3002) and its vertical form.
+_DOTS = str.maketrans({"\u3002": ".", "\uff61": ".", "\ufe12": "."})
+# A label: letters and digits of any script, hyphens and underscores inside.
+_LABEL = r"[^\W_](?:[\w-]*[^\W_])?"
+# The last label: two or more letters of any script, or punycode; nothing word-like after it.
+_LAST_LABEL = r"(?:[^\W\d_]{2,}|xn--[\w-]+)(?![^\W_])"
 LINK = re.compile(
-    r"(?:\b[a-z][a-z0-9+.-]*://\S+)"
-    r"|(?:\bwww\.\S+)"
-    rf"|(?:\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:{_TOP_LEVEL_DOMAINS})\b(?:/\S*)?)",
+    r"(?:[^\W_][\w+.-]*://\S*)"
+    r"|(?:www\.\S*)"
+    rf"|(?:{_LABEL}(?:\.{_LABEL})*\.{_LAST_LABEL}(?:/\S*)?)",
     re.IGNORECASE,
+)
+# What the writer is told of ``LINK``; the two say the same thing.
+NO_LINKS_TOLD = (
+    "No link or web address of any kind: nothing with a scheme such as https://, nothing that "
+    "starts with www., and no two words joined by a dot with no space between them, such as "
+    "example.com, in any script and with any kind of dot. Write a product name that has a dot "
+    "in it, such as Node.js, without the dot and what follows it (Node), and leave a space "
+    "after every full stop."
 )
 
 
@@ -124,8 +140,23 @@ def mentions(text: str) -> list[str]:
 
 
 def links(text: str) -> list[str]:
-    """The web addresses of ``text``, in order: with a scheme, from ``www.``, or a bare domain."""
-    return [match.group(0) for match in LINK.finditer(text)]
+    """The web addresses of ``text``, in order: with a scheme, from ``www.``, or a bare domain.
+
+    Each is quoted as it reads once normalized for the check, which is how a platform reads it.
+    """
+    return [match.group(0) for match in LINK.finditer(_as_an_address_reads(text))]
+
+
+def _as_an_address_reads(text: str) -> str:
+    """``text`` as a host name would be read: NFKC, every kind of full stop a dot, and without
+    the invisible characters and combining marks that would otherwise split a label."""
+    folded = unicodedata.normalize("NFKC", text).translate(_DOTS)
+    return "".join(char for char in folded if not _invisible(char))
+
+
+def _invisible(char: str) -> bool:
+    category = unicodedata.category(char)
+    return category == "Cf" or category.startswith("M")
 
 
 PLATFORM_RULES: Mapping[WritingPlatform, PlatformRules] = MappingProxyType(

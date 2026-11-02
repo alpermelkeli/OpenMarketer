@@ -25,6 +25,11 @@ Everything else is refused: a finished run is never started, failed or given ano
 (``WritingRunNotStarted``), and a run whose item is missing or still proposed cannot either
 (``WritingRunUnsettled``). What the run's model calls cost is recorded with its outcome.
 
+A brief that names an asset or a research run is requested only when the asset is one a post
+can go with and the research run succeeded, both of the run's project (``usable_asset`` in
+``db/media_assets.py``, ``succeeded_research_run`` in ``db/research_store.py``); the writer's
+``prepare`` checks both again, since either can change before the run starts.
+
 The brief is stored with the run and read back strictly whenever the run is executed
 (``run_to_execute``) or shown (``requested_brief``): a stored brief that no longer fits its
 schema is ``StoredWritingBriefInvalid``.
@@ -53,6 +58,7 @@ from sqlalchemy.orm import Session
 
 from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.db.chat import require_chat
+from openmarketer_core.db.media_assets import usable_asset
 from openmarketer_core.db.models import (
     RUN_ERROR_MAX_LENGTH,
     ContentItemRecord,
@@ -65,6 +71,7 @@ from openmarketer_core.db.models import (
 )
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.projects import get_project
+from openmarketer_core.db.research_store import succeeded_research_run
 from openmarketer_core.writing.brief import (
     StoredWritingBriefInvalid,
     WritingBrief,
@@ -181,12 +188,22 @@ def request_writing_run(
 
     ``chat_thread_id`` is the chat whose turn asked for the run, a chat of the same project.
     Raises ``ProjectNotFound`` when the workspace has no such project, and ``ChatNotFound``
-    when the project has no such chat.
+    when the project has no such chat. The brief's asset must be one the post can go with
+    (``MediaAssetNotFound``, ``AssetNotUsable``), and its research run a succeeded run of the
+    project (``ResearchRunNotFound``, ``ResearchRunNotUsable``).
     """
     project = get_project(session, workspace_id=workspace_id, project_id=project_id)
     if chat_thread_id is not None:
         require_chat(
             session, workspace_id=workspace_id, project_id=project_id, chat_id=chat_thread_id
+        )
+    if brief.asset is not None:
+        usable_asset(
+            session, workspace_id=workspace_id, project_id=project_id, asset_id=brief.asset
+        )
+    if brief.research_run_id is not None:
+        succeeded_research_run(
+            session, workspace_id=workspace_id, project_id=project_id, run_id=brief.research_run_id
         )
     record = WritingRunRecord(
         project_id=project.id,

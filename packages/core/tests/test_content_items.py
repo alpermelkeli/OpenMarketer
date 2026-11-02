@@ -22,6 +22,7 @@ from openmarketer_core.db.content_items import (
     ContentItemStored,
     NewContentItem,
     ProfileVersionNotChosen,
+    ProposalNotApproved,
     ProposalOfAnotherRun,
     content_item,
     list_content_items,
@@ -37,7 +38,7 @@ from openmarketer_core.db.models import (
     WritingRunStatus,
 )
 from openmarketer_core.db.projects import ProjectNotFound
-from openmarketer_core.db.proposals import propose_action
+from openmarketer_core.db.proposals import decide_proposal, propose_action
 from openmarketer_core.db.writing_runs import (
     WritingRunFinished,
     WritingRunNotStarted,
@@ -135,7 +136,14 @@ def approved_version(session: Session, project_id: uuid.UUID) -> uuid.UUID:
     return record.id
 
 
-def proposal_of(session: Session, run: RunOfProject, *, kind: str = WRITING_RUN_KIND) -> uuid.UUID:
+def proposal_of(
+    session: Session,
+    run: RunOfProject,
+    *,
+    kind: str = WRITING_RUN_KIND,
+    approved: bool | None = None,
+) -> uuid.UUID:
+    """A proposal of ``run``'s ``publish_post``: pending, or decided as ``approved`` says."""
     ref = GraphRunRef(kind=kind, run_id=run.run_id)
     proposal = propose_action(
         session,
@@ -150,6 +158,15 @@ def proposal_of(session: Session, run: RunOfProject, *, kind: str = WRITING_RUN_
         effect=ActionEffect.PUBLISHES,
         wait_seconds=3600,
     )
+    if approved is not None:
+        decide_proposal(
+            session,
+            workspace_id=run.workspace_id,
+            project_id=run.project_id,
+            proposal_id=proposal.id,
+            approved=approved,
+            decided_by=REVIEWER,
+        )
     return proposal.id
 
 
@@ -252,13 +269,7 @@ def test_a_proposal_of_another_kind_of_run_is_refused(session, run):
 
 
 @pytest.mark.parametrize(
-    "status",
-    [
-        ContentItemStatus.DRY_RUN,
-        ContentItemStatus.REJECTED,
-        ContentItemStatus.EXPIRED,
-        ContentItemStatus.FAILED,
-    ],
+    "status", [ContentItemStatus.REJECTED, ContentItemStatus.EXPIRED, ContentItemStatus.FAILED]
 )
 def test_a_proposed_item_is_settled_once(session, run, status):
     item = store(session, run)
@@ -270,12 +281,76 @@ def test_a_proposed_item_is_settled_once(session, run, status):
     assert settle(session, run, item.id, status) == settled
 
 
+def test_a_proposed_item_is_settled_as_a_dry_run_once_with_an_approved_proposal(session, run):
+    item = store(session, run)
+    proposal_id = proposal_of(session, run, approved=True)
+
+    settled = settle(session, run, item.id, ContentItemStatus.DRY_RUN, proposal_id=proposal_id)
+
+    assert settled.status is ContentItemStatus.DRY_RUN
+    assert settled.settled_at is not None
+    assert settle(session, run, item.id, ContentItemStatus.DRY_RUN) == settled
+
+
+def test_an_item_is_not_settled_as_a_dry_run_without_a_proposal(session, run):
+    item = store(session, run)
+
+    with pytest.raises(ProposalNotApproved):
+        settle(session, run, item.id, ContentItemStatus.DRY_RUN)
+    assert content_item(session, **run.scope(), item_id=item.id).status is (
+        ContentItemStatus.PROPOSED
+    )
+
+
+@pytest.mark.parametrize("approved", [None, False])
+def test_an_item_is_not_settled_as_a_dry_run_with_a_proposal_nobody_approved(
+    session, run, approved
+):
+    item = store(session, run)
+    proposal_id = proposal_of(session, run, approved=approved)
+
+    with pytest.raises(ProposalNotApproved):
+        settle(session, run, item.id, ContentItemStatus.DRY_RUN, proposal_id=proposal_id)
+
+
+def test_an_item_naming_an_approved_proposal_is_settled_as_a_dry_run_without_naming_it_again(
+    session, run
+):
+    item = store(session, run, replace(ITEM, proposal_id=proposal_of(session, run, approved=True)))
+
+    settled = settle(session, run, item.id, ContentItemStatus.DRY_RUN)
+
+    assert settled.status is ContentItemStatus.DRY_RUN
+
+
+def test_an_item_is_not_settled_as_a_dry_run_with_the_approved_proposal_of_another_run(
+    session, run
+):
+    item = store(session, run)
+    other = another_run_of(session, run.workspace_id, run.project_id)
+
+    with pytest.raises(ProposalOfAnotherRun):
+        settle(
+            session,
+            run,
+            item.id,
+            ContentItemStatus.DRY_RUN,
+            proposal_id=proposal_of(session, other, approved=True),
+        )
+
+
 def test_a_settled_item_is_not_settled_another_way(session, run):
     item = store(session, run)
     settle(session, run, item.id, ContentItemStatus.REJECTED)
 
     with pytest.raises(ContentItemSettled):
-        settle(session, run, item.id, ContentItemStatus.DRY_RUN)
+        settle(
+            session,
+            run,
+            item.id,
+            ContentItemStatus.DRY_RUN,
+            proposal_id=proposal_of(session, run, approved=True),
+        )
 
 
 def test_an_item_is_not_settled_back_to_proposed(session, run):
@@ -287,7 +362,7 @@ def test_an_item_is_not_settled_back_to_proposed(session, run):
 
 def test_settling_names_the_proposal_when_the_item_did_not(session, run):
     item = store(session, run)
-    proposal_id = proposal_of(session, run)
+    proposal_id = proposal_of(session, run, approved=True)
 
     settled = settle(session, run, item.id, ContentItemStatus.DRY_RUN, proposal_id=proposal_id)
 

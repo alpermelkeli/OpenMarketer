@@ -33,6 +33,17 @@ PROFILE = ProductProfile.model_validate(
 )
 CONTEXT = rules.writing_context(PROFILE)
 X = rules.situation(WritingPlatform.X, CONTEXT)
+IMAGE = {
+    "asset_id": "a",
+    "version_id": "v",
+    "platform": "x_post",
+    "goal": "g",
+    "words_on_image": ["Write anywhere", "Even offline"],
+}
+RESEARCH = {"run_id": "r", "questions": ["q"], "findings": [{"statement": "s", "sites": []}]}
+X_WITH_INPUTS = rules.situation(
+    WritingPlatform.X, {**CONTEXT, "image": IMAGE, "research": RESEARCH}
+)
 INTRODUCE = WritingBrief(platform=WritingPlatform.X, goal=WritingGoal.INTRODUCE)
 
 
@@ -98,6 +109,11 @@ def test_links_mentions_and_a_third_hashtag_fail():
     assert failures(variant("Thanks @acme")) == ["no_mentions"]
     assert failures(variant("#a #b #c")) == ["hashtags"]
     assert failures(variant("#a #b")) == []
+
+
+def test_a_bare_domain_under_any_top_level_domain_fails_as_a_link():
+    assert failures(variant("Try evil.top, it is fast.")) == ["no_links"]
+    assert failures(variant("Try evil\u3002com, it is fast.")) == ["no_links"]
 
 
 def test_a_language_is_one_of_the_profiles_or_a_region_of_one():
@@ -226,9 +242,9 @@ def test_every_field_a_model_fills_is_described_in_its_prompt():
 
 
 def test_the_draft_prompt_tells_every_code_rule_with_the_platforms_values():
-    prompt = rules.draft_system_prompt(X, 3)
+    prompt = rules.draft_system_prompt(X_WITH_INPUTS, 3)
     for rule in rules.CODE_RULES:
-        told = rule.told(X)
+        told = rule.told(X_WITH_INPUTS)
         assert told is not None and told in prompt
     assert "at most 280 as X counts it" in prompt
     assert "At most 2 hashtags." in prompt
@@ -254,3 +270,80 @@ def test_the_critic_prompt_names_every_criterion():
 @pytest.mark.parametrize("schema", [Plan, Draft, Variant, rules.Claim, CriticReport])
 def test_the_submission_schemas_forbid_extra_fields(schema):
     assert schema.model_json_schema()["additionalProperties"] is False
+
+
+# ------------------------------------------------------------------ the image and the research
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Write anywhere. Even offline.",
+        "write ANYWHERE — even offline!",
+        "Write anywhere\nEven offline",
+    ],
+)
+def test_a_text_that_is_only_the_words_on_the_image_breaks_a_rule(text):
+    report = rules.check_variant(variant(text), X_WITH_INPUTS, set())
+
+    assert [failure["rule"] for failure in report["failures"]] == ["image_words"]
+
+
+def test_a_text_that_adds_to_the_words_on_the_image_keeps_the_rule():
+    report = rules.check_variant(
+        variant("Write anywhere, even offline: on the plane too."), X_WITH_INPUTS, set()
+    )
+
+    assert report["passed"]
+
+
+def test_a_post_without_an_image_is_neither_told_nor_checked_the_image_rule():
+    [image_words] = [rule for rule in rules.CODE_RULES if rule.key == "image_words"]
+    assert image_words.told(X) is None
+    assert failures(variant("Write anywhere. Even offline.")) == []
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        rules.plan_system_prompt(X_WITH_INPUTS),
+        rules.draft_system_prompt(X_WITH_INPUTS, 1),
+        rules.critic_system_prompt(X_WITH_INPUTS),
+    ],
+)
+def test_every_prompt_of_a_run_given_inputs_says_how_to_use_them(prompt):
+    assert "\nThe image\n" in prompt and "\nThe research\n" in prompt
+    assert "(image)" in prompt and "(research)" in prompt
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [rules.plan_system_prompt(X), rules.draft_system_prompt(X, 1), rules.critic_system_prompt(X)],
+)
+def test_no_prompt_of_a_run_without_inputs_names_them(prompt):
+    assert "The image" not in prompt and "The research" not in prompt
+    assert "(image)" not in prompt and "(research)" not in prompt
+
+
+def test_the_writer_is_told_a_finding_is_never_a_claim_and_the_critic_fails_it_on_facts():
+    writer = rules.draft_system_prompt(X_WITH_INPUTS, 1)
+    critic = rules.critic_system_prompt(X_WITH_INPUTS)
+
+    assert "It is never a claim about the product" in writer
+    assert "facts fails when the text presents a finding" in critic
+
+
+def test_claims_take_the_evidence_of_their_features_in_the_writing_context():
+    context = {
+        "features": [
+            {"id": "offline-sync", "evidence": [{"file": "src/sync.ts", "lines": "10-40"}]},
+            {"id": "tags", "evidence": [{"file": "x" * (rules.MAX_EVIDENCE_FILE_CHARS + 1)}]},
+        ]
+    }
+    claims = [{"statement": "Syncs offline.", "feature_ids": ["offline-sync", "tags", "gone"]}]
+
+    assert rules.claims_with_evidence(claims, context) == [
+        {
+            "statement": "Syncs offline.",
+            "feature_ids": ["offline-sync", "tags", "gone"],
+            "evidence": [{"feature_id": "offline-sync", "file": "src/sync.ts", "lines": "10-40"}],
+        }
+    ]

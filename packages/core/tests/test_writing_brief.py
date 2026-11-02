@@ -1,5 +1,7 @@
 """Tests for the brief of a writing run: what each goal carries, and how every field is bounded."""
 
+import uuid
+
 import pytest
 from pydantic import ValidationError
 
@@ -83,3 +85,25 @@ def test_an_unknown_field_is_refused():
 def test_a_platform_other_than_x_is_refused():
     with pytest.raises(ValidationError):
         brief(platform="linkedin")
+
+
+def test_a_brief_may_name_an_asset_and_a_research_run():
+    asset, research = uuid.uuid4(), uuid.uuid4()
+
+    named = brief(asset=str(asset), research_run_id=str(research))
+
+    assert (named.asset, named.research_run_id) == (asset, research)
+
+
+def test_a_brief_stored_before_assets_and_research_reads_without_them():
+    stored = WritingBrief.model_validate(
+        {"platform": "x", "goal": "introduce", "feature": None, "angle": None, "variants": 3}
+    )
+
+    assert (stored.asset, stored.research_run_id) == (None, None)
+
+
+@pytest.mark.parametrize("field", ["asset", "research_run_id"])
+def test_an_asset_or_research_run_is_named_by_its_id(field):
+    with pytest.raises(ValidationError):
+        brief(**{field: "the launch image"})

@@ -6,8 +6,11 @@ engine: every failure is raised with a type that says whether another attempt is
 and with a message that may be stored and shown, and each can run twice without doing its work
 twice, because a transition to where a run or an item already is changes nothing.
 ``record_outcome`` settles the post and marks the run succeeded in one transaction, both or
-neither; ``record_failure`` records the run failed with what its stored draft cost, which
-settles a post nobody decided on ``failed`` with it.
+neither; it never records a post as sent: ``dry_run`` is reached only through the handler of
+``publish_post``, once a person approved the post, and ``record_outcome`` accepts it only for an
+item that handler recorded so, naming an approved proposal (core refuses the rest);
+``record_failure`` records the run failed with what its stored draft cost, which settles a post
+nobody decided on ``failed`` with it.
 
 None writes or stores a post: the steps of the graph and its two actions are the agent
 runtime's activities, with what ``writing.py`` hands them, and a run that is over is forgotten
@@ -30,6 +33,7 @@ from temporalio.exceptions import ApplicationError
 from openmarketer_core.db.content_items import (
     ContentItemNotFound,
     ContentItemSettled,
+    ProposalNotApproved,
     content_item,
     settle_content_item,
 )
@@ -81,7 +85,9 @@ class WriterActivities:
     def record_outcome(self, outcome: steps.RunOutcome) -> None:
         """Settle the run's post as it ended and mark the run succeeded, with what it cost.
 
-        The item must be the run's own. A run that succeeded before records nothing again.
+        The item must be the run's own. A run that succeeded before records nothing again. A
+        post that ended ``dry_run`` must have been recorded so by ``publish_post``'s handler,
+        with the proposal a person approved: an outcome cannot record a post as sent.
         """
         run = outcome.run
         with worded_failures(steps.WRITING_TEXTS, subject=subject_of(run.run_id)):
@@ -99,6 +105,8 @@ class WriterActivities:
                             f"content item {outcome.content_item_id} is not the post of "
                             f"writing run {run.run_id}",
                         )
+                    if status is ContentItemStatus.DRY_RUN:
+                        _require_recorded_as_sent(session, run, outcome.content_item_id)
                     settle_content_item(
                         session,
                         workspace_id=run.workspace_id,
@@ -107,6 +115,8 @@ class WriterActivities:
                         status=status,
                     )
                     mark_run_succeeded(session, **scope_of(run), cost_usd=cost)
+            except ProposalNotApproved as e:
+                raise failure(steps.WRITING_FAILED, str(e)) from None
             except (
                 WritingRunNotFound,
                 WritingRunFinished,
@@ -145,6 +155,18 @@ class WriterActivities:
                 # Nothing to record: no such run for this workspace and project, or its post
                 # was settled and the run succeeded, or it failed before.
                 logger.info("failure of writing run %s not recorded: %s", run.run_id, e)
+
+
+def _require_recorded_as_sent(session: Session, run: WritingRunInput, item_id: uuid.UUID) -> None:
+    """Refuse for good a ``dry_run`` outcome for an item ``publish_post`` did not record so."""
+    item = content_item(
+        session, workspace_id=run.workspace_id, project_id=run.project_id, item_id=item_id
+    )
+    if item.status is not ContentItemStatus.DRY_RUN or item.proposal_id is None:
+        raise failure(
+            steps.WRITING_FAILED,
+            f"content item {item_id} was not recorded as a dry run of an approved post",
+        )
 
 
 def _settled_status(value: str) -> ContentItemStatus:

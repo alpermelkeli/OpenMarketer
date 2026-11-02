@@ -358,9 +358,11 @@ def delete_run(
     """Delete a finished run with its assets and every version's image, for good.
 
     An accepted asset goes too. 409 `studio_run_unfinished` while the run is queued or
-    running: the worker would store images for a run that is gone. 503 `storage_unavailable`
-    when the images could not be removed from object storage; the run stays then, and can be
-    deleted again. The request takes no body; one is a 422.
+    running: the worker would store images for a run that is gone, and 409
+    `studio_run_used_by_post` while a post of the project goes with one of its assets: the post
+    is the record of what it went with, and is deleted only with its project. 503
+    `storage_unavailable` when the images could not be removed from object storage; the run
+    stays then, and can be deleted again. The request takes no body; one is a 422.
     """
     keys = delete_studio_run(
         session, workspace_id=workspace_id, project_id=project_id, run_id=run_id

@@ -76,12 +76,61 @@ def test_mentions_are_found_but_an_email_is_not_one():
         "go to www.example.org",
         "try acme.app today",
         "mail hi@example.io",
+        "try evil.io",
+        "try EVIL.COM",
+        "see t.co/abc",
+        "see xn--80ak6aa92e.com",
+        "see evil.xn--p1ai",
     ],
 )
 def test_a_link_is_found_with_or_without_a_scheme(text):
     assert links(text)
 
 
-@pytest.mark.parametrize("text", ["Built on Node.js", "e.g. this", "version 2.5 is out"])
-def test_words_with_dots_that_are_not_domains_are_not_links(text):
+@pytest.mark.parametrize(
+    "text",
+    [
+        "try evil.top",
+        "see evil.click/x",
+        "try evil.ninja",
+        "try bücher.de",
+        "try ex\u0430mple.com",  # a Cyrillic а in the first label
+        "try evil\u3002com",  # an ideographic full stop
+        "try evil\uff61com",  # its half-width form
+        "try evil\uff0ecom",  # a full-width full stop
+        "try \uff45\uff56\uff49\uff4c.com",  # full-width letters
+        "try ev\u200bil.com",  # a zero-width space inside the label
+        "try evil.c\u0301om",  # a combining mark inside the last label
+        "try example.\u043a\u043e\u043c",  # a last label in Cyrillic
+        "try example.\u4e2d\u56fd",  # a last label in Han
+    ],
+)
+def test_a_bare_domain_is_a_link_under_any_top_level_domain_and_however_it_is_written(text):
+    assert links(text)
+
+
+def test_a_link_is_quoted_as_it_reads_once_normalized():
+    assert links("try evil\u3002com now") == ["evil.com"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "e.g. this",
+        "i.e. that",
+        "version 2.5 is out",
+        "v2.0 ships today",
+        "It is 3.5 times faster.",
+        "Made in the U.S. and loved.",
+        "Wait... what? Yes.",
+        "Python 3.12 and 1.5x faster",
+    ],
+)
+def test_ordinary_text_with_abbreviations_and_numbers_holds_no_link(text):
     assert links(text) == []
+
+
+@pytest.mark.parametrize("text", ["Built on Node.js", "It works.Try it"])
+def test_a_word_joined_to_another_by_a_dot_is_refused_as_a_link(text):
+    # Telling a product name from a domain would take a list of top-level domains again.
+    assert links(text)

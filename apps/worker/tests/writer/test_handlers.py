@@ -6,19 +6,19 @@ PostgreSQL, with the writer and the critic scripted. The graph's own steps are r
 activities the worker registers, in Temporal's activity environment, which needs no server.
 """
 
+import json
 import uuid
+from dataclasses import replace
 
 import pytest
 from temporalio.exceptions import ApplicationError
 from writer_fakes import POST, ScriptedChat, a_draft, a_plan, a_review, one_round_that_passes
 
-from openmarketer_core.agent_runtime.actions import ActionEffect, ActionOutcome, ActionRequest
-from openmarketer_core.agent_runtime.gate import RunScope
+from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.credentials.resolution import ModelKeyNotSet
 from openmarketer_core.db.content_items import settle_content_item
 from openmarketer_core.db.models import ContentItemStatus
-from openmarketer_core.db.proposals import propose_action
 from openmarketer_core.db.session import transaction
 from openmarketer_core.llm import LLMError
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
@@ -141,7 +141,10 @@ async def test_draft_is_stored_as_the_runs_proposed_item_with_its_version_and_co
     assert item.profile_version_id == asked.version_id
     assert str(item.cost_usd) == "0.030000"  # a plan, a draft and a review, a cent each
     assert item.plan["feature_ids"] == ["offline-sync"]
-    assert item.claims[0]["evidence"][0]["file"] == "src/sync.ts"
+    assert item.claims[0]["evidence"] == [
+        {"feature_id": "offline-sync", "file": "src/sync.ts", "lines": "10-40"}
+    ]
+    assert "src/sync.ts" not in json.dumps(request.payload)  # the history holds no path
 
 
 async def test_draft_stored_again_gives_back_the_item_stored_first(
@@ -210,31 +213,25 @@ async def asked_to_publish(activities, run) -> ActionRequest:
     return asked
 
 
-async def stored_post(activities, run) -> PublishPost:
-    return PublishPost.model_validate((await asked_to_publish(activities, run)).payload)
+async def approved_post(activities, writer_database, run) -> tuple[PublishPost, str]:
+    """The run's ``publish_post``, held and approved by a person: its payload and action id."""
+    request = await asked_to_publish(activities, run)
+    writer_database.held(run, request)
+    return PublishPost.model_validate(request.payload), request.action_id
 
 
-def held(sessions, run, request: ActionRequest) -> uuid.UUID:
-    """The proposal the gate holds ``request`` as, stored as the gate stores it; its id."""
-    with transaction(sessions) as session:
-        return propose_action(
-            session,
-            scope=RunScope(workspace_id=run.workspace_id, project_id=run.project_id),
-            run=graph_run(run),
-            workflow_id=f"writing-{run.run_id}",
-            request=request,
-            effect=ActionEffect.PUBLISHES,
-            wait_seconds=3600,
-        ).id
+def refused_post(work, request: ActionRequest) -> ApplicationError:
+    payload = PublishPost.model_validate(request.payload)
+    return refused(work.publish_post, payload, request.action_id)
 
 
 async def test_approved_post_is_recorded_as_a_dry_run_and_sent_nowhere(
     work, activities, writer_database
 ):
     asked = writer_database.requested(started=True)
-    payload = await stored_post(activities, asked.run)
+    payload, action_id = await approved_post(activities, writer_database, asked.run)
 
-    answer = work.publish_post(payload, "no-proposal")
+    answer = work.publish_post(payload, action_id)
 
     item = writer_database.item(asked.run)
     assert answer == {"content_item_id": str(item.id), "status": "dry_run"}
@@ -242,11 +239,11 @@ async def test_approved_post_is_recorded_as_a_dry_run_and_sent_nowhere(
 
 
 async def test_post_recorded_names_the_proposal_its_action_was_held_as(
-    work, activities, writer_database, sessions
+    work, activities, writer_database
 ):
     asked = writer_database.requested(started=True)
     request = await asked_to_publish(activities, asked.run)
-    proposal_id = held(sessions, asked.run, request)
+    proposal_id = writer_database.held(asked.run, request)
 
     work.publish_post(PublishPost.model_validate(request.payload), request.action_id)
 
@@ -255,23 +252,119 @@ async def test_post_recorded_names_the_proposal_its_action_was_held_as(
 
 async def test_post_recorded_again_changes_nothing(work, activities, writer_database):
     asked = writer_database.requested(started=True)
-    payload = await stored_post(activities, asked.run)
-    work.publish_post(payload, "no-proposal")
+    payload, action_id = await approved_post(activities, writer_database, asked.run)
+    work.publish_post(payload, action_id)
     settled_at = writer_database.item(asked.run).settled_at
 
-    work.publish_post(payload, "no-proposal")
+    work.publish_post(payload, action_id)
 
     assert writer_database.item(asked.run).settled_at == settled_at
+
+
+async def test_post_with_no_proposal_is_refused_for_good_and_not_recorded(
+    work, activities, writer_database
+):
+    asked = writer_database.requested(started=True)
+    request = await asked_to_publish(activities, asked.run)
+
+    failure = refused_post(work, request)
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    item = writer_database.item(asked.run)
+    assert (item.status, item.proposal_id) == (ContentItemStatus.PROPOSED, None)
+
+
+@pytest.mark.parametrize("approved", [None, False])
+async def test_post_whose_proposal_nobody_approved_is_refused_for_good_and_not_recorded(
+    work, activities, writer_database, approved
+):
+    asked = writer_database.requested(started=True)
+    request = await asked_to_publish(activities, asked.run)
+    writer_database.held(asked.run, request, approved=approved)
+
+    failure = refused_post(work, request)
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    assert writer_database.item(asked.run).status is ContentItemStatus.PROPOSED
+
+
+async def test_post_whose_approved_proposal_holds_another_payload_is_refused_and_not_recorded(
+    work, activities, writer_database
+):
+    asked = writer_database.requested(started=True)
+    request = await asked_to_publish(activities, asked.run)
+    approved_text = {**request.payload, "text": "What the person approved."}
+    writer_database.held(asked.run, ActionRequest(request.action_id, request.name, approved_text))
+
+    failure = refused_post(work, request)
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    assert writer_database.item(asked.run).status is ContentItemStatus.PROPOSED
+
+
+async def test_post_whose_approved_proposal_is_of_another_action_is_refused_and_not_recorded(
+    work, activities, writer_database
+):
+    asked = writer_database.requested(started=True)
+    request = await asked_to_publish(activities, asked.run)
+    writer_database.held(
+        asked.run, ActionRequest(request.action_id, "something_else", request.payload)
+    )
+
+    failure = refused_post(work, request)
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    assert writer_database.item(asked.run).status is ContentItemStatus.PROPOSED
+
+
+async def test_post_whose_approved_proposal_is_of_another_run_is_refused_and_not_recorded(
+    work, activities, writer_database
+):
+    asked = writer_database.requested(started=True)
+    request = await asked_to_publish(activities, asked.run)
+    # The proposal is stored for another run of the same project, under this action's key.
+    writer_database.held(replace(asked.run, run_id=uuid.uuid4()), request)
+
+    failure = refused_post(work, request)
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    assert writer_database.item(asked.run).status is ContentItemStatus.PROPOSED
+
+
+async def test_post_whose_approved_proposal_is_of_another_kind_of_run_is_refused(
+    work, activities, writer_database
+):
+    asked = writer_database.requested(started=True)
+    request = await asked_to_publish(activities, asked.run)
+    writer_database.held(asked.run, request, kind="studio-run")
+
+    failure = refused_post(work, request)
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    assert writer_database.item(asked.run).status is ContentItemStatus.PROPOSED
+
+
+async def test_post_whose_approved_proposal_is_of_another_project_is_refused_and_not_recorded(
+    work, activities, writer_database
+):
+    asked = writer_database.requested(started=True)
+    request = await asked_to_publish(activities, asked.run)
+    writer_database.held(writer_database.requested(started=True).run, request)
+
+    failure = refused_post(work, request)
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    assert writer_database.item(asked.run).status is ContentItemStatus.PROPOSED
 
 
 async def test_post_whose_text_is_not_the_stored_one_is_refused_and_not_recorded(
     work, activities, writer_database
 ):
     asked = writer_database.requested(started=True)
-    payload = await stored_post(activities, asked.run)
+    payload, action_id = await approved_post(activities, writer_database, asked.run)
 
     failure = refused(
-        work.publish_post, payload.model_copy(update={"text": "Something else."}), "no-proposal"
+        work.publish_post, payload.model_copy(update={"text": "Something else."}), action_id
     )
 
     assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
@@ -282,7 +375,7 @@ async def test_post_settled_another_way_before_is_refused_for_good(
     work, activities, writer_database, sessions
 ):
     asked = writer_database.requested(started=True)
-    payload = await stored_post(activities, asked.run)
+    payload, action_id = await approved_post(activities, writer_database, asked.run)
     with transaction(sessions) as session:
         settle_content_item(
             session,
@@ -292,7 +385,7 @@ async def test_post_settled_another_way_before_is_refused_for_good(
             status=ContentItemStatus.EXPIRED,
         )
 
-    failure = refused(work.publish_post, payload, "no-proposal")
+    failure = refused(work.publish_post, payload, action_id)
 
     assert (failure.type, failure.non_retryable) == (steps.RUN_UNAVAILABLE, True)
     assert writer_database.item(asked.run).status is ContentItemStatus.EXPIRED
@@ -303,10 +396,9 @@ async def test_finished_run_reports_identifiers_status_and_cost_and_no_post(
     work, activities, writer_database
 ):
     asked = writer_database.requested(started=True)
-    request = await asked_to_publish(activities, asked.run)
-    payload = PublishPost.model_validate(request.payload)
-    answer = work.publish_post(payload, request.action_id)
-    published = ActionOutcome(request.action_id, True, answer, "")
+    payload, action_id = await approved_post(activities, writer_database, asked.run)
+    answer = work.publish_post(payload, action_id)
+    published = ActionOutcome(action_id, True, answer, "")
 
     output = (await activities.step(asked.run, published)).output
 

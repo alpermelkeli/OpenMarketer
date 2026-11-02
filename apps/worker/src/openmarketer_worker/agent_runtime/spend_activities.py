@@ -8,7 +8,8 @@ is the gate's verdict: run, ask a person, or refuse. ``settle_spend`` commits wh
 spent once it ran, or releases the hold when it did not. ``driver.py`` calls both.
 ``is_cleared`` is not an activity: it is how ``run_action`` checks, before it runs the handler
 of an action that spends, that the ledger holds a reservation for that very action and that a
-person approved it when the ledger asked for one, so that a workflow that skipped the gate
+person approved that very request when the ledger asked for one (core's ``approves_request``:
+its name, payload and run, not its key alone), so that a workflow that skipped the gate
 still spends nothing the budget did not let through.
 
 They hold no rule: the decision is core's ``decide_spend``, and the ledger's use cases are
@@ -41,7 +42,6 @@ from openmarketer_core.agent_runtime.actions import (
     InvalidActionPayload,
     UnknownAction,
 )
-from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.agent_runtime.model_input import shown
 from openmarketer_core.budget.caps import InvalidAmount, SpendDecision, usd
 from openmarketer_core.budget.ledger import (
@@ -53,7 +53,7 @@ from openmarketer_core.budget.ledger import (
 )
 from openmarketer_core.db.budget_ledger import held_decision_of_action
 from openmarketer_core.db.projects import ProjectNotFound
-from openmarketer_core.db.proposals import proposal_status_of_action
+from openmarketer_core.db.proposals import approves_request
 from openmarketer_core.db.session import transaction
 from openmarketer_core.workspace_settings.creative_budget_settings import (
     CreativeBudgetEnvironmentInvalid,
@@ -158,15 +158,17 @@ class SpendActivities:
                 )
             return str(settled.settled_usd)
 
-    def is_cleared(self, action_id: str) -> bool:
-        """Whether the budget let the action's spend through: held, and approved if it asked
-        for a person. It blocks."""
+    def is_cleared(self, request: ActionRequest) -> bool:
+        """Whether the budget let the action's spend through: held, and the request approved if
+        it asked for a person. It blocks."""
         with transaction(self._sessions) as session:
-            decision = held_decision_of_action(session, run_kind=self._kind, action_id=action_id)
+            decision = held_decision_of_action(
+                session, run_kind=self._kind, action_id=request.action_id
+            )
             if decision is SpendDecision.RUN_AUTOMATICALLY:
                 return True
             if decision is SpendDecision.ASK_A_PERSON:
-                return proposal_status_of_action(session, action_id) is ProposalStatus.APPROVED
+                return approves_request(session, request, run_kind=self._kind)
             return False
 
     def _validated(self, request: ActionRequest, subject: str) -> BaseModel:

@@ -10,8 +10,13 @@ feature it announces, an angle carries the person's own words, and an introducti
 neither. Whether the feature exists and is live is checked against the approved profile by the
 writer's ``prepare``, not here: the brief is read before the run knows which version it uses.
 
-The brief has no image, asset or research yet: the first step of the writer writes text posts
-only (``docs/status.md``).
+A brief may also hand the writer two ready inputs, by id: ``asset``, an image of the project's
+Studio library the post goes with (no image is made for it), and ``research_run_id``, a finished
+research run of the project whose findings the writer may quote as data. Agents do not start
+each other, so the writer never asks for either; whoever writes the brief names what exists.
+That each is the project's and usable is checked when the run is requested and again by the
+writer's ``prepare`` (``db/writing_runs.py``), not here. A brief stored before they existed
+reads without them.
 """
 
 from __future__ import annotations
@@ -70,6 +75,8 @@ class WritingBrief(BaseModel):
     feature: FeatureId | None = None
     angle: Angle | None = None
     variants: int = Field(default=DEFAULT_VARIANTS, ge=1, le=MAX_VARIANTS)
+    asset: uuid.UUID | None = None  # a media asset of the project's library
+    research_run_id: uuid.UUID | None = None  # a succeeded research run of the project
 
     @model_validator(mode="after")
     def _fields_of_the_goal(self) -> WritingBrief:

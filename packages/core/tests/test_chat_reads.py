@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import TypedDict
 
 import pytest
-from sqlalchemy import func, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
@@ -21,11 +21,17 @@ from openmarketer_core.db.analysis_runs import (
     mark_run_started,
     request_analysis_run,
 )
+from openmarketer_core.db.content_items import (
+    NewContentItem,
+    settle_content_item,
+    store_proposed_content_item,
+)
 from openmarketer_core.db.media_assets import NewAssetVersion, add_version, record_version_review
 from openmarketer_core.db.models import (
     AnalysisRunRecord,
     AnalysisRunStatus,
     AssetTechnique,
+    ContentItemStatus,
     MediaAssetStatus,
     ProductProfileRecord,
     ProfileStatus,
@@ -36,6 +42,8 @@ from openmarketer_core.db.models import (
     StudioRunRecord,
     StudioRunStatus,
     Workspace,
+    WritingRunRecord,
+    WritingRunStatus,
 )
 from openmarketer_core.db.profile_versions import approve_profile_version
 from openmarketer_core.db.proposals import ActionProposal, decide_proposal, propose_action
@@ -55,6 +63,8 @@ from openmarketer_core.db.studio_runs import (
     request_studio_run,
 )
 from openmarketer_core.db.studio_runs import mark_run_started as mark_studio_started
+from openmarketer_core.db.writing_runs import WritingRun, request_writing_run
+from openmarketer_core.db.writing_runs import mark_run_started as mark_writing_started
 from openmarketer_core.orchestrator.reads import ChatReads, UnknownProfileSection
 from openmarketer_core.orchestrator.reads_postgres import PostgresChatReads
 from openmarketer_core.profile import ProductProfile
@@ -65,6 +75,8 @@ from openmarketer_core.studio.asset_store import asset_key
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+from openmarketer_core.writing.brief import WritingBrief
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 PERSON = uuid.uuid4()
 
@@ -79,6 +91,16 @@ class _Scope(TypedDict):
 DAY = 24 * 60 * 60
 PROFILE = ProductProfile.model_validate({"product": {"name": "Memoria", "type": "consumer_app"}})
 REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
+BRIEF = WritingBrief.model_validate({"platform": "x", "goal": "angle", "angle": "Notes, offline"})
+# The chosen variant's review as the writer stores it: no risky claim, one minor note.
+CRITIC_REPORT = {
+    "variant": 0,
+    "risky_claim": False,
+    "criteria": [
+        {"criterion": "tone", "passed": True, "severity": "none", "note": ""},
+        {"criterion": "hook", "passed": False, "severity": "minor", "note": "could be sharper"},
+    ],
+}
 ASSET_REQUEST = AssetRequest(
     goal="Announce the Android launch", exact_copy=["Now on Android"], platform=Platform.X_POST
 )
@@ -409,6 +431,126 @@ def test_studio_reads_of_one_project_do_not_reach_another(session, scope):
     assert reads.studio_run(other_run.id) is None
     assert reads.recent_studio_runs(10) == []
     assert reads.media_assets(10) == []
+
+
+def test_writing_runs_are_read_newest_first_with_their_brief(session, scope):
+    older = request_writing_run(session, **_ids(scope), brief=BRIEF, requested_by="person")
+    session.execute(
+        update(WritingRunRecord)
+        .where(WritingRunRecord.id == older.id)
+        .values(created_at=func.now() - timedelta(hours=1))
+    )
+    newer = request_writing_run(session, **_ids(scope), brief=BRIEF, requested_by="orchestrator")
+    reads = reads_of(session, scope)
+
+    runs = reads.recent_writing_runs(10)
+
+    assert [run.id for run in runs] == [newer.id, older.id]
+    assert [run.id for run in reads.recent_writing_runs(1)] == [newer.id]
+    assert runs[0].brief == BRIEF.model_dump(mode="json")
+    assert (runs[0].status, runs[0].platform, runs[0].requested_by) == (
+        WritingRunStatus.QUEUED,
+        "x",
+        "orchestrator",
+    )
+    # A listing leaves the posts out.
+    assert runs[0].post is None
+
+
+def test_a_writing_run_is_read_with_its_post_and_the_proposal_it_waits_on(session, scope):
+    run = writing_run_with_post(session, scope)
+    proposal = propose_post(session, scope, run)
+
+    found = reads_of(session, scope).writing_run(run.id)
+
+    assert found is not None
+    assert found.status is WritingRunStatus.RUNNING
+    assert found.profile_version == 1
+    assert found.post is not None
+    assert found.post.text == "Notes that work offline."
+    assert found.post.status is ContentItemStatus.PROPOSED
+    assert found.post.passed_critic is True
+    assert found.post.proposal_id == proposal.id
+
+
+def test_a_settled_post_waits_on_no_proposal(session, scope):
+    run = writing_run_with_post(session, scope)
+    proposal = propose_post(session, scope, run)
+    found = reads_of(session, scope).writing_run(run.id)
+    assert found is not None and found.post is not None
+    settle_content_item(
+        session,
+        **_ids(scope),
+        item_id=found.post.id,
+        status=ContentItemStatus.REJECTED,
+        proposal_id=proposal.id,
+    )
+
+    settled = reads_of(session, scope).writing_run(run.id)
+
+    assert settled is not None and settled.post is not None
+    assert (settled.post.status, settled.post.proposal_id) == (ContentItemStatus.REJECTED, None)
+
+
+def test_a_review_the_critic_rule_cannot_read_is_no_verdict(session, scope):
+    run = writing_run_with_post(session, scope, critic_report={"passed": True})
+
+    found = reads_of(session, scope).writing_run(run.id)
+
+    assert found is not None and found.post is not None
+    assert found.post.passed_critic is None
+
+
+def test_writing_reads_of_one_project_do_not_reach_another(session, scope):
+    other = new_scope(session)
+    other_run = writing_run_with_post(session, other)
+    reads = reads_of(session, scope)
+
+    assert reads.writing_run(other_run.id) is None
+    assert reads.recent_writing_runs(10) == []
+
+
+def writing_run_with_post(
+    session: Session, scope: RunScope, *, critic_report: dict | None = None
+) -> WritingRun:
+    """A running writing run that stored its post, from the project's approved version 1."""
+    store_approved(session, scope)
+    version_id = session.scalars(
+        select(ProductProfileRecord.id).where(ProductProfileRecord.project_id == scope.project_id)
+    ).one()
+    run = request_writing_run(session, **_ids(scope), brief=BRIEF, requested_by="orchestrator")
+    mark_writing_started(session, **_ids(scope), run_id=run.id, profile_version_id=version_id)
+    store_proposed_content_item(
+        session,
+        **_ids(scope),
+        run_id=run.id,
+        item=NewContentItem(
+            text="Notes that work offline.",
+            plan={"angle": "offline"},
+            check_report={"passed": True, "failures": []},
+            critic_report=CRITIC_REPORT if critic_report is None else critic_report,
+            cost_usd=Decimal("0.02"),
+        ),
+    )
+    return run
+
+
+def propose_post(session: Session, scope: RunScope, run: WritingRun) -> ActionProposal:
+    """The run's ``publish_post``, held by the gate for a person."""
+    ref = GraphRunRef(kind=WRITING_RUN_KIND, run_id=run.id)
+    return propose_action(
+        session,
+        scope=scope,
+        run=ref,
+        workflow_id=f"writing-{run.id}",
+        request=ActionRequest(
+            action_id=f"{WRITING_RUN_KIND}:{run.id}:publish",
+            name="publish_post",
+            payload={"text": "Notes that work offline."},
+        ),
+        effect=ActionEffect.PUBLISHES,
+        wait_seconds=DAY,
+    )
 
 
 def studio_run_that_needs_review(session: Session, scope: RunScope) -> StudioRun:

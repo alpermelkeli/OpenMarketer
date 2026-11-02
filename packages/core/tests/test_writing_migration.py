@@ -2,11 +2,11 @@
 
 They need PostgreSQL (see the root ``conftest.py``) and run the migrations themselves, so
 they do not use the ``engine`` fixture. The rows are written at the revision itself, through
-the stores, and the downgrade is then run over them.
+the stores where a store writes nothing a later revision added, and the content item in SQL
+of the revision's own columns; the downgrade is then run over them.
 """
 
 import uuid
-from decimal import Decimal
 
 import pytest
 from alembic import command
@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
-from openmarketer_core.db.content_items import NewContentItem, store_proposed_content_item
 from openmarketer_core.db.models import ProductProfileRecord, Project, Workspace
 from openmarketer_core.db.proposals import propose_action
 from openmarketer_core.db.writing_runs import mark_run_started, request_writing_run
@@ -83,18 +82,24 @@ def a_proposed_post(engine) -> None:
             requested_by="person",
         )
         mark_run_started(session, **ids, run_id=run.id, profile_version_id=version.id)
-        store_proposed_content_item(
-            session,
-            **ids,
-            run_id=run.id,
-            item=NewContentItem(
-                text="Hello.",
-                plan={},
-                check_report={},
-                critic_report={},
-                cost_usd=Decimal(0),
-                proposal_id=proposal(session, scope, "writing-run", run.id),
+        item_id = session.execute(
+            text(
+                "INSERT INTO content_item (project_id, run_id, platform, text, plan,"
+                " plan_changes, alternatives, claims, check_report, critic_report,"
+                " flagged_numbers, profile_version_id, proposal_id)"
+                " VALUES (:project, :run, 'x', 'Hello.', '{}', '[]', '[]', '[]', '{}', '{}',"
+                " '[]', :version, :proposal) RETURNING id"
             ),
+            {
+                "project": project.id,
+                "run": run.id,
+                "version": version.id,
+                "proposal": proposal(session, scope, "writing-run", run.id),
+            },
+        ).scalar_one()
+        session.execute(
+            text("UPDATE writing_run SET content_item_id = :item WHERE id = :run"),
+            {"item": item_id, "run": run.id},
         )
         proposal(session, scope, "studio-run", uuid.uuid4())
 

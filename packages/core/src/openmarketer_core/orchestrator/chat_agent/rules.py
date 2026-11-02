@@ -19,6 +19,11 @@ worded here, by code, and so is the check a studio request's copy passes before 
 is asked (``term_not_to_mention``): the copy may be the model's own, so the brand's
 ``do_not_mention`` is held by code and not only by the prompt.
 
+Which run a request starts, and that a post or a request needing several agents together
+starts none, is the prompt's: the model reads what the operator asked for. The chat has no
+request action for the writer, so code holds that a post is never started here: a post is a
+task's, which the chat does not make yet. Nothing here lets one run start another.
+
 Nothing here depends on the graph framework (``graph.py`` wires these functions into a
 graph) or on a database (reads reach the model through the ``ChatReads`` port, given to a
 tool at call time).
@@ -72,6 +77,8 @@ TOOL_LABELS: Mapping[str, str] = {
     "get_studio_run": "Reading a studio run",
     "list_media_assets": "Listing the Studio library",
     "start_creative": "Starting an image in the studio",
+    "list_writing_runs": "Listing the writing runs",
+    "get_writing_run": "Reading a writing run",
 }
 UNKNOWN_TOOL_LABEL = "Calling a tool"
 # What an event names a tool the agent does not have by: the name is what the model wrote.
@@ -145,7 +152,8 @@ keep each item concise.
 
 - Ground every factual statement in the project's records, including project state, \
 Product Profile, analysis runs, research runs, their reports, studio runs, the images of \
-the Studio library, and proposals awaiting a person's decision.
+the Studio library, writing runs and the posts they proposed, and proposals awaiting a \
+person's decision.
 - The Product Profile is the structured description of the product that other parts of \
 the system work from. Read the whole profile or relevant sections when needed.
 - A research run answers questions using public pages. Its report contains findings and \
@@ -161,11 +169,33 @@ sentence.
 ## What you may do
 
 - You may read project records.
+
+### Which run a request starts
+
+- A post, a tweet, or "introduce / announce the product" **starts nothing here.** Say in \
+one sentence that posts will be handled as a task, and that until then a post is started \
+from the project's Writing screen. You may still answer questions about the project's \
+writing runs and their posts.
+- An image, a poster, a visual, a story, an Open Graph image or an App Store screenshot is \
+the **studio**: `start_creative`.
+- A question about the world outside the project (competitors, the market, what people say) \
+is **research**: `start_research`.
+- Each run is one agent doing one thing. **A request that needs several agents together** \
+(research and then an image made from it, an image and its caption) **starts nothing.** Say \
+in one sentence that requests like this will be handled as a task, and offer to start the \
+parts you can start (research, an image) separately if the operator wants; start them only \
+once the operator says so.
+
+### Research
+
 - You may start **one research run** when the operator asks for research.
 - Starting a research run creates a run that answers questions using public pages and \
 stores a report with its sources once complete.
 - When you start a research run, include its exact run ID in your answer and state that \
 it is queued. Explain that its report can be reviewed once it finishes.
+
+### Images
+
 - You may start **a studio run** when the operator asks for an image, such as a post \
 visual, a story, an Open Graph image or an App Store screenshot. A studio run makes one \
 image for one platform and picks how to make it by itself; you do not choose the technique.
@@ -192,6 +222,9 @@ you start one.
 - When you start a studio run, state what you chose (the angle, the copy and the platform), \
 include its exact run ID and state that it is queued. Its image lands in the project's Studio \
 library, where a person accepts or rejects it.
+
+### What you cannot do
+
 - You cannot approve or reject proposals or images, publish content, change settings, or \
 start any other kind of run.
 - If the operator requests an action you cannot perform, explain the limitation briefly \

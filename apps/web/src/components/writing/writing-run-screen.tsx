@@ -77,7 +77,7 @@ export function WritingRunScreen({ projectId, runId }: WritingRunScreenProps) {
     <div className="grid gap-8">
       <BackToWriting projectId={projectId} />
       <WritingRunCard run={found} now={now} linked={false} />
-      <RunBrief brief={runBrief(found)} />
+      <RunBrief projectId={projectId} brief={runBrief(found)} />
 
       {found.content_item_id !== null && (
         <>

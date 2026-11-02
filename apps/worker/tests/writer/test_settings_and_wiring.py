@@ -109,7 +109,8 @@ def test_registration_removes_left_over_checkpoints_of_writing_runs(writer_regis
 
 
 def test_one_model_for_the_writer_and_the_critic_is_a_warning(caplog):
-    router = ModelRouter.from_file(MODELS, env={})
+    writer = ModelRouter.from_file(MODELS, env={}).resolve("writer").model
+    router = ModelRouter.from_file(MODELS, env={"LLM_MODEL__CRITIC": writer})
 
     with caplog.at_level(logging.WARNING, logger="openmarketer_worker.writer.wiring"):
         warn_of_one_model_for_both_roles(router)

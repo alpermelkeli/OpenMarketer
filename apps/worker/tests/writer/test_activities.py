@@ -31,6 +31,17 @@ async def with_a_stored_post(activities, writer_database) -> tuple:
     return asked.run, uuid.UUID(stored.result["content_item_id"])
 
 
+async def with_a_post_recorded_as_sent(activities, writer_database) -> tuple:
+    """A started run whose post a person approved and ``publish_post`` recorded, ``dry_run``."""
+    asked = writer_database.requested()
+    activities.start(asked.run)
+    stored = await activities.act((await activities.step(asked.run)).action)
+    request = (await activities.step(asked.run, stored)).action
+    writer_database.held(asked.run, request)
+    await activities.act(request)
+    return asked.run, uuid.UUID(stored.result["content_item_id"])
+
+
 def outcome(run, item_id, status: str, cost: str = "0.03") -> steps.RunOutcome:
     return steps.RunOutcome(run=run, content_item_id=item_id, status=status, cost_usd=cost)
 
@@ -70,9 +81,7 @@ def test_start_of_a_run_that_failed_is_refused_for_good(activities, writer_datab
 
 
 # --------------------------------------------------------------------------- record_outcome
-@pytest.mark.parametrize(
-    "status", [ContentItemStatus.REJECTED, ContentItemStatus.EXPIRED, ContentItemStatus.DRY_RUN]
-)
+@pytest.mark.parametrize("status", [ContentItemStatus.REJECTED, ContentItemStatus.EXPIRED])
 async def test_outcome_settles_the_post_and_marks_the_run_succeeded_with_its_cost(
     activities, writer_database, status
 ):
@@ -83,6 +92,28 @@ async def test_outcome_settles_the_post_and_marks_the_run_succeeded_with_its_cos
     stored = writer_database.run(run)
     assert (stored.status, stored.cost_usd) == (WritingRunStatus.SUCCEEDED, Decimal("0.031"))
     assert writer_database.item(run).status is status
+
+
+async def test_outcome_of_a_post_recorded_as_sent_marks_the_run_succeeded(
+    activities, writer_database
+):
+    run, item_id = await with_a_post_recorded_as_sent(activities, writer_database)
+
+    activities.run(steps.RECORD_OUTCOME, outcome(run, item_id, "dry_run", "0.031"))
+
+    stored = writer_database.run(run)
+    assert (stored.status, stored.cost_usd) == (WritingRunStatus.SUCCEEDED, Decimal("0.031"))
+    assert writer_database.item(run).status is ContentItemStatus.DRY_RUN
+
+
+async def test_outcome_cannot_record_a_proposed_post_as_sent(activities, writer_database):
+    run, item_id = await with_a_stored_post(activities, writer_database)
+
+    failure = refused(activities, steps.RECORD_OUTCOME, outcome(run, item_id, "dry_run"))
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    assert writer_database.item(run).status is ContentItemStatus.PROPOSED
+    assert writer_database.run(run).status is WritingRunStatus.RUNNING
 
 
 async def test_outcome_recorded_again_changes_nothing(activities, writer_database):

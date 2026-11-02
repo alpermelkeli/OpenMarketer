@@ -56,6 +56,7 @@ from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.db.chat import require_chat
 from openmarketer_core.db.models import (
     RUN_ERROR_MAX_LENGTH,
+    ContentItemRecord,
     MediaAssetRecord,
     MediaAssetVersionRecord,
     Project,
@@ -114,6 +115,15 @@ class StudioRunUnfinished(Exception):
     def __init__(self, run_id: uuid.UUID, status: StudioRunStatus) -> None:
         self.status = status
         super().__init__(f"studio run {run_id} is still {status.value}")
+
+
+class StudioRunUsedByPost(Exception):
+    """A post of the project names an asset of the run; the run stays as long as the post."""
+
+    def __init__(self, run_id: uuid.UUID) -> None:
+        super().__init__(
+            f"studio run {run_id} made the image of a post; it is kept as long as the post is"
+        )
 
 
 class ReferenceAssetNotFound(Exception):
@@ -389,8 +399,10 @@ def delete_studio_run(
     Nothing is kept to restore it from, an accepted asset included. Answers the storage keys
     of the removed versions' images; the caller removes each key's object from object storage
     before its transaction commits. Raises ``StudioRunNotFound`` when the workspace has no
-    such run of the project, and ``StudioRunUnfinished`` while the run is queued or running:
-    the worker would store images for a run that is gone, and nothing here stops its workflow.
+    such run of the project, ``StudioRunUnfinished`` while the run is queued or running:
+    the worker would store images for a run that is gone, and nothing here stops its workflow,
+    and ``StudioRunUsedByPost`` when a content item names one of its assets: the item is the
+    record of what a post went with, and is deleted only with its project.
     """
     record = _run_to_change(session, workspace_id, project_id, run_id)
     if record.status not in FINISHED:
@@ -398,6 +410,11 @@ def delete_studio_run(
     assets = select(MediaAssetRecord.id).where(
         MediaAssetRecord.project_id == project_id, MediaAssetRecord.run_id == run_id
     )
+    used = select(ContentItemRecord.id).where(
+        ContentItemRecord.project_id == project_id, ContentItemRecord.asset_id.in_(assets)
+    )
+    if session.scalar(select(used.exists())):
+        raise StudioRunUsedByPost(run_id)
     keys = tuple(
         session.scalars(
             select(MediaAssetVersionRecord.storage_key).where(

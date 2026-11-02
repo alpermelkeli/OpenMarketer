@@ -9,16 +9,26 @@ in them.
 
 A run has one item. The worker stores it, ``proposed``, while the run is running and after the
 run chose its profile version (``store_proposed_content_item``); storing it again for the same
-run with the same text gives back the stored item, so a retried activity stores one. The item
+run with the same text, image and research gives back the stored item, so a retried activity
+stores one. The item
 is then settled once (``settle_content_item``): ``dry_run`` when the person approved it and the
 post was recorded as it would have been sent, ``rejected``, ``expired``, or ``failed``. Settling
 it the same way again changes nothing; another way is ``ContentItemSettled``. An item still
 proposed when its run fails is settled ``failed`` by the run (``db/writing_runs.py``). A
 finished run's item is never changed.
 
+An item may name the image of the project's library it goes with, an asset with its version,
+both or neither, and the research run whose findings it drew on; the version must be one of
+that asset's and the asset and the run the project's (``MediaAssetNotFound``,
+``MediaAssetVersionNotFound``, ``ResearchRunNotFound``). Whether a post can go with that asset,
+and whether the run succeeded, is the writer's ``prepare``'s check, made before it writes; the
+item records what the post was written with.
+
 The proposal is the one the gate held the run's ``publish_post`` as, and must be a proposal of
 the same run. It is named when the item is stored or when it is settled, whichever comes first
-knows it, and once.
+knows it, and once. An item is settled ``dry_run`` only with a proposal of its run that a person
+approved, given or named already (``ProposalNotApproved``): recording a post as sent is what a
+person's approval allows, and nothing else does.
 
 Every function is scoped to a workspace and a project, takes a session and never commits; an
 item of another workspace or project is treated as missing. Writes take the workspace lock
@@ -38,17 +48,23 @@ from typing import Any
 from sqlalchemy import Select, func, select, tuple_, update
 from sqlalchemy.orm import Session
 
+from openmarketer_core.agent_runtime.gate import ProposalStatus
+from openmarketer_core.db.media_assets import MediaAssetNotFound, MediaAssetVersionNotFound
 from openmarketer_core.db.models import (
     ContentItemRecord,
     ContentItemStatus,
+    MediaAssetRecord,
+    MediaAssetVersionRecord,
     ProductProfileRecord,
     Project,
     ProposalRecord,
+    ResearchRunRecord,
     WritingRunRecord,
     WritingRunStatus,
 )
 from openmarketer_core.db.pages import CreatedPosition, Page, page_of, rows_to_fetch
 from openmarketer_core.db.projects import get_project
+from openmarketer_core.db.research_runs import ResearchRunNotFound
 from openmarketer_core.db.workspace_lock import wait_for_other_writes
 from openmarketer_core.db.writing_runs import (
     FINISHED,
@@ -76,7 +92,7 @@ class ContentItemNotFound(Exception):
 
 
 class ContentItemStored(Exception):
-    """The run stored another item before; a run proposes one post."""
+    """The run stored another item before (another text, image or research); it proposes one."""
 
     def __init__(self, run_id: uuid.UUID) -> None:
         super().__init__(f"writing run {run_id} has already stored another content item")
@@ -104,9 +120,23 @@ class ProposalOfAnotherRun(Exception):
         super().__init__(f"proposal {proposal_id} is not the proposal of writing run {run_id}")
 
 
+class ProposalNotApproved(Exception):
+    """The item would be recorded as sent with no proposal of its run that a person approved."""
+
+    def __init__(self, item_id: uuid.UUID) -> None:
+        super().__init__(
+            f"content item {item_id} is recorded as a dry run only with an approved proposal "
+            "of its run"
+        )
+
+
 @dataclass(frozen=True)
 class NewContentItem:
-    """A proposed post as the worker stores it; the reports are JSON-ready values."""
+    """A proposed post as the worker stores it; the reports are JSON-ready values.
+
+    ``asset_id`` and ``asset_version_id`` are the image the post goes with, both or neither;
+    ``research_run_id`` the research run it drew on.
+    """
 
     text: str
     plan: Mapping[str, Any]
@@ -118,6 +148,13 @@ class NewContentItem:
     claims: Sequence[Any] = ()
     flagged_numbers: Sequence[Any] = ()
     proposal_id: uuid.UUID | None = None
+    asset_id: uuid.UUID | None = None
+    asset_version_id: uuid.UUID | None = None
+    research_run_id: uuid.UUID | None = None
+
+    def __post_init__(self) -> None:
+        if (self.asset_id is None) != (self.asset_version_id is None):
+            raise ValueError("an item names an asset together with its version, or neither")
 
 
 @dataclass(frozen=True)
@@ -140,6 +177,9 @@ class ContentItem:
     profile_version_id: uuid.UUID
     profile_version: int  # the number of that version, which is what a person is shown
     proposal_id: uuid.UUID | None
+    asset_id: uuid.UUID | None
+    asset_version_id: uuid.UUID | None
+    research_run_id: uuid.UUID | None
     cost_usd: Decimal
     created_at: datetime
     settled_at: datetime | None
@@ -155,22 +195,32 @@ def store_proposed_content_item(
 ) -> ContentItem:
     """Store the post the run proposes, ``proposed``, and name it as the run's item.
 
-    The item takes the run's platform and profile version. Storing it again with the same text
-    gives back the stored item; another text is ``ContentItemStored``. Raises
-    ``WritingRunNotFound``, ``WritingRunNotStarted``, ``WritingRunFinished``,
-    ``ProfileVersionNotChosen`` and ``ProposalOfAnotherRun``. Takes the workspace lock.
+    The item takes the run's platform and profile version. Storing it again with the same
+    text, image and research gives back the stored item; anything else is
+    ``ContentItemStored``. Raises ``WritingRunNotFound``, ``WritingRunNotStarted``,
+    ``WritingRunFinished``, ``ProfileVersionNotChosen`` and ``ProposalOfAnotherRun``, and
+    ``MediaAssetNotFound``, ``MediaAssetVersionNotFound`` or ``ResearchRunNotFound`` when the
+    asset, its version or the research run is not the project's. Takes the workspace lock.
     """
     wait_for_other_writes(session, workspace_id)
     run = _running_run(session, workspace_id, project_id, run_id)
     if run.content_item_id is not None:
         stored = _found_item(session, workspace_id, project_id, run.content_item_id)
-        if stored.text != item.text:
+        if (stored.text, stored.asset_version_id, stored.research_run_id) != (
+            item.text,
+            item.asset_version_id,
+            item.research_run_id,
+        ):
             raise ContentItemStored(run_id)
         return _content_item(session, stored)
     if run.profile_version_id is None:
         raise ProfileVersionNotChosen(run_id)
     if item.proposal_id is not None:
         _require_proposal_of_run(session, project_id, run_id, item.proposal_id)
+    if item.asset_id is not None and item.asset_version_id is not None:
+        _require_version_of_asset(session, project_id, item.asset_id, item.asset_version_id)
+    if item.research_run_id is not None:
+        _require_research_run(session, project_id, item.research_run_id)
     record = ContentItemRecord(
         project_id=project_id,
         run_id=run_id,
@@ -185,6 +235,9 @@ def store_proposed_content_item(
         flagged_numbers=list(item.flagged_numbers),
         profile_version_id=run.profile_version_id,
         proposal_id=item.proposal_id,
+        asset_id=item.asset_id,
+        asset_version_id=item.asset_version_id,
+        research_run_id=item.research_run_id,
         cost_usd=item.cost_usd,
     )
     session.add(record)
@@ -211,9 +264,10 @@ def settle_content_item(
 
     ``status`` is one of ``SETTLED`` (``ValueError`` otherwise). Settling it the same way again
     changes nothing; another way is ``ContentItemSettled``. ``proposal_id``, when given, is
-    recorded if the item names no proposal yet and must be the one it names otherwise. Raises
-    ``ContentItemNotFound``, ``WritingRunFinished`` and ``ProposalOfAnotherRun``. Takes the
-    workspace lock.
+    recorded if the item names no proposal yet and must be the one it names otherwise.
+    ``dry_run`` needs a proposal of the item's run that a person approved, given or named by
+    the item (``ProposalNotApproved``). Raises ``ContentItemNotFound``, ``WritingRunFinished``
+    and ``ProposalOfAnotherRun``. Takes the workspace lock.
     """
     if status not in SETTLED:
         raise ValueError(f"an item is settled as one of {[s.value for s in SETTLED]}")
@@ -225,6 +279,9 @@ def settle_content_item(
         if record.proposal_id is not None:
             raise ProposalOfAnotherRun(record.run_id, proposal_id)
         _require_proposal_of_run(session, project_id, record.run_id, proposal_id)
+    if status is ContentItemStatus.DRY_RUN:
+        approving = proposal_id if proposal_id is not None else record.proposal_id
+        _require_approved_proposal_of_run(session, project_id, record, approving)
     if record.status is not ContentItemStatus.PROPOSED and record.status is not status:
         raise ContentItemSettled(item_id, record.status)
     columns: dict[str, object] = {}
@@ -318,6 +375,59 @@ def _require_proposal_of_run(
         raise ProposalOfAnotherRun(run_id, proposal_id)
 
 
+def _require_approved_proposal_of_run(
+    session: Session,
+    project_id: uuid.UUID,
+    record: ContentItemRecord,
+    proposal_id: uuid.UUID | None,
+) -> None:
+    found = None
+    if proposal_id is not None:
+        found = session.scalar(
+            select(ProposalRecord.id).where(
+                ProposalRecord.id == proposal_id,
+                ProposalRecord.project_id == project_id,
+                ProposalRecord.run_kind == WRITING_RUN_KIND,
+                ProposalRecord.run_id == record.run_id,
+                ProposalRecord.status == ProposalStatus.APPROVED,
+            )
+        )
+    if found is None:
+        raise ProposalNotApproved(record.id)
+
+
+def _require_version_of_asset(
+    session: Session, project_id: uuid.UUID, asset_id: uuid.UUID, version_id: uuid.UUID
+) -> None:
+    # The run was found in the workspace's project, so the project scopes the asset too.
+    asset = session.scalar(
+        select(MediaAssetRecord.id).where(
+            MediaAssetRecord.id == asset_id, MediaAssetRecord.project_id == project_id
+        )
+    )
+    if asset is None:
+        raise MediaAssetNotFound(project_id, asset_id)
+    version = session.scalar(
+        select(MediaAssetVersionRecord.id).where(
+            MediaAssetVersionRecord.id == version_id,
+            MediaAssetVersionRecord.asset_id == asset_id,
+            MediaAssetVersionRecord.project_id == project_id,
+        )
+    )
+    if version is None:
+        raise MediaAssetVersionNotFound(project_id, version_id)
+
+
+def _require_research_run(session: Session, project_id: uuid.UUID, run_id: uuid.UUID) -> None:
+    found = session.scalar(
+        select(ResearchRunRecord.id).where(
+            ResearchRunRecord.id == run_id, ResearchRunRecord.project_id == project_id
+        )
+    )
+    if found is None:
+        raise ResearchRunNotFound(project_id, run_id)
+
+
 def _items_of_project(workspace_id: uuid.UUID, project_id: uuid.UUID) -> Select[ContentItemRecord]:
     return (
         select(ContentItemRecord)
@@ -373,6 +483,9 @@ def _item_of_version(record: ContentItemRecord, profile_version: int) -> Content
         profile_version_id=record.profile_version_id,
         profile_version=profile_version,
         proposal_id=record.proposal_id,
+        asset_id=record.asset_id,
+        asset_version_id=record.asset_version_id,
+        research_run_id=record.research_run_id,
         cost_usd=record.cost_usd,
         created_at=record.created_at,
         settled_at=record.settled_at,

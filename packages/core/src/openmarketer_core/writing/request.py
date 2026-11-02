@@ -58,8 +58,12 @@ def request_post(
 
     ``chat_thread_id`` is the chat whose turn asks for the run, which hears back when it
     ends. Raises ``ProjectNotFound`` when the workspace has no such project, ``ChatNotFound``
-    when the project has no such chat, and ``WritingNotStarted`` when the workflow could not
-    be started.
+    when the project has no such chat, ``MediaAssetNotFound`` or ``AssetNotUsable`` when the
+    brief's asset is not the project's or cannot go with a post (rejected, still being made,
+    without an image, or a draft of a failed run), ``ResearchRunNotFound`` or
+    ``ResearchRunNotUsable`` when its research run is not the project's or has not succeeded,
+    and ``WritingNotStarted`` when the workflow could not be started. Nothing is stored when
+    a check fails.
     """
     with transaction(sessions) as session:
         run = request_writing_run(

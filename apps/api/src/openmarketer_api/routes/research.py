@@ -214,7 +214,10 @@ def delete(
     """Delete a finished run with its report and the pages it fetched, for good.
 
     409 `research_unfinished` while the run is queued or running: the worker
-    would store pages or a report for a run that is gone. 503
+    would store pages or a report for a run that is gone, and 409
+    `research_used_by_post` while a post of the project drew on its findings:
+    the post is the record of what it drew on, and is deleted only with its
+    project. 503
     `storage_unavailable` when the pages' objects could not be removed from
     object storage; the run stays then, and can be deleted again. The request
     takes no body; one is a 422.
