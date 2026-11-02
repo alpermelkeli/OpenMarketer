@@ -212,7 +212,8 @@ class WriterDatabase:
             )
             run = request_writing_run(
                 session,
-                **scope,
+                workspace_id=scope["workspace_id"],
+                project_id=scope["project_id"],
                 brief=brief,
                 requested_by=REQUESTED_BY_A_PERSON,
             )

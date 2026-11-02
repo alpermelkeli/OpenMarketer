@@ -2,8 +2,8 @@
 
 They need PostgreSQL (see the root ``conftest.py``) and run the migrations themselves, so
 they do not use the ``engine`` fixture. The rows are written at the revision itself, through
-the stores where a store writes nothing a later revision added, and the content item in SQL
-of the revision's own columns; the downgrade is then run over them.
+the stores where a store writes nothing a later revision added, and the writing run and its
+content item in SQL of the revision's own columns; the downgrade is then run over them.
 """
 
 import uuid
@@ -18,8 +18,6 @@ from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.models import ProductProfileRecord, Project, Workspace
 from openmarketer_core.db.proposals import propose_action
-from openmarketer_core.db.writing_runs import mark_run_started, request_writing_run
-from openmarketer_core.writing.brief import WritingBrief
 
 BEFORE = "75fd91d8fe65"
 ADDS_WRITING = "6afb465902a5"
@@ -74,14 +72,15 @@ def a_proposed_post(engine) -> None:
             {"by": REVIEWER, "id": version.id},
         )
         scope = RunScope(workspace_id=workspace.id, project_id=project.id)
-        ids = {"workspace_id": workspace.id, "project_id": project.id}
-        run = request_writing_run(
-            session,
-            **ids,
-            brief=WritingBrief.model_validate({"platform": "x", "goal": "introduce"}),
-            requested_by="person",
-        )
-        mark_run_started(session, **ids, run_id=run.id, profile_version_id=version.id)
+        run_id = session.execute(
+            text(
+                "INSERT INTO writing_run (project_id, status, requested_by, brief, platform,"
+                " profile_version_id, started_at) VALUES (:project, 'running', 'person',"
+                ' \'{"platform": "x", "goal": "introduce"}\', \'x\', :version, now())'
+                " RETURNING id"
+            ),
+            {"project": project.id, "version": version.id},
+        ).scalar_one()
         item_id = session.execute(
             text(
                 "INSERT INTO content_item (project_id, run_id, platform, text, plan,"
@@ -92,14 +91,14 @@ def a_proposed_post(engine) -> None:
             ),
             {
                 "project": project.id,
-                "run": run.id,
+                "run": run_id,
                 "version": version.id,
-                "proposal": proposal(session, scope, "writing-run", run.id),
+                "proposal": proposal(session, scope, "writing-run", run_id),
             },
         ).scalar_one()
         session.execute(
             text("UPDATE writing_run SET content_item_id = :item WHERE id = :run"),
-            {"item": item_id, "run": run.id},
+            {"item": item_id, "run": run_id},
         )
         proposal(session, scope, "studio-run", uuid.uuid4())
 

@@ -182,12 +182,16 @@ def request_writing_run(
     project_id: uuid.UUID,
     brief: WritingBrief,
     requested_by: str,
+    origin_action_id: str | None = None,
     chat_thread_id: uuid.UUID | None = None,
 ) -> WritingRun:
     """Add a queued writing run for the project, with the brief it answers.
 
-    ``chat_thread_id`` is the chat whose turn asked for the run, a chat of the same project.
-    Raises ``ProjectNotFound`` when the workspace has no such project, and ``ChatNotFound``
+    With ``origin_action_id`` -- the idempotency key of the action of another run that asked
+    for this one -- a run already asked for under that key is found and given back instead,
+    before anything else is checked: an attempt of that action which is tried again starts no
+    second run. ``chat_thread_id`` is the chat whose turn asked for the run, a chat of the same
+    project. Raises ``ProjectNotFound`` when the workspace has no such project, and ``ChatNotFound``
     when the project has no such chat. The brief's asset must be one the post can go with
     (``MediaAssetNotFound``, ``AssetNotUsable``), and its research run a succeeded run of the
     project (``ResearchRunNotFound``, ``ResearchRunNotUsable``).
@@ -197,6 +201,15 @@ def request_writing_run(
         require_chat(
             session, workspace_id=workspace_id, project_id=project_id, chat_id=chat_thread_id
         )
+    if origin_action_id is not None:
+        asked_before = session.scalar(
+            select(WritingRunRecord).where(
+                WritingRunRecord.project_id == project.id,
+                WritingRunRecord.origin_action_id == origin_action_id,
+            )
+        )
+        if asked_before is not None:
+            return _writing_run(session, asked_before)
     if brief.asset is not None:
         usable_asset(
             session, workspace_id=workspace_id, project_id=project_id, asset_id=brief.asset
@@ -208,6 +221,7 @@ def request_writing_run(
     record = WritingRunRecord(
         project_id=project.id,
         requested_by=requested_by,
+        origin_action_id=origin_action_id,
         chat_thread_id=chat_thread_id,
         brief=brief.model_dump(mode="json"),
         platform=brief.platform.value,

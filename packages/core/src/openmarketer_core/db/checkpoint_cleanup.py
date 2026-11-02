@@ -65,12 +65,15 @@ from openmarketer_core.db.models import (
     AnalysisRunRecord,
     ResearchRunRecord,
     StudioRunRecord,
+    TaskRecord,
     WritingRunRecord,
 )
 from openmarketer_core.db.research_runs import FINISHED as RESEARCH_FINISHED
 from openmarketer_core.db.research_runs import RESEARCH_RUN_THREADS
 from openmarketer_core.db.studio_runs import FINISHED as STUDIO_FINISHED
 from openmarketer_core.db.studio_runs import STUDIO_RUN_THREADS
+from openmarketer_core.db.tasks import FINISHED as TASK_FINISHED
+from openmarketer_core.db.tasks import TASK_RUN_THREADS
 from openmarketer_core.db.writing_runs import FINISHED as WRITING_FINISHED
 from openmarketer_core.db.writing_runs import WRITING_RUN_THREADS
 
@@ -255,6 +258,46 @@ def remove_checkpoints_of_writing_runs(session: Session, *, longest_run: timedel
         .exists()
     )
     return _remove_threads(session, select(threads.c.thread_id).where(~run_in_progress))
+
+
+def remove_checkpoints_of_tasks(session: Session, *, longest_run: timedelta) -> int:
+    """Remove the checkpoints orchestrator tasks no longer need; say how many threads.
+
+    The tasks' rule, built like the research runs': among the threads named for a task
+    (``tasks.run_thread_id``, names that start with ``TASK_RUN_THREADS``), a thread is kept only
+    while its task is unfinished (``queued`` or ``running``) and was started no longer ago than
+    a task can take. Threads of any other name, those of the runs a task started included, are
+    not looked at: each of those is its own kind's.
+
+    ``longest_run`` is how long after its start a task can still be in progress: its deadline,
+    with the waits for a person's confirmation of its plan and for the runs it started; the
+    caller derives it from how it executes tasks. Like the other rules, this is maintenance of
+    the whole database, one statement, and it does not commit.
+    """
+    # The library's tables have no model (see ``checkpoint_schema.py``); only this column is used.
+    tables = [
+        table(name, column("thread_id", Text)) for name in sorted(CHECKPOINT_TABLES_OF_THREADS)
+    ]
+    threads = union(
+        *(
+            select(t.c.thread_id).where(t.c.thread_id.startswith(TASK_RUN_THREADS, autoescape=True))
+            for t in tables
+        )
+    ).subquery("thread")
+    task_in_progress = (
+        select(TaskRecord.id)
+        # Compared as text, as in the research runs' rule.
+        .where(func.concat(TASK_RUN_THREADS, cast(TaskRecord.id, Text)) == threads.c.thread_id)
+        .where(TaskRecord.status.not_in(TASK_FINISHED))
+        .where(
+            or_(
+                TaskRecord.started_at.is_(None),
+                TaskRecord.started_at > func.now() - longest_run,
+            )
+        )
+        .exists()
+    )
+    return _remove_threads(session, select(threads.c.thread_id).where(~task_in_progress))
 
 
 def remove_stale_checkpoints(session: Session, *, kind: str, untouched_for: timedelta) -> int:

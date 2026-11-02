@@ -88,3 +88,30 @@ def request_asset(
             )
         raise StudioNotStarted(run.id) from e
     return run
+
+
+def request_asset_for_action(
+    sessions: sessionmaker[Session],
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    request: AssetRequest,
+    action_id: str,
+) -> StudioRun:
+    """Store the studio run the action ``action_id`` of another run asks for; start nothing.
+
+    The run is keyed by the action, so an attempt of the action's prepare that is tried again
+    finds the run it made. It is asked for by a run and names no chat: the run that asked hears
+    of its end, not a chat. Its workflow is started by the runtime as the asking run's child,
+    not here. Raises ``ProjectNotFound`` when the workspace has no such project and
+    ``ReferenceAssetNotFound`` when a reference asset is not the project's.
+    """
+    with transaction(sessions) as session:
+        return request_studio_run(
+            session,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            request=request,
+            requested_by=REQUESTED_BY_A_RUN,
+            origin_action_id=action_id,
+        )
