@@ -17,7 +17,8 @@ a request and its side effect stands here:
   runs, and the model's text never becomes an activity.
 - A run may ask for ``policy.max_actions`` actions and no more: each one adds to
   its history.
-- The policy gate (core's ``gate.py``) holds an action that publishes or spends until a person
+- The policy gate (core's ``gate.py``) holds an action that publishes, spends or confirms
+  (``ActionEffect.CONFIRMS``, a task's plan) until a person
   approves it (``approval_wait.wait_for_a_person``). One that is rejected, or that nobody
   decided on in time, does not run: the graph is told so as a failed outcome (core's
   ``gate.NOT_APPROVED_TEXTS``), as it is told of any action that failed, and may revise what
@@ -50,7 +51,8 @@ run and the action id, and the engine records the start in the parent's history,
 retried workflow task replays it instead of starting a second execution. ``RunKind.START``
 starts the child and goes on with its run id (``ABANDON``: the child is not cancelled with
 the parent, because a later run or a person uses its result); ``RunKind.WAIT`` waits with no
-graph running and gives the child's small result back (``WAIT_CANCELLATION_COMPLETED``: a
+graph running and gives the child's small result back, with the run's id under ``run_id`` as
+``START`` gives it (``WAIT_CANCELLATION_COMPLETED``: a
 cancelled parent cancels the child, whose own workflow records that, and waits for it). A
 child that fails does not fail the parent: the graph is told ``CHILD_RUN_DID_NOT_FINISH``,
 in fixed words, and the child's own failure stays in its own run's record. What the child was
@@ -483,7 +485,9 @@ async def _start_or_wait_the_run(
         return _failed(request, CHILD_RUN_ALREADY_STARTED)
     if not isinstance(result, dict):
         return _failed(request, CHILD_RUN_UNREADABLE)
-    return ActionOutcome(request.action_id, succeeded=True, result=result, error="")
+    # The run's id is the record the runtime made, never a value of the child's own result.
+    answered = {**result, "run_id": str(prepared.run_id)}
+    return ActionOutcome(request.action_id, succeeded=True, result=answered, error="")
 
 
 def _failed(request: ActionRequest, error: str) -> ActionOutcome:

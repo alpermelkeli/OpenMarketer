@@ -149,11 +149,12 @@ def delete(
     That is its analyses, the evidence they found, every profile version, its
     proposals, its chats, its research runs with their reports and the pages
     they fetched, its studio runs with their assets and every version's image,
-    accepted ones included, and its writing runs with the posts they proposed.
-    Refused while an analysis, a research run, a studio run or a writing run of
-    the project is queued or running (409 `analysis_already_running`,
-    `research_unfinished`, `studio_run_unfinished`, `writing_run_unfinished`), or a
-    proposal of it waits for a decision. The pages and the images are in the
+    accepted ones included, its writing runs with the posts they proposed, and
+    its orchestrator tasks. Refused while an analysis, a research run, a studio
+    run, a writing run or a task of the project is queued or running (409
+    `analysis_already_running`, `research_unfinished`, `studio_run_unfinished`,
+    `writing_run_unfinished`, `task_unfinished`), or a proposal of it waits for
+    a decision. The pages and the images are in the
     installation's one bucket and are removed through the same store. 503
     `storage_unavailable` when an object could not be removed from object
     storage; the project stays then. The repository is not touched, nor what its

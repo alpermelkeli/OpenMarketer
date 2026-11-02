@@ -1,7 +1,8 @@
 """``wait_for_a_person``: how a run holds an action the gate stopped until a person decides.
 
 The driver calls it for an action whose verdict is ``ASK_A_PERSON`` (core's ``gate.py``): one
-that publishes, or one that spends more than the creative budget lets run on its own, whose
+that publishes, one where a person confirms before the run goes on (``ActionEffect.CONFIRMS``,
+a task's plan), or one that spends more than the creative budget lets run on its own, whose
 estimate the proposal shows. It stores the action as a proposal (the activity
 ``propose_action``), then waits, with no activity running, until one of three things happens:
 

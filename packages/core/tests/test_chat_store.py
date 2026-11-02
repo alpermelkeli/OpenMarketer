@@ -40,11 +40,13 @@ from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.research_runs import request_research_run, research_run
 from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.studio_runs import request_studio_run, studio_run
+from openmarketer_core.db.writing_runs import request_writing_run, writing_run
 from openmarketer_core.orchestrator.chat_agent.definitions import CHAT_TURN_KIND
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.run_events import TURN_STARTED, RunEvent
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
+from openmarketer_core.writing.brief import WritingBrief
 
 
 def new_scope(session: Session) -> RunScope:
@@ -641,6 +643,27 @@ def test_deleting_a_chat_keeps_the_studio_runs_it_asked_for(session, scope):
     )
 
     kept = studio_run(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, run_id=run.id
+    )
+    assert kept.chat_thread_id is None
+
+
+def test_deleting_a_chat_keeps_the_writing_runs_it_asked_for(session, scope):
+    chat = open_chat(session, scope)
+    run = request_writing_run(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        brief=WritingBrief.model_validate({"platform": "x", "goal": "introduce"}),
+        requested_by="orchestrator",
+        chat_thread_id=chat.id,
+    )
+
+    delete_chat(
+        session, workspace_id=scope.workspace_id, project_id=scope.project_id, chat_id=chat.id
+    )
+
+    kept = writing_run(
         session, workspace_id=scope.workspace_id, project_id=scope.project_id, run_id=run.id
     )
     assert kept.chat_thread_id is None

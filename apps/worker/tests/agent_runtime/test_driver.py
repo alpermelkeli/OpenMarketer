@@ -631,7 +631,8 @@ async def test_a_run_waited_for_hands_the_child_its_input_and_gives_its_answer_b
     )
 
     assert outcome.succeeded is True
-    assert outcome.result == children.result
+    # The child's answer, with the id of the run record the runtime made for it.
+    assert outcome.result == {**children.result, "run_id": str(run_id)}
     (awaited,) = children.awaited
     assert awaited["workflow"] == CHILD_WORKFLOW
     assert awaited["task_queue"] == "children-of-the-tests"

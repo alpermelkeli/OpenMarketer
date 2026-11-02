@@ -41,6 +41,8 @@ from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.research_runs import ResearchRunNotFound, request_research_run
 from openmarketer_core.db.run_events import StoredRunEvent, events_of_chat
 from openmarketer_core.db.studio_runs import StudioRunNotFound, request_studio_run
+from openmarketer_core.db.tasks import TaskNotFound, request_task_run
+from openmarketer_core.orchestrator.task.plan import TaskRequest
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.run_events import TURN_FAILED, TURN_STARTED
 from openmarketer_core.studio.platforms import Platform
@@ -48,6 +50,9 @@ from openmarketer_core.studio.requests import AssetRequest
 
 REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
 ASSET_REQUEST = AssetRequest(goal="Announce the launch", platform=Platform.X_POST)
+TASK_REQUEST = TaskRequest(
+    request="Write a post about offline mode", understanding="One post for X about offline mode."
+)
 
 
 def new_scope(session: Session) -> RunScope:
@@ -117,6 +122,23 @@ def studio_follow_up(session: Session, scope: RunScope, chat_id: uuid.UUID, run_
         **ids(scope, chat_id),
         trigger=ChatTurnTrigger.STUDIO_FINISHED,
         studio_run_id=run_id,
+    )
+
+
+def task_of(session: Session, scope: RunScope, chat_id: uuid.UUID | None) -> uuid.UUID:
+    return request_task_run(
+        session,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        request=TASK_REQUEST,
+        requested_by="orchestrator",
+        chat_thread_id=chat_id,
+    ).id
+
+
+def task_follow_up(session: Session, scope: RunScope, chat_id: uuid.UUID, task_id: uuid.UUID):
+    return start_turn(
+        session, **ids(scope, chat_id), trigger=ChatTurnTrigger.TASK_FINISHED, task_id=task_id
     )
 
 
@@ -295,6 +317,8 @@ def test_the_database_holds_one_running_turn_per_chat(session, scope, chat_id):
         ({"trigger": ChatTurnTrigger.RESEARCH_FINISHED}, "ck_chat_turn_research_run_id"),
         ({"trigger": ChatTurnTrigger.STUDIO_FINISHED}, "ck_chat_turn_studio_run_id"),
         ({"studio_run_id": uuid.uuid4()}, "ck_chat_turn_studio_run_id"),
+        ({"trigger": ChatTurnTrigger.TASK_FINISHED}, "ck_chat_turn_task_id"),
+        ({"task_id": uuid.uuid4()}, "ck_chat_turn_task_id"),
         ({"status": ChatTurnStatus.FAILED, "finished_at": func.now()}, "ck_chat_turn_error"),
         ({"status": ChatTurnStatus.ANSWERED}, "ck_chat_turn_finished_at"),
         ({"error": "why"}, "ck_chat_turn_error"),
@@ -532,4 +556,67 @@ def test_a_project_of_another_workspace_is_not_found(session, scope, chat_id):
     with pytest.raises(ProjectNotFound):
         record_unstarted_follow_up(
             session, **ids(elsewhere, chat_id), research_run_id=uuid.uuid4(), error="no"
+        )
+
+
+def test_a_follow_up_names_the_task_it_is_about(session, scope, chat_id):
+    task_id = task_of(session, scope, chat_id)
+
+    turn = task_follow_up(session, scope, chat_id, task_id)
+
+    assert (turn.trigger, turn.task_id, turn.research_run_id) == (
+        ChatTurnTrigger.TASK_FINISHED,
+        task_id,
+        None,
+    )
+
+
+def test_a_follow_up_about_a_task_another_chat_started_is_refused(session, scope, chat_id):
+    other = create_chat(session, workspace_id=scope.workspace_id, project_id=scope.project_id)
+    task_id = task_of(session, scope, other.id)
+
+    with pytest.raises(TaskNotFound):
+        task_follow_up(session, scope, chat_id, task_id)
+
+
+def test_a_task_is_named_only_for_its_follow_up(session, scope, chat_id):
+    task_id = task_of(session, scope, chat_id)
+
+    with pytest.raises(ValueError):
+        start_turn(session, **ids(scope, chat_id), trigger=ChatTurnTrigger.MESSAGE, task_id=task_id)
+
+
+def test_a_task_a_turn_has_answered_about_is_not_followed_up_again(session, scope, chat_id):
+    task_id = task_of(session, scope, chat_id)
+    turn = task_follow_up(session, scope, chat_id, task_id)
+    finish_turn(session, **ids(scope, chat_id), turn_id=turn.id)
+
+    with pytest.raises(FollowUpAnswered):
+        task_follow_up(session, scope, chat_id, task_id)
+
+
+def test_a_task_follow_up_that_never_got_to_a_turn_is_recorded_as_one_that_failed(
+    session, scope, chat_id
+):
+    task_id = task_of(session, scope, chat_id)
+
+    recorded = record_unstarted_follow_up(
+        session, **ids(scope, chat_id), task_id=task_id, error="It could not start."
+    )
+
+    assert recorded is not None
+    assert (recorded.task_id, recorded.status) == (task_id, ChatTurnStatus.FAILED)
+
+
+def test_an_unstarted_follow_up_names_no_more_than_one_run(session, scope, chat_id):
+    task_id = task_of(session, scope, chat_id)
+    run_id = research_of(session, scope, chat_id)
+
+    with pytest.raises(ValueError):
+        record_unstarted_follow_up(
+            session,
+            **ids(scope, chat_id),
+            research_run_id=run_id,
+            task_id=task_id,
+            error="Both.",
         )

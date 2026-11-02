@@ -1,6 +1,6 @@
 /**
- * The order a chat thread is read in: its stored messages, oldest first, with each research run
- * and studio run a turn started placed where it belongs among them.
+ * The order a chat thread is read in: its stored messages, oldest first, with each research run,
+ * studio run and task a turn started placed where it belongs among them.
  *
  * A run goes right after the answer of the turn that started it, which says it was started. When
  * that answer is not among the messages shown (the turn is still running or failed, or its
@@ -18,15 +18,16 @@
 
 import type { ChatMessage } from "@/lib/api/types";
 
-import { type ResearchRunView, type StudioRunView, type TurnView, isFollowUp } from "./events";
+import { type ResearchRunView, type StudioRunView, type TaskRunView, type TurnView, isFollowUp } from "./events";
 
 export type TimelineItem =
   | { kind: "message"; message: ChatMessage }
   | { kind: "research"; run: ResearchRunView }
   | { kind: "studio"; run: StudioRunView }
+  | { kind: "task"; run: TaskRunView }
   | { kind: "failed-follow-up"; turn: TurnView };
 
-type RunItem = Extract<TimelineItem, { kind: "research" | "studio" }>;
+type RunItem = Extract<TimelineItem, { kind: "research" | "studio" | "task" }>;
 type Timed = Exclude<TimelineItem, { kind: "message" }>;
 
 export function chatTimeline(
@@ -34,6 +35,7 @@ export function chatTimeline(
   runs: readonly ResearchRunView[],
   turns: readonly TurnView[],
   studioRuns: readonly StudioRunView[] = [],
+  tasks: readonly TaskRunView[] = [],
 ): TimelineItem[] {
   const answerOfTurn = new Map(turns.map((turn) => [turn.id, turn.messageId]));
   const running = new Set(turns.filter((turn) => turn.status === "running").map((turn) => turn.id));
@@ -44,6 +46,7 @@ export function chatTimeline(
   const followed: RunItem[] = [
     ...runs.map((run): RunItem => ({ kind: "research", run })),
     ...studioRuns.map((run): RunItem => ({ kind: "studio", run })),
+    ...tasks.map((run): RunItem => ({ kind: "task", run })),
   ];
   for (const item of followed) {
     const { run } = item;

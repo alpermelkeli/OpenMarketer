@@ -418,3 +418,87 @@ describe("a studio run in its chat", () => {
     expect(onlyTurn([event("turn_started", { trigger: "something_else" })]).trigger).toBe("message");
   });
 });
+
+const TASK = "88888888-8888-4888-8888-888888888888";
+const CHILD = "99999999-9999-4999-8999-999999999999";
+
+function taskEvent(kind: string, detail: RunEvent["detail"] = {}, over: Partial<RunEvent> = {}): RunEvent {
+  return event(kind, detail, { run_kind: "orchestrator-task", run_id: TASK, ...over });
+}
+
+function onlyTask(events: RunEvent[]) {
+  const [task] = foldChatEvents(events).tasks;
+  if (task === undefined) throw new Error("expected a task");
+  return task;
+}
+
+describe("a task in its chat", () => {
+  it("is followed from the turn that started it", () => {
+    const activity = foldChatEvents([event("run_started", { run_kind: "orchestrator-task", run_id: TASK })]);
+    expect(activity.turns[0]?.taskIds).toEqual([TASK]);
+    expect(activity.tasks).toMatchObject([{ id: TASK, turnId: TURN, status: "running" }]);
+  });
+
+  it("keeps each node's stage, from what code wrote only", () => {
+    const task = onlyTask([
+      taskEvent("task_planned", { steps: 2, agents: ["studio", "writing"] }),
+      taskEvent("plan_checked", { steps: 2, needs_confirmation: true, plan_changes: 0 }),
+      taskEvent("plan_confirmation", { status: "confirmed" }),
+      taskEvent("step_finished", { step: 1, agent: "studio", run_id: CHILD, status: "succeeded" }),
+      taskEvent("step_finished", { step: 2, agent: "writing", run_id: CHILD, status: "succeeded", post_status: "rejected" }),
+      taskEvent("step_dropped", { steps: [3, 4] }),
+      taskEvent("task_reviewed", { decision: "finish" }),
+      taskEvent("task_reported", { outcome: "completed", cost_usd: 0.0123 }),
+    ]);
+    expect(task.stages).toEqual([
+      { kind: "planned", steps: 2, agents: ["studio", "writing"] },
+      { kind: "checked", steps: 2, needsConfirmation: true, planChanges: 0 },
+      { kind: "confirmation", status: "confirmed" },
+      { kind: "step_finished", step: 1, agent: "studio", runId: CHILD, status: "succeeded", postStatus: null },
+      { kind: "step_finished", step: 2, agent: "writing", runId: CHILD, status: "succeeded", postStatus: "rejected" },
+      { kind: "step_dropped", steps: [3, 4] },
+      { kind: "reviewed", decision: "finish" },
+      { kind: "reported", outcome: "completed", costUsd: 0.0123 },
+    ]);
+  });
+
+  it("takes a step that started no run as one without a run", () => {
+    const task = onlyTask([taskEvent("step_finished", { step: 1, agent: "writing", run_id: "", status: "failed" })]);
+    expect(task.stages).toEqual([
+      { kind: "step_finished", step: 1, agent: "writing", runId: null, status: "failed", postStatus: null },
+    ]);
+  });
+
+  it("skips a stage it cannot read rather than show it half-way", () => {
+    const task = onlyTask([
+      taskEvent("step_finished", { step: "one", agent: "studio" }),
+      taskEvent("step_dropped", { steps: ["2", -1] }),
+      taskEvent("plan_confirmation", { status: 3 }),
+      taskEvent("task_reported", { outcome: "completed", cost_usd: "free" }),
+    ]);
+    expect(task.stages).toEqual([{ kind: "reported", outcome: "completed", costUsd: null }]);
+  });
+
+  it("holds its plan to confirm and where that stands", () => {
+    const waiting = taskEvent("proposal_waiting", { proposal_id: "p-1", action_name: "confirm_plan", effect: "confirms" });
+    expect(onlyTask([waiting]).proposal).toEqual({
+      id: "p-1",
+      actionName: "confirm_plan",
+      effect: "confirms",
+      status: "waiting",
+    });
+    const rejected = onlyTask([waiting, taskEvent("proposal_decided", { proposal_id: "p-1", approved: false })]);
+    expect(rejected.proposal?.status).toBe("rejected");
+  });
+
+  it("ends as its workflow says", () => {
+    expect(onlyTask([taskEvent("finished")]).status).toBe("finished");
+    const failed = onlyTask([taskEvent("failed", { reason: "The task could not start." })]);
+    expect(failed).toMatchObject({ status: "failed", reason: "The task could not start." });
+  });
+
+  it("is answered by a follow-up turn once it has ended", () => {
+    const activity = foldChatEvents([event("turn_started", { trigger: "task_finished" })]);
+    expect(activity.turns[0]?.trigger).toBe("task_finished");
+  });
+});

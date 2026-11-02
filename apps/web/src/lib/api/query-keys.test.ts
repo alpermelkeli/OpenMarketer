@@ -222,3 +222,30 @@ describe("what a workspace event refreshes", () => {
     ).toEqual([]);
   });
 });
+
+describe("what a task's event refreshes", () => {
+  it("is the task for each of its nodes", () => {
+    for (const kind of ["task_planned", "plan_checked", "step_finished", "task_reported"]) {
+      expect(refreshed(event("orchestrator-task", kind, "k"))).toEqual([queryKeys.task(PROJECT, "k")]);
+    }
+  });
+
+  it("adds the proposals and what waits in the workspace for its plan to confirm", () => {
+    for (const kind of PROPOSAL_KINDS) {
+      expect(refreshed(event("orchestrator-task", kind, "k"))).toEqual([
+        queryKeys.task(PROJECT, "k"),
+        queryKeys.proposals(PROJECT),
+        queryKeys.waitingProposals(),
+      ]);
+    }
+  });
+
+  it("adds the chat when it ends, which may start a follow-up turn", () => {
+    for (const kind of ["finished", "failed"]) {
+      expect(refreshed(event("orchestrator-task", kind, "k"))).toEqual([
+        queryKeys.task(PROJECT, "k"),
+        queryKeys.chat(PROJECT, CHAT),
+      ]);
+    }
+  });
+});

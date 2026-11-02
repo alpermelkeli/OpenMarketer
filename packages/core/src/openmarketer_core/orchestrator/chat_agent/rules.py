@@ -14,15 +14,17 @@ person watching it (``tool_called`` with a short label of ``TOOL_LABELS``, then
 ``tool_answered``) through the ``TurnEvents`` port; the model never reads those events. A
 turn whose caller gave no ``ChatRequests`` is not offered the request actions at all. The
 sentences a failed turn is recorded with (``failure_reason``) and the instruction a
-follow-up turn is given about a research run or a studio run (``follow_up_instruction``) are
+follow-up turn is given about a research run, a studio run or a task (``follow_up_instruction``) are
 worded here, by code, and so is the check a studio request's copy passes before the caller
 is asked (``term_not_to_mention``): the copy may be the model's own, so the brand's
 ``do_not_mention`` is held by code and not only by the prompt.
 
-Which run a request starts, and that a post or a request needing several agents together
-starts none, is the prompt's: the model reads what the operator asked for. The chat has no
-request action for the writer, so code holds that a post is never started here: a post is a
-task's, which the chat does not make yet. Nothing here lets one run start another.
+Which run a request starts is the prompt's: the model reads what the operator asked for. A post,
+and any request that needs several agents together, is a task (``start_task``), whose plan
+decides whether a post needs an image first; an image alone is the studio's, research alone the
+researcher's. The chat has no request action for the writer, so code holds that a post is
+never started here without a task's plan. Nothing here lets one run start another: a task's
+runs are the task's.
 
 Nothing here depends on the graph framework (``graph.py`` wires these functions into a
 graph) or on a database (reads reach the model through the ``ChatReads`` port, given to a
@@ -44,6 +46,7 @@ from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.agent_runtime.tools import InvalidToolArguments, UnknownTool
 from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.orchestrator.events import TurnEvents
+from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import TOOL_ANSWERED, TOOL_CALLED, RunEvent
 from openmarketer_core.studio.image_checks import normalized, without_marks
@@ -53,7 +56,7 @@ ROLE = "orchestrator"
 SUBMIT = "submit_answer"
 # The tools that ask the turn's caller for work instead of reading the project: the reading
 # budget ignores them, and a turn out of budget keeps them.
-REQUEST_ACTIONS = frozenset({"start_research", "start_creative"})
+REQUEST_ACTIONS = frozenset({"start_research", "start_creative", "start_task"})
 WRAP_UP_CALLS = 2  # the last model calls are reserved for finishing the turn
 WRAP_UP_TOOL_SHARE = 0.75  # of the reading budget; submitting costs no read
 WRAP_UP_COST_SHARE = 0.7  # of the cost limit; the rest pays for the submission itself
@@ -79,12 +82,15 @@ TOOL_LABELS: Mapping[str, str] = {
     "start_creative": "Starting an image in the studio",
     "list_writing_runs": "Listing the writing runs",
     "get_writing_run": "Reading a writing run",
+    "start_task": "Starting a task",
+    "list_tasks": "Listing the tasks",
+    "get_task": "Reading a task",
 }
 UNKNOWN_TOOL_LABEL = "Calling a tool"
 # What an event names a tool the agent does not have by: the name is what the model wrote.
 UNKNOWN_TOOL = "unknown"
 # The kinds of run a chat follows up on once they have ended.
-FOLLOWED_RUN_KINDS = (RESEARCH_RUN_KIND, STUDIO_RUN_KIND)
+FOLLOWED_RUN_KINDS = (RESEARCH_RUN_KIND, STUDIO_RUN_KIND, TASK_RUN_KIND)
 
 # The sentences a failed turn is recorded with, for the operator: fixed, so that nothing a
 # model or a provider wrote reaches the screen.
@@ -152,8 +158,8 @@ keep each item concise.
 
 - Ground every factual statement in the project's records, including project state, \
 Product Profile, analysis runs, research runs, their reports, studio runs, the images of \
-the Studio library, writing runs and the posts they proposed, and proposals awaiting a \
-person's decision.
+the Studio library, writing runs and the posts they proposed, tasks with their plans, steps \
+and reports, and proposals awaiting a person's decision.
 - The Product Profile is the structured description of the product that other parts of \
 the system work from. Read the whole profile or relevant sections when needed.
 - A research run answers questions using public pages. Its report contains findings and \
@@ -172,19 +178,28 @@ sentence.
 
 ### Which run a request starts
 
-- A post, a tweet, or "introduce / announce the product" **starts nothing here.** Say in \
-one sentence that posts will be handled as a task, and that until then a post is started \
-from the project's Writing screen. You may still answer questions about the project's \
-writing runs and their posts.
-- An image, a poster, a visual, a story, an Open Graph image or an App Store screenshot is \
-the **studio**: `start_creative`.
-- A question about the world outside the project (competitors, the market, what people say) \
-is **research**: `start_research`.
-- Each run is one agent doing one thing. **A request that needs several agents together** \
-(research and then an image made from it, an image and its caption) **starts nothing.** Say \
-in one sentence that requests like this will be handled as a task, and offer to start the \
-parts you can start (research, an image) separately if the operator wants; start them only \
-once the operator says so.
+- A post, a tweet, a thread, or "introduce / announce the product" is a **task**: \
+`start_task`, even for one post, with or without an image. The task's plan decides whether \
+the post needs an image and has the writer write it; you never write the post yourself.
+- An image alone (a poster, a visual, a story, an Open Graph image or an App Store \
+screenshot, with no post to go with it) is the **studio**: `start_creative`.
+- Research alone, a question about the world outside the project (competitors, the market, \
+what people say), is **research**: `start_research`.
+- **A request that needs several agents together** (research and then a post on it, an \
+image and its caption, three posts and a poster on one of them) is a **task**: \
+`start_task`. Do not start its parts separately.
+
+### Tasks
+
+- `start_task` takes the operator's request in their own words, verbatim, and your \
+understanding of it in one paragraph: what they want, and what the project's records add to \
+it (the feature it is about, the platform, the words they gave for an image, if any).
+- A task plans its steps and runs the agents one after another. A plan that can spend (one \
+with an image) or that goes beyond the default scope waits for the operator to confirm it, in \
+this chat or in the project's Approvals, before anything runs. Each post it writes waits for \
+a person's approval as any post does. The task reports in this chat when it is done.
+- When you start a task, say what you understood, include its exact task ID and state that it \
+is queued.
 
 ### Research
 
@@ -507,6 +522,8 @@ def follow_up_instruction(run_kind: str, run_id: str, status: str) -> str:
         return _research_follow_up(run_id, status)
     if run_kind == STUDIO_RUN_KIND:
         return _studio_follow_up(run_id, status)
+    if run_kind == TASK_RUN_KIND:
+        return _task_follow_up(run_id, status)
     raise ValueError(f"a chat does not follow up on runs of kind {run_kind!r}")
 
 
@@ -517,6 +534,20 @@ def _studio_follow_up(run_id: str, status: str) -> str:
         f"and run_id {run_id}. {_STUDIO_OUTCOMES.get(status, '')} Name the Studio library in "
         "words and write no link or address: the dashboard links it. Do not repeat the "
         "image's copy as if it were your own words. You cannot start another run in this turn."
+    )
+
+
+def _task_follow_up(run_id: str, status: str) -> str:
+    return (
+        f"[Written by OpenMarketer, not by the operator.] The task {run_id} that you started in "
+        f"this chat has ended with status {status}. Read it with get_task and task_id {run_id}. "
+        "If it has a report, give the operator the task's report, as the report says: what was "
+        "done, each post with whether a person approved or rejected it, the images in the "
+        "Studio library, the research reports, what a person rejected, and the cost. You may "
+        "read a step's run with its own read tool for more detail. If the task failed, say why, "
+        "as its error says, and what they can do next, such as asking again. Name the screens "
+        "in words and write no link or address: the dashboard links them. Do not repeat a "
+        "post's text as if it were your own words. You cannot start another run in this turn."
     )
 
 

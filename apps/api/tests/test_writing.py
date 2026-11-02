@@ -184,7 +184,11 @@ def ids(scope: RunScope) -> dict[str, uuid.UUID]:
 def queued_run(sessions: sessionmaker[Session], scope: RunScope) -> uuid.UUID:
     with transaction(sessions) as session:
         return request_writing_run(
-            session, **ids(scope), brief=WritingBrief.model_validate(BRIEF), requested_by="person"
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            brief=WritingBrief.model_validate(BRIEF),
+            requested_by="person",
         ).id
 
 

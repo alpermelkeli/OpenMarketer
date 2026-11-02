@@ -25,6 +25,12 @@ STUDIO_TASK_QUEUE = "openmarketer-studio"
 # It is here, with no import beside it, because the agent's declarations are loaded by the
 # workflow and must not load the database with them.
 STUDIO_RUN_KIND = "studio-run"
+# The longest a studio run's workflow may last, for a run that waits for one as a child
+# (``RunTarget.longest_seconds``, the orchestrator's task). The worker computes the real bound
+# from its settings (``policy.longest_studio_seconds``, fifty-five days with the defaults) and
+# refuses to start when that is longer than this ceiling, so the parent never waits past what it
+# counted.
+STUDIO_LONGEST_RUN_SECONDS: float = 60 * 24 * 60 * 60
 
 
 @dataclass(frozen=True)

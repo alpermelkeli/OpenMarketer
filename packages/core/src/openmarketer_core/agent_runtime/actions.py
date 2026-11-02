@@ -172,12 +172,16 @@ class ActionEffect(StrEnum):
     runs when the graph asks. ``PUBLISHES`` puts something in front of other people, and the
     gate holds it for a person's approval. ``SPENDS`` costs money: the gate reserves its
     estimate under the creative budget, which lets it run, holds it for a person or refuses it
-    (``gate.py``); its worker declares how its cost is estimated.
+    (``gate.py``); its worker declares how its cost is estimated. ``CONFIRMS`` changes nothing
+    by itself: it is a point where a person confirms before the run goes on (the orchestrator's
+    task asks for a plan that can spend to be confirmed), and the gate holds it exactly as it
+    holds an action that publishes.
     """
 
     INTERNAL = "internal"
     PUBLISHES = "publishes"
     SPENDS = "spends"
+    CONFIRMS = "confirms"
 
 
 class RunKind(StrEnum):

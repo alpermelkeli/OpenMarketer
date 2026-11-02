@@ -2,7 +2,8 @@
 
 They need PostgreSQL (see the root ``conftest.py``) and run the migrations themselves, so they
 do not use the ``engine`` fixture. The rows are written at the revision itself, through the
-stores, and the downgrade is then run over them.
+stores where a store writes nothing a later revision added, and the writing run and its post in
+SQL of the revision's own columns; the downgrade is then run over them.
 """
 
 import uuid
@@ -13,7 +14,6 @@ from alembic import command
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
-from openmarketer_core.db.content_items import NewContentItem, store_proposed_content_item
 from openmarketer_core.db.media_assets import NewAssetVersion, add_version
 from openmarketer_core.db.models import AssetTechnique, ProductProfileRecord, Project, Workspace
 from openmarketer_core.db.research_runs import mark_run_started as mark_research_started
@@ -22,14 +22,11 @@ from openmarketer_core.db.research_runs import request_research_run
 from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.db.studio_runs import mark_run_needs_review, request_studio_run
 from openmarketer_core.db.studio_runs import mark_run_started as mark_studio_started
-from openmarketer_core.db.writing_runs import mark_run_started as mark_writing_started
-from openmarketer_core.db.writing_runs import request_writing_run
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import Report
 from openmarketer_core.studio.asset_store import asset_key
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
-from openmarketer_core.writing.brief import WritingBrief
 
 BEFORE = "6afb465902a5"
 LETS_A_POST_NAME_ITS_INPUTS = "2530b8dce085"
@@ -123,27 +120,36 @@ def a_post_with_its_image_and_research(engine) -> None:
             ),
             {"by": REVIEWER, "id": profile.id},
         )
-        run = request_writing_run(
-            session,
-            **ids,
-            brief=WritingBrief.model_validate({"platform": "x", "goal": "introduce"}),
-            requested_by="person",
-        )
-        mark_writing_started(session, **ids, run_id=run.id, profile_version_id=profile.id)
-        store_proposed_content_item(
-            session,
-            **ids,
-            run_id=run.id,
-            item=NewContentItem(
-                text="Offline sync is here.",
-                plan={},
-                check_report={},
-                critic_report={},
-                cost_usd=Decimal(0),
-                asset_id=version.asset_id,
-                asset_version_id=version.id,
-                research_run_id=research.id,
+        run_id = session.execute(
+            text(
+                "INSERT INTO writing_run (project_id, status, requested_by, brief, platform,"
+                " profile_version_id, started_at) VALUES (:project, 'running', 'person',"
+                ' \'{"platform": "x", "goal": "introduce"}\', \'x\', :version, now())'
+                " RETURNING id"
             ),
+            {"project": project.id, "version": profile.id},
+        ).scalar_one()
+        item_id = session.execute(
+            text(
+                "INSERT INTO content_item (project_id, run_id, platform, text, plan,"
+                " plan_changes, alternatives, claims, check_report, critic_report,"
+                " flagged_numbers, profile_version_id, asset_id, asset_version_id,"
+                " research_run_id) VALUES (:project, :run, 'x', 'Offline sync is here.', '{}',"
+                " '[]', '[]', '[]', '{}', '{}', '[]', :version, :asset, :asset_version,"
+                " :research) RETURNING id"
+            ),
+            {
+                "project": project.id,
+                "run": run_id,
+                "version": profile.id,
+                "asset": version.asset_id,
+                "asset_version": version.id,
+                "research": research.id,
+            },
+        ).scalar_one()
+        session.execute(
+            text("UPDATE writing_run SET content_item_id = :item WHERE id = :run"),
+            {"item": item_id, "run": run_id},
         )
 
 

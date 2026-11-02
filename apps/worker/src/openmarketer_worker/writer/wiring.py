@@ -45,7 +45,10 @@ from openmarketer_core.db.checkpoint_cleanup import remove_checkpoints_of_writin
 from openmarketer_core.llm import ChatModel, RouterChatModel
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ConfigError, ModelRouter
 from openmarketer_core.tracing import Tracing
-from openmarketer_core.writing.workflow_contract import WRITING_TASK_QUEUE
+from openmarketer_core.writing.workflow_contract import (
+    WRITING_LONGEST_RUN_SECONDS,
+    WRITING_TASK_QUEUE,
+)
 from openmarketer_core.writing.writer_agent import rules
 from openmarketer_core.writing.writer_agent.definitions import PublishPost, StoreDraft, agent
 from openmarketer_core.writing.writer_agent.graph import recursion_limit
@@ -55,6 +58,7 @@ from openmarketer_worker.agent_runtime.agent_worker import AgentWorker
 from openmarketer_worker.agent_runtime.routes import ActionContext
 from openmarketer_worker.checkpoint_cleanup import CheckpointCleanup
 from openmarketer_worker.credentials import WorkspaceCredentials
+from openmarketer_worker.settings import require_a_run_within
 from openmarketer_worker.workspace_settings import WorkspaceSettings
 from openmarketer_worker.writer import steps
 from openmarketer_worker.writer.activities import WriterActivities
@@ -143,7 +147,13 @@ def _model_of_workspace(
 
 
 def registration(parts: WriterParts) -> AgentRegistration:
-    """What the worker registers to write posts with ``parts``."""
+    """What the worker registers to write posts with ``parts``.
+
+    Raises ``SettingsError`` when a run can last longer than a task that waits for one counts.
+    """
+    require_a_run_within(
+        longest_writing_seconds(parts.policy), WRITING_LONGEST_RUN_SECONDS, runs="writing"
+    )
     work = WritingWork(
         parts.sessions, parts.checkpoints, new_model=parts.new_model, limits=parts.limits
     )

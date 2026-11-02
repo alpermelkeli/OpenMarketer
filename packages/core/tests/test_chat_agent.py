@@ -21,6 +21,8 @@ from openmarketer_core.db.models import (
     ProjectStatus,
     ResearchRunStatus,
     StudioRunStatus,
+    TaskStatus,
+    TaskStepOutcome,
     WritingRunStatus,
 )
 from openmarketer_core.llm import ChatReply
@@ -42,17 +44,20 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
 )
 from openmarketer_core.orchestrator.chat_agent.tools import (
     get_studio_run,
+    get_task,
     get_writing_run,
     list_analysis_runs,
     list_media_assets,
     list_pending_proposals,
     list_research_runs,
     list_studio_runs,
+    list_tasks,
     list_writing_runs,
     read_profile,
     read_research_report,
     start_creative,
     start_research,
+    start_task,
 )
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
@@ -67,11 +72,19 @@ from openmarketer_core.orchestrator.reads import (
     ResearchRunReading,
     RunReading,
     StudioRunReading,
+    TaskReading,
+    TaskStepReading,
     UnknownProfileSection,
     WritingPostReading,
     WritingRunReading,
 )
-from openmarketer_core.orchestrator.requests import ResearchNotStarted, StudioNotStarted
+from openmarketer_core.orchestrator.requests import (
+    ResearchNotStarted,
+    StudioNotStarted,
+    TaskNotStarted,
+)
+from openmarketer_core.orchestrator.task.plan import TaskRequest
+from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import RUN_STARTED, TOOL_ANSWERED, TOOL_CALLED, RunEvent
@@ -88,6 +101,7 @@ STUDIO_RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000005")
 ASSET_ID = uuid.UUID("00000000-0000-4000-8000-000000000006")
 WRITING_RUN_ID = uuid.UUID("00000000-0000-4000-8000-000000000007")
 POST_ID = uuid.UUID("00000000-0000-4000-8000-000000000008")
+TASK_ID = uuid.UUID("00000000-0000-4000-8000-000000000009")
 # The approved profile's features: one live, one not.
 FEATURES = [
     {"id": "offline-sync", "description": "Works offline", "status": "live"},
@@ -163,6 +177,7 @@ class FakeReads:
         self.studio_calls: list[uuid.UUID] = []
         self.asset_limits: list[int] = []
         self.writing_limits: list[int] = []
+        self.task_limits: list[int] = []
         self.writing_calls: list[uuid.UUID] = []
 
     def project_status(self) -> ProjectStatusReading:
@@ -286,6 +301,27 @@ class FakeReads:
             settled_at=None,
         )
         return writing_run_reading(WritingRunStatus.RUNNING, post=post)
+
+    def recent_tasks(self, limit: int) -> list[TaskReading]:
+        self.task_limits.append(limit)
+        return [] if self.empty else [task_reading()]
+
+    def task(self, task_id: uuid.UUID) -> TaskReading | None:
+        if self.empty or task_id != TASK_ID:
+            return None
+        step = TaskStepReading(
+            step="post",
+            agent="writing",
+            run_id=WRITING_RUN_ID,
+            outcome=TaskStepOutcome.SUCCEEDED,
+            created_at=datetime.now(UTC),
+            finished_at=datetime.now(UTC),
+        )
+        report = {
+            "summary": "Step 'post' (writing): succeeded.",
+            "content_item_ids": [str(POST_ID)],
+        }
+        return task_reading(TaskStatus.SUCCEEDED, steps=[step], report=report)
 
     def _content(self, section: str | None) -> object | None:
         if section is None:
@@ -427,6 +463,7 @@ class FakeRequests:
         self.fails = fails
         self.started: list[ResearchRequest] = []
         self.creatives: list[AssetRequest] = []
+        self.tasks: list[TaskRequest] = []
 
     def start_research(self, request: ResearchRequest) -> ResearchRunReading:
         self.started.append(request)
@@ -449,6 +486,27 @@ class FakeRequests:
         if self.fails is not None:
             raise self.fails
         return studio_run_reading(StudioRunStatus.QUEUED)
+
+    def start_task(self, request: TaskRequest) -> TaskReading:
+        self.tasks.append(request)
+        if self.fails is not None:
+            raise self.fails
+        return task_reading(TaskStatus.QUEUED)
+
+
+def task_reading(status: TaskStatus = TaskStatus.RUNNING, **details) -> TaskReading:
+    return TaskReading(
+        id=TASK_ID,
+        status=status,
+        goal=None if status is TaskStatus.QUEUED else "Announce offline sync.",
+        requested_by="orchestrator",
+        error=None,
+        cost_usd=0.02,
+        created_at=datetime.now(UTC),
+        started_at=None,
+        finished_at=None,
+        **details,
+    )
 
 
 def a_context(reads: FakeReads, requests: FakeRequests | None) -> ChatTurnContext:
@@ -573,7 +631,7 @@ def test_the_turn_fails_when_the_model_never_answers(reads):
     reading = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
     wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
     assert "read_profile" in reading
-    assert wrap_up == ["start_research", "start_creative", SUBMIT]
+    assert wrap_up == ["start_research", "start_creative", "start_task", SUBMIT]
     messages = [
         m for m in model.requests[-1]["messages"] if "You are out of reading budget" in str(m)
     ]
@@ -596,7 +654,7 @@ def test_cost_limit_stops_the_turn(reads):
         )
     assert len(model.requests) == 3
     wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
-    assert wrap_up == ["start_research", "start_creative", SUBMIT]
+    assert wrap_up == ["start_research", "start_creative", "start_task", SUBMIT]
 
 
 # ------------------------------------------------------------------- tools
@@ -770,7 +828,7 @@ def test_a_spent_reading_budget_still_lets_the_turn_start_research(reads):
     assert turn.answer == "Started it."
     assert any("out of reading budget" in str(m) for m in model.requests[1]["messages"])
     wrap_up = [schema["function"]["name"] for schema in model.requests[1]["tools"]]
-    assert wrap_up == ["start_research", "start_creative", SUBMIT]
+    assert wrap_up == ["start_research", "start_creative", "start_task", SUBMIT]
 
 
 def test_empty_readings_are_plain_sentences():
@@ -800,6 +858,9 @@ def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
         "start_creative",
         "list_writing_runs",
         "get_writing_run",
+        "start_task",
+        "list_tasks",
+        "get_task",
     ]
     assert submit_schema()["function"]["name"] == SUBMIT
     by_name = {schema["function"]["name"]: schema for schema in schemas}
@@ -829,7 +890,7 @@ def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
 
 def test_the_wrap_up_offers_the_request_action_and_the_submission_only():
     names = [schema["function"]["name"] for schema in wrap_up_tool_schemas(agent)]
-    assert names == ["start_research", "start_creative", SUBMIT]
+    assert names == ["start_research", "start_creative", "start_task", SUBMIT]
 
 
 # ------------------------------------------------------------ the creative studio
@@ -1138,64 +1199,119 @@ def test_an_image_request_is_still_started_in_the_studio(reads):
     assert [request.goal for request in requests.creatives] == ["A launch poster"]
 
 
-def test_a_request_for_several_agents_is_answered_without_starting_anything(reads):
+def test_a_request_for_several_agents_starts_a_task(reads):
     requests = FakeRequests()
     events = RecordedEvents()
+    asked = "Research competitors, then make an image of it."
     model = ScriptedModel(
         [
             call(
-                SUBMIT,
-                answer="Research and then an image from it will be handled as a task. "
-                "Shall I start the research and the image separately?",
+                "start_task",
+                request=asked,
+                understanding="Research the competitors, then an image from the findings.",
             )
         ],
+        [call(SUBMIT, answer=f"Started task `{TASK_ID}`.")],
     )
 
-    turn = answer_message(
-        reads,
-        model,
-        [{"role": "user", "content": "Research competitors, then make an image of it."}],
-        requests=requests,
-        events=events,
+    answer_message(
+        reads, model, [{"role": "user", "content": asked}], requests=requests, events=events
     )
 
-    assert "task" in turn.answer
+    [task] = requests.tasks
+    assert task.request == asked
     assert (requests.creatives, requests.started) == ([], [])
-    assert RUN_STARTED not in [event.kind for event in events.events]
+    started = [event for event in events.events if event.kind == RUN_STARTED]
+    assert [event.detail for event in started] == [
+        {"run_kind": TASK_RUN_KIND, "run_id": str(TASK_ID)}
+    ]
 
 
-def test_a_post_request_starts_nothing_and_points_to_the_writing_screen(reads):
+def test_a_post_request_starts_a_task_and_never_the_writer(reads):
     requests = FakeRequests()
-    events = RecordedEvents()
     model = ScriptedModel(
         [
             call(
-                SUBMIT,
-                answer="Posts will be handled as a task; until then, start one from the "
-                "project's Writing screen.",
+                "start_task",
+                request="Write a tweet announcing the product.",
+                understanding="One post on X introducing the product.",
             )
         ],
+        [call(SUBMIT, answer=f"Started task `{TASK_ID}`.")],
     )
 
-    turn = answer_message(
+    answer_message(
         reads,
         model,
         [{"role": "user", "content": "Write a tweet announcing the product."}],
         requests=requests,
-        events=events,
     )
 
     offered = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
-    assert "Writing screen" in turn.answer
+    assert "start_task" in offered
     assert not [name for name in offered if "writ" in name and name.startswith("start")]
-    assert (requests.creatives, requests.started) == ([], [])
-    assert RUN_STARTED not in [event.kind for event in events.events]
+    assert [task.understanding for task in requests.tasks] == [
+        "One post on X introducing the product."
+    ]
+
+
+def test_start_task_reads_the_request_strictly_before_asking_the_caller():
+    requests = FakeRequests()
+
+    answer = start_task(a_context(FakeReads(), requests), request="", understanding="Nothing.")
+
+    assert answer.startswith("error: the task request does not fit")
+    assert "request" in answer
+    assert requests.tasks == []
+
+
+def test_start_task_answers_with_the_new_tasks_id_and_status():
+    answer = start_task(
+        a_context(FakeReads(), FakeRequests()), request="Write a post.", understanding="A post."
+    )
+
+    assert json.loads(answer) == {"task_id": str(TASK_ID), "status": "queued"}
+
+
+def test_a_task_that_could_not_be_started_is_said_so():
+    requests = FakeRequests(fails=TaskNotStarted("the task could not be handed to a worker"))
+
+    answer = start_task(a_context(FakeReads(), requests), request="A post.", understanding="Post.")
+
+    assert answer == "error: the task could not be handed to a worker"
+
+
+def test_start_task_is_not_available_without_a_caller():
+    answer = start_task(a_context(FakeReads(), None), request="A post.", understanding="Post.")
+
+    assert answer == "error: starting a task is not available here"
+
+
+def test_list_tasks_bounds_the_limit_and_get_task_reads_its_steps_and_report(reads):
+    [listed] = json.loads(list_tasks(a_context(reads, None), limit=500))
+    found = json.loads(get_task(a_context(reads, None), task_id=str(TASK_ID)))
+
+    assert reads.task_limits == [MAX_LISTED_RECORDS]
+    assert listed["goal"] == "Announce offline sync."
+    assert found["steps"][0]["run_id"] == str(WRITING_RUN_ID)
+    assert found["report"]["content_item_ids"] == [str(POST_ID)]
+    assert get_task(a_context(reads, None), task_id="nope").startswith("error:")
+    assert get_task(a_context(reads, None), task_id=str(uuid.uuid4())).startswith("error: no task")
+
+
+def test_a_follow_up_on_a_task_tells_the_chat_to_give_its_report():
+    instruction = follow_up_instruction(TASK_RUN_KIND, str(TASK_ID), "succeeded")
+
+    assert instruction.startswith("[Written by OpenMarketer, not by the operator.]")
+    assert f"get_task and task_id {TASK_ID}" in instruction
+    assert "give the operator the task's report" in instruction
+    assert "cannot start another run" in instruction
 
 
 def test_the_chat_has_no_request_action_for_the_writer():
     names = {schema["function"]["name"] for schema in agent.tool_schemas()}
     assert "start_writing" not in names
-    assert REQUEST_ACTIONS == {"start_research", "start_creative"}
+    assert REQUEST_ACTIONS == {"start_research", "start_creative", "start_task"}
 
 
 def test_a_follow_up_on_a_writing_run_is_refused():
@@ -1203,24 +1319,23 @@ def test_a_follow_up_on_a_writing_run_is_refused():
         follow_up_instruction(WRITING_RUN_KIND, str(WRITING_RUN_ID), "succeeded")
 
 
-def test_the_prompt_says_a_post_starts_nothing_and_where_one_is_started():
-    assert 'A post, a tweet, or "introduce / announce the product" **starts nothing here.**' in (
+def test_the_prompt_routes_a_post_to_a_task():
+    assert 'A post, a tweet, a thread, or "introduce / announce the product" is a **task**' in (
         SYSTEM_PROMPT
     )
-    assert "posts will be handled as a task" in SYSTEM_PROMPT
-    assert "a post is started from the project's Writing screen" in SYSTEM_PROMPT
+    assert "Writing screen" not in SYSTEM_PROMPT
     assert "start_writing" not in SYSTEM_PROMPT
 
 
-def test_the_prompt_routes_images_and_research_to_their_runs():
-    assert "App Store screenshot is the **studio**: `start_creative`" in SYSTEM_PROMPT
+def test_the_prompt_routes_an_image_alone_and_research_alone_to_their_runs():
+    assert "is the **studio**: `start_creative`" in SYSTEM_PROMPT
     assert "is **research**: `start_research`" in SYSTEM_PROMPT
 
 
-def test_the_prompt_says_a_request_for_several_agents_starts_nothing_yet():
-    assert "**starts nothing.**" in SYSTEM_PROMPT
-    assert "handled as a task" in SYSTEM_PROMPT
-    assert "parts you can start (research, an image) separately" in SYSTEM_PROMPT
+def test_the_prompt_routes_a_request_for_several_agents_to_a_task():
+    assert "**A request that needs several agents together**" in SYSTEM_PROMPT
+    assert "is a **task**: `start_task`. Do not start its parts separately." in SYSTEM_PROMPT
+    assert "starts nothing" not in SYSTEM_PROMPT
 
 
 def test_list_writing_runs_bounds_the_limit_and_carries_the_brief(reads):

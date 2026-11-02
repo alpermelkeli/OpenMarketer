@@ -105,3 +105,23 @@ describe("the action the gate held for a run", () => {
     );
   });
 });
+
+describe("a task's plan the gate held for a person", () => {
+  const proposal = (status: RunProposal["status"]): RunProposal => ({
+    id: "p-2",
+    actionName: "confirm_plan",
+    effect: "confirms",
+    status,
+  });
+
+  it("reads as a plan to confirm, not as an action to run", () => {
+    expect(proposalText(proposal("waiting"))).toBe(
+      "The task asks you to confirm its plan and waits. Nothing of the plan runs until you decide; rejected, the task ends without running it.",
+    );
+    expect(proposalText(proposal("approved"))).toBe("You confirmed the plan; the task runs it.");
+    expect(proposalText(proposal("rejected"))).toBe("The plan was rejected; the task ended without running it.");
+    expect(proposalText(proposal("expired"))).toBe(
+      "Nobody confirmed the plan before its deadline, or the task stopped waiting; none of it ran.",
+    );
+  });
+});

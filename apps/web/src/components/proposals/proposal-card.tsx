@@ -9,6 +9,7 @@ import type { Proposal } from "@/lib/api/types";
 import { formatDateTime, shortId } from "@/lib/format";
 import {
   actionLabel,
+  decisionLabels,
   effectLabel,
   estimateText,
   payloadText,
@@ -17,7 +18,9 @@ import {
   timeLeftToDecide,
 } from "@/lib/proposals/proposal-display";
 import { proposalAnchor, writingHref } from "@/lib/projects/project-navigation";
+import { isPlanConfirmation } from "@/lib/tasks/plan";
 
+import { ProposedPlan } from "./proposed-plan";
 import { ProposedPostImage } from "./proposed-post-image";
 
 type ProposalCardProps = {
@@ -34,6 +37,8 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
   const label = actionLabel(proposal.action_name);
   const estimate = estimateText(proposal.estimate_usd);
   const post = proposedPostText(proposal);
+  const plan = isPlanConfirmation(proposal);
+  const labels = decisionLabels(proposal.effect);
 
   return (
     <article
@@ -77,6 +82,8 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
         </div>
       )}
 
+      {plan && <ProposedPlan proposal={proposal} />}
+
       <div className="grid gap-1.5">
         <p className="text-2xs tracking-widest text-muted-foreground uppercase">What the agent asks</p>
         {/* Written by an agent from a model's output: text only, never HTML or Markdown. */}
@@ -93,11 +100,11 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
           </p>
           <Button variant="outline" onClick={() => onDecide(false)}>
             <XIcon data-icon="inline-start" aria-hidden="true" />
-            Reject
+            {labels.reject}
           </Button>
           <Button onClick={() => onDecide(true)}>
             <CheckIcon data-icon="inline-start" aria-hidden="true" />
-            Approve
+            {labels.approve}
           </Button>
         </div>
       )}

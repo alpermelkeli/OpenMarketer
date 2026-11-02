@@ -5,17 +5,19 @@ in them, every Product Profile version, approved ones included, the proposals
 of its runs, decided or expired, its chat threads with their turns and
 messages, its research runs with their reports and the pages they fetched, its
 studio runs with the media assets they made and every version of each, accepted
-ones included, its writing runs with the content items they proposed, the product
-images its analyses found in the repository, and the events its runs recorded.
-Nothing is kept to restore it from: deleting is final, and a project made again
-for the same repository starts with no history.
+ones included, its writing runs with the content items they proposed, its
+tasks with their steps, the product images its analyses found in the
+repository, and the events its runs recorded. Nothing is kept to restore it
+from: deleting is final, and a project made again for the same repository
+starts with no history.
 
 A project with an unfinished run is not deleted (``ProjectHasUnfinishedRun``):
 the worker that runs it would store a profile for a project that is gone, and
 the workflow cannot be stopped from here. Nor is a project with an unfinished
 research run (``ProjectHasUnfinishedResearch``), an unfinished studio run
-(``ProjectHasUnfinishedStudioRun``) or an unfinished writing run
-(``ProjectHasUnfinishedWritingRun``), for the same reason, nor one
+(``ProjectHasUnfinishedStudioRun``), an unfinished writing run
+(``ProjectHasUnfinishedWritingRun``) or an unfinished task (``ProjectHasUnfinishedTask``),
+for the same reason, nor one
 with a pending proposal (``ProjectHasPendingProposal``): a run waits for a
 person to decide it, and would find neither the proposal nor its project.
 Deleting takes the workspace lock, as every write of a workspace does, so a run
@@ -69,12 +71,15 @@ from openmarketer_core.db.models import (
     ResearchRunRecord,
     RunEventRecord,
     StudioRunRecord,
+    TaskRecord,
+    TaskStepRecord,
     WritingRunRecord,
 )
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.research_runs import FINISHED as RESEARCH_FINISHED
 from openmarketer_core.db.studio_runs import FINISHED as STUDIO_FINISHED
 from openmarketer_core.db.studio_runs import remove_studio_rows
+from openmarketer_core.db.tasks import FINISHED as TASK_FINISHED
 from openmarketer_core.db.workspace_lock import wait_for_other_writes
 from openmarketer_core.db.writing_runs import FINISHED as WRITING_FINISHED
 
@@ -122,6 +127,16 @@ class ProjectHasUnfinishedWritingRun(Exception):
         )
 
 
+class ProjectHasUnfinishedTask(Exception):
+    """The project has a task that is queued or running; it is deleted once the task ends."""
+
+    def __init__(self, project_id: uuid.UUID) -> None:
+        super().__init__(
+            f"project {project_id} has a task in progress; it can be deleted when the task has"
+            " finished"
+        )
+
+
 class ProjectHasPendingProposal(Exception):
     """A run of the project waits for a person to decide a proposal; it is deleted once decided."""
 
@@ -141,7 +156,8 @@ def delete_project(
     ``ProjectHasUnfinishedRun`` while one of its analysis runs is queued or running,
     ``ProjectHasUnfinishedResearch`` while one of its research runs is,
     ``ProjectHasUnfinishedStudioRun`` while one of its studio runs is,
-    ``ProjectHasUnfinishedWritingRun`` while one of its writing runs is, and
+    ``ProjectHasUnfinishedWritingRun`` while one of its writing runs is,
+    ``ProjectHasUnfinishedTask`` while one of its tasks is, and
     ``ProjectHasPendingProposal`` while one of its proposals waits for a decision.
     """
     wait_for_other_writes(session, workspace_id)
@@ -162,6 +178,8 @@ def delete_project(
         raise ProjectHasUnfinishedStudioRun(project_id)
     if _has_unfinished_writing_run(session, project_id):
         raise ProjectHasUnfinishedWritingRun(project_id)
+    if _has_unfinished_task(session, project_id):
+        raise ProjectHasUnfinishedTask(project_id)
     if _has_pending_proposal(session, project_id):
         raise ProjectHasPendingProposal(project_id)
 
@@ -194,6 +212,9 @@ def delete_project(
         delete(ResearchReportRecord).where(ResearchReportRecord.project_id == project_id)
     )
     remove_studio_rows(session, project_id=project_id)
+    # A task names the chat thread that asked for it, so it goes before the threads.
+    session.execute(delete(TaskStepRecord).where(TaskStepRecord.project_id == project_id))
+    session.execute(delete(TaskRecord).where(TaskRecord.project_id == project_id))
     session.execute(delete(ChatThreadRecord).where(ChatThreadRecord.project_id == project_id))
     session.execute(
         delete(RepositoryImageRecord).where(RepositoryImageRecord.project_id == project_id)
@@ -249,6 +270,15 @@ def _has_unfinished_writing_run(session: Session, project_id: uuid.UUID) -> bool
             WritingRunRecord.project_id == project_id,
             WritingRunRecord.status.not_in(WRITING_FINISHED),
         )
+        .exists()
+    )
+    return session.scalar(select(unfinished)) is True
+
+
+def _has_unfinished_task(session: Session, project_id: uuid.UUID) -> bool:
+    unfinished = (
+        select(TaskRecord.id)
+        .where(TaskRecord.project_id == project_id, TaskRecord.status.not_in(TASK_FINISHED))
         .exists()
     )
     return session.scalar(select(unfinished)) is True
