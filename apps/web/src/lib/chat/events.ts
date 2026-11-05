@@ -72,10 +72,23 @@ export const PROPOSAL_KINDS: readonly string[] = [
 export const TURN_ENDS: readonly string[] = ["turn_answered", "turn_failed"];
 export const RUN_ENDS: readonly string[] = ["finished", "failed"];
 
-/** What a turn answers: a person's message, or the end of a run a turn of the chat started. */
-export type TurnTrigger = "message" | "research_finished" | "studio_finished" | "task_finished";
+/**
+ * What a turn answers: a person's message, the end of a run a turn of the chat started, or the end
+ * of one step of a task the chat started, while the task goes on.
+ */
+export type TurnTrigger =
+  | "message"
+  | "research_finished"
+  | "studio_finished"
+  | "task_finished"
+  | "task_step_finished";
 
-const FOLLOW_UP_TRIGGERS: readonly TurnTrigger[] = ["research_finished", "studio_finished", "task_finished"];
+const FOLLOW_UP_TRIGGERS: readonly TurnTrigger[] = [
+  "research_finished",
+  "studio_finished",
+  "task_finished",
+  "task_step_finished",
+];
 
 export type TurnStep = {
   tool: string;

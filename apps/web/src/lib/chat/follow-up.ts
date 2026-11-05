@@ -26,6 +26,11 @@ const WORDING: Record<TurnTrigger, Wording> = {
     failed: "The orchestrator could not report on the task",
     stillThere: "The task’s report is still in its card in this chat.",
   },
+  task_step_finished: {
+    reviewing: "The orchestrator is writing up the task’s progress…",
+    failed: "The orchestrator could not write up the task’s progress",
+    stillThere: "The task’s steps are still in its card in this chat.",
+  },
   message: {
     reviewing: "The orchestrator is reviewing a run of this chat…",
     failed: "The orchestrator could not review the run",

@@ -14,7 +14,8 @@ person watching it (``tool_called`` with a short label of ``TOOL_LABELS``, then
 ``tool_answered``) through the ``TurnEvents`` port; the model never reads those events. A
 turn whose caller gave no ``ChatRequests`` is not offered the request actions at all. The
 sentences a failed turn is recorded with (``failure_reason``) and the instruction a
-follow-up turn is given about a research run, a studio run or a task (``follow_up_instruction``) are
+follow-up turn is given about a research run, a studio run, a task or a step of a task
+(``follow_up_instruction``) are
 worded here, by code, and so is the check a studio request's copy passes before the caller
 is asked (``term_not_to_mention``): the copy may be the model's own, so the brand's
 ``do_not_mention`` is held by code and not only by the prompt.
@@ -510,14 +511,22 @@ _STUDIO_OUTCOMES: Mapping[str, str] = {
 }
 
 
-def follow_up_instruction(run_kind: str, run_id: str, status: str) -> str:
+def follow_up_instruction(
+    run_kind: str, run_id: str, status: str, *, step: str | None = None
+) -> str:
     """What a follow-up turn is told when a run of ``run_kind`` the chat started has ended.
 
     ``run_kind`` is one of ``FOLLOWED_RUN_KINDS``. The instruction is
     given to the model in the operator's place and never stored as a message of the chat.
-    ``run_id`` and ``status`` are the run's, read from its record by code. Raises
-    ``ValueError`` for a kind of run a chat does not follow up on.
+    ``run_id`` and ``status`` are the run's, read from its record by code. With ``step``, the
+    id of a task's step whose run ended while the task goes on, ``status`` is how that step's
+    run ended and the turn writes the task's progress so far. Raises ``ValueError`` for a kind
+    of run a chat does not follow up on, and for a step of a run that is not a task.
     """
+    if step is not None:
+        if run_kind != TASK_RUN_KIND:
+            raise ValueError(f"a chat follows up on the steps of a task, not of a {run_kind!r} run")
+        return _task_step_follow_up(run_id, step, status)
     if run_kind == RESEARCH_RUN_KIND:
         return _research_follow_up(run_id, status)
     if run_kind == STUDIO_RUN_KIND:
@@ -541,13 +550,36 @@ def _task_follow_up(run_id: str, status: str) -> str:
     return (
         f"[Written by OpenMarketer, not by the operator.] The task {run_id} that you started in "
         f"this chat has ended with status {status}. Read it with get_task and task_id {run_id}. "
-        "If it has a report, give the operator the task's report, as the report says: what was "
-        "done, each post with whether a person approved or rejected it, the images in the "
-        "Studio library, the research reports, what a person rejected, and the cost. You may "
-        "read a step's run with its own read tool for more detail. If the task failed, say why, "
-        "as its error says, and what they can do next, such as asking again. Name the screens "
-        "in words and write no link or address: the dashboard links them. Do not repeat a "
-        "post's text as if it were your own words. You cannot start another run in this turn."
+        "This is your last message about the task: it closes the messages you wrote in this "
+        "chat as its steps ended, and sums up every step of it, the last one included, in a "
+        "line or two each. If it has a report, give the operator the task's report, as the "
+        "report says: what was done, each post with whether a person approved or rejected it, "
+        "the images in the Studio library, the research reports, what a person rejected, and "
+        "the cost. You may read a step's run with its own read tool for more detail. If the "
+        "task failed, say why, as its error says, and what they can do next, such as asking "
+        "again. Name the screens in words and write no link or address: the dashboard links "
+        "them. Do not repeat a post's text as if it were your own words. You cannot start "
+        "another run in this turn."
+    )
+
+
+def _task_step_follow_up(task_id: str, step: str, outcome: str) -> str:
+    return (
+        f"[Written by OpenMarketer, not by the operator.] The task {task_id} that you started "
+        f"in this chat goes on, and its step {step} has ended with outcome {outcome}. Read the "
+        f"task with get_task and task_id {task_id}, then the run of step {step} with its own "
+        "read tool: read_research_report for research, get_studio_run for an image, "
+        "get_writing_run for a post. Then write the operator a short message on the task's "
+        "progress so far, in three parts. First, one line for each earlier step that has "
+        "ended, saying what it produced. Second, a few lines on what step "
+        f"{step} produced: for research, its main findings; for an image, what it shows and "
+        "that it waits in the Studio library for a person to accept it; for a post, that it "
+        "waits for a person's approval; if the step failed, why, as its record says. Third, "
+        "what the task does next, as its plan says. Do not repeat at length what you already "
+        "told the operator about the earlier steps. Name the screens in words and write no "
+        "link or address: the dashboard links them. Do not repeat a post's text as if it were "
+        "your own words. You cannot start another run in this turn, and do not ask the "
+        "operator whether to start one: the task goes on by itself."
     )
 
 

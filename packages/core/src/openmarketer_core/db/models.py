@@ -999,6 +999,8 @@ class ChatTurnTrigger(StrEnum):
     RESEARCH_FINISHED = "research_finished"  # a research run the thread started has ended
     STUDIO_FINISHED = "studio_finished"  # a studio run the thread started has ended
     TASK_FINISHED = "task_finished"  # a task the thread started has ended
+    # a step of a task the thread started has ended, and the task goes on
+    TASK_STEP_FINISHED = "task_step_finished"
 
 
 class ChatTurnStatus(StrEnum):
@@ -1065,7 +1067,8 @@ class ChatTurnRecord(Base):
 
     A turn answers the operator's message, or follows up on a research run, a studio run or a
     task the thread started (``research_run_id``, ``studio_run_id`` or ``task_id``, each set
-    exactly for its trigger). A thread
+    exactly for its trigger), or on one step of such a task that ended while the task goes on
+    (``task_id`` and ``task_step_key``, the step's id in the task's plan). A thread
     has at most one running turn; a failed turn keeps why, worded for the
     operator.
     """
@@ -1080,7 +1083,18 @@ class ChatTurnRecord(Base):
             "(trigger = 'studio_finished') = (studio_run_id IS NOT NULL)",
             name="studio_run_id",
         ),
-        CheckConstraint("(trigger = 'task_finished') = (task_id IS NOT NULL)", name="task_id"),
+        CheckConstraint(
+            "(trigger IN ('task_finished', 'task_step_finished')) = (task_id IS NOT NULL)",
+            name="task_id",
+        ),
+        CheckConstraint(
+            "(trigger = 'task_step_finished') = (task_step_key IS NOT NULL)",
+            name="task_step_key",
+        ),
+        CheckConstraint(
+            f"char_length(task_step_key) BETWEEN 1 AND {MAX_STEP_ID_CHARS}",
+            name="task_step_key_length",
+        ),
         CheckConstraint("(status = 'failed') = (error IS NOT NULL)", name="error"),
         CheckConstraint(f"char_length(error) <= {CHAT_TURN_ERROR_MAX_LENGTH}", name="error_length"),
         CheckConstraint("(status = 'running') = (finished_at IS NULL)", name="finished_at"),
@@ -1102,6 +1116,7 @@ class ChatTurnRecord(Base):
     research_run_id: Mapped[uuid.UUID | None] = mapped_column()
     studio_run_id: Mapped[uuid.UUID | None] = mapped_column()
     task_id: Mapped[uuid.UUID | None] = mapped_column()
+    task_step_key: Mapped[str | None] = mapped_column(Text)
     status: Mapped[ChatTurnStatus] = mapped_column(
         _enum(ChatTurnStatus, "status"), server_default=ChatTurnStatus.RUNNING.value
     )

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ChatMessage, RunEvent } from "@/lib/api/types";
 
-import { awaitedTurn, foldChatEvents, inOrder, MAX_HISTORY_PAGES, needsOlderEvents, newestEventId, parseRunEvent } from "./events";
+import { awaitedTurn, foldChatEvents, inOrder, isFollowUp, MAX_HISTORY_PAGES, needsOlderEvents, newestEventId, parseRunEvent } from "./events";
 
 const TURN = "11111111-1111-4111-8111-111111111111";
 const LATER_TURN = "22222222-2222-4222-8222-222222222222";
@@ -500,5 +500,11 @@ describe("a task in its chat", () => {
   it("is answered by a follow-up turn once it has ended", () => {
     const activity = foldChatEvents([event("turn_started", { trigger: "task_finished" })]);
     expect(activity.turns[0]?.trigger).toBe("task_finished");
+  });
+
+  it("is followed up on after each step it goes on from", () => {
+    const [turn] = foldChatEvents([event("turn_started", { trigger: "task_step_finished" })]).turns;
+    expect(turn?.trigger).toBe("task_step_finished");
+    expect(turn && isFollowUp(turn)).toBe(true);
   });
 });

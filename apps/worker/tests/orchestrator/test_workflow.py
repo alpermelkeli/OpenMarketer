@@ -109,6 +109,7 @@ async def test_history_holds_the_identifiers_of_the_follow_up_and_nothing_else(
             "chat_id": str(asked.chat_id),
             "run_kind": RESEARCH_RUN_KIND,
             "run_id": str(asked.run_id),
+            "step": None,
         }
     ]
 

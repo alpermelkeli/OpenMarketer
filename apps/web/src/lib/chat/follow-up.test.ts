@@ -19,4 +19,9 @@ describe("how a follow-up on a task is worded", () => {
     expect(followUpWording("task_finished").failed).toBe("The orchestrator could not report on the task");
     expect(followUpWording("task_finished").stillThere).toBe("The task’s report is still in its card in this chat.");
   });
+
+  it("names the task's progress when one of its steps has ended", () => {
+    expect(followUpWording("task_step_finished").reviewing).toBe("The orchestrator is writing up the task’s progress…");
+    expect(followUpWording("task_step_finished").failed).toBe("The orchestrator could not write up the task’s progress");
+  });
 });

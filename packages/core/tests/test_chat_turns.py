@@ -6,6 +6,7 @@ They need PostgreSQL (see the root ``conftest.py``).
 import threading
 import uuid
 from datetime import timedelta
+from typing import TypedDict
 
 import pytest
 from sqlalchemy import func, update
@@ -77,7 +78,15 @@ def chat_id(session, scope) -> uuid.UUID:
     return create_chat(session, workspace_id=scope.workspace_id, project_id=scope.project_id).id
 
 
-def ids(scope: RunScope, chat_id: uuid.UUID) -> dict[str, uuid.UUID]:
+class ChatIds(TypedDict):
+    """The ids the scoped functions of a chat take, so unpacking them names ids and nothing else."""
+
+    workspace_id: uuid.UUID
+    project_id: uuid.UUID
+    chat_id: uuid.UUID
+
+
+def ids(scope: RunScope, chat_id: uuid.UUID) -> ChatIds:
     return {"workspace_id": scope.workspace_id, "project_id": scope.project_id, "chat_id": chat_id}
 
 

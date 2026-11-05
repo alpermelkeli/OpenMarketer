@@ -68,6 +68,10 @@ class FailedTakesNoReason:
     async def failed(self, run): ...
 
 
+class WentOnTakesNoAction:
+    async def went_on(self, run): ...
+
+
 @pytest.mark.parametrize(
     ("refused", "why"),
     [
@@ -80,6 +84,7 @@ class FailedTakesNoReason:
         (AfterTakesOnlyTheOutput, "hook after"),
         (AfterTakesTooMuch, "hook after"),
         (FailedTakesNoReason, "hook failed"),
+        (WentOnTakesNoAction, "hook went_on"),
     ],
     ids=lambda case: getattr(case, "__name__", case),
 )

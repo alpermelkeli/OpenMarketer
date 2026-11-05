@@ -3,13 +3,19 @@
 Every agent's workflow does the same around its own steps: refuse a run that is not the agent's,
 run the graph with the actions the agent declared, say how a run that did not finish ended, and
 forget the run's checkpoints whatever happened. ``agent_workflow`` writes that, so the author's
-class is what is particular to the agent and nothing else. It may define three optional hooks,
+class is what is particular to the agent and nothing else. It may define four optional hooks,
 all ``async def``, each given the workflow's input as the author typed it (``run`` below):
 
 - ``before(self, run)``: first. For marking the run started. It may return a ``GraphRunPolicy``,
   which the run's steps are then taken with instead of ``graph``: workflow code cannot read the
   environment, so limits that come from the worker's settings reach a run through the activity
   that ``before`` calls.
+- ``went_on(self, run, action)``: while the graph runs, each time a run it waited for (an
+  action with a ``RunTarget`` of ``RunKind.WAIT``) has ended and the graph went on to ask for
+  another action; ``action`` is the ``ActionRequest`` that started the run that ended. Not
+  called for the run after which the graph finished or failed. For telling someone that a
+  step is behind the run; the driver waits for it before it handles the next action, so it
+  should not wait long itself. A failure of it ends the run like any other.
 - ``after(self, run, output)``: once the graph finished, with the ``result`` its agent reports
   (``AgentSteps``). For storing what the run produced.
 - ``failed(self, run, reason)``: when the run did not finish, with the sentence that may be
@@ -85,13 +91,14 @@ Temporal this relies on).
 import asyncio
 import inspect
 import uuid
-from collections.abc import Callable, Collection
+from collections.abc import Awaitable, Callable, Collection
 from typing import Any
 
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, ApplicationError, FailureError
 
 with workflow.unsafe.imports_passed_through():
+    from openmarketer_core.agent_runtime.actions import ActionRequest
     from openmarketer_core.agent_runtime.agent import Agent
     from openmarketer_core.agent_runtime.gate import (
         PROPOSAL_DECIDED_SIGNAL,
@@ -121,6 +128,7 @@ with workflow.unsafe.imports_passed_through():
 # The hooks a class may define, with what each is called with, in order.
 _HOOKS: dict[str, tuple[str, ...]] = {
     "before": ("run",),
+    "went_on": ("run", "action"),
     "after": ("run", "output"),
     "failed": ("run", "reason"),
 }
@@ -292,7 +300,8 @@ def _require_a_class_that_can_be_a_workflow(cls: type) -> None:
         if hasattr(cls, written):
             raise InvalidAgentWorkflow(
                 f"workflow class {cls.__name__} defines {written}, which agent_workflow writes: "
-                "put what is particular to the agent in the hooks before, after and failed"
+                "put what is particular to the agent in the hooks before, went_on, after and "
+                "failed"
             )
     for hook, arguments in _HOOKS.items():
         _require_a_hook_that_can_be_called(cls, hook, arguments)
@@ -346,6 +355,7 @@ async def _run_agent(
             scope=scope,
             decided=_decided_proposals_of(instance),
             run_targets=agent.run_targets,
+            went_on=_went_on(instance, run_input),
         )
         await _call_hook(instance, "after", run_input, output)
     except _RUN_FAILURES as failure:
@@ -367,6 +377,17 @@ async def _before(instance: object, run_input: Any, default: GraphRunPolicy) -> 
         return default
     chosen = await defined(run_input)
     return default if chosen is None else chosen
+
+
+def _went_on(instance: object, run_input: Any) -> Callable[[ActionRequest], Awaitable[None]] | None:
+    defined = getattr(instance, "went_on", None)
+    if defined is None:
+        return None
+
+    async def went_on(action: ActionRequest) -> None:
+        await defined(run_input, action)
+
+    return went_on
 
 
 async def _call_hook(instance: object, hook: str, *arguments: Any) -> None:

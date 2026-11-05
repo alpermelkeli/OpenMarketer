@@ -28,15 +28,27 @@ def activities(task_registration, activities_of):
 def test_starting_a_task_marks_it_running_and_gives_this_workers_limits(activities, task_database):
     asked = task_database.requested()
 
-    configured = activities.run(steps.START_TASK, asked.run)
+    started = activities.run(steps.START_TASK, asked.run)
 
-    assert configured == TaskPolicy(
+    assert started.policy == TaskPolicy(
         attempt_timeout_seconds=60,
         heartbeat_timeout_seconds=10,
         max_attempts=2,
         retry_after_seconds=1,
     )
     assert task_database.task(asked.run).status is TaskStatus.RUNNING
+
+
+def test_starting_a_task_names_the_chat_that_asked_for_it(activities, task_database):
+    asked = task_database.requested()
+
+    assert activities.run(steps.START_TASK, asked.run).chat_id == asked.chat_id
+
+
+def test_starting_a_task_no_chat_asked_for_names_none(activities, task_database):
+    asked = task_database.requested(from_a_chat=False)
+
+    assert activities.run(steps.START_TASK, asked.run).chat_id is None
 
 
 def test_a_task_that_ended_is_not_started_again(activities, task_database, sessions):

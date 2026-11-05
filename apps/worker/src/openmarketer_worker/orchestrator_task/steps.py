@@ -23,7 +23,9 @@ from openmarketer_worker.agent_runtime.vocabulary import (
     WORDED_BY_THE_RUNTIME,
     FailureTexts,
 )
+from openmarketer_worker.orchestrator_task.policy import TaskPolicy
 
+# A task is picked up: the limits of its graph's steps, and the chat that asked for it.
 START_TASK = "start_task"
 # Once a task is over, either way: its last event, and the chat that asked for it, if one did.
 RECORD_END = "record_end"
@@ -95,4 +97,13 @@ class TaskEnd:
 class TaskEndRecorded:
     """What ``record_end`` and ``record_failure`` answer: the task's chat, or ``None``."""
 
+    chat_id: uuid.UUID | None
+
+
+@dataclass(frozen=True)
+class TaskStarted:
+    """What ``start_task`` answers: how this worker limits the steps of the task's graph, and
+    the chat that asked for the task, or ``None``, which the task tells as its steps end."""
+
+    policy: TaskPolicy
     chat_id: uuid.UUID | None

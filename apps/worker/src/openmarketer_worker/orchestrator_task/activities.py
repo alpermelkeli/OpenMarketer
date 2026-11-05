@@ -1,5 +1,8 @@
 """The three activities the hooks of ``OrchestratorTask`` call: a task starts, ends, or failed.
 
+``start_task`` answers with the limits of the task's graph and the chat that asked for the task,
+which the workflow tells about each step that ends while the task goes on.
+
 They hold no rule of their own: how a task changes state is core's (``db/tasks.py``). What they
 add is what an activity owes the engine: every failure is raised with a type that says whether
 another attempt is worth its cost and with a message that may be stored and shown, and each can
@@ -64,18 +67,19 @@ class TaskActivities:
         self._spent = spent
 
     @activity.defn(name=steps.START_TASK)
-    def start_task(self, run: TaskRunInput) -> TaskPolicy:
-        """Mark the task as picked up and say how this worker limits the steps of its graph."""
+    def start_task(self, run: TaskRunInput) -> steps.TaskStarted:
+        """Mark the task as picked up; say how this worker limits the steps of its graph, and
+        which chat asked for the task."""
         with worded_failures(steps.TASK_TEXTS, subject=subject_of(run.run_id)):
             try:
                 with transaction(self._sessions) as session:
-                    mark_task_started(session, **scope_of(run))
+                    task = mark_task_started(session, **scope_of(run))
             except TaskNotFound as e:
                 # The request that created the task may not have committed it yet.
                 raise failure(steps.TASK_NOT_FOUND_YET, str(e)) from None
             except TaskFinished as e:
                 raise failure(steps.TASK_UNAVAILABLE, str(e)) from None
-        return self._policy
+        return steps.TaskStarted(policy=self._policy, chat_id=task.chat_thread_id)
 
     @activity.defn(name=steps.RECORD_END)
     def record_end(self, end: steps.TaskEnd) -> steps.TaskEndRecorded:

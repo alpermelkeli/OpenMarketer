@@ -7,8 +7,9 @@ writer's and the studio's real wiring, with their models, image provider, sandbo
 storage scripted or faked, each on a queue of the test's own (``children`` in ``conftest.py``).
 Skipped when Temporal or PostgreSQL is not reachable. Timeouts are real, so the limits are
 short. A person's decision is made as the API makes it: stored, then signalled to the run that
-waits for it. The chat's follow-up is a child the task starts and abandons: these tests serve no
-worker for it, and read the child Temporal holds, then terminate it.
+waits for it. The chat's follow-ups are children the task starts and abandons: these tests serve
+them on a queue of the test's own with the real ``ChatFollowUp`` workflow and its activity
+scripted (``ScriptedFollowUps``), which records what each was about, in the order they came.
 """
 
 import asyncio
@@ -19,7 +20,7 @@ import subprocess
 import sys
 import uuid
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -36,12 +37,16 @@ from task_fakes import (
     POST_WITH_IMAGE,
     UNDERSTANDING,
     ScriptedOrchestrator,
+    a_plan,
     a_post_plan,
     a_post_with_an_image_plan,
     a_review,
+    writing_step,
 )
+from temporalio import activity
 from temporalio.client import WorkflowFailureError, WorkflowHandle, WorkflowHistory
 from temporalio.service import RPCError
+from temporalio.worker import Worker
 
 from openmarketer_core.agent_runtime.gate import PROPOSAL_DECIDED_SIGNAL, ProposalStatus
 from openmarketer_core.credentials.catalog import OPENROUTER_API_KEY
@@ -69,7 +74,15 @@ from openmarketer_core.writing.writer_agent.definitions import PUBLISH_POST
 from openmarketer_worker import main
 from openmarketer_worker.creative_studio import wiring as studio_wiring
 from openmarketer_worker.credentials import WorkspaceCredentials
-from openmarketer_worker.orchestrator.contract import follow_up_workflow_id
+from openmarketer_worker.orchestrator import contract
+from openmarketer_worker.orchestrator import steps as follow_up_steps
+from openmarketer_worker.orchestrator.contract import (
+    CHAT_FOLLOW_UP_WORKFLOW,
+    ChatFollowUpInput,
+    FollowUpNotTaken,
+    follow_up_workflow_id,
+)
+from openmarketer_worker.orchestrator.workflow import ChatFollowUp
 from openmarketer_worker.writer import wiring as writer_wiring
 
 RATE_LIMITED = LLMError("the model provider answered HTTP 429", status=429)
@@ -88,9 +101,48 @@ def readable(history: WorkflowHistory) -> str:
     return "\n".join([document, *payloads])
 
 
+@dataclass
+class ScriptedFollowUps:
+    """The follow-up activity of the chat, scripted: what each follow-up was about, in order.
+
+    The follow-up of a step in ``held`` answers only once its event is set, and keeps its
+    attempt alive meanwhile.
+    """
+
+    asked: list[ChatFollowUpInput] = field(default_factory=list)
+    held: dict[str, asyncio.Event] = field(default_factory=dict)
+
+    @activity.defn(name=follow_up_steps.FOLLOW_UP_ON_RUN)
+    async def follow_up_on_run(self, follow_up: ChatFollowUpInput) -> None:
+        self.asked.append(follow_up)
+        release = self.held.get(follow_up.step or "")
+        while release is not None and not release.is_set():
+            activity.heartbeat()
+            await asyncio.sleep(0.2)
+
+    @activity.defn(name=follow_up_steps.RECORD_FOLLOW_UP_NOT_TAKEN)
+    async def record_follow_up_not_taken(self, not_taken: FollowUpNotTaken) -> None:
+        raise AssertionError(f"a follow-up was not taken: {not_taken.cause}")
+
+    def steps(self) -> list[str | None]:
+        return [follow_up.step for follow_up in self.asked]
+
+
 @pytest.fixture
-def serving(temporal, task_queue, children, task_registration, sessions, checkpoints):
-    """The task's worker on the test's queue, and the writer's and the studio's on theirs."""
+def follow_ups(monkeypatch) -> tuple[ScriptedFollowUps, str]:
+    """The chat's follow-ups, scripted, and a queue of the test's own that the task starts them
+    on: the real queue may be served by a worker in development. The workflow sandbox passes
+    the contract through, so the task's workflow reads the queue the test set."""
+    queue = f"test-follow-ups-{uuid.uuid4()}"
+    monkeypatch.setattr(contract, "CHAT_FOLLOW_UP_TASK_QUEUE", queue)
+    return ScriptedFollowUps(), queue
+
+
+@pytest.fixture
+def serving(temporal, task_queue, children, task_registration, sessions, checkpoints, follow_ups):
+    """The task's worker on the test's queue, the writer's and the studio's on theirs, and the
+    chat's follow-ups, scripted, on theirs; it gives the scripted follow-ups."""
+    scripted, follow_up_queue = follow_ups
 
     @asynccontextmanager
     async def serve(*, writer_model: Any = None, **changes):
@@ -132,7 +184,15 @@ def serving(temporal, task_queue, children, task_registration, sessions, checkpo
                 await stack.enter_async_context(
                     main.build_worker(temporal, registration, max_concurrent_activities=4)
                 )
-            yield
+            await stack.enter_async_context(
+                Worker(
+                    temporal,
+                    task_queue=follow_up_queue,
+                    workflows=[ChatFollowUp],
+                    activities=[scripted.follow_up_on_run, scripted.record_follow_up_not_taken],
+                )
+            )
+            yield scripted
 
     return serve
 
@@ -177,7 +237,7 @@ async def decide(temporal, task_database, run, action_name: str, *, approved: bo
 
 
 async def follow_up_of(temporal, run) -> dict[str, Any]:
-    """The input of the follow-up the task started, which is then terminated."""
+    """The input of the follow-up of its report the task started, which is then terminated."""
     handle = temporal.get_workflow_handle(follow_up_workflow_id(TASK_RUN_KIND, run.run_id))
     try:
         started = (await handle.fetch_history()).events[0]
@@ -192,6 +252,33 @@ async def follow_up_of(temporal, run) -> dict[str, Any]:
 
 def scope_of(run) -> dict[str, uuid.UUID]:
     return {"workspace_id": run.workspace_id, "project_id": run.project_id}
+
+
+async def stored_succeeded(task_database, run, *, within: float = 90) -> None:
+    """Once the task is stored succeeded: its graph has finished and its report is stored."""
+
+    async def succeeded():
+        while task_database.task(run).status is not TaskStatus.SUCCEEDED:
+            await asyncio.sleep(0.1)
+
+    await asyncio.wait_for(succeeded(), timeout=within)
+
+
+def three_posts() -> ScriptedOrchestrator:
+    """A plan of three posts one after the other, each reviewed as it ends."""
+    plan = a_plan(writing_step("first"), writing_step("second"), writing_step("third"))
+    reviews = (a_review("dispatch_next"), a_review("dispatch_next"), a_review())
+    return ScriptedOrchestrator(plan, *reviews)
+
+
+def two_posts() -> ScriptedOrchestrator:
+    plan = a_plan(writing_step("first"), writing_step("second"))
+    return ScriptedOrchestrator(plan, a_review("dispatch_next"), a_review())
+
+
+async def approve_posts(temporal, task_database, run, count: int) -> None:
+    for _ in range(count):
+        await decide(temporal, task_database, run, PUBLISH_POST, approved=True)
 
 
 # ------------------------------------------------------------------------- success
@@ -392,3 +479,68 @@ def test_module_of_the_workflow_loads_no_database_graph_framework_or_activity():
         "cryptography",
     )
     assert [name for name in json.loads(done.stdout) if name.startswith(forbidden)] == []
+
+
+# ------------------------------------------------------------- the chat, step by step
+async def test_task_of_a_chat_follows_up_on_each_step_it_goes_on_from_then_on_its_report(
+    serving, start, task_database, temporal
+):
+    asked = task_database.requested(POST_REQUEST)
+    async with serving(model=three_posts()) as follow_ups:
+        follow_ups.held["first"] = asyncio.Event()
+        handle = await start(asked.run)
+        await approve_posts(temporal, task_database, asked.run, 3)
+        await stored_succeeded(task_database, asked.run)
+        # The task is over, and its chat still answers about the first step: nothing after it
+        # was started, so the chat is told in order whichever follow-up would be taken first.
+        assert follow_ups.steps() == ["first"]
+        follow_ups.held["first"].set()
+        output = await ended(handle)
+
+    assert output["outcome"] == "completed"
+    assert follow_ups.steps() == ["first", "second", None]
+    assert {(f.run_kind, f.run_id, f.chat_id) for f in follow_ups.asked} == {
+        (TASK_RUN_KIND, asked.run.run_id, asked.chat_id)
+    }
+
+
+async def test_task_no_chat_asked_for_starts_no_follow_up(serving, start, task_database, temporal):
+    asked = task_database.requested(POST_REQUEST, from_a_chat=False)
+    async with serving(model=two_posts()) as follow_ups:
+        handle = await start(asked.run)
+        await approve_posts(temporal, task_database, asked.run, 2)
+        output = await ended(handle)
+
+    assert output["outcome"] == "completed"
+    assert follow_ups.asked == []
+
+
+async def test_retried_workflow_does_not_follow_up_twice_on_a_step(
+    serving, start, task_database, temporal, follow_ups
+):
+    asked = task_database.requested(POST_REQUEST)
+    assert asked.chat_id is not None
+    _, follow_up_queue = follow_ups
+    # What an earlier execution of the task started for its first step, before it was retried.
+    earlier = await temporal.start_workflow(
+        CHAT_FOLLOW_UP_WORKFLOW,
+        ChatFollowUpInput(
+            asked.run.workspace_id,
+            asked.run.project_id,
+            asked.chat_id,
+            TASK_RUN_KIND,
+            asked.run.run_id,
+            step="first",
+        ),
+        id=follow_up_workflow_id(TASK_RUN_KIND, asked.run.run_id, "first"),
+        task_queue=f"{follow_up_queue}-unserved",
+    )
+    await earlier.terminate()
+    async with serving(model=two_posts()) as scripted:
+        handle = await start(asked.run)
+        await approve_posts(temporal, task_database, asked.run, 2)
+        await ended(handle)
+
+    assert scripted.steps() == [None]
+    found = temporal.get_workflow_handle(earlier.id)
+    assert (await found.describe()).run_id == earlier.first_execution_run_id
