@@ -9,8 +9,9 @@ graph imports; importing it is what puts them on ``agent``.
   the task's own model calls and the number of plan changes are in it, so they count every
   attempt of a task.
 - ``TaskContext`` is what a node needs that is not state: the model of the attempt, which
-  answers the role ``orchestrator``, the project's approved profile, read once by ``prepare``,
-  and the clock the deadline is read by.
+  answers the role ``orchestrator``; one reading of the project as the task finds it (its
+  approved profile, its finished reports and the chat that asked), which ``prepare`` calls
+  once; and the clock the deadline is read by.
 - The actions. ``confirm_plan`` asks a person to confirm a plan that can spend or whose scope
   is above the defaults: its effect is ``CONFIRMS``, so the gate holds it as a proposal exactly
   as it holds an action that publishes; its payload is the plan itself, so what the person
@@ -35,10 +36,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from openmarketer_core.agent_runtime.actions import ActionEffect, ChildRun, RunKind, RunTarget
 from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.llm import ChatModel
-from openmarketer_core.orchestrator.task.plan import StepId, TaskPlan, TaskRequest
+from openmarketer_core.orchestrator.task.plan import (
+    StepId,
+    TaskAtHand,
+    TaskPlan,
+    TaskRequest,
+)
 from openmarketer_core.orchestrator.task.task_agent.rules import TaskLimits
 from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND, TaskRunInput
-from openmarketer_core.profile import ProductProfile
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import (
     RESEARCH_LONGEST_RUN_SECONDS,
@@ -83,7 +88,11 @@ class TaskState(TypedDict):
     request: dict[str, Any]
     started_at: str
     limits: dict[str, Any]
-    project: dict[str, Any]  # ``rules.project_of`` the approved profile; {} without one
+    # What the task found at the project when it started (``rules.at_hand_data``): the approved
+    # profile as ``rules.project_of`` reads it ({} without one), the reports of its finished
+    # research runs (``rules.reports_of``; each labelled ``report-1`` ... and the run's id kept
+    # in the state) and the conversation of the chat that asked (``rules.chat_of``).
+    at_hand: dict[str, Any]
     # The plan in force (``plan.TaskPlan`` as JSON; {} until one is accepted), the plan the
     # last plan or review submitted for ``check`` ({} once checked), how often it changed, and
     # whether the plan in force waits for a person (and how often one was asked).
@@ -113,13 +122,14 @@ class TaskState(TypedDict):
 class TaskContext:
     """What the nodes of one attempt are given besides the state.
 
-    ``model`` answers the role ``orchestrator``. ``approved_profile`` reads the project's
-    approved Product Profile, or gives ``None`` when it has none; only ``prepare`` calls it.
+    ``model`` answers the role ``orchestrator``. ``at_hand`` reads the project once: its
+    approved profile, the reports of its finished research runs, newest first, and the
+    conversation of the chat that asked for the task, oldest first. Only ``prepare`` calls it.
     ``now`` is the time, aware, for the deadline. A context serves one attempt, in one thread.
     """
 
     model: ChatModel
-    approved_profile: Callable[[], ProductProfile | None]
+    at_hand: Callable[[], TaskAtHand]
     now: Callable[[], datetime]
 
 
@@ -232,7 +242,7 @@ def initial_state(
         "request": request.model_dump(mode="json"),
         "started_at": started_at.isoformat(),
         "limits": limits.as_data(),
-        "project": {},
+        "at_hand": {"project": {}, "research_reports": [], "chat": []},
         "plan": {},
         "proposed_plan": {},
         "plan_changes": 0,

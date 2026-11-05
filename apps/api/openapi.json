@@ -5364,7 +5364,7 @@
       },
       "WritingStep": {
         "additionalProperties": false,
-        "description": "A step that runs the writer, with the earlier steps whose results its brief takes.\n\n``asset_from_step`` names a studio step, whose asset the post goes with;\n``research_from_step`` a research step, whose findings the writer may quote.",
+        "description": "A step that runs the writer, with the earlier steps whose results its brief takes.\n\n``asset_from_step`` names a studio step, whose asset the post goes with;\n``research_from_step`` a research step, whose findings the writer may quote; and\n``research_from_report`` a report already finished in the project. A step rests on one\nresearch source: it names a research step or a report, never both.",
         "properties": {
           "agent": {
             "const": "writing",
@@ -5402,6 +5402,19 @@
           },
           "request": {
             "$ref": "#/components/schemas/WritingStepRequest"
+          },
+          "research_from_report": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "pattern": "^report-[1-9][0-9]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research From Report"
           },
           "research_from_step": {
             "anyOf": [

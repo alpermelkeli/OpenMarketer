@@ -33,7 +33,13 @@ from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator.task.failures import TaskError
-from openmarketer_core.orchestrator.task.plan import TaskPlanChange, TaskRequest
+from openmarketer_core.orchestrator.task.plan import (
+    ChatLine,
+    ResearchReportAtHand,
+    TaskAtHand,
+    TaskPlanChange,
+    TaskRequest,
+)
 from openmarketer_core.orchestrator.task.task_agent import progress
 from openmarketer_core.orchestrator.task.task_agent.definitions import (
     CONFIRM_PLAN,
@@ -60,6 +66,7 @@ ASSET_ID = "22222222-2222-4222-8222-222222222222"
 WRITING_RUN_ID = "33333333-3333-4333-8333-333333333333"
 ITEM_ID = "44444444-4444-4444-8444-444444444444"
 RESEARCH_RUN_ID = "55555555-5555-4555-8555-555555555555"
+REPORT_RUN_ID = "99999999-9999-4999-8999-999999999999"
 SECOND_WRITING_RUN_ID = "66666666-6666-4666-8666-666666666666"
 SECOND_ITEM_ID = "77777777-7777-4777-8777-777777777777"
 
@@ -202,6 +209,8 @@ class Run:
         limits: TaskLimits | None = None,
         now: datetime = STARTED + timedelta(hours=1),
         cost_usd: float = 0.0,
+        reports: tuple[ResearchReportAtHand, ...] = (),
+        chat_history: tuple[ChatLine, ...] = (),
     ):
         run = TaskRunInput(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
         self.run = run
@@ -209,7 +218,9 @@ class Run:
         self.confirmations = list(confirmations or [])
         context = TaskContext(
             model=chat,
-            approved_profile=lambda: profile or a_profile(),
+            at_hand=lambda: TaskAtHand(
+                profile=profile or a_profile(), reports=reports, chat=chat_history
+            ),
             now=lambda: now,
         )
         self.events: list[RunEvent] = []
@@ -364,6 +375,60 @@ def test_research_reaches_the_writer_by_its_run_id():
     assert run.result.report["research_run_ids"] == [RESEARCH_RUN_ID]
     review = data_of(chat.calls[1]["messages"])
     assert review["steps"][0]["outcome"]["statements"] == ["Remote teams lose notes offline."]
+
+
+def a_report_at_hand() -> ResearchReportAtHand:
+    return ResearchReportAtHand(
+        run_id=uuid.UUID(REPORT_RUN_ID),
+        questions=("What do remote teams struggle with?",),
+        statements=("Remote teams lose notes offline.",),
+        findings=3,
+        finished_at=STARTED,
+    )
+
+
+def test_a_finished_report_reaches_the_writer_without_a_research_step():
+    chat = ScriptedChat(
+        text(a_plan(writing_step(research_from_report="report-1"))), a_review("finish")
+    )
+
+    run = Run(
+        chat,
+        request="Write a post from the research we already have.",
+        reports=(a_report_at_hand(),),
+        chat_history=(ChatLine(role="user", content="Use the report about remote teams."),),
+        children={RUN_WRITING: [writing_end()]},
+    )
+
+    [writing] = run.payloads(RUN_WRITING)
+    assert writing["brief"]["research_run_id"] == REPORT_RUN_ID
+    assert run.names() == [RUN_WRITING]
+    planning = data_of(chat.calls[0]["messages"])
+    assert planning["research_reports"][0]["label"] == "report-1"
+    assert planning["research_reports"][0]["statements"] == ["Remote teams lose notes offline."]
+    assert planning["research_reports"][0]["findings"] == 3
+    assert planning["chat"] == [{"role": "user", "content": "Use the report about remote teams."}]
+    assert REPORT_RUN_ID not in chat.calls[0]["messages"][1]["content"]
+
+
+def test_a_plan_that_rests_on_a_report_the_project_lacks_is_refused_and_asked_once_more():
+    chat = ScriptedChat(
+        text(a_plan(writing_step(research_from_report="report-2"))),
+        text(a_plan(writing_step())),
+        a_review("finish"),
+    )
+
+    run = Run(
+        chat,
+        request="Write a post from the research we already have.",
+        reports=(a_report_at_hand(),),
+        children={RUN_WRITING: [writing_end()]},
+    )
+
+    told = chat.calls[1]["messages"][-1]["content"]
+    assert told.startswith("Rejected.")
+    assert "report-2" in told and "report-1" in told
+    assert run.names() == [RUN_WRITING]
 
 
 def test_a_plan_that_refers_to_a_later_step_is_refused_and_asked_once_more():

@@ -3524,7 +3524,9 @@ export interface components {
          * @description A step that runs the writer, with the earlier steps whose results its brief takes.
          *
          *     ``asset_from_step`` names a studio step, whose asset the post goes with;
-         *     ``research_from_step`` a research step, whose findings the writer may quote.
+         *     ``research_from_step`` a research step, whose findings the writer may quote; and
+         *     ``research_from_report`` a report already finished in the project. A step rests on one
+         *     research source: it names a research step or a report, never both.
          */
         WritingStep: {
             /**
@@ -3539,6 +3541,8 @@ export interface components {
             /** Id */
             id: string;
             request: components["schemas"]["WritingStepRequest"];
+            /** Research From Report */
+            research_from_report?: string | null;
             /** Research From Step */
             research_from_step?: string | null;
         };

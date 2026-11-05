@@ -6,7 +6,9 @@ quotes it relies on), what the code dropped on the way, the cost and the model.
 ``save_research_report`` adds it; the worker marks the run succeeded with its
 id in the same transaction, so a run and its report appear together or not at
 all. ``research_report`` reads a run's report, its asker included (the run
-knows who asked), and refuses a run that has none.
+knows who asked), and refuses a run that has none. ``finished_research_reports``
+lists a project's reports, newest first, which is what a task's planner may rest
+a post on.
 
 A post may draw on the findings of a research run that succeeded
 (``succeeded_research_run``). ``research_findings_for_post`` is what the writer
@@ -29,9 +31,16 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from openmarketer_core.db.models import ResearchReportRecord, ResearchRunStatus
+from openmarketer_core.db.models import (
+    Project,
+    ResearchReportRecord,
+    ResearchRunRecord,
+    ResearchRunStatus,
+)
+from openmarketer_core.db.projects import get_project
 from openmarketer_core.db.research_runs import ResearchRun, research_run
 from openmarketer_core.research.research_agent.rules import (
     MAX_FINDING_SOURCES,
@@ -156,6 +165,29 @@ def research_report(
     if record is None:
         raise ResearchReportNotFound(project_id, run_id)
     return _report(record, run_id=run_id, requested_by=run.requested_by)
+
+
+def finished_research_reports(
+    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, limit: int
+) -> list[ResearchReport]:
+    """The reports of the project's finished research runs, newest first, at most ``limit``.
+
+    A report exists only with a succeeded run (both are written in one transaction), so every
+    report here is one a post may draw on. Raises ``ProjectNotFound`` when the workspace has no
+    such project.
+    """
+    if limit < 1:
+        raise ValueError("a reader asks for at least one report")
+    get_project(session, workspace_id=workspace_id, project_id=project_id)
+    rows = session.execute(
+        select(ResearchRunRecord, ResearchReportRecord)
+        .join(ResearchReportRecord, ResearchReportRecord.id == ResearchRunRecord.report_id)
+        .join(Project, Project.id == ResearchRunRecord.project_id)
+        .where(Project.workspace_id == workspace_id, ResearchRunRecord.project_id == project_id)
+        .order_by(ResearchRunRecord.finished_at.desc(), ResearchRunRecord.id.desc())
+        .limit(limit)
+    ).all()
+    return [_report(record, run_id=run.id, requested_by=run.requested_by) for run, record in rows]
 
 
 def _report(

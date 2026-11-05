@@ -6,8 +6,9 @@ worker's database and models, one method for each thing the agent runtime asks a
 - ``initial_state``: what a task starts from: its request, the installation's default scope
   of a task (the worker's settings) and when it was requested, which its deadline counts from;
 - ``context``: what the nodes of one attempt are given: a chat model of the attempt's own,
-  which answers the role ``orchestrator``, the reading of the project's approved profile, and
-  the clock;
+  which answers the role ``orchestrator``, the reading of the project's approved profile, of
+  the reports of its finished research runs and of the conversation of the chat that asked
+  for the task, and the clock;
 - ``record_progress``: storing the events of each node as it ends (``progress.py`` in core);
 - ``confirm_plan``: the handler of the action ``confirm_plan``. It does nothing: the gate held
   the action for a person and runs it only once the plan was confirmed, which is all it is
@@ -56,12 +57,17 @@ from openmarketer_core.agent_runtime.langgraph_agent import compile_agent
 from openmarketer_core.agent_runtime.langgraph_steps import GraphThread
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
 from openmarketer_core.credentials.resolution import CredentialUnreadable, ModelKeyNotSet
+from openmarketer_core.db.chat import chat_history
 from openmarketer_core.db.media_assets import AssetNotUsable, MediaAssetNotFound
 from openmarketer_core.db.models import TaskStepOutcome
 from openmarketer_core.db.profile_versions import latest_approved_profile
 from openmarketer_core.db.projects import ProjectNotFound
 from openmarketer_core.db.research_runs import ResearchRunNotFound
-from openmarketer_core.db.research_store import ResearchRunNotUsable
+from openmarketer_core.db.research_store import (
+    ResearchReport,
+    ResearchRunNotUsable,
+    finished_research_reports,
+)
 from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.session import transaction
 from openmarketer_core.db.studio_runs import ReferenceAssetNotFound, StudioRunNotFound
@@ -92,8 +98,11 @@ from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.orchestrator.task.failures import TASK_FAILURES
 from openmarketer_core.orchestrator.task.plan import (
+    ChatLine,
+    ResearchReportAtHand,
     StoredTaskInvalid,
     TaskAgentName,
+    TaskAtHand,
     TaskOutcome,
     TaskPlan,
     TaskPlanChange,
@@ -112,7 +121,6 @@ from openmarketer_core.orchestrator.task.task_agent.definitions import (
 )
 from openmarketer_core.orchestrator.task.task_agent.rules import StepStatus, TaskLimits
 from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND, TaskRunInput
-from openmarketer_core.profile import ProductProfile
 from openmarketer_core.research.request import request_research_for_action
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import RUN_STARTED, RunEvent
@@ -161,6 +169,28 @@ RUN_KIND_OF = {
     TaskAgentName.STUDIO: STUDIO_RUN_KIND,
     TaskAgentName.WRITING: WRITING_RUN_KIND,
 }
+# What a task's planner and every review are read of the project: its latest finished reports,
+# a few findings of each, and the newest part of the chat that asked for it. Core bounds what
+# is put in the prompt.
+SHOWN_REPORTS = 10
+SHOWN_REPORT_STATEMENTS = 3
+SHOWN_CHAT_MESSAGES = 40
+
+
+def _report_at_hand(report: ResearchReport) -> ResearchReportAtHand:
+    """A stored report as the task keeps it: its questions, a few statements, its count."""
+    statements = [
+        str(finding.get("statement", ""))
+        for finding in report.findings
+        if isinstance(finding, dict)
+    ]
+    return ResearchReportAtHand(
+        run_id=report.run_id,
+        questions=tuple(report.questions),
+        statements=tuple(statements[:SHOWN_REPORT_STATEMENTS]),
+        findings=len(report.findings),
+        finished_at=report.created_at,
+    )
 
 
 class TaskWork:
@@ -200,7 +230,7 @@ class TaskWork:
         found = self._task_to_execute(run.run_id)
         return TaskContext(
             model=ModelOfTheAttempt(lambda: self._new_model(found.workspace_id)),
-            approved_profile=lambda: self._approved_profile(found),
+            at_hand=lambda: self._at_hand(found),
             now=lambda: datetime.now(UTC),
         )
 
@@ -373,12 +403,36 @@ class TaskWork:
         return _dollars(values.get("cost_usd", 0.0))
 
     # ------------------------------------------------------------------- reading
-    def _approved_profile(self, task: TaskToExecute) -> ProductProfile | None:
+    def _at_hand(self, task: TaskToExecute) -> TaskAtHand:
+        """The project as the task finds it, read once: profile, reports and asking chat."""
         with transaction(self._sessions) as session:
             approved = latest_approved_profile(
                 session, workspace_id=task.workspace_id, project_id=task.project_id
             )
-        return None if approved is None else approved.profile
+            reports = finished_research_reports(
+                session,
+                workspace_id=task.workspace_id,
+                project_id=task.project_id,
+                limit=SHOWN_REPORTS,
+            )
+            messages = (
+                ()
+                if task.chat_thread_id is None
+                else chat_history(
+                    session,
+                    workspace_id=task.workspace_id,
+                    project_id=task.project_id,
+                    chat_id=task.chat_thread_id,
+                )
+            )
+        return TaskAtHand(
+            profile=None if approved is None else approved.profile,
+            reports=tuple(_report_at_hand(report) for report in reports),
+            chat=tuple(
+                ChatLine(role=message.role.value, content=message.content)
+                for message in messages[-SHOWN_CHAT_MESSAGES:]
+            ),
+        )
 
     def _task_to_execute(self, task_id: uuid.UUID) -> TaskToExecute:
         try:
