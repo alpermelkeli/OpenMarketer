@@ -94,6 +94,28 @@ def test_a_studio_step_cannot_carry_a_reference():
         plan({**STUDIO_STEP, "asset_from_step": "image"})
 
 
+def test_a_writing_step_may_rest_on_a_report_at_hand_by_its_label():
+    step = plan({**WRITING_STEP, "research_from_report": "report-2"}).steps[0]
+
+    assert isinstance(step, WritingStep)
+    assert step.research_from_report == "report-2"
+
+
+@pytest.mark.parametrize(
+    "label", ["report-0", "report-one", "4f3072a0-1e4d-4b24-8ee1-2a06f5e7a4f0"]
+)
+def test_a_report_label_is_report_then_a_number(label: str):
+    with pytest.raises(ValidationError):
+        plan({**WRITING_STEP, "research_from_report": label})
+
+
+def test_a_writing_step_rests_on_one_research_source():
+    step = {**WRITING_STEP, "research_from_step": "research", "research_from_report": "report-1"}
+
+    with pytest.raises(ValidationError):
+        plan(step)
+
+
 def test_a_writing_step_keeps_the_rules_of_a_brief():
     step = {**WRITING_STEP, "request": {"platform": "x", "goal": "announce"}}
 

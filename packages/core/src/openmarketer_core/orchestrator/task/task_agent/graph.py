@@ -155,8 +155,8 @@ def _deadline(state: TaskState, plan: TaskPlan) -> datetime:
 # --------------------------------------------------------------------------------- nodes
 @agent.node(start=True)
 def prepare(state: TaskState, context: TaskContext) -> dict[str, Any]:
-    """Keep what the project's approved profile says, for the plan and every review."""
-    return {"project": rules.project_of(context.approved_profile())}
+    """Keep what the task found at the project, for the plan and every review."""
+    return {"at_hand": rules.at_hand_data(context.at_hand())}
 
 
 @agent.node
@@ -169,11 +169,14 @@ def plan(state: TaskState, context: TaskContext) -> dict[str, Any]:
     spent = _Spent()
     submitted = _ask(
         context,
-        rules.plan_messages(request, state["project"], limits),
+        rules.plan_messages(request, state["at_hand"], limits),
         model_type=TaskPlan,
         shaped=rules.plan_data,
         problems=lambda proposed: rules.plan_problems(
-            proposed, request=request["request"], project=state["project"]
+            proposed,
+            request=request["request"],
+            project=state["at_hand"]["project"],
+            reports=state["at_hand"]["research_reports"],
         ),
         spent=spent,
     )
@@ -194,7 +197,8 @@ def check(state: TaskState) -> dict[str, Any]:
     problems = rules.plan_problems(
         proposed,
         request=state["request"]["request"],
-        project=state["project"],
+        project=state["at_hand"]["project"],
+        reports=state["at_hand"]["research_reports"],
         steps=state["steps"],
         accepted=accepted,
         plan_changes=state["plan_changes"],
@@ -252,7 +256,7 @@ def dispatch(state: TaskState) -> dict[str, Any]:
     steps = [dict(record) for record in state["steps"]]
     record = next(record for record in steps if record["id"] == step.id)
     try:
-        asked = rules.request_of(step, state["steps"])
+        asked = rules.request_of(step, state["steps"], state["at_hand"]["research_reports"])
     except ReferenceNotResolved as e:
         record.update(status=StepStatus.FAILED.value, error=str(e))
     else:
@@ -307,7 +311,7 @@ def review(state: TaskState, context: TaskContext) -> dict[str, Any]:
         context,
         rules.review_messages(
             state["request"],
-            state["project"],
+            state["at_hand"],
             state["plan"],
             state["steps"],
             state["finished_step"],
@@ -340,7 +344,8 @@ def _change_problems(state: TaskState, decided: Review) -> list[str]:
     return rules.plan_problems(
         decided.plan,
         request=state["request"]["request"],
-        project=state["project"],
+        project=state["at_hand"]["project"],
+        reports=state["at_hand"]["research_reports"],
         steps=state["steps"],
         accepted=state["plan"],
         plan_changes=state["plan_changes"],

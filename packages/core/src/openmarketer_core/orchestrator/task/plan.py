@@ -8,10 +8,17 @@ step is one run of an agent the task may start, with its request, the steps it w
 
 A step's request is the agent's own schema read just as strictly, minus what a reference
 replaces: a model never writes an id. So a writing step has no ``asset`` and no
-``research_run_id``; it names a studio step in ``asset_from_step`` and a research step in
-``research_from_step``, and code puts the ids of their results in the brief when the step is
-dispatched (``WritingStepRequest.brief_with``). A studio step names no reference assets: its
-style refers to nothing. A research step's request is a ``ResearchRequest`` as it is.
+``research_run_id``; it names a studio step in ``asset_from_step``, a research step in
+``research_from_step``, or one of the project's finished reports in
+``research_from_report`` (``report-1``, ``report-2`` ..., the labels code gives the reports it
+puts at hand), and code puts the ids of their results in the brief when the step is dispatched
+(``WritingStepRequest.brief_with``). A studio step names no reference assets: its style refers
+to nothing. A research step's request is a ``ResearchRequest`` as it is.
+
+What the project already has is read once, as a ``TaskAtHand``: the approved profile, the
+reports of its finished research runs and the conversation of the chat that asked for the
+task. Code gives the reports their labels and builds what the model is shown, so the planner
+chooses among labels rather than ids (``task_agent/rules.py``).
 
 This module holds the schemas only. Whether a reference points backwards to a step of the
 right agent, whether ``depends_on`` names steps of the plan, whether the plan keeps to the
@@ -23,6 +30,8 @@ nothing is read leniently. This module reaches no database and no network.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -36,7 +45,7 @@ from pydantic import (
     model_validator,
 )
 
-from openmarketer_core.profile import FeatureId
+from openmarketer_core.profile import FeatureId, ProductProfile
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import (
@@ -60,6 +69,7 @@ MAX_REQUEST_CHARS = 2000
 MAX_UNDERSTANDING_CHARS = 1000
 MAX_TASK_GOAL_CHARS = 500
 MAX_STEP_ID_CHARS = 32
+MAX_REPORT_LABEL_CHARS = 16
 MAX_REPORT_CHARS = 4000
 MAX_CHANGE_REASON_CHARS = 500
 MAX_REPORT_ITEMS = 50
@@ -91,6 +101,10 @@ TaskGoal = Annotated[
 # A step's name within its plan, such as ``image`` or ``post-1``: a label the plan chooses,
 # never the id of a record.
 StepId = Annotated[str, Field(pattern=r"^[a-z0-9]+(-[a-z0-9]+)*$", max_length=MAX_STEP_ID_CHARS)]
+# One of the labels code gives the project's finished research reports, such as ``report-1``.
+ReportLabel = Annotated[
+    str, Field(pattern=r"^report-[1-9][0-9]*$", max_length=MAX_REPORT_LABEL_CHARS)
+]
 ChangeReason = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_CHANGE_REASON_CHARS),
@@ -116,6 +130,45 @@ class TaskRequest(BaseModel):
 
     request: Request
     understanding: Understanding
+
+
+@dataclass(frozen=True)
+class ResearchReportAtHand:
+    """One finished research run's report the task may rest a post on.
+
+    The run's id is kept in the task's state and never shown to the model; the label the model
+    names is code's (``rules.reports_of``). ``statements`` is a few of the report's findings,
+    enough for the planner to judge whether the report bears on the request.
+    """
+
+    run_id: uuid.UUID
+    questions: tuple[str, ...]
+    statements: tuple[str, ...]
+    findings: int
+    finished_at: datetime
+
+
+@dataclass(frozen=True)
+class ChatLine:
+    """One message of the chat that asked for the task, as the planner reads it."""
+
+    role: str
+    content: str
+
+
+@dataclass(frozen=True)
+class TaskAtHand:
+    """The project as the task reads it once, for the plan and every review.
+
+    The worker fills it from the project's records in one read: the approved profile, the
+    reports of its finished research runs, newest first, and the conversation of the chat that
+    asked for the task, oldest first. Only ``prepare`` reads it; what the model is shown is
+    built from it by code (``rules.at_hand_data``).
+    """
+
+    profile: ProductProfile | None
+    reports: tuple[ResearchReportAtHand, ...]
+    chat: tuple[ChatLine, ...]
 
 
 class TaskAgentName(StrEnum):
@@ -200,7 +253,9 @@ class WritingStep(BaseModel):
     """A step that runs the writer, with the earlier steps whose results its brief takes.
 
     ``asset_from_step`` names a studio step, whose asset the post goes with;
-    ``research_from_step`` a research step, whose findings the writer may quote.
+    ``research_from_step`` a research step, whose findings the writer may quote; and
+    ``research_from_report`` a report already finished in the project. A step rests on one
+    research source: it names a research step or a report, never both.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -211,6 +266,16 @@ class WritingStep(BaseModel):
     depends_on: StepIds = Field(default_factory=list)
     asset_from_step: StepId | None = None
     research_from_step: StepId | None = None
+    research_from_report: ReportLabel | None = None
+
+    @model_validator(mode="after")
+    def _one_research_reference(self) -> WritingStep:
+        if self.research_from_step is not None and self.research_from_report is not None:
+            raise ValueError(
+                "a writing step names its research once: research_from_step or "
+                "research_from_report, not both"
+            )
+        return self
 
 
 TaskStep = Annotated[ResearchStep | StudioStep | WritingStep, Field(discriminator="agent")]

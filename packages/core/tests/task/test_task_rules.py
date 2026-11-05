@@ -1,16 +1,33 @@
 """Tests for the rules a task's plan keeps to, which code holds and the prompt only repeats."""
 
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
-from openmarketer_core.orchestrator.task.plan import TaskPlan
+import pytest
+
+from openmarketer_core.orchestrator.task.plan import (
+    ChatLine,
+    ResearchReportAtHand,
+    TaskAtHand,
+    TaskPlan,
+    WritingStep,
+)
 from openmarketer_core.orchestrator.task.task_agent.rules import (
+    ReferenceNotResolved,
     TaskLimits,
+    at_hand_data,
+    chat_of,
     needs_confirmation,
+    plan_messages,
     plan_problems,
     project_of,
+    reports_of,
+    request_of,
     step_outcome,
 )
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.writing.brief import WritingBrief
 
 PROJECT = project_of(
     ProductProfile.model_validate(
@@ -183,3 +200,90 @@ def test_a_research_runs_projection_gives_how_many_findings_its_report_holds():
     answered = {"report_id": "p1", "findings": 3, "run_id": "r1"}
 
     assert step_outcome("research", answered) == {"findings": 3, "statements": [], "cost_usd": 0.0}
+
+
+# ---------------------------------------------------------------- the reports at hand
+def a_report(*, questions: tuple[str, ...] = ("What do teams say?",)) -> ResearchReportAtHand:
+    return ResearchReportAtHand(
+        run_id=uuid.uuid4(),
+        questions=questions,
+        statements=("Remote teams lose notes offline.",),
+        findings=2,
+        finished_at=datetime(2026, 11, 1, 9, 0, tzinfo=UTC),
+    )
+
+
+def test_reports_at_hand_are_labelled_by_code_newest_first():
+    reports = reports_of([a_report(), a_report(questions=("Why offline?",))])
+
+    assert [report["label"] for report in reports] == ["report-1", "report-2"]
+    assert reports[1]["questions"] == ["Why offline?"]
+    assert reports[0]["statements"] == ["Remote teams lose notes offline."]
+    assert reports[0]["findings"] == 2
+
+
+def test_a_post_may_rest_on_a_report_at_hand():
+    reports = reports_of([a_report()])
+    step = {**post(), "research_from_report": "report-1"}
+
+    assert plan_problems(plan_of(step), request="A post.", project=PROJECT, reports=reports) == []
+
+
+def test_a_post_cannot_rest_on_a_report_the_project_lacks():
+    [problem] = plan_problems(
+        plan_of({**post(), "research_from_report": "report-2"}),
+        request="A post.",
+        project=PROJECT,
+        reports=reports_of([a_report()]),
+    )
+
+    assert "report-2" in problem and "report-1" in problem
+
+
+def test_a_report_at_hand_is_resolved_to_its_runs_id():
+    report = a_report()
+    reports = reports_of([report])
+    step = WritingStep.model_validate({**post(), "research_from_report": "report-1"})
+
+    brief = request_of(step, [], reports)
+
+    assert isinstance(brief, WritingBrief)
+    assert brief.research_run_id == report.run_id
+
+
+def test_a_report_that_is_not_at_hand_cannot_be_resolved():
+    step = WritingStep.model_validate({**post(), "research_from_report": "report-1"})
+
+    with pytest.raises(ReferenceNotResolved):
+        request_of(step, [], [])
+
+
+def test_the_plan_is_shown_the_chat_and_the_reports_without_a_runs_id():
+    report = a_report()
+    at_hand = at_hand_data(
+        TaskAtHand(
+            profile=None,
+            reports=(report,),
+            chat=(ChatLine(role="user", content="Write about the report."),),
+        )
+    )
+
+    messages = plan_messages(
+        {"request": "A post.", "understanding": "One post."}, at_hand, TaskLimits()
+    )
+
+    data = messages[1]["content"]
+
+    assert "report-1" in data and str(report.run_id) not in data
+    assert "Remote teams lose notes offline." in data
+    assert "Write about the report." in data
+
+
+def test_the_chat_is_shown_its_newest_messages_oldest_first():
+    lines = [ChatLine(role="user", content=f"message {number}") for number in range(30)]
+
+    shown = chat_of(lines)
+
+    assert len(shown) == 20
+    assert [line["content"] for line in shown][0] == "message 10"
+    assert shown[-1]["content"] == "message 29"

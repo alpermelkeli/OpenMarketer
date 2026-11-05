@@ -60,9 +60,13 @@ from openmarketer_core.orchestrator.task.plan import (
     MAX_TASK_DEADLINE_DAYS,
     MAX_TASK_PLAN_CHANGES,
     MAX_TASK_STEPS,
+    ChatLine,
+    ReportLabel,
+    ResearchReportAtHand,
     ResearchStep,
     StudioStep,
     TaskAgentName,
+    TaskAtHand,
     TaskPlan,
     TaskReport,
     TaskScope,
@@ -96,6 +100,15 @@ MAX_SHOWN_FINDING_CHARS = 300
 MAX_SHOWN_POST_CHARS = 600
 MAX_REASON_CHARS = 500
 MAX_PROBLEMS = 12
+# What the plan and every review are shown of the project's finished reports and of the chat
+# that asked for the task: enough to choose, bounded so the prompt stays small.
+MAX_SHOWN_REPORTS = 10
+MAX_SHOWN_REPORT_QUESTIONS = 5
+MAX_SHOWN_REPORT_STATEMENTS = 3
+MAX_SHOWN_QUESTION_CHARS = 300
+MAX_SHOWN_CHAT_MESSAGES = 20
+MAX_SHOWN_CHAT_MESSAGE_CHARS = 1000
+MAX_SHOWN_CHAT_CHARS = 4000
 # What a change of plan is recorded with when the review gave no reason for it.
 CHANGE_WITHOUT_REASON = "the review changed the plan"
 # The near synonyms a weak model names an agent by.
@@ -221,6 +234,63 @@ def project_of(profile: ProductProfile | None) -> dict[str, Any]:
     }
 
 
+# ------------------------------------------------------------------ what is at hand
+def at_hand_data(at_hand: TaskAtHand) -> dict[str, Any]:
+    """What the task keeps of the project it found, for the plan and every review."""
+    return {
+        "project": project_of(at_hand.profile),
+        "research_reports": reports_of(at_hand.reports),
+        "chat": chat_of(at_hand.chat),
+    }
+
+
+def reports_of(reports: Sequence[ResearchReportAtHand]) -> list[dict[str, Any]]:
+    """The project's finished reports, newest first, each labelled by code as ``report-N``.
+
+    The label is what a plan names in ``research_from_report``; the run's id stays in the
+    state, and the messages shown to the model leave it out. A few finding statements go with
+    each report, enough for the planner to judge whether it bears on the request.
+    """
+    return [
+        {
+            "label": f"report-{number}",
+            "run_id": str(report.run_id),
+            "questions": [
+                _bounded(question, MAX_SHOWN_QUESTION_CHARS)
+                for question in report.questions[:MAX_SHOWN_REPORT_QUESTIONS]
+            ],
+            "statements": [
+                _bounded(statement, MAX_SHOWN_FINDING_CHARS)
+                for statement in report.statements[:MAX_SHOWN_REPORT_STATEMENTS]
+            ],
+            "findings": report.findings,
+            "finished_at": report.finished_at.isoformat(),
+        }
+        for number, report in enumerate(reports[:MAX_SHOWN_REPORTS], start=1)
+    ]
+
+
+def chat_of(messages: Sequence[ChatLine]) -> list[dict[str, Any]]:
+    """The chat that asked for the task, its newest messages that fit the prompt, oldest first."""
+    kept: list[dict[str, Any]] = []
+    length = 0
+    for line in reversed(messages):
+        if len(kept) >= MAX_SHOWN_CHAT_MESSAGES:
+            break
+        content = _bounded(line.content, MAX_SHOWN_CHAT_MESSAGE_CHARS)
+        if kept and length + len(content) > MAX_SHOWN_CHAT_CHARS:
+            break
+        kept.append({"role": line.role, "content": content})
+        length += len(content)
+    kept.reverse()
+    return kept
+
+
+def _shown_reports(reports: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The reports as the model reads them: the label and what it says, never the run's id."""
+    return [{key: value for key, value in report.items() if key != "run_id"} for report in reports]
+
+
 # ------------------------------------------------------------------------- reading answers
 _FENCE = re.compile(r"^\s*```(?:json)?\s*(?P<body>.*?)\s*```\s*$", re.DOTALL)
 
@@ -304,6 +374,7 @@ def plan_problems(
     *,
     request: str,
     project: Mapping[str, Any],
+    reports: Sequence[Mapping[str, Any]] = (),
     steps: Sequence[Mapping[str, Any]] = (),
     accepted: Mapping[str, Any] | None = None,
     plan_changes: int = 0,
@@ -311,9 +382,10 @@ def plan_problems(
     """What the plan breaks of the rules code holds, worded for the model to correct; [] if none.
 
     ``request`` is the operator's words, which a studio step's copy may take verbatim.
-    ``project`` is ``project_of`` the approved profile. For a change of plan, ``accepted`` is
-    the plan in force (as JSON data), ``steps`` the state's record of its steps and
-    ``plan_changes`` how many changes the task made so far.
+    ``project`` is ``project_of`` the approved profile and ``reports`` ``reports_of`` the
+    project's finished research runs. For a change of plan, ``accepted`` is the plan in force
+    (as JSON data), ``steps`` the state's record of its steps and ``plan_changes`` how many
+    changes the task made so far.
     """
     problems: list[str] = []
     if len(plan.steps) > plan.scope.max_steps:
@@ -322,6 +394,7 @@ def plan_problems(
         )
     earlier: dict[str, str] = {}
     image_platforms: dict[str, Platform] = {}
+    known_reports = {report["label"] for report in reports}
     for step in plan.steps:
         problems.extend(_order_problems(step, earlier))
         if isinstance(step, StudioStep):
@@ -329,6 +402,7 @@ def plan_problems(
             image_platforms[step.id] = step.request.platform
         if isinstance(step, WritingStep):
             problems.extend(_writing_problems(step, project))
+            problems.extend(_report_problems(step, known_reports))
             problems.extend(_image_problems(step, image_platforms))
         earlier[step.id] = step.agent
     if accepted is not None:
@@ -401,6 +475,25 @@ def _writing_problems(step: WritingStep, project: Mapping[str, Any]):
                 f"step {step.id!r} announces {shown(announced)}, which is not a live feature "
                 "of the profile: announce one of live_features"
             )
+
+
+def _report_problems(step: WritingStep, known: set[str]):
+    """A report the post rests on is one of the reports the project has at hand."""
+    label = step.research_from_report
+    if label is None or label in known:
+        return
+    if known:
+        yield (
+            f"research_from_report of step {step.id!r} names {shown(label)}, which is not a "
+            f"report of the project: use one of {', '.join(sorted(known))}, or plan a research "
+            "step and name it in research_from_step"
+        )
+    else:
+        yield (
+            f"research_from_report of step {step.id!r} names {shown(label)}, and the project has "
+            "no finished research reports: plan a research step and name it in "
+            "research_from_step"
+        )
 
 
 def _image_problems(step: WritingStep, image_platforms: Mapping[str, Platform]):
@@ -585,11 +678,15 @@ class ReferenceNotResolved(Exception):
 
 
 def request_of(
-    step: ResearchStep | StudioStep | WritingStep, steps: Sequence[Mapping[str, Any]]
+    step: ResearchStep | StudioStep | WritingStep,
+    steps: Sequence[Mapping[str, Any]],
+    reports: Sequence[Mapping[str, Any]] = (),
 ) -> ResearchRequest | AssetRequest | WritingBrief:
     """What the step's run is asked, with every reference resolved from earlier outcomes.
 
-    Raises ``ReferenceNotResolved`` when a referenced step's outcome has no asset or run id.
+    A writing step's research comes from an earlier research step or from a report at hand.
+    Raises ``ReferenceNotResolved`` when a referenced step's outcome has no asset or run id,
+    or when a report the step names is not at hand.
     """
     if isinstance(step, ResearchStep):
         return step.request
@@ -598,6 +695,8 @@ def request_of(
     records = {record["id"]: record for record in steps}
     asset = _resolved(records, step.asset_from_step, "asset_id")
     research = _resolved(records, step.research_from_step, "run_id")
+    if research is None and step.research_from_report is not None:
+        research = _report_run(reports, step.research_from_report)
     return step.request.brief_with(asset=asset, research_run_id=research)
 
 
@@ -613,6 +712,17 @@ def _resolved(
         return uuid.UUID(str(value))
     except ValueError:
         raise ReferenceNotResolved(f"step {step_id!r} has no {key}") from None
+
+
+def _report_run(reports: Sequence[Mapping[str, Any]], label: ReportLabel) -> uuid.UUID:
+    """The run id of the report labelled ``label`` among those at hand."""
+    for report in reports:
+        if report.get("label") == label:
+            try:
+                return uuid.UUID(str(report.get("run_id")))
+            except ValueError:
+                break
+    raise ReferenceNotResolved(f"report {label!r} is not at hand")
 
 
 def step_outcome(agent: str, result: Mapping[str, Any]) -> dict[str, Any]:
@@ -721,6 +831,9 @@ null, "angle": text or null, "variants": 1 to 5}}.
 - A writing step may take an earlier step's result by reference: "asset_from_step", the id \
 of a studio step whose image the post goes with, and "research_from_step", the id of a \
 research step whose findings it may quote. Never write an id of a record: code puts them in.
+- A writing step may instead rest on a report the project already has: "research_from_report" \
+names one of "research_reports" by its label, such as "report-1". It gives one research \
+reference, "research_from_step" or "research_from_report", never both.
 - A step refers only to steps listed before it.
 
 A post
@@ -729,8 +842,12 @@ first, then the writing step with "asset_from_step" naming it. Without: the writ
 - An Instagram post is always an image with its caption: a studio step for \
 {_INSTAGRAM_IMAGES} first, then a writing step for "instagram" whose "asset_from_step" names \
 it. The image of a post is made for the post's platform.
-- Research that a post rests on is a research step before the writing step, named in \
-"research_from_step".
+- Research that a post rests on is a finished report when the project has one whose questions \
+bear on the post: name it in "research_from_report" and plan no research step. Plan a research \
+step and name it in "research_from_step" when no report at hand answers the post, or when the \
+operator asks for new research.
+- The chat conversation, and the understanding when it names reports, say why a request was \
+made; they are not steps to take.
 
 An image's copy
 - What the operator gives is followed exactly: words they give for the image go into \
@@ -744,8 +861,9 @@ PLAN_SYSTEM_PROMPT = f"""\
 You are the orchestrator of OpenMarketer, planning a task: a request of the operator that \
 needs one or more of the agents below. You do none of the agents' work: you give each its \
 request, and the code runs them in order. You are given, as data, the operator's request in \
-their own words, the chat's understanding of it, what the project's approved profile says, \
-and the installation's default scope of a task.
+their own words, the chat's understanding of it and the conversation it came from, what the \
+project's approved profile says, the reports of the project's finished research runs, and the \
+installation's default scope of a task.
 
 {_STEPS_TEXT}
 Scope
@@ -768,9 +886,10 @@ n, "max_plan_changes": n, "deadline_days": n, "max_cost_usd": n}}}}
 
 REVIEW_SYSTEM_PROMPT = f"""\
 You are the orchestrator of OpenMarketer, reviewing a task after one of its steps finished. \
-You are given, as data, the operator's request, the plan in force, every step with what its \
-run gave (its status, the post and whether a person approved or rejected it, the image, the \
-findings), and what the task has left of its scope.
+You are given, as data, the operator's request and the chat's understanding of it, the plan in \
+force, every step with what its run gave (its status, the post and whether a person approved or \
+rejected it, the image, the findings), the reports of the project's finished research runs, \
+and what the task has left of its scope.
 
 Decide one of
 - "dispatch_next": the plan is still right; the next step whose waits succeeded runs.
@@ -801,13 +920,20 @@ def _user(data: Mapping[str, Any], instruction: str) -> dict[str, Any]:
 
 
 def plan_messages(
-    request: Mapping[str, Any], project: Mapping[str, Any], limits: TaskLimits
+    request: Mapping[str, Any], at_hand: Mapping[str, Any], limits: TaskLimits
 ) -> list[dict[str, Any]]:
-    """What the orchestrator is sent to plan the task."""
+    """What the orchestrator is sent to plan the task.
+
+    ``at_hand`` is ``at_hand_data`` the project it found: its approved profile, its finished
+    research reports and the chat that asked. The reports' run ids are left out.
+    """
     data = {
         "request": request["request"],
         "understanding": request["understanding"],
-        "project": dict(project) or "The project has no approved Product Profile.",
+        "chat": [dict(line) for line in at_hand["chat"]],
+        "project": dict(at_hand["project"]) or "The project has no approved Product Profile.",
+        "research_reports": _shown_reports(at_hand["research_reports"])
+        or "The project has no finished research reports.",
         "default_scope": limits.as_data(),
     }
     return [{"role": "system", "content": PLAN_SYSTEM_PROMPT}, _user(data, "Plan the task.")]
@@ -833,7 +959,7 @@ class Left:
 
 def review_messages(
     request: Mapping[str, Any],
-    project: Mapping[str, Any],
+    at_hand: Mapping[str, Any],
     plan: Mapping[str, Any],
     steps: Sequence[Mapping[str, Any]],
     finished: str,
@@ -843,7 +969,10 @@ def review_messages(
     data = {
         "request": request["request"],
         "understanding": request["understanding"],
-        "project": dict(project) or "The project has no approved Product Profile.",
+        "chat": [dict(line) for line in at_hand["chat"]],
+        "project": dict(at_hand["project"]) or "The project has no approved Product Profile.",
+        "research_reports": _shown_reports(at_hand["research_reports"])
+        or "The project has no finished research reports.",
         "plan": dict(plan),
         "steps": [_shown_step(record) for record in steps],
         "finished_step": finished,

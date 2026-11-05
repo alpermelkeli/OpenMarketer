@@ -9,9 +9,10 @@ what it takes with it.
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from openmarketer_core.db.chat import ChatNotFound, create_chat
@@ -37,7 +38,10 @@ from openmarketer_core.db.research_runs import (
     request_research_run,
     research_run,
 )
-from openmarketer_core.db.research_store import save_research_report
+from openmarketer_core.db.research_store import (
+    finished_research_reports,
+    save_research_report,
+)
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import Report
 
@@ -267,6 +271,31 @@ def finished_run_with_pages(
         ),
     )
     return mark_run_succeeded(session, **ids(project), run_id=run.id, report_id=report.id)
+
+
+def test_finished_reports_are_the_projects_own_newest_first(session, project):
+    first = finished_run_with_pages(session, project, storage_keys=("one",))
+    second = finished_run_with_pages(session, project, storage_keys=("two",))
+    unfinished = run_with_pages(session, project, storage_keys=("three",))
+    other = new_project(session)
+    finished_run_with_pages(session, other, storage_keys=("four",))
+    session.execute(
+        update(ResearchRunRecord)
+        .where(ResearchRunRecord.id == first.id)
+        .values(finished_at=datetime(2026, 11, 1, tzinfo=UTC))
+    )
+    session.execute(
+        update(ResearchRunRecord)
+        .where(ResearchRunRecord.id == second.id)
+        .values(finished_at=datetime(2026, 11, 2, tzinfo=UTC))
+    )
+
+    reports = finished_research_reports(session, **ids(project), limit=10)
+    [newest] = finished_research_reports(session, **ids(project), limit=1)
+
+    assert [report.run_id for report in reports] == [second.id, first.id]
+    assert newest.run_id == second.id
+    assert unfinished.id not in [report.run_id for report in reports]
 
 
 def rows_for_run(session: Session, run: ResearchRun) -> tuple[int, int, int]:
