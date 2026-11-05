@@ -231,6 +231,14 @@ def test_the_list_shows_each_task_with_its_goal_and_without_its_plan(
 def test_the_list_is_paged_newest_first(client: TestClient, session, scope):
     older = queued_task(session, scope)
     newer = queued_task(session, scope)
+    # Both are stored in the test's one transaction, at the same time: the older is moved back.
+    session.execute(
+        text(
+            "UPDATE orchestrator_task SET created_at = created_at - interval '1 minute' "
+            "WHERE id = :id"
+        ),
+        {"id": older},
+    )
 
     first = client.get(tasks_url(scope), params={"limit": 1}).json()
     second = client.get(
