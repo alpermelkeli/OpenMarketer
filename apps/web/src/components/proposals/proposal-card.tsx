@@ -70,7 +70,7 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
           </blockquote>
           <ProposedPostImage proposal={proposal} />
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-            <span>The writer sends nothing to X yet: an approved post is recorded as a dry run.</span>
+            <span>The writer sends nothing to a platform yet: an approved post is recorded as a dry run.</span>
             <Link
               href={writingHref(proposal.project_id, proposal.run_id)}
               className="inline-flex items-center gap-1 rounded-sm text-brand underline-offset-4 hover:underline"

@@ -1,4 +1,5 @@
 import { postLengthOf, variantLabel, type Alternative } from "@/lib/writing/record";
+import { countedAs } from "@/lib/writing/status";
 
 import { CodeChecks, CriticReview, FlaggedNumbers } from "./post-checks";
 
@@ -7,7 +8,14 @@ import { CodeChecks, CriticReview, FlaggedNumbers } from "./post-checks";
  * found of it. A person reads them to see what was weighed; the gate approves or rejects the post
  * only, so none of them can be chosen here. Every text was written by a model: shown as text only.
  */
-export function PostAlternatives({ alternatives }: { alternatives: readonly Alternative[] }) {
+export function PostAlternatives({
+  alternatives,
+  platform,
+}: {
+  alternatives: readonly Alternative[];
+  /** The post's platform, whose count each length is. */
+  platform: string;
+}) {
   return (
     <section aria-labelledby="alternatives" className="grid gap-4 border-t pt-8">
       <div className="max-w-prose">
@@ -34,7 +42,7 @@ export function PostAlternatives({ alternatives }: { alternatives: readonly Alte
                 <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                   {length !== null && (
                     <span className={length.kept === false ? "text-destructive" : undefined}>
-                      Counts <span className="font-mono tabular-nums">{length.count}</span> as X counts it
+                      Counts <span className="font-mono tabular-nums">{length.count}</span> {countedAs(platform)}
                       {length.kept === false && ", over its limit"}
                     </span>
                   )}

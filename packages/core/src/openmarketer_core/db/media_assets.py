@@ -19,9 +19,11 @@ the workspace lock like every person's write of a workspace.
 
 A post may go with an asset of the library (``usable_asset``, ``asset_for_post``): one that was
 not rejected, whose run has ended and left it an image, and, while it is a draft, whose run
-ended with it (succeeded, or waits for a person). The writer reads what the asset's run was
-asked, its goal and exact words, and never its image. The visual concept the studio's director
-chose is not stored outside the run's checkpoints, so it is not part of that reading.
+ended with it (succeeded, or waits for a person); and one made for a platform whose images fit
+the post's (``writing/platforms.image_fits``: an Instagram post goes with an Instagram image).
+The writer reads what the asset's run was asked, its goal and exact words, and never its image.
+The visual concept the studio's director chose is not stored outside the run's checkpoints, so
+it is not part of that reading.
 
 Every function is scoped to a workspace and a project, takes a session and never commits; an
 asset or version of another workspace or project is treated as missing. Assets are deleted
@@ -66,6 +68,8 @@ from openmarketer_core.db.workspace_lock import wait_for_other_writes
 from openmarketer_core.studio.asset_store import ASSETS_PREFIX, EXTENSIONS
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.sandbox import ImageMime
+from openmarketer_core.writing.brief import WritingPlatform
+from openmarketer_core.writing.platforms import image_fits, platform_rules
 
 # The name of the unique constraint two attempts at one action meet.
 VERSION_ACTION_CONSTRAINT = "uq_media_asset_version_action_id"
@@ -109,6 +113,16 @@ ASSET_REJECTED = "a person rejected it"
 ASSET_UNFINISHED = "its studio run is still making it"
 ASSET_WITHOUT_IMAGE = "it has no image"
 ASSET_OF_FAILED_RUN = "its studio run failed and nobody accepted it"
+
+
+def asset_for_another_platform(image_platform: str, post_platform: WritingPlatform) -> str:
+    """Why an image made for ``image_platform`` cannot go with a post on ``post_platform``."""
+    rules = platform_rules(post_platform)
+    fitting = ", ".join(sorted(platform.value for platform in rules.image_platforms))
+    return (
+        f"it was made for {image_platform}, and a post on {rules.name} goes with an image "
+        f"made for {fitting}"
+    )
 
 
 class MediaAssetVersionReviewed(Exception):
@@ -317,26 +331,36 @@ def media_asset(
 
 
 def usable_asset(
-    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, asset_id: uuid.UUID
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    asset_id: uuid.UUID,
+    post_platform: WritingPlatform,
 ) -> MediaAsset:
-    """The asset, if a post can go with it as it is now (see the module).
+    """The asset, if a post on ``post_platform`` can go with it as it is now (see the module).
 
     Raises ``MediaAssetNotFound`` when the project has no such asset, and ``AssetNotUsable``
     with the reason otherwise.
     """
-    record, _ = _usable_asset(session, workspace_id, project_id, asset_id)
+    record, _ = _usable_asset(session, workspace_id, project_id, asset_id, post_platform)
     return _asset(record)
 
 
 def asset_for_post(
-    session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, asset_id: uuid.UUID
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    asset_id: uuid.UUID,
+    post_platform: WritingPlatform,
 ) -> AssetForPost:
-    """The asset as the writer is shown it, if a post can go with it.
+    """The asset as the writer is shown it, if a post on ``post_platform`` can go with it.
 
     Raises ``MediaAssetNotFound``, ``AssetNotUsable`` (as ``usable_asset``) and
     ``StoredAssetRequestInvalid`` when its run's stored request no longer fits its schema.
     """
-    record, version_id = _usable_asset(session, workspace_id, project_id, asset_id)
+    record, version_id = _usable_asset(session, workspace_id, project_id, asset_id, post_platform)
     request = requested_asset(
         session, workspace_id=workspace_id, project_id=project_id, run_id=record.run_id
     )
@@ -499,9 +523,13 @@ def _decide(
 
 
 def _usable_asset(
-    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID, asset_id: uuid.UUID
+    session: Session,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    asset_id: uuid.UUID,
+    post_platform: WritingPlatform,
 ) -> tuple[MediaAssetRecord, uuid.UUID]:
-    """The asset a post can go with, and its current version."""
+    """The asset a post on ``post_platform`` can go with, and its current version."""
     found = session.execute(
         _assets_of_project(workspace_id, project_id)
         .add_columns(StudioRunRecord.status)
@@ -520,6 +548,8 @@ def _usable_asset(
         raise AssetNotUsable(asset_id, ASSET_WITHOUT_IMAGE)
     if record.status is MediaAssetStatus.DRAFT and run_status not in WITH_ASSET:
         raise AssetNotUsable(asset_id, ASSET_OF_FAILED_RUN)
+    if not image_fits(post_platform, Platform(record.platform)):
+        raise AssetNotUsable(asset_id, asset_for_another_platform(record.platform, post_platform))
     return record, version_id
 
 

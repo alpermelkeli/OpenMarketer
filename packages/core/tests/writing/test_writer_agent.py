@@ -817,6 +817,33 @@ def test_a_post_with_an_asset_names_it_and_its_version_in_the_draft_and_the_prop
     assert run.result.research_run_id is None
 
 
+def test_an_instagram_caption_longer_than_a_post_on_x_is_proposed_with_its_image():
+    caption = (
+        "Your notes keep up when the connection does not.\n\n"
+        + "Write on the plane, in the tunnel, at the cabin. " * 8
+        + "\n\nLink in bio.\n\n#notes #offline #productivity"
+    )
+    instagram = WritingBrief(
+        platform=WritingPlatform.INSTAGRAM, goal=WritingGoal.INTRODUCE, variants=1, asset=ASSET_ID
+    )
+    chat = ScriptedChat(
+        writer=[a_plan(), a_draft(a_variant(caption))], critic=[a_report(a_review(0))]
+    )
+
+    run = Run(
+        chat,
+        brief=instagram,
+        post_image=lambda asset_id: an_asset(platform=Platform.INSTAGRAM_PORTRAIT),
+    )
+
+    [(_, draft), (_, proposal)] = run.asked
+    assert proposal["text"] == caption.strip()
+    assert proposal["asset_version_id"] == str(ASSET_VERSION_ID)
+    assert draft["check_report"]["passed"]
+    assert draft["check_report"]["length"] > 280
+    assert "Instagram" in chat.sent_to("writer")[1][0]["content"]
+
+
 def test_every_model_is_shown_what_the_image_was_asked_for_and_never_its_ids():
     chat = ScriptedChat(writer=[a_plan(), a_draft(a_variant())], critic=[a_report(a_review(0))])
 

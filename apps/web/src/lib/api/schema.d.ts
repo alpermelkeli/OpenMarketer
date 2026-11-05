@@ -991,13 +991,14 @@ export interface paths {
          *     The post it proposes waits for a person on its proposal.
          *
          *     The brief may name `asset`, an image of the project's Studio library the post goes with,
-         *     and `research_run_id`, a research run of the project whose findings it may draw on. One
-         *     the project does not have is a 404 (`media_asset_not_found`, `research_not_found`); 409
-         *     `media_asset_not_usable` when the asset was rejected, has no image or is still being
-         *     made, and 409 `research_not_usable` when the research run has not succeeded. 503
-         *     `writing_not_started` when
-         *     the run could not be handed to a worker: it is then stored as failed and a new one can be
-         *     started.
+         *     and `research_run_id`, a research run of the project whose findings it may draw on. A
+         *     post for `instagram` is an image with its caption, so its brief must name an `asset`
+         *     (422 otherwise). One the project does not have is a 404 (`media_asset_not_found`,
+         *     `research_not_found`); 409 `media_asset_not_usable` when the asset was rejected, has no
+         *     image, is still being made or was made for another platform (an Instagram post goes with
+         *     an `instagram_*` image), and 409 `research_not_usable` when the research run has not
+         *     succeeded. 503 `writing_not_started` when the run could not be handed to a worker: it is
+         *     then stored as failed and a new one can be started.
          */
         post: operations["startWritingRun"];
         delete?: never;
@@ -3408,7 +3409,7 @@ export interface components {
          * WritingPlatform
          * @enum {string}
          */
-        WritingPlatform: "x";
+        WritingPlatform: "x" | "instagram";
         /** WritingRunDetailResponse */
         WritingRunDetailResponse: {
             /** @description What the run was asked to write; null when the stored brief no longer fits the brief's schema, which a later version may have tightened. */

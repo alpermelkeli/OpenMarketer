@@ -212,7 +212,11 @@ def request_writing_run(
             return _writing_run(session, asked_before)
     if brief.asset is not None:
         usable_asset(
-            session, workspace_id=workspace_id, project_id=project_id, asset_id=brief.asset
+            session,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            asset_id=brief.asset,
+            post_platform=brief.platform,
         )
     if brief.research_run_id is not None:
         succeeded_research_run(

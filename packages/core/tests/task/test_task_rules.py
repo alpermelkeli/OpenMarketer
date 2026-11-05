@@ -86,6 +86,45 @@ def test_a_post_needs_an_approved_profile():
     assert "no approved Product Profile" in problem
 
 
+def instagram_post(*, asset_from_step: str | None = "image") -> dict[str, Any]:
+    step = post(platform="instagram")
+    return step if asset_from_step is None else {**step, "asset_from_step": asset_from_step}
+
+
+def image_for(platform: str) -> dict[str, Any]:
+    step = image("Write anywhere")
+    return {**step, "request": {**step["request"], "platform": platform}}
+
+
+def test_an_instagram_post_takes_an_image_made_for_instagram():
+    plan = plan_of(image_for("instagram_portrait"), instagram_post())
+
+    assert plan_problems(plan, request="Write anywhere", project=PROJECT) == []
+
+
+def test_an_instagram_post_without_an_image_step_is_refused():
+    [problem] = plan_problems(
+        plan_of(instagram_post(asset_from_step=None)), request="A post.", project=PROJECT
+    )
+
+    assert "published with an image" in problem and "asset_from_step" in problem
+
+
+def test_an_instagram_post_with_an_image_made_for_x_is_refused():
+    plan = plan_of(image_for("x_post"), instagram_post())
+
+    [problem] = plan_problems(plan, request="Write anywhere", project=PROJECT)
+
+    assert "x_post" in problem and "instagram_post" in problem
+
+
+def test_an_x_post_needs_no_image_and_may_take_one_made_for_any_platform():
+    with_image = plan_of(image_for("og_image"), {**post(), "asset_from_step": "image"})
+
+    assert plan_problems(plan_of(post()), request="A post.", project=PROJECT) == []
+    assert plan_problems(with_image, request="Write anywhere", project=PROJECT) == []
+
+
 def test_a_step_waits_only_for_steps_before_it():
     waiting = {**post(), "depends_on": ["image"]}
 

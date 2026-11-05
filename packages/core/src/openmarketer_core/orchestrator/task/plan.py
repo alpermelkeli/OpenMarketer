@@ -49,6 +49,7 @@ from openmarketer_core.studio.requests import (
 from openmarketer_core.writing.brief import (
     DEFAULT_VARIANTS,
     MAX_VARIANTS,
+    PLATFORMS_WITH_IMAGE,
     Angle,
     WritingBrief,
     WritingGoal,
@@ -74,6 +75,8 @@ MAX_TASK_COST_USD = Decimal(20)
 # their schemas minus these.
 WRITING_FIELDS_REPLACED = frozenset({"asset", "research_run_id"})
 STUDIO_FIELDS_REPLACED = frozenset({"reference_asset_ids"})
+# What a writing step's request is checked with in place of the image its reference gives.
+_STAND_IN_ASSET = uuid.UUID(int=0)
 
 Request = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_REQUEST_CHARS)
@@ -151,8 +154,11 @@ class WritingStepRequest(BaseModel):
 
     @model_validator(mode="after")
     def _fits_a_brief(self) -> WritingStepRequest:
-        # The brief's own rules (the fields of each goal) hold for the step as they are.
-        self.brief_with(asset=None, research_run_id=None)
+        # The brief's own rules (the fields of each goal) hold for the step as they are. Its
+        # image comes from a reference, so it stands in for one here; that a step for a
+        # platform with an image has its reference is the task agent's rule.
+        stand_in = _STAND_IN_ASSET if self.platform in PLATFORMS_WITH_IMAGE else None
+        self.brief_with(asset=stand_in, research_run_id=None)
         return self
 
     def brief_with(

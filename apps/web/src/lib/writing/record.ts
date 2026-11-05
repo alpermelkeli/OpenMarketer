@@ -5,12 +5,14 @@
  * The API serves these as plain data that a run wrote (`dict`s in its contract), so each is read
  * defensively here and nowhere else: an entry without the shape the writer stores is left out
  * rather than shown half-way, and a rule, criterion or format the dashboard has no words for is
- * shown by the name the run gave it. Every text in them was written by a model or taken from a
+ * shown by the name the run gave it, and one about the platform is named after the post's (its
+ * length on X, on Instagram). Every text in them was written by a model or taken from a
  * repository: untrusted, to be rendered as text only. Display only: whether a variant kept a rule
  * or passed a criterion is what the run recorded, never worked out here.
  */
 
 import type { ContentItemDetail } from "@/lib/api/types";
+import { writingPlatformLabel } from "@/lib/writing/status";
 
 /** One rule of the code the post broke, in words, with what the check found. */
 export type RuleFinding = { rule: string; label: string; finding: string };
@@ -18,7 +20,7 @@ export type RuleFinding = { rule: string; label: string; finding: string };
 export type CheckReport = {
   /** Whether the text kept every rule of the code, as the run recorded it; null when it did not say. */
   passed: boolean | null;
-  /** The text's length as X counts it (weighted), as the check measured it. */
+  /** The text's length as the post's platform counts it (X weighs some characters twice), as the check measured it. */
   length: number | null;
   failures: RuleFinding[];
   /** Numbers in the text that the profile does not hold, for a person to check. */
@@ -69,23 +71,29 @@ export type Alternative = {
   review: Review | null;
 };
 
-const RULES = new Map<string, string>([
-  ["length", "Length on X"],
-  ["do_not_mention", "Nothing the profile says never to mention"],
-  ["claims", "Every claim rests on a live feature"],
-  ["no_links", "No links"],
-  ["no_mentions", "No @mentions"],
-  ["hashtags", "Hashtags within X's limit"],
-  ["language", "One of the product's languages"],
-]);
+/** The rules of the code in words, those about the platform named after the post's (`platform`). */
+function rulesOn(platform: string): Map<string, string> {
+  return new Map<string, string>([
+    ["length", `Length on ${platform}`],
+    ["do_not_mention", "Nothing the profile says never to mention"],
+    ["claims", "Every claim rests on a live feature"],
+    ["image_words", "More than the words on the image"],
+    ["no_links", "No links"],
+    ["no_mentions", "No @mentions"],
+    ["hashtags", `Hashtags within ${platform}'s limit`],
+    ["language", "One of the product's languages"],
+  ]);
+}
 
-const CRITERIA = new Map<string, string>([
-  ["brand_voice", "The brand's voice"],
-  ["facts", "Facts"],
-  ["platform_fit", "Reads well on X"],
-  ["brief_fit", "Does what the brief asks"],
-  ["language", "Written in its language"],
-]);
+function criteriaOn(platform: string): Map<string, string> {
+  return new Map<string, string>([
+    ["brand_voice", "The brand's voice"],
+    ["facts", "Facts"],
+    ["platform_fit", `Reads well on ${platform}`],
+    ["brief_fit", "Does what the brief asks"],
+    ["language", "Written in its language"],
+  ]);
+}
 
 const SEVERITIES = new Map<string, string>([
   ["none", "No issue"],
@@ -101,8 +109,10 @@ const FORMATS = new Map<string, string>([
   ["story", "A small before-and-after"],
 ]);
 
-export function checkReportOf(report: unknown): CheckReport | null {
+/** The code-rule report of a post on `platform` (the slug the run recorded). */
+export function checkReportOf(report: unknown, platform: string): CheckReport | null {
   if (!isRecord(report)) return null;
+  const RULES = rulesOn(writingPlatformLabel(platform));
   const failures = Array.isArray(report.failures)
     ? report.failures.flatMap((entry): RuleFinding[] =>
         isRecord(entry) && typeof entry.rule === "string" && typeof entry.finding === "string"
@@ -118,20 +128,21 @@ export function checkReportOf(report: unknown): CheckReport | null {
   };
 }
 
-/** The rule of the code that holds a text to X's length. */
+/** The rule of the code that holds a text to its platform's length. */
 const LENGTH_RULE = "length";
 
 export type PostLength = {
-  /** The length as X counts it, as the check measured it. */
+  /** The length as the post's platform counts it, as the check measured it. */
   count: number;
-  /** Whether the text kept X's limit, as the check recorded it; null when it did not say. */
+  /** Whether the text kept the platform's limit, as the check recorded it; null when it did not say. */
   kept: boolean | null;
 };
 
 /**
- * The text's length on X and whether it kept the limit, read from its code-rule report: the
- * count is weighted (some characters count twice), so it is the check's, never worked out here.
- * Null when the report gives no length.
+ * The text's length on its platform and whether it kept the limit, read from its code-rule report:
+ * each platform counts in its own way (X weighs some characters twice, Instagram counts an emoji as
+ * two or more), so the count is the check's, never worked out here. Null when the report gives no
+ * length.
  */
 export function postLengthOf(report: CheckReport | null): PostLength | null {
   if (report === null || report.length === null) return null;
@@ -139,8 +150,10 @@ export function postLengthOf(report: CheckReport | null): PostLength | null {
   return { count: report.length, kept: broken ? false : report.passed === null ? null : true };
 }
 
-export function reviewOf(review: unknown): Review | null {
+/** The critic's review of a post on `platform` (the slug the run recorded). */
+export function reviewOf(review: unknown, platform: string): Review | null {
   if (!isRecord(review)) return null;
+  const CRITERIA = criteriaOn(writingPlatformLabel(platform));
   const criteria = Array.isArray(review.criteria)
     ? review.criteria.flatMap((entry): CriterionVerdict[] => {
         if (!isRecord(entry) || typeof entry.criterion !== "string" || typeof entry.passed !== "boolean") return [];
@@ -193,8 +206,8 @@ export function planOf(plan: ContentItemDetail["plan"]): Plan {
   };
 }
 
-/** The other variants, in the order of the round. */
-export function alternativesOf(alternatives: ContentItemDetail["alternatives"]): Alternative[] {
+/** The other variants of a post on `platform`, in the order of the round. */
+export function alternativesOf(alternatives: ContentItemDetail["alternatives"], platform: string): Alternative[] {
   return alternatives
     .flatMap((entry): Alternative[] => {
       if (!isRecord(entry) || !isRecord(entry.variant)) return [];
@@ -214,8 +227,8 @@ export function alternativesOf(alternatives: ContentItemDetail["alternatives"]):
                   : [],
               )
             : [],
-          check: checkReportOf(entry.check),
-          review: reviewOf(entry.review),
+          check: checkReportOf(entry.check, platform),
+          review: reviewOf(entry.review, platform),
         },
       ];
     })

@@ -4,15 +4,18 @@ import { alternativesOf, checkReportOf, claimsOf, planOf, postLengthOf, reviewOf
 
 describe("the code-rule report", () => {
   it("names each broken rule in words, with what the check found", () => {
-    const report = checkReportOf({
-      passed: false,
-      failures: [
-        { rule: "length", finding: "the text counts 301, over 280" },
-        { rule: "no_links", finding: "the text holds a link (example.com)" },
-      ],
-      length: 301,
-      flagged_numbers: ["40"],
-    });
+    const report = checkReportOf(
+      {
+        passed: false,
+        failures: [
+          { rule: "length", finding: "the text counts 301, over 280" },
+          { rule: "no_links", finding: "the text holds a link (example.com)" },
+        ],
+        length: 301,
+        flagged_numbers: ["40"],
+      },
+      "x",
+    );
     expect(report).toEqual({
       passed: false,
       length: 301,
@@ -25,43 +28,59 @@ describe("the code-rule report", () => {
   });
 
   it("shows a rule it has no words for by the name the run gave it", () => {
-    const report = checkReportOf({ passed: false, failures: [{ rule: "emoji", finding: "too many" }] });
+    const report = checkReportOf({ passed: false, failures: [{ rule: "emoji", finding: "too many" }] }, "x");
     expect(report?.failures[0].label).toBe("emoji");
   });
 
   it("leaves out a finding without its shape, and says nothing it was not told", () => {
-    const report = checkReportOf({ failures: [{ rule: 3 }, "x", null], length: -1, flagged_numbers: [7, "12"] });
+    const report = checkReportOf({ failures: [{ rule: 3 }, "x", null], length: -1, flagged_numbers: [7, "12"] }, "x");
     expect(report).toEqual({ passed: null, length: null, failures: [], flaggedNumbers: ["12"] });
   });
 
   it("is none when there is no report", () => {
-    expect(checkReportOf(null)).toBeNull();
-    expect(checkReportOf([])).toBeNull();
+    expect(checkReportOf(null, "x")).toBeNull();
+    expect(checkReportOf([], "x")).toBeNull();
   });
 });
 
-describe("the post's length on X", () => {
+describe("the post's length on its platform", () => {
   it("is the check's count, kept when the check found nothing against it", () => {
-    expect(postLengthOf(checkReportOf({ passed: true, failures: [], length: 212 }))).toEqual({
+    expect(postLengthOf(checkReportOf({ passed: true, failures: [], length: 212 }, "x"))).toEqual({
       count: 212,
       kept: true,
     });
   });
 
   it("is over the limit when the length rule failed", () => {
-    const report = checkReportOf({ passed: false, failures: [{ rule: "length", finding: "301, over 280" }], length: 301 });
+    const report = checkReportOf({ passed: false, failures: [{ rule: "length", finding: "301, over 280" }], length: 301 }, "x");
     expect(postLengthOf(report)).toEqual({ count: 301, kept: false });
   });
 
   it("is kept when only another rule failed, and unknown when the check did not say", () => {
-    const other = checkReportOf({ passed: false, failures: [{ rule: "no_links", finding: "a link" }], length: 90 });
+    const other = checkReportOf({ passed: false, failures: [{ rule: "no_links", finding: "a link" }], length: 90 }, "x");
     expect(postLengthOf(other)?.kept).toBe(true);
-    expect(postLengthOf(checkReportOf({ length: 90 }))?.kept).toBeNull();
+    expect(postLengthOf(checkReportOf({ length: 90 }, "x"))?.kept).toBeNull();
   });
 
   it("is none without a measured length", () => {
-    expect(postLengthOf(checkReportOf({ passed: true }))).toBeNull();
+    expect(postLengthOf(checkReportOf({ passed: true }, "x"))).toBeNull();
     expect(postLengthOf(null)).toBeNull();
+  });
+});
+
+describe("a post on Instagram", () => {
+  it("names the rules and the criterion about the platform after Instagram", () => {
+    const failures = [
+      { rule: "length", finding: "the text counts 2301, over 2200" },
+      { rule: "hashtags", finding: "the text has 31 hashtags, over 30" },
+    ];
+    const report = checkReportOf({ passed: false, failures, length: 2301 }, "instagram");
+    expect(report?.failures.map((failure) => failure.label)).toEqual([
+      "Length on Instagram",
+      "Hashtags within Instagram's limit",
+    ]);
+    const review = reviewOf({ criteria: [{ criterion: "platform_fit", passed: true, severity: "none" }] }, "instagram");
+    expect(review?.criteria[0].label).toBe("Reads well on Instagram");
   });
 });
 
@@ -76,7 +95,7 @@ describe("the critic's review", () => {
       risky_claim: false,
       risky_note: "",
       suggestions: ["Shorter opening"],
-    });
+    }, "x");
     expect(review).toEqual({
       criteria: [
         { label: "Facts", passed: true, severity: "No issue", minor: false, note: "" },
@@ -91,14 +110,14 @@ describe("the critic's review", () => {
   it("leaves out a verdict without a criterion or a pass, and keeps an unknown one by its name", () => {
     const review = reviewOf({
       criteria: [{ criterion: "facts" }, { passed: true }, { criterion: "humour", passed: false, severity: "grave" }],
-    });
+    }, "x");
     expect(review?.criteria).toEqual([{ label: "humour", passed: false, severity: "grave", minor: false, note: "" }]);
     expect(review?.riskyClaim).toBeNull();
   });
 
   it("is none when the critic did not review", () => {
-    expect(reviewOf(null)).toBeNull();
-    expect(reviewOf("passed")).toBeNull();
+    expect(reviewOf(null, "x")).toBeNull();
+    expect(reviewOf("passed", "x")).toBeNull();
   });
 });
 
@@ -161,7 +180,7 @@ describe("the other variants", () => {
     const alternatives = alternativesOf([
       { index: 2, variant: variant("Third"), check: { passed: true, failures: [], length: 5 }, review: null },
       { index: 0, variant: variant("First"), check: null, review: { criteria: [], risky_claim: true } },
-    ]);
+    ], "x");
     expect(alternatives.map((a) => a.text)).toEqual(["First", "Third"]);
     expect(alternatives[0].review?.riskyClaim).toBe(true);
     expect(alternatives[0].check).toBeNull();
@@ -171,7 +190,7 @@ describe("the other variants", () => {
   });
 
   it("leave out an entry without an index or a text", () => {
-    expect(alternativesOf([{ variant: variant("No index") }, { index: 1, variant: {} }, { index: 1 }])).toEqual([]);
+    expect(alternativesOf([{ variant: variant("No index") }, { index: 1, variant: {} }, { index: 1 }], "x")).toEqual([]);
   });
 
   it("are counted from one for a person", () => {

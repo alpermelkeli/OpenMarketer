@@ -27,7 +27,7 @@ from openmarketer_core.orchestrator.task.plan import (
     WritingStepRequest,
 )
 from openmarketer_core.studio.requests import AssetRequest
-from openmarketer_core.writing.brief import WritingBrief
+from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
 
 SCOPE: dict[str, Any] = {
     "max_steps": 6,
@@ -99,6 +99,23 @@ def test_a_writing_step_keeps_the_rules_of_a_brief():
 
     with pytest.raises(ValidationError):
         plan(STUDIO_STEP, step)
+
+
+def test_an_instagram_writing_step_is_read_before_its_image_is_resolved():
+    step = {**WRITING_STEP, "request": {"platform": "instagram", "goal": "introduce"}}
+
+    request = plan(step).steps[0].request
+    assert isinstance(request, WritingStepRequest)
+    assert request.platform is WritingPlatform.INSTAGRAM
+
+
+def test_an_instagram_writing_step_becomes_a_brief_only_with_its_image():
+    request = WritingStepRequest(platform=WritingPlatform.INSTAGRAM, goal=WritingGoal.INTRODUCE)
+    asset = uuid.uuid4()
+
+    assert request.brief_with(asset=asset, research_run_id=None).asset == asset
+    with pytest.raises(ValidationError):
+        request.brief_with(asset=None, research_run_id=None)
 
 
 def test_a_writing_step_becomes_a_brief_with_the_ids_code_resolved():

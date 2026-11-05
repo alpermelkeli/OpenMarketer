@@ -82,9 +82,24 @@ def test_an_unknown_field_is_refused():
         brief(image="auto")
 
 
-def test_a_platform_other_than_x_is_refused():
+def test_a_platform_the_writer_does_not_write_for_is_refused():
     with pytest.raises(ValidationError):
         brief(platform="linkedin")
+
+
+def test_an_instagram_brief_names_the_image_its_post_goes_with():
+    asset = uuid.uuid4()
+
+    assert brief(platform="instagram", asset=str(asset)).asset == asset
+
+
+def test_an_instagram_brief_without_an_image_is_refused():
+    with pytest.raises(ValidationError, match="published with an image"):
+        brief(platform="instagram")
+
+
+def test_an_x_brief_needs_no_image():
+    assert brief(platform="x").asset is None
 
 
 def test_a_brief_may_name_an_asset_and_a_research_run():

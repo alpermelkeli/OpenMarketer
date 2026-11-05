@@ -52,8 +52,11 @@ def variant(text: str = "Write anywhere.", **changes: Any) -> Variant:
     return Variant.model_validate(data)
 
 
-def failures(v: Variant) -> list[str]:
-    report = rules.check_variant(v, X, rules.profile_numbers(CONTEXT))
+INSTAGRAM = rules.situation(WritingPlatform.INSTAGRAM, {**CONTEXT, "image": IMAGE})
+
+
+def failures(v: Variant, s: rules.Situation = X) -> list[str]:
+    report = rules.check_variant(v, s, rules.profile_numbers(CONTEXT))
     return [failure["rule"] for failure in report["failures"]]
 
 
@@ -109,6 +112,43 @@ def test_links_mentions_and_a_third_hashtag_fail():
     assert failures(variant("Thanks @acme")) == ["no_mentions"]
     assert failures(variant("#a #b #c")) == ["hashtags"]
     assert failures(variant("#a #b")) == []
+
+
+def test_an_instagram_caption_over_2200_characters_fails():
+    assert failures(variant("a" * 2201), INSTAGRAM) == ["length"]
+    assert failures(variant("a" * 2200), INSTAGRAM) == []
+
+
+def test_an_instagram_caption_may_run_over_several_lines():
+    caption = "Write anywhere.\n\nEven on a plane.\n\n#notes #offline #productivity"
+    assert failures(variant(caption), INSTAGRAM) == []
+
+
+def test_an_address_in_an_instagram_caption_fails_as_a_link():
+    assert failures(variant("Get it at https://acme.app"), INSTAGRAM) == ["no_links"]
+    assert failures(variant("Get it at acme.app"), INSTAGRAM) == ["no_links"]
+    assert failures(variant("Get it: link in bio."), INSTAGRAM) == []
+
+
+def test_an_instagram_caption_may_carry_30_hashtags_and_not_31():
+    assert failures(variant(" ".join(f"#tag{n}" for n in range(30))), INSTAGRAM) == []
+    assert failures(variant(" ".join(f"#tag{n}" for n in range(31))), INSTAGRAM) == ["hashtags"]
+
+
+def test_the_writer_and_the_critic_are_told_instagrams_habits():
+    draft = rules.draft_system_prompt(INSTAGRAM, 3)
+    critic = rules.critic_system_prompt(INSTAGRAM)
+
+    assert "at most 2200 as Instagram counts it" in draft
+    assert "At most 30 hashtags." in draft
+    for habit in INSTAGRAM.platform.habits:
+        assert habit in draft and habit in critic
+    assert '"link in bio"' in draft
+
+
+def test_an_x_post_is_told_no_habits_of_another_platform():
+    assert "link in bio" not in rules.draft_system_prompt(X, 3)
+    assert "habits" not in rules.critic_system_prompt(X)
 
 
 def test_a_bare_domain_under_any_top_level_domain_fails_as_a_link():
