@@ -213,7 +213,13 @@ def store(
         "chat_id": chat_id,
     }
     with transaction(sessions) as session:
-        turn = start_turn(session, trigger=ChatTurnTrigger.MESSAGE, **in_chat)
+        turn = start_turn(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            trigger=ChatTurnTrigger.MESSAGE,
+        )
         finish_turn(session, turn_id=turn.id, **in_chat)
         append_exchange(session, turn_id=turn.id, question=question, answer=answer, **in_chat)
 

@@ -16,15 +16,26 @@ from temporalio.testing import ActivityEnvironment
 from openmarketer_core.credentials.resolution import ModelKeyNotSet
 from openmarketer_core.db.chat import chat_history
 from openmarketer_core.db.chat_turns import MAX_FOLLOW_UP_TURNS, start_turn
-from openmarketer_core.db.models import ChatRole, ChatTurnTrigger
-from openmarketer_core.db.research_runs import mark_run_failed
+from openmarketer_core.db.models import ChatRole, ChatTurnTrigger, TaskStepOutcome
+from openmarketer_core.db.research_runs import mark_run_failed, request_research_run
 from openmarketer_core.db.run_events import events_of_chat
 from openmarketer_core.db.session import transaction
 from openmarketer_core.db.studio_runs import mark_run_failed as mark_studio_run_failed
 from openmarketer_core.db.studio_runs import request_studio_run
+from openmarketer_core.db.tasks import (
+    mark_task_failed,
+    mark_task_started,
+    record_step_dispatched,
+    record_step_outcome,
+    record_task_plan,
+    request_task_run,
+)
 from openmarketer_core.llm import ChatReply, LLMError
 from openmarketer_core.orchestrator.chat_agent.rules import SUBMIT
 from openmarketer_core.orchestrator.follow_up import NOT_TAKEN
+from openmarketer_core.orchestrator.task.plan import TaskAgentName, TaskPlan, TaskRequest
+from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
+from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.request import REQUESTED_BY_THE_CHAT
@@ -199,6 +210,153 @@ async def test_studio_run_still_queued_has_nothing_to_follow_up_on(sessions, stu
     following_up = FollowingUp(sessions)
 
     refused = await refusal(following_up, studio_asked)
+
+    assert (refused.type, refused.non_retryable) == (steps.NOTHING_TO_FOLLOW_UP, True)
+    assert following_up.model.calls == 0
+
+
+@pytest.fixture
+def task_asked(database, sessions):
+    """An orchestrator task a chat of a new project asked for, and the chat; queued."""
+    research = database.requested_research()
+    with transaction(sessions) as session:
+        task = request_task_run(
+            session,
+            workspace_id=research.run.workspace_id,
+            project_id=research.run.project_id,
+            request=TaskRequest(request="Write a post.", understanding="One post."),
+            requested_by="orchestrator",
+            chat_thread_id=research.chat_id,
+        )
+    return ChatFollowUpInput(
+        workspace_id=research.run.workspace_id,
+        project_id=research.run.project_id,
+        chat_id=research.chat_id,
+        run_kind=TASK_RUN_KIND,
+        run_id=task.id,
+    )
+
+
+async def test_follow_up_of_a_task_answers_in_the_chat_that_asked_for_it(sessions, task_asked):
+    with transaction(sessions) as session:
+        mark_task_failed(
+            session,
+            workspace_id=task_asked.workspace_id,
+            project_id=task_asked.project_id,
+            task_id=task_asked.run_id,
+            error="the task did not finish in time",
+        )
+    following_up = FollowingUp(sessions)
+
+    await following_up(task_asked)
+
+    with transaction(sessions) as session:
+        [answer] = chat_history(
+            session,
+            workspace_id=task_asked.workspace_id,
+            project_id=task_asked.project_id,
+            chat_id=task_asked.chat_id,
+        )
+    assert answer.content == following_up.model.answer
+
+
+async def test_task_of_another_project_has_nothing_to_follow_up_on(sessions, task_asked):
+    following_up = FollowingUp(sessions)
+
+    refused = await refusal(following_up, dataclasses.replace(task_asked, run_id=uuid.uuid4()))
+
+    assert (refused.type, refused.non_retryable) == (steps.NOTHING_TO_FOLLOW_UP, True)
+    assert following_up.model.calls == 0
+
+
+# ------------------------------------------------------------------ a step of a task
+RESEARCH_THEN_POST = TaskPlan.model_validate(
+    {
+        "goal": "Announce offline sync.",
+        "steps": [
+            {"id": "find", "agent": "research", "request": {"questions": ["Who?"]}},
+            {"id": "post", "agent": "writing", "request": {"platform": "x", "goal": "introduce"}},
+        ],
+        "scope": {"max_steps": 6, "max_plan_changes": 2, "deadline_days": 7, "max_cost_usd": 1},
+    }
+)
+
+
+@pytest.fixture
+def step_ended(sessions, task_asked) -> ChatFollowUpInput:
+    """The follow-up of step ``find`` of the task, whose research run ended; the task goes on."""
+    ids = {"workspace_id": task_asked.workspace_id, "project_id": task_asked.project_id}
+    with transaction(sessions) as session:
+        mark_task_started(session, **ids, task_id=task_asked.run_id)
+        record_task_plan(session, **ids, task_id=task_asked.run_id, plan=RESEARCH_THEN_POST)
+        research = request_research_run(
+            session, **ids, request=ResearchRequest(questions=["Who?"]), requested_by="run"
+        )
+        record_step_dispatched(
+            session,
+            **ids,
+            task_id=task_asked.run_id,
+            step_key="find",
+            agent=TaskAgentName.RESEARCH,
+            child_run_id=research.id,
+        )
+        record_step_outcome(
+            session,
+            **ids,
+            task_id=task_asked.run_id,
+            step_key="find",
+            outcome=TaskStepOutcome.SUCCEEDED,
+        )
+    return dataclasses.replace(task_asked, step="find")
+
+
+async def test_follow_up_of_a_step_answers_in_the_chat_as_a_step_finished_turn(
+    sessions, step_ended
+):
+    following_up = FollowingUp(sessions)
+
+    await following_up(step_ended)
+
+    with transaction(sessions) as session:
+        [answer] = chat_history(
+            session,
+            workspace_id=step_ended.workspace_id,
+            project_id=step_ended.project_id,
+            chat_id=step_ended.chat_id,
+        )
+        events = events_of_chat(
+            session,
+            workspace_id=step_ended.workspace_id,
+            project_id=step_ended.project_id,
+            chat_id=step_ended.chat_id,
+            after=None,
+            limit=50,
+        )
+    assert answer.content == following_up.model.answer
+    assert events[0].detail == {"trigger": "task_step_finished"}
+
+
+async def test_step_follow_up_that_meets_a_busy_chat_is_tried_again(sessions, step_ended):
+    with transaction(sessions) as session:
+        start_turn(
+            session,
+            workspace_id=step_ended.workspace_id,
+            project_id=step_ended.project_id,
+            chat_id=step_ended.chat_id,
+            trigger=ChatTurnTrigger.MESSAGE,
+        )
+    following_up = FollowingUp(sessions)
+
+    refused = await refusal(following_up, step_ended)
+
+    assert (refused.type, refused.non_retryable) == (steps.CHAT_BUSY, False)
+    assert following_up.model.calls == 0
+
+
+async def test_step_that_has_not_ended_has_nothing_to_follow_up_on(sessions, task_asked):
+    following_up = FollowingUp(sessions)
+
+    refused = await refusal(following_up, dataclasses.replace(task_asked, step="find"))
 
     assert (refused.type, refused.non_retryable) == (steps.NOTHING_TO_FOLLOW_UP, True)
     assert following_up.model.calls == 0

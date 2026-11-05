@@ -28,14 +28,15 @@ import { Composer } from "./composer";
 import { DeleteChatButton } from "./delete-chat-button";
 import { FollowedResearchProgress } from "./followed-research-progress";
 import { FollowedStudioProgress } from "./followed-studio-progress";
+import { FollowedTaskProgress } from "./followed-task-progress";
 import { MessageMarkdown } from "./message-markdown";
 import { TurnActivity, TurnSteps } from "./turn-activity";
 
 const ANSWERING = "The orchestrator is answering another message of this chat…";
 
 /**
- * One chat with the orchestrator: its messages, oldest first, the research and studio runs its
- * turns started, and where the next one is written. A message being answered is shown as sent, with the steps of
+ * One chat with the orchestrator: its messages, oldest first, the research runs, studio runs and
+ * tasks its turns started, and where the next one is written. A message being answered is shown as sent, with the steps of
  * its turn as they happen, and one that failed is kept here to be sent again, since the API stores
  * nothing of a failed turn. While the orchestrator answers a turn it started itself (when a run it
  * asked for has ended), nothing can be sent. Opening the chat marks it read.
@@ -52,7 +53,7 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
   const activity = useMemo(() => foldChatEvents(events.events ?? []), [events.events]);
   useEventsCoveringMessages(events, activity, messages.data);
   const timeline = useMemo(
-    () => chatTimeline(messages.data ?? [], activity.runs, activity.turns, activity.studioRuns),
+    () => chatTimeline(messages.data ?? [], activity.runs, activity.turns, activity.studioRuns, activity.tasks),
     [messages.data, activity],
   );
   const turnById = useMemo(() => new Map(activity.turns.map((turn) => [turn.id, turn])), [activity]);
@@ -70,13 +71,14 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
   const live = liveTurn?.status === "running" ? liveTurn.id : null;
   const liveRuns = live === null ? [] : activity.runs.filter((run) => run.turnId === live);
   const liveStudioRuns = live === null ? [] : activity.studioRuns.filter((run) => run.turnId === live);
+  const liveTasks = live === null ? [] : activity.tasks.filter((run) => run.turnId === live);
 
   const end = useRef<HTMLDivElement>(null);
   const shown = timeline.length + (submission === null ? 0 : 1) + (otherTurn === null ? 0 : 1);
-  useEffect(
-    () => end.current?.scrollIntoView({ block: "end" }),
-    [shown, submission?.status, liveTurn?.steps.length],
-  );
+  // In braces: a browser whose scrollIntoView returns a promise would otherwise hand React a clean-up that is not a function.
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: "end" });
+  }, [shown, submission?.status, liveTurn?.steps.length]);
 
   if (chat.error) {
     return <RequestProblem title="This chat could not be read" error={chat.error} onRetry={() => chat.refetch()} />;
@@ -138,6 +140,9 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
             if (item.kind === "studio") {
               return <FollowedStudioProgress key={item.run.id} projectId={projectId} view={item.run} />;
             }
+            if (item.kind === "task") {
+              return <FollowedTaskProgress key={item.run.id} projectId={projectId} view={item.run} />;
+            }
             return <FailedFollowUp key={item.turn.id} turn={item.turn} />;
           })
         )}
@@ -181,6 +186,9 @@ export function ChatThreadScreen({ projectId, chatId }: { projectId: string; cha
         ))}
         {liveStudioRuns.map((run) => (
           <FollowedStudioProgress key={run.id} projectId={projectId} view={run} />
+        ))}
+        {liveTasks.map((run) => (
+          <FollowedTaskProgress key={run.id} projectId={projectId} view={run} />
         ))}
         {events.error && (
           <p className="text-xs text-muted-foreground">

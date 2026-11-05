@@ -6,10 +6,12 @@ import type { Proposal } from "@/lib/api/types";
 import {
   actionLabel,
   decideProblem,
+  decisionLabels,
   effectLabel,
   effectNote,
   estimateText,
   payloadText,
+  planDecisionWording,
   proposalStatusDisplay,
   proposedPostText,
   splitByDecision,
@@ -138,5 +140,24 @@ describe("the post a writing run asks to publish", () => {
   it("is none for another action or another kind of run", () => {
     expect(proposedPostText({ ...writing, action_name: "generate_image" })).toBeNull();
     expect(proposedPostText({ ...writing, run_kind: "studio-run" })).toBeNull();
+  });
+});
+
+describe("a task's plan to confirm", () => {
+  it("is named as a plan to confirm", () => {
+    expect(effectLabel("confirms")).toBe("Confirm a plan");
+    expect(actionLabel("confirm_plan")).toBe("Confirm a task's plan");
+  });
+
+  it("is decided with buttons that say so", () => {
+    expect(decisionLabels("confirms")).toEqual({ approve: "Confirm the plan", reject: "Reject the plan" });
+    expect(decisionLabels("spends")).toEqual({ approve: "Approve", reject: "Reject" });
+  });
+
+  it("says before deciding that a rejection ends the task", () => {
+    expect(planDecisionWording(false).description).toBe(
+      "The task ends without running any of its steps, and reports so in its chat.",
+    );
+    expect(planDecisionWording(true).title).toBe("Confirm this plan?");
   });
 });

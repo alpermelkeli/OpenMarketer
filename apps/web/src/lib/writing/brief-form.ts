@@ -3,15 +3,25 @@
  * API takes it. The goal decides which field is sent: an announcement names a feature, an angle
  * carries the person's words, an introduction carries neither. Every rule of a valid brief (how
  * long an angle may be, whether the feature is live, whether an image or a research run may still
- * be used) is the API's and the run's; their answer is put beside the field. Which images and runs
- * are offered is a display choice only: the API checks again.
+ * be used, whether the image was made for the post's platform) is the API's and the run's; their
+ * answer is put beside the field. Which images and runs are offered, and that an Instagram post asks
+ * for an image, are display choices only: the API checks again.
  */
 
 import type { ApiError } from "@/lib/api/api-error";
-import type { Feature, MediaAsset, ProductProfile, ResearchRun, WritingBrief, WritingGoal } from "@/lib/api/types";
+import type {
+  Feature,
+  MediaAsset,
+  ProductProfile,
+  ResearchRun,
+  WritingBrief,
+  WritingGoal,
+  WritingPlatform,
+} from "@/lib/api/types";
 import { formProblems, type FormProblems } from "@/lib/settings/form-problems";
 
 export type BriefForm = {
+  platform: WritingPlatform;
   goal: WritingGoal;
   /** The feature an announcement names; "" while none is chosen. */
   feature: string;
@@ -29,6 +39,7 @@ export const DEFAULT_VARIANTS = 3;
 export const VARIANT_OPTIONS: readonly number[] = [1, 2, 3, 4, 5];
 
 export const EMPTY_BRIEF: BriefForm = {
+  platform: "x",
   goal: "introduce",
   feature: "",
   angle: "",
@@ -42,7 +53,11 @@ export const EMPTY_BRIEF: BriefForm = {
  * image and the research run only when one was chosen.
  */
 export function writingBriefOf(form: BriefForm): WritingBrief {
-  const brief: WritingBrief = { platform: "x", goal: form.goal, variants: form.variants };
+  const brief: WritingBrief = {
+    platform: form.platform,
+    goal: form.goal,
+    variants: form.variants,
+  };
   if (form.goal === "announce") brief.feature = form.feature === "" ? null : form.feature;
   if (form.goal === "angle") brief.angle = form.angle.trim();
   if (form.asset !== "") brief.asset = form.asset;
@@ -56,6 +71,33 @@ export function writingBriefOf(form: BriefForm): WritingBrief {
  */
 export function attachableAssets(assets: readonly MediaAsset[]): MediaAsset[] {
   return assets.filter((asset) => asset.status !== "rejected" && asset.current_version_id !== null);
+}
+
+// The Studio platforms whose images a post on each platform goes with, as the writer's rule has
+// them; null for any. An Instagram post is an image with its caption, made for Instagram.
+const POST_IMAGES: Record<WritingPlatform, readonly MediaAsset["platform"][] | null> = {
+  x: null,
+  instagram: ["instagram_post", "instagram_portrait", "instagram_story"],
+};
+
+/** Whether a post on `platform` cannot be text alone: its brief must name an image. */
+export function needsImage(platform: WritingPlatform): boolean {
+  return POST_IMAGES[platform] !== null;
+}
+
+/** Whether a post on `platform` can go with `asset`, by the platform the image was made for. */
+export function imageFitsPost(platform: WritingPlatform, asset: MediaAsset): boolean {
+  const fitting = POST_IMAGES[platform];
+  return fitting === null || fitting.includes(asset.platform);
+}
+
+/** What the image choice offers a post on `platform`: the images made for it among `offered`. */
+export function imagesForPost(offered: Offered<MediaAsset>, platform: WritingPlatform): Offered<MediaAsset> {
+  if (offered.state !== "known") return offered;
+  return {
+    state: "known",
+    items: offered.items.filter((asset) => imageFitsPost(platform, asset)),
+  };
 }
 
 /** The research runs whose findings a post can draw on: those that succeeded, with a report. */

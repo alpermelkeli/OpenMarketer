@@ -15,9 +15,25 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_api.chat_requests import PostgresChatRequests
 from openmarketer_core.db.chat import create_chat
-from openmarketer_core.db.models import Project, ResearchRunRecord, StudioRunRecord, Workspace
+from openmarketer_core.db.models import (
+    Project,
+    ResearchRunRecord,
+    StudioRunRecord,
+    TaskRecord,
+    Workspace,
+)
 from openmarketer_core.db.session import session_factory, transaction
-from openmarketer_core.orchestrator.requests import ResearchNotStarted, StudioNotStarted
+from openmarketer_core.orchestrator.requests import (
+    ResearchNotStarted,
+    StudioNotStarted,
+    TaskNotStarted,
+)
+from openmarketer_core.orchestrator.task.plan import TaskRequest
+from openmarketer_core.orchestrator.task.workflow_contract import (
+    TASK_TASK_QUEUE,
+    TASK_WORKFLOW,
+    TaskRunInput,
+)
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import (
     RESEARCH_TASK_QUEUE,
@@ -36,6 +52,11 @@ from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
 REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
 ASSET_REQUEST = AssetRequest(
     goal="Announce the Android launch", exact_copy=["Now on Android"], platform=Platform.X_POST
+)
+
+TASK_REQUEST = TaskRequest(
+    request="Post about offline mode, with an image",
+    understanding="One post for X announcing offline mode, with an image made for it.",
 )
 
 
@@ -170,3 +191,44 @@ def test_a_reference_image_the_project_lacks_starts_nothing(sessions, scope):
             select(StudioRunRecord.id).where(StudioRunRecord.project_id == scope[1])
         )
     assert stored is None
+
+
+def test_starting_a_task_stores_it_for_the_chat_and_hands_its_workflow_to_the_starter(
+    sessions, scope
+):
+    started: list[WorkflowStart] = []
+
+    reading = adapter_of(sessions, scope, started.append).start_task(TASK_REQUEST)
+
+    [workflow] = started
+    assert (workflow.workflow, workflow.task_queue) == (TASK_WORKFLOW, TASK_TASK_QUEUE)
+    assert workflow.input == TaskRunInput(
+        workspace_id=scope[0], project_id=scope[1], run_id=reading.id
+    )
+    assert (reading.status.value, reading.requested_by, reading.request) == (
+        "queued",
+        "orchestrator",
+        TASK_REQUEST.request,
+    )
+    assert (reading.goal, reading.plan, reading.steps, reading.report) == (None, None, [], None)
+    with transaction(sessions) as session:
+        stored = session.get(TaskRecord, reading.id)
+    assert stored is not None
+    assert (stored.requested_by, stored.understanding) == (
+        "orchestrator",
+        TASK_REQUEST.understanding,
+    )
+    assert stored.chat_thread_id == scope[2]
+
+
+def test_a_task_workflow_that_cannot_be_started_is_the_ports_own_error_in_a_fixed_sentence(
+    sessions, scope
+):
+    with pytest.raises(TaskNotStarted) as refused:
+        adapter_of(sessions, scope, refusing).start_task(TASK_REQUEST)
+
+    assert str(refused.value) == "the task could not be handed to a worker"
+    with transaction(sessions) as session:
+        status = session.scalar(select(TaskRecord.status).where(TaskRecord.project_id == scope[1]))
+    assert status is not None
+    assert status.value == "failed"

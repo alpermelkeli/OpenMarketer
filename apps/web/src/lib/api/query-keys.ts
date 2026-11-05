@@ -6,6 +6,7 @@ import {
   RESEARCH_RUN,
   RUN_ENDS,
   STUDIO_RUN,
+  TASK_RUN,
   TURN_ENDS,
 } from "@/lib/chat/events";
 
@@ -43,6 +44,9 @@ export const queryKeys = {
     ["projects", "one", projectId, "writing-runs", "list"] as const,
   writingRun: (projectId: string, runId: string) =>
     ["projects", "one", projectId, "writing-runs", "run", runId] as const,
+  /** One task of the orchestrator, with its plan, steps and report. */
+  task: (projectId: string, taskId: string) =>
+    ["projects", "one", projectId, "tasks", "one", taskId] as const,
   /** The posts the project's writing runs proposed. */
   contentItems: (projectId: string) =>
     ["projects", "one", projectId, "content-items", "list"] as const,
@@ -160,7 +164,8 @@ export function refreshedByStudioRunDeleted(projectId: string): Refresh[] {
  * its kind. A research run that ends has its final state and perhaps a report; a studio run that
  * ends has its final state, an asset in the library and its cost in this month's spending. Either
  * may start a follow-up turn, which makes the chat busy. A proposal event of either kind of run
- * changes the project's proposals, which the approvals screen and the sidebar's count read. The
+ * changes the project's proposals, which the approvals screen and the sidebar's count read. Every
+ * event of a task changes the task (`refreshedByTaskEvent`). The
  * chat's own key is refreshed alone (`exact`), so its events, which the stream keeps current, are
  * not read again.
  */
@@ -183,6 +188,7 @@ export function refreshedByChatEvent(
       return refreshedByRunStarted(projectId, event.detail.run_kind);
     return [];
   }
+  if (event.run_kind === TASK_RUN) return refreshedByTaskEvent(projectId, chatId, event);
   if (event.run_kind !== RESEARCH_RUN && event.run_kind !== STUDIO_RUN)
     return [];
   if (PROPOSAL_KINDS.includes(event.kind))
@@ -200,6 +206,20 @@ export function refreshedByChatEvent(
     ...refreshedByStudioRunEnd(projectId),
     chat,
   ];
+}
+
+/**
+ * What a task's event makes out of date: the task itself, whose plan, steps or report each of its
+ * nodes changes. A proposal event of its plan changes the project's proposals and what waits in
+ * the workspace, where the plan to confirm is read from; its end may start a follow-up turn.
+ */
+function refreshedByTaskEvent(projectId: string, chatId: string, event: RunEvent): Refresh[] {
+  const task = { queryKey: queryKeys.task(projectId, event.run_id) };
+  if (PROPOSAL_KINDS.includes(event.kind)) {
+    return [task, { queryKey: queryKeys.proposals(projectId) }, { queryKey: queryKeys.waitingProposals() }];
+  }
+  if (RUN_ENDS.includes(event.kind)) return [task, { queryKey: queryKeys.chat(projectId, chatId), exact: true }];
+  return [task];
 }
 
 function refreshedByRunStarted(projectId: string, runKind: unknown): Refresh[] {

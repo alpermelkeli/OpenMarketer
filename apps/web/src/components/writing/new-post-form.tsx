@@ -7,16 +7,18 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { Feature, MediaAsset, ResearchRun, WritingBrief, WritingGoal } from "@/lib/api/types";
+import type { Feature, MediaAsset, ResearchRun, WritingBrief, WritingGoal, WritingPlatform } from "@/lib/api/types";
 import { fieldProblems, type FormProblems } from "@/lib/settings/form-problems";
 import {
   EMPTY_BRIEF,
   VARIANT_OPTIONS,
+  imagesForPost,
+  needsImage,
   writingBriefOf,
   type BriefForm,
   type Offered,
 } from "@/lib/writing/brief-form";
-import { GOAL_OPTIONS } from "@/lib/writing/status";
+import { GOAL_OPTIONS, PLATFORM_OPTIONS, writingPlatformLabel } from "@/lib/writing/status";
 
 import { PostImageChoice } from "./post-image-choice";
 import { PostResearchChoice } from "./post-research-choice";
@@ -27,7 +29,7 @@ type NewPostFormProps = {
   projectId: string;
   /** The live features of the approved profile, which an announcement can name; null while read. */
   features: readonly Feature[] | null;
-  /** The library's images a post can go with. */
+  /** The library's images a post can go with; the form offers those made for the chosen platform. */
   assets: Offered<MediaAsset>;
   moreAssets: MoreOf;
   /** The project's research runs that succeeded. */
@@ -38,11 +40,16 @@ type NewPostFormProps = {
   onSubmit: (brief: WritingBrief) => void;
 };
 
-const VARIANT_ITEMS = VARIANT_OPTIONS.map((n) => ({ value: String(n), label: String(n) }));
+const VARIANT_ITEMS = VARIANT_OPTIONS.map((n) => ({
+  value: String(n),
+  label: String(n),
+}));
 
 /**
- * What the writer is asked for: a goal, the feature or the angle it needs, how many texts, and, if
- * a person wants them, an image of the library for the post to go with and research to draw on.
+ * What the writer is asked for: a platform, a goal, the feature or the angle it needs, how many
+ * texts, and, if a person wants them, an image of the library for the post to go with and research
+ * to draw on. An Instagram post is an image with its caption, so it asks for an image made for
+ * Instagram; the API holds the same rule.
  */
 export function NewPostForm({
   projectId,
@@ -57,25 +64,74 @@ export function NewPostForm({
 }: NewPostFormProps) {
   const id = useId();
   const [form, setForm] = useState<BriefForm>(EMPTY_BRIEF);
+  // Set when the form was sent for a platform that needs an image and none was chosen.
+  const [imageMissing, setImageMissing] = useState(false);
+  const imageRequired = needsImage(form.platform);
+  const offeredImages = imagesForPost(assets, form.platform);
   const goalProblems = fieldProblems(problems, "goal");
   const featureProblems = fieldProblems(problems, "feature");
   const angleProblems = fieldProblems(problems, "angle");
   const variantProblems = fieldProblems(problems, "variants");
   const platformProblems = fieldProblems(problems, "platform");
-  const featureItems = (features ?? []).map((feature) => ({ value: feature.id, label: feature.id }));
+  const featureItems = (features ?? []).map((feature) => ({
+    value: feature.id,
+    label: feature.id,
+  }));
+
+  const assetProblems = imageMissing
+    ? [`A post on ${writingPlatformLabel(form.platform)} is an image with its caption: choose its image.`]
+    : fieldProblems(problems, "asset");
+
+  function choosePlatform(platform: WritingPlatform) {
+    const offered = imagesForPost(assets, platform);
+    // An image made for another platform is not kept: the post could not go with it.
+    const kept = offered.state === "known" && offered.items.some((asset) => asset.id === form.asset);
+    setForm({ ...form, platform, asset: kept ? form.asset : "" });
+    setImageMissing(false);
+  }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) return;
+    if (imageRequired && form.asset === "") {
+      setImageMissing(true);
+      return;
+    }
     onSubmit(writingBriefOf(form));
   }
 
   return (
     <form onSubmit={submit} className="grid max-w-prose gap-5" autoComplete="off" noValidate>
-      {/* One platform only, so there is nothing to choose: it is said rather than offered. */}
       <div className="grid gap-2">
-        <p className="text-sm">
-          For X <span className="text-muted-foreground">· the only platform the writer writes for so far</span>
+        <Label id={`${id}-platform-label`}>Where the post goes</Label>
+        <Select
+          items={PLATFORM_OPTIONS}
+          value={form.platform}
+          onValueChange={(next) => {
+            if (next !== null) choosePlatform(next as WritingPlatform);
+          }}
+          disabled={pending}
+        >
+          <SelectTrigger
+            aria-labelledby={`${id}-platform-label`}
+            aria-invalid={platformProblems.length > 0}
+            aria-describedby={`${id}-platform-hint ${id}-platform-errors`}
+            className="w-full sm:w-56"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PLATFORM_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p id={`${id}-platform-hint`} className="text-xs text-pretty text-muted-foreground">
+          {imageRequired
+            ? "An Instagram post is an image with its caption: the writer writes the caption for an image of the library made for Instagram."
+            : "A post on X may be text alone or go with an image of the library."}
         </p>
         <FieldErrors id={`${id}-platform-errors`} messages={platformProblems} />
       </div>
@@ -198,10 +254,14 @@ export function NewPostForm({
       <PostImageChoice
         id={id}
         projectId={projectId}
-        assets={assets}
+        assets={offeredImages}
+        required={imageRequired}
         value={form.asset}
-        onChange={(asset) => setForm({ ...form, asset })}
-        problems={fieldProblems(problems, "asset")}
+        onChange={(asset) => {
+          setForm({ ...form, asset });
+          setImageMissing(false);
+        }}
+        problems={assetProblems}
         disabled={pending}
         more={moreAssets}
       />
@@ -220,9 +280,9 @@ export function NewPostForm({
       <FieldErrors id={`${id}-form-errors`} messages={problems.form} />
       <div className="grid gap-2">
         <p className="text-sm text-pretty text-muted-foreground">
-          The run writes from the approved profile: it plans the post, writes the texts, checks them in code and has
-          the critic read them, then asks you in Approvals to approve the best one, with its image when one is chosen.
-          Nothing is sent to X: an approved post is recorded as a dry run.
+          The run writes from the approved profile: it plans the post, writes the texts, checks them in code and has the
+          critic read them, then asks you in Approvals to approve the best one, with its image when one is chosen.
+          Nothing is sent to {writingPlatformLabel(form.platform)}: an approved post is recorded as a dry run.
         </p>
         <div>
           <Button type="submit" disabled={pending}>

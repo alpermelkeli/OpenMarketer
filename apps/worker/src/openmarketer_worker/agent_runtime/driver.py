@@ -17,7 +17,8 @@ a request and its side effect stands here:
   runs, and the model's text never becomes an activity.
 - A run may ask for ``policy.max_actions`` actions and no more: each one adds to
   its history.
-- The policy gate (core's ``gate.py``) holds an action that publishes or spends until a person
+- The policy gate (core's ``gate.py``) holds an action that publishes, spends or confirms
+  (``ActionEffect.CONFIRMS``, a task's plan) until a person
   approves it (``approval_wait.wait_for_a_person``). One that is rejected, or that nobody
   decided on in time, does not run: the graph is told so as a failed outcome (core's
   ``gate.NOT_APPROVED_TEXTS``), as it is told of any action that failed, and may revise what
@@ -50,12 +51,18 @@ run and the action id, and the engine records the start in the parent's history,
 retried workflow task replays it instead of starting a second execution. ``RunKind.START``
 starts the child and goes on with its run id (``ABANDON``: the child is not cancelled with
 the parent, because a later run or a person uses its result); ``RunKind.WAIT`` waits with no
-graph running and gives the child's small result back (``WAIT_CANCELLATION_COMPLETED``: a
+graph running and gives the child's small result back, with the run's id under ``run_id`` as
+``START`` gives it (``WAIT_CANCELLATION_COMPLETED``: a
 cancelled parent cancels the child, whose own workflow records that, and waits for it). A
 child that fails does not fail the parent: the graph is told ``CHILD_RUN_DID_NOT_FINISH``,
 in fixed words, and the child's own failure stays in its own run's record. What the child was
 started with, and what it answered, enters the parent's history; a target whose input names
-identifiers only keeps it small (``RunTarget.input_of``).
+identifiers only keeps it small (``RunTarget.input_of``). Once a run the graph waited for has
+ended and the graph went on to ask for another action that the driver accepts, ``went_on`` is
+called with the request of the run that ended, before that next action is handled: so an
+agent's workflow can tell someone a step is behind it, and not of the step that ended the run
+(``agent_workflow``'s hook of that name). It hears of a run that failed as of one that
+succeeded; what came of it is in the records the graph keeps, not in the call.
 
 What the graph is told of a failure is the message of the error the action's handler worded,
 or a fixed text (``ACTION_TEXTS``) for a timeout or an error nobody worded, cut to
@@ -93,7 +100,7 @@ or inside ``workflow.unsafe.imports_passed_through()``; both work, and the tests
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Collection, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import timedelta
 from typing import Any
 
@@ -209,6 +216,7 @@ async def run_graph_with_actions(
     scope: RunScope | None = None,
     decided: DecidedProposals | None = None,
     run_targets: Mapping[str, RunTarget] | None = None,
+    went_on: Callable[[ActionRequest], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Run the graph of ``run`` and the actions it asks for; the graph's final output.
 
@@ -218,9 +226,11 @@ async def run_graph_with_actions(
     message the graph is told, as the module's docstring says. ``scope`` and ``decided`` are
     for an agent whose actions the gate may hold or that start another run: the project its
     proposals and its child runs belong to, and the decisions its workflow heard of. Without
-    them such an action ends the run.
+    them such an action ends the run. ``went_on`` hears of a run the graph waited for once
+    the graph asked for another action after it, as the module's docstring says.
     """
     resume: ActionOutcome | None = None
+    waited: ActionRequest | None = None
     asked = 0
     while True:
         step = await _take_step(StepInput(run=run, resume=resume), policy)
@@ -247,9 +257,14 @@ async def run_graph_with_actions(
                 non_retryable=True,
             )
         asked += 1
+        if waited is not None and went_on is not None:
+            await went_on(waited)
+        waited = None
         target = run_targets.get(request.name) if run_targets is not None else None
         if target is not None:
             resume = await _start_or_wait_the_run(run, scope, request, target, worded_types)
+            if target.kind == RunKind.WAIT:
+                waited = request
             continue
         if spends(limits):
             resume = await _spend(run, scope, decided, request, limits, worded_types)
@@ -483,7 +498,9 @@ async def _start_or_wait_the_run(
         return _failed(request, CHILD_RUN_ALREADY_STARTED)
     if not isinstance(result, dict):
         return _failed(request, CHILD_RUN_UNREADABLE)
-    return ActionOutcome(request.action_id, succeeded=True, result=result, error="")
+    # The run's id is the record the runtime made, never a value of the child's own result.
+    answered = {**result, "run_id": str(prepared.run_id)}
+    return ActionOutcome(request.action_id, succeeded=True, result=answered, error="")
 
 
 def _failed(request: ActionRequest, error: str) -> ActionOutcome:

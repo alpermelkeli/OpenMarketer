@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "@/lib/api/types";
 
-import type { ResearchRunView, StudioRunView, TurnView } from "./events";
+import type { ResearchRunView, StudioRunView, TaskRunView, TurnView } from "./events";
 import { chatTimeline, type TimelineItem } from "./timeline";
 
 function message(id: string, minute: number, turnId: string | null = null): ChatMessage {
@@ -27,6 +27,7 @@ function turn(id: string, over: Partial<TurnView> = {}): TurnView {
     reason: null,
     researchRunIds: [],
     studioRunIds: [],
+    taskIds: [],
     started: true,
     firstEventId: 1,
     startedAt: "2026-10-17T12:00:00Z",
@@ -65,11 +66,25 @@ function studioRun(id: string, turnId: string | null, minute: number, firstEvent
   };
 }
 
+function task(id: string, turnId: string | null, minute: number, firstEventId: number): TaskRunView {
+  return {
+    id,
+    turnId,
+    stages: [],
+    status: "running",
+    reason: null,
+    proposal: null,
+    firstEventId,
+    startedAt: `2026-10-17T12:${String(minute).padStart(2, "0")}:30Z`,
+  };
+}
+
 function order(items: TimelineItem[]): string[] {
   return items.map((item) => {
     if (item.kind === "message") return item.message.id;
     if (item.kind === "research") return `run:${item.run.id}`;
     if (item.kind === "studio") return `studio:${item.run.id}`;
+    if (item.kind === "task") return `task:${item.run.id}`;
     return `failed:${item.turn.id}`;
   });
 }
@@ -160,5 +175,32 @@ describe("a chat's timeline", () => {
       turn("f", { trigger: "studio_finished", status: "failed", firstEventId: 30, startedAt: "2026-10-17T12:06:00Z" }),
     ];
     expect(order(chatTimeline(messages, [], turns))).toEqual(["answer", "failed:f", "later"]);
+  });
+});
+
+describe("a chat's timeline with tasks", () => {
+  it("places a task right after the answer of the turn that started it", () => {
+    const turns = [turn("t", { messageId: "answer" })];
+    const timeline = chatTimeline([message("ask", 1), message("answer", 2), message("later", 9)], [], turns, [], [
+      task("k", "t", 1, 5),
+    ]);
+    expect(order(timeline)).toEqual(["ask", "answer", "task:k", "later"]);
+  });
+
+  it("orders a task and a studio run placed at one point by when they began", () => {
+    const turns = [turn("t", { messageId: "answer" })];
+    const timeline = chatTimeline(
+      [message("answer", 2)],
+      [],
+      turns,
+      [studioRun("s", "t", 1, 7)],
+      [task("k", "t", 1, 5)],
+    );
+    expect(order(timeline)).toEqual(["answer", "task:k", "studio:s"]);
+  });
+
+  it("leaves out a task of a turn still running", () => {
+    const turns = [turn("t", { status: "running" })];
+    expect(order(chatTimeline([message("ask", 1)], [], turns, [], [task("k", "t", 1, 5)]))).toEqual(["ask"]);
   });
 });

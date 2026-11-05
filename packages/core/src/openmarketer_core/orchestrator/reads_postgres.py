@@ -66,6 +66,13 @@ from openmarketer_core.db.studio_runs import (
     requested_asset,
 )
 from openmarketer_core.db.studio_runs import studio_run as stored_studio_run
+from openmarketer_core.db.tasks import (
+    OrchestratorTask,
+    TaskNotFound,
+    TaskSummary,
+    list_tasks,
+    orchestrator_task,
+)
 from openmarketer_core.db.writing_runs import (
     WritingRun,
     WritingRunNotFound,
@@ -86,10 +93,13 @@ from openmarketer_core.orchestrator.reads import (
     ResearchRunReading,
     RunReading,
     StudioRunReading,
+    TaskReading,
+    TaskStepReading,
     UnknownProfileSection,
     WritingPostReading,
     WritingRunReading,
 )
+from openmarketer_core.orchestrator.task.plan import StoredTaskInvalid
 from openmarketer_core.run_events import ESCALATED
 from openmarketer_core.studio.requests import AssetRequest, StoredAssetRequestInvalid
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
@@ -275,6 +285,27 @@ class PostgresChatReads:
             return None
         return writing_run_reading(run, self._brief_of(run.id), post=self._post_of(run))
 
+    def recent_tasks(self, limit: int) -> Sequence[TaskReading]:
+        page = list_tasks(
+            self.session,
+            workspace_id=self.workspace_id,
+            project_id=self.project_id,
+            limit=min(limit, MAX_LISTED_RECORDS),
+        )
+        return [task_summary_reading(task) for task in page.items]
+
+    def task(self, task_id: uuid.UUID) -> TaskReading | None:
+        try:
+            task = orchestrator_task(
+                self.session,
+                workspace_id=self.workspace_id,
+                project_id=self.project_id,
+                task_id=task_id,
+            )
+        except (TaskNotFound, StoredTaskInvalid):
+            return None
+        return task_reading(task)
+
     def _brief_of(self, run_id: uuid.UUID) -> dict[str, Any] | None:
         try:
             brief = requested_brief(
@@ -404,6 +435,51 @@ def writing_run_reading(
         started_at=run.started_at,
         finished_at=run.finished_at,
         post=post,
+    )
+
+
+def task_summary_reading(task: TaskSummary) -> TaskReading:
+    """A task of a listing as the chat reads it: without its plan, steps and report."""
+    return TaskReading(
+        id=task.id,
+        status=task.status,
+        goal=task.goal,
+        requested_by=task.requested_by,
+        error=task.error,
+        cost_usd=float(task.cost_usd),
+        created_at=task.created_at,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+    )
+
+
+def task_reading(task: OrchestratorTask) -> TaskReading:
+    """One task as the chat reads it, with its request, plan, steps and report."""
+    return TaskReading(
+        id=task.id,
+        status=task.status,
+        goal=None if task.plan is None else task.plan.goal,
+        requested_by=task.requested_by,
+        error=task.error,
+        cost_usd=float(task.cost_usd),
+        created_at=task.created_at,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+        request=task.request.request,
+        plan=None if task.plan is None else task.plan.model_dump(mode="json"),
+        plan_changes=len(task.plan_changes),
+        steps=[
+            TaskStepReading(
+                step=step.step_key,
+                agent=step.agent.value,
+                run_id=step.child_run_id,
+                outcome=step.outcome,
+                created_at=step.created_at,
+                finished_at=step.finished_at,
+            )
+            for step in task.steps
+        ],
+        report=None if task.report is None else task.report.model_dump(mode="json"),
     )
 
 

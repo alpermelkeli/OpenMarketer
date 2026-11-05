@@ -1,10 +1,14 @@
-"""Tests for what a platform asks of a post's text: X's length, hashtags, links, mentions."""
+"""Tests for what a platform asks of a post: X's and Instagram's length, hashtags, links,
+mentions, and which images fit a post."""
 
 import pytest
 
+from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.writing.brief import WritingPlatform
 from openmarketer_core.writing.platforms import (
     hashtags,
+    image_fits,
+    instagram_length,
     links,
     mentions,
     platform_rules,
@@ -134,3 +138,34 @@ def test_ordinary_text_with_abbreviations_and_numbers_holds_no_link(text):
 def test_a_word_joined_to_another_by_a_dot_is_refused_as_a_link(text):
     # Telling a product name from a domain would take a list of top-level domains again.
     assert links(text)
+
+
+# ------------------------------------------------------------------------------ Instagram
+def test_an_instagram_caption_counts_every_character_and_line_break_as_one():
+    assert instagram_length("Ship it.\n\n#launch") == 17
+
+
+def test_an_instagram_caption_counts_an_emoji_as_two_or_more():
+    assert instagram_length("🚀") == 2
+    assert instagram_length("👩‍💻") == 5
+
+
+def test_an_instagram_caption_may_count_2200_and_carry_30_hashtags():
+    rules = platform_rules(WritingPlatform.INSTAGRAM)
+
+    assert (rules.max_length, rules.max_hashtags) == (2200, 30)
+    assert not rules.allows_links and not rules.allows_mentions
+
+
+def test_an_instagram_post_goes_with_an_image_made_for_instagram_only():
+    fitting = {image for image in Platform if image_fits(WritingPlatform.INSTAGRAM, image)}
+
+    assert fitting == {
+        Platform.INSTAGRAM_POST,
+        Platform.INSTAGRAM_PORTRAIT,
+        Platform.INSTAGRAM_STORY,
+    }
+
+
+def test_an_x_post_goes_with_an_image_made_for_any_platform():
+    assert all(image_fits(WritingPlatform.X, image) for image in Platform)

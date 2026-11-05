@@ -184,20 +184,29 @@ def ids(scope: RunScope) -> dict[str, uuid.UUID]:
 def queued_run(sessions: sessionmaker[Session], scope: RunScope) -> uuid.UUID:
     with transaction(sessions) as session:
         return request_writing_run(
-            session, **ids(scope), brief=WritingBrief.model_validate(BRIEF), requested_by="person"
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            brief=WritingBrief.model_validate(BRIEF),
+            requested_by="person",
         ).id
 
 
 def library_image(
-    sessions: sessionmaker[Session], scope: RunScope, *, rejected: bool = False
+    sessions: sessionmaker[Session],
+    scope: RunScope,
+    *,
+    rejected: bool = False,
+    platform: Platform = Platform.X_POST,
 ) -> LibraryImage:
-    """A finished studio run with one asset of one version, left for review or rejected."""
+    """A finished studio run with one asset of one version for ``platform``, left for review
+    or rejected."""
     with transaction(sessions) as session:
         run = request_studio_run(
             session,
             workspace_id=scope.workspace_id,
             project_id=scope.project_id,
-            request=ASSET_REQUEST,
+            request=ASSET_REQUEST.model_copy(update={"platform": platform}),
             requested_by="person",
         )
         run_scope = {**ids(scope), "run_id": run.id}
@@ -440,6 +449,41 @@ def test_start_with_a_rejected_asset_is_a_conflict(
     assert "rejected" in response.json()["message"]
     assert workflows.started == []
     assert client.get(runs_url(scope)).json()["runs"] == []
+
+
+def test_start_of_an_instagram_post_takes_an_image_made_for_instagram(
+    client: TestClient, services, scope, sessions, workflows
+):
+    image = library_image(sessions, scope, platform=Platform.INSTAGRAM_POST)
+    brief = {**BRIEF, "platform": "instagram", "asset": str(image.asset_id)}
+
+    response = client.post(runs_url(scope), json=brief)
+
+    assert response.status_code == 202
+    assert response.json()["platform"] == "instagram"
+    assert len(workflows.started) == 1
+
+
+def test_start_of_an_instagram_post_without_an_image_is_refused(
+    client: TestClient, services, scope, workflows
+):
+    response = client.post(runs_url(scope), json={**BRIEF, "platform": "instagram"})
+
+    assert response.status_code == 422
+    assert workflows.started == []
+
+
+def test_start_of_an_instagram_post_with_an_image_made_for_x_is_a_conflict(
+    client: TestClient, services, scope, sessions, workflows
+):
+    image = library_image(sessions, scope, platform=Platform.X_POST)
+    brief = {**BRIEF, "platform": "instagram", "asset": str(image.asset_id)}
+
+    response = client.post(runs_url(scope), json=brief)
+
+    assert (response.status_code, response.json()["code"]) == (409, "media_asset_not_usable")
+    assert "x_post" in response.json()["message"]
+    assert workflows.started == []
 
 
 def test_start_with_a_research_run_the_project_does_not_have_is_not_found(

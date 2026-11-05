@@ -1,6 +1,8 @@
 /**
  * A chat's events, folded into what its screen shows: each turn of the orchestrator with the tools
- * it called, and each research run and studio run a turn started with its stages as they arrived.
+ * it called, and each research run, studio run and task a turn started with its stages as they
+ * arrived. The runs a task starts record their own events elsewhere: the task's events tell the
+ * chat about them.
  *
  * Events arrive from two places, the history the API pages and the live stream, and a retried step
  * of a run may record the same thing twice, so the fold is forgiving: an event is counted once by
@@ -20,6 +22,7 @@ import type { ChatMessage, RunEvent } from "@/lib/api/types";
 export const CHAT_RUN = "orchestrator-chat";
 export const RESEARCH_RUN = "research-run";
 export const STUDIO_RUN = "studio-run";
+export const TASK_RUN = "orchestrator-task";
 
 /** Every kind of run event the API records, which a stream listens for by name. */
 export const EVENT_KINDS = [
@@ -44,6 +47,13 @@ export const EVENT_KINDS = [
   "edit_planned",
   "finalized",
   "escalated",
+  "task_planned",
+  "plan_checked",
+  "plan_confirmation",
+  "step_finished",
+  "step_dropped",
+  "task_reviewed",
+  "task_reported",
   "finished",
   "failed",
   "proposal_waiting",
@@ -62,10 +72,23 @@ export const PROPOSAL_KINDS: readonly string[] = [
 export const TURN_ENDS: readonly string[] = ["turn_answered", "turn_failed"];
 export const RUN_ENDS: readonly string[] = ["finished", "failed"];
 
-/** What a turn answers: a person's message, or the end of a run a turn of the chat started. */
-export type TurnTrigger = "message" | "research_finished" | "studio_finished";
+/**
+ * What a turn answers: a person's message, the end of a run a turn of the chat started, or the end
+ * of one step of a task the chat started, while the task goes on.
+ */
+export type TurnTrigger =
+  | "message"
+  | "research_finished"
+  | "studio_finished"
+  | "task_finished"
+  | "task_step_finished";
 
-const FOLLOW_UP_TRIGGERS: readonly TurnTrigger[] = ["research_finished", "studio_finished"];
+const FOLLOW_UP_TRIGGERS: readonly TurnTrigger[] = [
+  "research_finished",
+  "studio_finished",
+  "task_finished",
+  "task_step_finished",
+];
 
 export type TurnStep = {
   tool: string;
@@ -87,6 +110,8 @@ export type TurnView = {
   researchRunIds: string[];
   /** The studio runs it started, in the order it started them. */
   studioRunIds: string[];
+  /** The tasks it started, in the order it started them. */
+  taskIds: string[];
   /** Whether its `turn_started` event is among those folded, so none of its steps is missing. */
   started: boolean;
   /** The id of its first event: where it begins in the chat's order. */
@@ -165,11 +190,47 @@ export type StudioRunView = {
   startedAt: string;
 };
 
-/** An action of a research or studio run that the policy gate held for a person. */
+/**
+ * What a task recorded, node by node. Only code wrote these: places in the plan (from 1), counts,
+ * agents, statuses and run ids; never a goal or a request.
+ */
+export type TaskStage =
+  | { kind: "planned"; steps: number; agents: string[] }
+  | { kind: "checked"; steps: number; needsConfirmation: boolean; planChanges: number }
+  /** How the person answered the plan's confirmation: `confirmed`, `rejected` or `expired`. */
+  | { kind: "confirmation"; status: string }
+  | {
+      kind: "step_finished";
+      step: number;
+      agent: string;
+      /** The run the step started, as the event named it; null when it started none. */
+      runId: string | null;
+      status: string;
+      /** For a post: how the person decided on it (`dry_run`, `rejected`, `expired`, `failed`). */
+      postStatus: string | null;
+    }
+  | { kind: "step_dropped"; steps: number[] }
+  | { kind: "reviewed"; decision: string }
+  | { kind: "reported"; outcome: string; costUsd: number | null };
+
+export type TaskRunView = {
+  id: string;
+  /** The turn that started it, when its `run_started` event is among those folded. */
+  turnId: string | null;
+  stages: TaskStage[];
+  status: "running" | "finished" | "failed";
+  reason: string | null;
+  /** The plan the task asked a person to confirm (`confirm_plan`), and where it stands. */
+  proposal: RunProposal | null;
+  firstEventId: number;
+  startedAt: string;
+};
+
+/** An action of a research or studio run, or of a task, that the policy gate held for a person. */
 export type RunProposal = {
   id: string;
   actionName: string;
-  /** What the action does beyond the run, as the event worded it ("publishes", "spends"). */
+  /** What the action does beyond the run, as the event worded it ("publishes", "spends", "confirms"). */
   effect: string;
   /** "waiting" until the person decides or the deadline passes. */
   status: "waiting" | "approved" | "rejected" | "expired";
@@ -182,27 +243,35 @@ export type ChatActivity = {
   runs: ResearchRunView[];
   /** In the order they began. */
   studioRuns: StudioRunView[];
+  /** In the order they began. */
+  tasks: TaskRunView[];
   /** The latest turn that has neither answered nor failed, if any. */
   runningTurn: TurnView | null;
 };
 
 type Detail = RunEvent["detail"];
 
-type Followed = { research: Map<string, ResearchRunView>; studio: Map<string, StudioRunView> };
+type Followed = {
+  research: Map<string, ResearchRunView>;
+  studio: Map<string, StudioRunView>;
+  tasks: Map<string, TaskRunView>;
+};
 
 export function foldChatEvents(events: readonly RunEvent[]): ChatActivity {
   const turns = new Map<string, TurnView>();
-  const followed: Followed = { research: new Map(), studio: new Map() };
+  const followed: Followed = { research: new Map(), studio: new Map(), tasks: new Map() };
   for (const event of inOrder(events)) {
     if (event.run_kind === CHAT_RUN) foldTurnEvent(turnOf(turns, event), event, followed);
     else if (event.run_kind === RESEARCH_RUN) foldResearchEvent(runOf(followed.research, event.run_id, event), event);
     else if (event.run_kind === STUDIO_RUN) foldStudioEvent(studioRunOf(followed.studio, event.run_id, event), event);
+    else if (event.run_kind === TASK_RUN) foldTaskEvent(taskOf(followed.tasks, event.run_id, event), event);
   }
   const turnList = [...turns.values()];
   return {
     turns: turnList,
     runs: [...followed.research.values()].sort((a, b) => a.firstEventId - b.firstEventId),
     studioRuns: [...followed.studio.values()].sort((a, b) => a.firstEventId - b.firstEventId),
+    tasks: [...followed.tasks.values()].sort((a, b) => a.firstEventId - b.firstEventId),
     runningTurn: turnList.findLast((turn) => turn.status === "running") ?? null,
   };
 }
@@ -255,6 +324,7 @@ function turnOf(turns: Map<string, TurnView>, event: RunEvent): TurnView {
       reason: null,
       researchRunIds: [],
       studioRunIds: [],
+      taskIds: [],
       started: false,
       firstEventId: event.id,
       startedAt: event.created_at,
@@ -305,6 +375,24 @@ function studioRunOf(runs: Map<string, StudioRunView>, runId: string, event: Run
   return run;
 }
 
+function taskOf(tasks: Map<string, TaskRunView>, runId: string, event: RunEvent): TaskRunView {
+  let task = tasks.get(runId);
+  if (task === undefined) {
+    task = {
+      id: runId,
+      turnId: null,
+      stages: [],
+      status: "running",
+      reason: null,
+      proposal: null,
+      firstEventId: event.id,
+      startedAt: event.created_at,
+    };
+    tasks.set(runId, task);
+  }
+  return task;
+}
+
 function foldTurnEvent(turn: TurnView, event: RunEvent, followed: Followed): void {
   const { detail } = event;
   switch (event.kind) {
@@ -336,6 +424,9 @@ function foldTurnEvent(turn: TurnView, event: RunEvent, followed: Followed): voi
       } else if (runKind === STUDIO_RUN) {
         if (!turn.studioRunIds.includes(runId)) turn.studioRunIds.push(runId);
         studioRunOf(followed.studio, runId, event).turnId ??= turn.id;
+      } else if (runKind === TASK_RUN) {
+        if (!turn.taskIds.includes(runId)) turn.taskIds.push(runId);
+        taskOf(followed.tasks, runId, event).turnId ??= turn.id;
       }
       return;
     }
@@ -500,6 +591,78 @@ function studioStageOf(kind: string, detail: Detail): StudioStage | null {
       return { kind, versionId: textOf(detail, "version_id"), round: countOf(detail, "round") };
     case "escalated":
       return { kind, versionId: textOf(detail, "version_id"), reason: textOf(detail, "reason") ?? "" };
+    default:
+      return null;
+  }
+}
+
+function foldTaskEvent(task: TaskRunView, event: RunEvent): void {
+  const { detail } = event;
+  if (event.kind === "finished") {
+    task.status = "finished";
+    return;
+  }
+  if (event.kind === "failed") {
+    task.status = "failed";
+    task.reason = textOf(detail, "reason");
+    return;
+  }
+  if (PROPOSAL_KINDS.includes(event.kind)) {
+    foldProposalEvent(task, event);
+    return;
+  }
+  const stage = taskStageOf(event.kind, detail);
+  if (stage === null) return;
+  const previous = task.stages.at(-1);
+  if (previous !== undefined && sameStage(previous, stage)) return;
+  task.stages.push(stage);
+}
+
+function taskStageOf(kind: string, detail: Detail): TaskStage | null {
+  switch (kind) {
+    case "task_planned":
+      return { kind: "planned", steps: countOf(detail, "steps") ?? 0, agents: textsOf(detail, "agents") };
+    case "plan_checked":
+      return {
+        kind: "checked",
+        steps: countOf(detail, "steps") ?? 0,
+        needsConfirmation: flagOf(detail, "needs_confirmation") ?? false,
+        planChanges: countOf(detail, "plan_changes") ?? 0,
+      };
+    case "plan_confirmation": {
+      const status = textOf(detail, "status");
+      return status === null ? null : { kind: "confirmation", status };
+    }
+    case "step_finished": {
+      const step = countOf(detail, "step");
+      const agent = textOf(detail, "agent");
+      if (step === null || agent === null) return null;
+      const runId = textOf(detail, "run_id");
+      return {
+        kind: "step_finished",
+        step,
+        agent,
+        runId: runId === null || runId === "" ? null : runId,
+        status: textOf(detail, "status") ?? "",
+        postStatus: textOf(detail, "post_status"),
+      };
+    }
+    case "step_dropped": {
+      const value = detail.steps;
+      const steps = Array.isArray(value)
+        ? value.filter((item): item is number => typeof item === "number" && Number.isInteger(item) && item > 0)
+        : [];
+      return steps.length === 0 ? null : { kind: "step_dropped", steps };
+    }
+    case "task_reviewed":
+      return { kind: "reviewed", decision: textOf(detail, "decision") ?? "unread" };
+    case "task_reported": {
+      const outcome = textOf(detail, "outcome");
+      if (outcome === null) return null;
+      const cost = detail.cost_usd;
+      const costUsd = typeof cost === "number" && Number.isFinite(cost) && cost >= 0 ? cost : null;
+      return { kind: "reported", outcome, costUsd };
+    }
     default:
       return null;
   }

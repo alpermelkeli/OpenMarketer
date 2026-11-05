@@ -4,8 +4,9 @@ Every action passes the gate where its workflow starts it (the worker's ``driver
 the one place every action passes, so no node of a graph can skip it and no model can avoid it.
 The gate reads only what the code declared about the action (``ActionPolicy.effect``), never the
 request, whose name and payload are text a model may have shaped. An action that works for the
-run itself runs; one that publishes or spends becomes a *proposal* that a person approves or
-rejects from the dashboard, and that nobody decided on before its deadline is not run either.
+run itself runs; one that publishes, spends or asks a person to confirm becomes a *proposal*
+that a person approves or rejects from the dashboard, and that nobody decided on before its
+deadline is not run either.
 
 An action that spends is weighed by the creative budget first (``budget/caps.py``, through the
 ledger of ``budget/ledger.py``): its estimate is reserved, and the ledger's decision is the
@@ -17,10 +18,11 @@ says, from the declaration alone, whether an action can ever be held, which is w
 workflow and registration must be ready for.
 
 This is the gate of the design report's section "Policy gate" as far as it is built: it holds
-every action that publishes for a person, and weighs every action that spends against the
-creative budget. Banned content, a budget for publishing, the content filter, risk levels and
-the project's autonomy level are not here yet; each will add a reason to refuse or to let an
-action through before a person is asked.
+every action that publishes for a person, and every action that asks a person to confirm
+(``ActionEffect.CONFIRMS``, a task's plan that can spend) the same way, and weighs every action
+that spends against the creative budget. Banned content, a budget for publishing, the content
+filter, risk levels and the project's autonomy level are not here yet; each will add a reason to
+refuse or to let an action through before a person is asked.
 
 What a proposal is and how its decision travels are here too, as plain values, because the
 workflow, the worker's activities and the API share them: the statuses of a proposal, where it
@@ -95,8 +97,9 @@ _VERDICT_OF_A_SPEND = {
 
 
 def may_wait_for_a_person(policy: ActionPolicy) -> bool:
-    """Whether an action with ``policy`` can ever be held for a person: one that publishes or
-    spends. Its workflow needs a project to propose it in, and its worker the database."""
+    """Whether an action with ``policy`` can ever be held for a person: one that publishes,
+    spends or confirms. Its workflow needs a project to propose it in, and its worker the
+    database."""
     # Compared by value: the workflow sandbox loads its own copy of this module, and a policy
     # the worker's process made holds the other copy's member.
     return policy.effect != ActionEffect.INTERNAL
@@ -117,7 +120,7 @@ def verdict_for(policy: ActionPolicy, spend: SpendDecision | str | None = None) 
     """
     if policy.effect == ActionEffect.INTERNAL:
         return GateVerdict.RUN
-    if policy.effect == ActionEffect.PUBLISHES:
+    if policy.effect in (ActionEffect.PUBLISHES, ActionEffect.CONFIRMS):
         return GateVerdict.ASK_A_PERSON
     if spend is None:
         raise SpendNotDecided

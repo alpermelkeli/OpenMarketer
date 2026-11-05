@@ -31,6 +31,7 @@ from openmarketer_core.db.media_assets import (
     NewAssetVersion,
     accept_asset,
     add_version,
+    asset_for_another_platform,
     asset_for_post,
     reject_asset,
     usable_asset,
@@ -78,7 +79,7 @@ from openmarketer_core.research.research_agent.rules import CheckedFinding, Repo
 from openmarketer_core.studio.asset_store import asset_key
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
-from openmarketer_core.writing.brief import WritingBrief
+from openmarketer_core.writing.brief import WritingBrief, WritingPlatform
 
 PERSON = uuid.UUID("11111111-1111-4111-8111-111111111111")
 ASSET_REQUEST = AssetRequest(
@@ -86,6 +87,7 @@ ASSET_REQUEST = AssetRequest(
     exact_copy=["Offline sync is here", "Memoria 2.0"],
     platform=Platform.INSTAGRAM_POST,
 )
+X = WritingPlatform.X
 RESEARCH_REQUEST = ResearchRequest(questions=["How do note apps announce offline sync?"])
 
 
@@ -122,9 +124,17 @@ def project(session) -> ProjectIds:
     return new_project(session)
 
 
-def image(session: Session, project: ProjectIds, *, run_ends: str | None = "needs_review") -> Image:
-    """A studio run with one asset of one version; the run ends as ``run_ends`` says."""
-    run = request_studio_run(session, **project.ids(), request=ASSET_REQUEST, requested_by="person")
+def image(
+    session: Session,
+    project: ProjectIds,
+    *,
+    run_ends: str | None = "needs_review",
+    platform: Platform = Platform.INSTAGRAM_POST,
+) -> Image:
+    """A studio run with one asset of one version for ``platform``; the run ends as
+    ``run_ends`` says."""
+    request = ASSET_REQUEST.model_copy(update={"platform": platform})
+    run = request_studio_run(session, **project.ids(), request=request, requested_by="person")
     scope = {**project.ids(), "run_id": run.id}
     mark_studio_started(session, **scope)
     version_id = uuid.uuid4()
@@ -245,7 +255,7 @@ def writing_runs(session: Session) -> int:
 def test_a_post_can_go_with_a_draft_asset_its_run_ended_with(session, project):
     made = image(session, project)
 
-    asset = usable_asset(session, **project.ids(), asset_id=made.asset_id)
+    asset = usable_asset(session, **project.ids(), asset_id=made.asset_id, post_platform=X)
 
     assert asset.status is MediaAssetStatus.DRAFT
     assert asset.current_version_id == made.version_id
@@ -254,7 +264,7 @@ def test_a_post_can_go_with_a_draft_asset_its_run_ended_with(session, project):
 def test_the_writer_reads_what_the_assets_run_was_asked(session, project):
     made = image(session, project)
 
-    asset = asset_for_post(session, **project.ids(), asset_id=made.asset_id)
+    asset = asset_for_post(session, **project.ids(), asset_id=made.asset_id, post_platform=X)
 
     assert asset.id == made.asset_id
     assert asset.version_id == made.version_id
@@ -268,7 +278,7 @@ def test_a_rejected_asset_cannot_go_with_a_post(session, project):
     reject_asset(session, **project.ids(), asset_id=made.asset_id, decided_by=PERSON)
 
     with pytest.raises(AssetNotUsable) as refused:
-        asset_for_post(session, **project.ids(), asset_id=made.asset_id)
+        asset_for_post(session, **project.ids(), asset_id=made.asset_id, post_platform=X)
     assert refused.value.reason == ASSET_REJECTED
 
 
@@ -276,7 +286,7 @@ def test_an_asset_still_being_made_cannot_go_with_a_post(session, project):
     made = image(session, project, run_ends=None)
 
     with pytest.raises(AssetNotUsable) as refused:
-        usable_asset(session, **project.ids(), asset_id=made.asset_id)
+        usable_asset(session, **project.ids(), asset_id=made.asset_id, post_platform=X)
     assert refused.value.reason == ASSET_UNFINISHED
 
 
@@ -284,7 +294,7 @@ def test_a_draft_of_a_failed_run_cannot_go_with_a_post(session, project):
     made = image(session, project, run_ends="failed")
 
     with pytest.raises(AssetNotUsable) as refused:
-        usable_asset(session, **project.ids(), asset_id=made.asset_id)
+        usable_asset(session, **project.ids(), asset_id=made.asset_id, post_platform=X)
     assert refused.value.reason == ASSET_OF_FAILED_RUN
 
 
@@ -292,9 +302,44 @@ def test_an_asset_a_person_accepted_can_go_with_a_post_whatever_its_run_ended(se
     made = image(session, project, run_ends="failed")
     accept_asset(session, **project.ids(), asset_id=made.asset_id, decided_by=PERSON)
 
-    asset = usable_asset(session, **project.ids(), asset_id=made.asset_id)
+    asset = usable_asset(session, **project.ids(), asset_id=made.asset_id, post_platform=X)
 
     assert asset.status is MediaAssetStatus.ACCEPTED
+
+
+def test_an_image_made_for_x_cannot_go_with_an_instagram_post(session, project):
+    made = image(session, project, platform=Platform.X_POST)
+
+    with pytest.raises(AssetNotUsable) as refused:
+        usable_asset(
+            session,
+            **project.ids(),
+            asset_id=made.asset_id,
+            post_platform=WritingPlatform.INSTAGRAM,
+        )
+    assert refused.value.reason == asset_for_another_platform("x_post", WritingPlatform.INSTAGRAM)
+
+
+@pytest.mark.parametrize(
+    "platform",
+    [Platform.INSTAGRAM_POST, Platform.INSTAGRAM_PORTRAIT, Platform.INSTAGRAM_STORY],
+)
+def test_an_image_made_for_instagram_can_go_with_an_instagram_post(session, project, platform):
+    made = image(session, project, platform=platform)
+
+    asset = asset_for_post(
+        session, **project.ids(), asset_id=made.asset_id, post_platform=WritingPlatform.INSTAGRAM
+    )
+
+    assert asset.platform is platform
+
+
+def test_an_x_post_can_go_with_an_image_made_for_any_platform(session, project):
+    made = image(session, project, platform=Platform.OG_IMAGE)
+
+    asset = usable_asset(session, **project.ids(), asset_id=made.asset_id, post_platform=X)
+
+    assert asset.platform is Platform.OG_IMAGE
 
 
 def test_an_asset_of_another_workspace_is_missing_for_a_post(session, project):
@@ -302,7 +347,7 @@ def test_an_asset_of_another_workspace_is_missing_for_a_post(session, project):
     other = new_project(session)
 
     with pytest.raises(MediaAssetNotFound):
-        asset_for_post(session, **other.ids(), asset_id=made.asset_id)
+        asset_for_post(session, **other.ids(), asset_id=made.asset_id, post_platform=X)
 
 
 # --------------------------------------------------------------------- the research
@@ -400,6 +445,32 @@ def test_a_writing_run_with_an_asset_that_cannot_go_with_a_post_is_not_requested
             session,
             **project.ids(),
             brief=brief(asset=str(made.asset_id)),
+            requested_by="person",
+        )
+    assert writing_runs(session) == 0
+
+
+def test_an_instagram_post_is_requested_with_an_image_made_for_instagram(session, project):
+    made = image(session, project, platform=Platform.INSTAGRAM_PORTRAIT)
+
+    run = request_writing_run(
+        session,
+        **project.ids(),
+        brief=brief(platform="instagram", asset=str(made.asset_id)),
+        requested_by="person",
+    )
+
+    assert run.platform is WritingPlatform.INSTAGRAM
+
+
+def test_an_instagram_post_with_an_image_made_for_x_is_not_requested(session, project):
+    made = image(session, project, platform=Platform.X_POST)
+
+    with pytest.raises(AssetNotUsable):
+        request_writing_run(
+            session,
+            **project.ids(),
+            brief=brief(platform="instagram", asset=str(made.asset_id)),
             requested_by="person",
         )
     assert writing_runs(session) == 0

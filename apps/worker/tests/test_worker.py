@@ -30,6 +30,7 @@ from openmarketer_core.db.analysis_runs import run_thread_id
 from openmarketer_core.db.models import AnalysisRunStatus
 from openmarketer_core.llm import LLMError
 from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.orchestrator.task.workflow_contract import TASK_TASK_QUEUE
 from openmarketer_core.repository_analysis.analyzer_agent import AnalysisError
 from openmarketer_core.repository_analysis.intake import IntakeError
 from openmarketer_core.repository_analysis.workflow_contract import (
@@ -487,6 +488,8 @@ async def test_worker_removes_leftover_checkpoints_when_it_starts(
         "STUDIO_MAX_ITERATIONS",
         "WRITER_MAX_ROUNDS",
         "WRITER_MAX_COST_USD",
+        "TASK_MAX_STEPS",
+        "TASK_MAX_COST_USD",
     ],
 )
 async def test_worker_does_not_start_with_a_limit_that_is_not_a_number(name):
@@ -511,6 +514,35 @@ def test_worker_serves_the_creative_studio_on_a_queue_of_its_own(engine, session
     queues = [registration.task_queue for registration in served]
     assert STUDIO_TASK_QUEUE in queues
     assert len(set(queues)) == len(queues)
+
+
+@pytest.mark.parametrize(
+    ("name", "minutes", "runs"),
+    [
+        ("RESEARCH_TIMEOUT_MINUTES", "600", "research"),
+        ("STUDIO_TIMEOUT_MINUTES", "600", "studio"),
+        ("WRITER_TIMEOUT_MINUTES", "1440", "writing"),
+    ],
+)
+async def test_worker_does_not_start_when_a_run_a_task_waits_for_can_outlast_its_ceiling(
+    name, minutes, runs
+):
+    # Attempts this long let a run of the kind last longer than a task waiting for it counts on.
+    # A worker that started would serve until stopped: the deadline makes that a failure.
+    with pytest.raises(main.StartupError, match=f"a {runs} run can last"):
+        await asyncio.wait_for(main.serve({**DATABASE, **MODEL, name: minutes}), timeout=30)
+
+
+def test_worker_serves_the_orchestrators_task_on_a_queue_of_its_own(engine, sessions):
+    served = main.agents(
+        MODEL,
+        sessions,
+        engine.url.render_as_string(hide_password=False),
+        WorkspaceCredentials(sessions, {}, None),
+        NOT_TRACING,
+    )
+    [task] = [r for r in served if r.task_queue == TASK_TASK_QUEUE]
+    assert [workflow.__name__ for workflow in task.workflows] == ["OrchestratorTask"]
 
 
 def test_worker_serves_the_writer_on_a_queue_of_its_own(engine, sessions):

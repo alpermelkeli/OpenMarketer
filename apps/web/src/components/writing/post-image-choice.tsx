@@ -17,6 +17,8 @@ type PostImageChoiceProps = {
   id: string;
   projectId: string;
   assets: Offered<MediaAsset>;
+  /** Whether the post cannot be text alone (an Instagram post): "No image" is then not offered. */
+  required: boolean;
   /** The chosen asset's id; "" for a post alone. */
   value: string;
   onChange: (assetId: string) => void;
@@ -30,13 +32,15 @@ const CHOICE =
 
 /**
  * Which image of the project's Studio library the post goes with, if any: one choice per image,
- * each with its thumbnail and where it stands, after "No image". The writer does not see the image;
+ * each with its thumbnail and where it stands, after "No image" when the post may be text alone. The
+ * images offered are those made for the post's platform. The writer does not see the image;
  * it is told what the image was asked to be, and the post waits for approval with it.
  */
 export function PostImageChoice({
   id,
   projectId,
   assets,
+  required,
   value,
   onChange,
   problems,
@@ -46,26 +50,30 @@ export function PostImageChoice({
   const name = `${id}-asset`;
   return (
     <fieldset className="grid gap-2" aria-describedby={`${id}-asset-hint ${id}-asset-errors`}>
-      <legend className="mb-2 text-sm">An image to go with the post</legend>
+      <legend className="mb-2 text-sm">
+        {required ? "The image the post goes with" : "An image to go with the post"}
+      </legend>
       <ul className="grid gap-2 sm:grid-cols-2">
-        <li>
-          <input
-            type="radio"
-            id={`${name}-none`}
-            name={name}
-            value=""
-            checked={value === ""}
-            onChange={() => onChange("")}
-            disabled={disabled}
-            className="peer sr-only"
-          />
-          <label htmlFor={`${name}-none`} className={CHOICE}>
-            <span className="grid size-14 shrink-0 place-items-center rounded-sm bg-surface text-muted-foreground">
-              <ImageOffIcon aria-hidden="true" className="size-4" />
-            </span>
-            No image: the post is text alone
-          </label>
-        </li>
+        {!required && (
+          <li>
+            <input
+              type="radio"
+              id={`${name}-none`}
+              name={name}
+              value=""
+              checked={value === ""}
+              onChange={() => onChange("")}
+              disabled={disabled}
+              className="peer sr-only"
+            />
+            <label htmlFor={`${name}-none`} className={CHOICE}>
+              <span className="grid size-14 shrink-0 place-items-center rounded-sm bg-surface text-muted-foreground">
+                <ImageOffIcon aria-hidden="true" className="size-4" />
+              </span>
+              No image: the post is text alone
+            </label>
+          </li>
+        )}
         {(assets.state === "known" ? assets.items : []).map((asset) => {
           const status = assetStatusDisplay(asset.status);
           const draft = asset.status === "draft";
@@ -118,10 +126,10 @@ export function PostImageChoice({
             >
               Studio
             </Link>{" "}
-            library has no image a post can go with yet.
+            library has no image a post on this platform can go with yet.
           </>
         ) : (
-          "Only images not rejected are offered. A draft image can be chosen: approving the post approves the image with it. The writer does not see the image; it writes from what the image was asked to be."
+          "Only images not rejected, made for the post's platform, are offered. A draft image can be chosen: approving the post approves the image with it. The writer does not see the image; it writes from what the image was asked to be."
         )}
       </p>
       <FieldErrors id={`${id}-asset-errors`} messages={problems} />

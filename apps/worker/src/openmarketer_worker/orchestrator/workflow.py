@@ -1,11 +1,11 @@
 """``ChatFollowUp``: the orchestrator's own turn in a chat once a run it started ended.
 
-The ``Research`` and the ``CreativeStudio`` workflows start it as a child they abandon, with
-an id derived from the run's kind and id (``contract.follow_up_workflow_id``), so a run
-follows up once. It is one activity (``follow_up_on_run``), which takes the turn: the
-turn's rows, its events and its answer are core's to store. The workflow adds what Temporal
-owns: the activity's time limits, its heartbeats and which failures are tried again
-(``policy.py``, ``steps.py``).
+The ``Research``, ``CreativeStudio`` and ``OrchestratorTask`` workflows start it as a child they
+abandon, with an id derived from the run's kind and id (``contract.follow_up_workflow_id``), so a
+run follows up once. It is one activity (``follow_up_on_run``), which takes the turn: the turn's
+rows, its events and its answer are core's to store. The workflow adds what Temporal owns: the
+activity's time limits, its heartbeats and which failures are tried again (``policy.py``,
+``steps.py``).
 
 A follow-up that does not answer in the end leaves its turn recorded failed in the chat
 (core does that at each attempt). One that never got to a turn (the chat stayed busy, the

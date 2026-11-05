@@ -25,6 +25,7 @@ const EFFECT_LABEL: Record<ActionEffect, string> = {
   publishes: "Publishes",
   spends: "Spends money",
   internal: "Internal",
+  confirms: "Confirm a plan",
 };
 
 export function effectLabel(effect: ActionEffect): string {
@@ -35,6 +36,7 @@ const EFFECT_NOTE: Record<ActionEffect, string> = {
   publishes: "It puts something in front of other people.",
   spends: "It costs money.",
   internal: "It works for the run itself.",
+  confirms: "The task waits for this before it runs anything.",
 };
 
 /** What approving an action with `effect` lets happen, as a sentence. */
@@ -47,6 +49,7 @@ const ACTION_LABELS = new Map<string, string>([
   ["generate_image", "Generate an image"],
   ["edit_image", "Edit an image"],
   ["publish_post", "Publish a post"],
+  ["confirm_plan", "Confirm a task's plan"],
 ]);
 
 /** The run kind of a writing run, whose `publish_post` carries the post it would publish. */
@@ -114,6 +117,36 @@ export function timeLeftToDecide(expiresAt: string, now: number): string {
 
 function within(count: number, unit: string): string {
   return `within ${count} ${unit}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The words of the two buttons that decide a proposal: a plan to confirm is confirmed or
+ * rejected, any other action approved or rejected.
+ */
+export function decisionLabels(effect: string): { approve: string; reject: string } {
+  return effect === "confirms"
+    ? { approve: "Confirm the plan", reject: "Reject the plan" }
+    : { approve: "Approve", reject: "Reject" };
+}
+
+/**
+ * What the step before deciding on a task's plan says: what follows a confirmation, which runs the
+ * steps, and a rejection, which ends the task. A post the plan writes still waits for its own
+ * decision; that is the gate's rule, which this only repeats.
+ */
+export function planDecisionWording(approve: boolean): { title: string; description: string; action: string } {
+  return approve
+    ? {
+        title: "Confirm this plan?",
+        description:
+          "The task runs its steps as shown. A studio step can spend from the creative budget; a post a writing step proposes still waits for your own decision before anything is sent.",
+        action: "Confirm the plan",
+      }
+    : {
+        title: "Reject this plan?",
+        description: "The task ends without running any of its steps, and reports so in its chat.",
+        action: "Reject the plan",
+      };
 }
 
 /** What to tell the person when a decision is refused. */

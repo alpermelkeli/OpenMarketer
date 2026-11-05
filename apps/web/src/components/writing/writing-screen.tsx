@@ -58,17 +58,17 @@ export function WritingScreen({ projectId }: WritingScreenProps) {
           Write posts for the product
         </h2>
         <p className="mt-2 text-pretty text-muted-foreground">
-          A writing run writes one post for X from the approved profile. It plans the post, writes a few texts, checks
-          each in code (its length as X counts it, no links, no @mentions, nothing the profile says never to mention,
-          every claim resting on a live feature), has a second model read them as a critic, and revises until one
-          passes. The best one waits in{" "}
+          A writing run writes one post for X, or the caption of an Instagram post for an image of the library, from the
+          approved profile. It plans the post, writes a few texts, checks each in code (its length as the platform
+          counts it, no links, no @mentions, nothing the profile says never to mention, every claim resting on a live
+          feature), has a second model read them as a critic, and revises until one passes. The best one waits in{" "}
           <Link
             href={projectPageHref(projectId, "approvals")}
             className="rounded-sm text-brand underline-offset-4 hover:underline"
           >
             Approvals
           </Link>{" "}
-          for you. Nothing is sent to X yet: an approved post is recorded as a dry run.
+          for you. Nothing is sent to a platform yet: an approved post is recorded as a dry run.
         </p>
       </section>
 

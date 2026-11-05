@@ -9,6 +9,8 @@ import {
   announceableFeatures,
   attachableAssets,
   briefProblems,
+  imagesForPost,
+  needsImage,
   offeredOf,
   usableResearchRuns,
   writingBriefOf,
@@ -72,6 +74,42 @@ describe("the images a post can go with", () => {
       asset("d", "draft", null),
     ];
     expect(attachableAssets(assets).map((a) => a.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("a post on Instagram", () => {
+  const made = (id: string, platform: MediaAsset["platform"]) =>
+    ({ id, platform, status: "accepted", current_version_id: "v" }) as MediaAsset;
+  const library = {
+    state: "known" as const,
+    items: [made("square", "instagram_post"), made("story", "instagram_story"), made("wide", "x_post")],
+  };
+
+  it("is sent for Instagram with the image chosen", () => {
+    expect(writingBriefOf({ ...EMPTY_BRIEF, platform: "instagram", asset: "square" })).toEqual({
+      platform: "instagram",
+      goal: "introduce",
+      variants: 3,
+      asset: "square",
+    });
+  });
+
+  it("needs an image, and a post on X does not", () => {
+    expect(needsImage("instagram")).toBe(true);
+    expect(needsImage("x")).toBe(false);
+  });
+
+  it("is offered only the images made for Instagram, and a post on X every image", () => {
+    const offered = (platform: "x" | "instagram") => {
+      const images = imagesForPost(library, platform);
+      return images.state === "known" ? images.items.map((asset) => asset.id) : [];
+    };
+    expect(offered("instagram")).toEqual(["square", "story"]);
+    expect(offered("x")).toEqual(["square", "story", "wide"]);
+  });
+
+  it("leaves a list still being read as it is", () => {
+    expect(imagesForPost({ state: "reading" }, "instagram")).toEqual({ state: "reading" });
   });
 });
 

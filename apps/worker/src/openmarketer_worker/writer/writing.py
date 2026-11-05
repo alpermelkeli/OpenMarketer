@@ -116,12 +116,12 @@ from openmarketer_core.db.writing_runs import (
     writing_run,
 )
 from openmarketer_core.graph_checkpoints import RunCheckpoints
-from openmarketer_core.llm import ChatModel, ChatReply, LLMError
+from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.run_events import RunEvent
 from openmarketer_core.studio.requests import StoredAssetRequestInvalid
 from openmarketer_core.workspace_settings.model_settings import StoredModelChoiceInvalid
-from openmarketer_core.writing.brief import StoredWritingBriefInvalid
+from openmarketer_core.writing.brief import StoredWritingBriefInvalid, WritingPlatform
 from openmarketer_core.writing.failures import WRITING_FAILURES
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND, WritingRunInput
 from openmarketer_core.writing.writer_agent import rules
@@ -143,7 +143,7 @@ from openmarketer_core.writing.writer_agent.rules import (
     ResearchNotUsable,
 )
 from openmarketer_worker.agent_runtime.activities import AgentGraph
-from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess
+from openmarketer_worker.agent_runtime.activity_support import CheckpointAccess, ModelOfTheAttempt
 from openmarketer_worker.agent_runtime.vocabulary import DATABASE_UNAVAILABLE, MAX_ERROR_CHARACTERS
 from openmarketer_worker.writer import steps
 from openmarketer_worker.writer.activities import failure
@@ -167,32 +167,6 @@ NEWER_VERSION_APPROVED = (
     "a newer version of the product profile was approved while the run was starting: "
     "request the post again"
 )
-
-
-class ModelOfTheAttempt:
-    """The chat model of one attempt, made the first time a node asks it something.
-
-    A step that asks no model makes none, and so resolves no key.
-    """
-
-    def __init__(self, make: Callable[[], ChatModel]) -> None:
-        self._make = make
-        self._model: ChatModel | None = None
-
-    def chat(
-        self,
-        role: str,
-        messages: list[dict[str, Any]],
-        *,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
-    ) -> ChatReply:
-        if self._model is None:
-            self._model = self._make()
-        return self._model.chat(role, messages, tools=tools, tool_choice=tool_choice)
-
-    def __repr__(self) -> str:
-        return "ModelOfTheAttempt()"
 
 
 class WritingWork:
@@ -338,7 +312,7 @@ class WritingWork:
                         f"of writing run {payload.run_id} as it was stored",
                     )
                 if stored.asset_id is not None:
-                    _require_usable_image(session, payload, stored.asset_id)
+                    _require_usable_image(session, payload, stored.asset_id, stored.platform)
                 settled = settle_content_item(
                     session,
                     workspace_id=payload.workspace_id,
@@ -411,6 +385,7 @@ class WritingWork:
                     workspace_id=run.workspace_id,
                     project_id=run.project_id,
                     asset_id=asset_id,
+                    post_platform=run.brief.platform,
                 )
         except MediaAssetNotFound:
             raise PostImageNotUsable(asset_id, NO_SUCH_ASSET) from None
@@ -504,11 +479,18 @@ def _payload_of(stored: Mapping[str, Any]) -> PublishPost | None:
         return None
 
 
-def _require_usable_image(session: Session, post: PublishPost, asset_id: uuid.UUID) -> None:
-    """Refuse for good to record ``post`` when its image cannot go with a post any more."""
+def _require_usable_image(
+    session: Session, post: PublishPost, asset_id: uuid.UUID, platform: WritingPlatform
+) -> None:
+    """Refuse for good to record ``post`` when its image cannot go with a post on ``platform``
+    any more."""
     try:
         usable_asset(
-            session, workspace_id=post.workspace_id, project_id=post.project_id, asset_id=asset_id
+            session,
+            workspace_id=post.workspace_id,
+            project_id=post.project_id,
+            asset_id=asset_id,
+            post_platform=platform,
         )
     except MediaAssetNotFound:
         reason = NO_SUCH_ASSET

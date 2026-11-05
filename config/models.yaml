@@ -80,10 +80,11 @@ limits:
 roles:
   # --- operator-facing -------------------------------------------------
   orchestrator:                  # dashboard chat: status questions and special requests, and the
-                                 # worker's follow-up turn after a research run the chat started
+                                 # worker's follow-up turn after a research run the chat started;
+                                 # a task's plan and its reviews, as structured output without tools
     tier: strong
     temperature: 0.3
-    max_tokens: 4096
+    max_tokens: 16384              # thinking counts against this cap: a task's plan of several steps, plus a reasoning model's reasoning
     requires: [tools]            # reads data and creates requests through tools; never executes them directly
 
   # --- understanding ---------------------------------------------------

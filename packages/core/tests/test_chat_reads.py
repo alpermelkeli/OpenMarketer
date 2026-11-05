@@ -63,10 +63,17 @@ from openmarketer_core.db.studio_runs import (
     request_studio_run,
 )
 from openmarketer_core.db.studio_runs import mark_run_started as mark_studio_started
+from openmarketer_core.db.tasks import (
+    mark_task_started,
+    record_step_dispatched,
+    record_task_plan,
+    request_task_run,
+)
 from openmarketer_core.db.writing_runs import WritingRun, request_writing_run
 from openmarketer_core.db.writing_runs import mark_run_started as mark_writing_started
 from openmarketer_core.orchestrator.reads import ChatReads, UnknownProfileSection
 from openmarketer_core.orchestrator.reads_postgres import PostgresChatReads
+from openmarketer_core.orchestrator.task.plan import TaskAgentName, TaskPlan, TaskRequest
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import CheckedFinding, Report
@@ -508,6 +515,52 @@ def test_writing_reads_of_one_project_do_not_reach_another(session, scope):
 
     assert reads.writing_run(other_run.id) is None
     assert reads.recent_writing_runs(10) == []
+
+
+TASK_PLAN = TaskPlan.model_validate(
+    {
+        "goal": "Announce offline sync.",
+        "steps": [
+            {"id": "post", "agent": "writing", "request": {"platform": "x", "goal": "introduce"}}
+        ],
+        "scope": {"max_steps": 6, "max_plan_changes": 2, "deadline_days": 7, "max_cost_usd": 1},
+    }
+)
+
+
+def test_tasks_are_listed_with_their_goal_and_one_is_read_with_its_plan_and_steps(session, scope):
+    task = request_task_run(
+        session,
+        **_ids(scope),
+        request=TaskRequest(request="Write a post.", understanding="One post on X."),
+        requested_by="orchestrator",
+    )
+    mark_task_started(session, **_ids(scope), task_id=task.id)
+    record_task_plan(session, **_ids(scope), task_id=task.id, plan=TASK_PLAN)
+    run = request_writing_run(session, **_ids(scope), brief=BRIEF, requested_by="run")
+    record_step_dispatched(
+        session,
+        **_ids(scope),
+        task_id=task.id,
+        step_key="post",
+        agent=TaskAgentName.WRITING,
+        child_run_id=run.id,
+    )
+    reads = reads_of(session, scope)
+
+    [listed] = reads.recent_tasks(10)
+    found = reads.task(task.id)
+
+    assert (listed.id, listed.goal, listed.status) == (task.id, "Announce offline sync.", "running")
+    assert listed.plan is None and listed.steps == []
+    assert found is not None
+    assert found.request == "Write a post."
+    assert found.plan == TASK_PLAN.model_dump(mode="json")
+    assert [(step.step, step.agent, step.run_id) for step in found.steps] == [
+        ("post", "writing", run.id)
+    ]
+    assert reads.task(uuid.uuid4()) is None
+    assert reads_of(session, new_scope(session)).recent_tasks(10) == []
 
 
 def writing_run_with_post(

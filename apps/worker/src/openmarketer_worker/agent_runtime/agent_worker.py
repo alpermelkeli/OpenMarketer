@@ -33,19 +33,18 @@ before the handler may run, and every such action has one. Its handler reports w
 its result's ``cost_usd`` (``vocabulary.COST_USD``), or is taken to have spent the estimate.
 
 ``registration`` turns the handlers into what the process serves: the runtime's activities
-(``run_graph_step``, ``run_action``, ``prepare_run`` and ``forget_run``) with the agent's
-routes, graph, kind and
-words, the agent's own activities (the ones its workflow's hooks call) and its workflows.
-An agent with an action the policy gate holds for a person also gives ``registration`` the
-worker's database sessions: it registers the gate's activities (``propose_action`` and
-``settle_proposal``) with them, and ``run_action`` checks each such action's approval there.
-An agent with an action that spends gives the sessions and the process's environment too, and
-gets the budget's activities (``reserve_spend`` and ``settle_spend``), which resolve the
-workspace's caps at each attempt.
-``registration`` is also given how long a run of the agent can take at most
-(``longest_run``), and adds core's rule for its kind to the cleanups of left-over checkpoints
-(``checkpoint_cleanup.stale_threads_of``), so that no agent's threads are left for nobody to
-remove.
+(``run_graph_step``, ``run_action``, ``prepare_run`` and ``forget_run``) with the agent's routes,
+graph, kind and words, the agent's own activities (the ones its workflow's hooks call) and its
+workflows. An agent with an action the policy gate holds for a person (one that publishes, or
+confirms: ``ActionEffect.PUBLISHES``, ``CONFIRMS``; one that spends, above what the budget lets run
+on its own) also gives ``registration`` the worker's database sessions: it registers the gate's
+activities (``propose_action`` and ``settle_proposal``) with them, and ``run_action`` checks each
+such action's approval there. An agent with an action that spends gives the sessions and the
+process's environment too, and gets the budget's activities (``reserve_spend`` and
+``settle_spend``), which resolve the workspace's caps at each attempt. ``registration`` is also
+given how long a run of the agent can take at most (``longest_run``), and adds core's rule for its
+kind to the cleanups of left-over checkpoints (``checkpoint_cleanup.stale_threads_of``), so that no
+agent's threads are left for nobody to remove.
 
 Whatever can be wrong is wrong when the worker starts, not at the first run: an action with no
 handler, a run action with no prepare callable, an action that spends with no estimate, an
@@ -293,7 +292,7 @@ class AgentWorker:
             kind=self._agent.kind,
             texts=texts,
             on_run_end=self._run_ended,
-            held_actions=self._actions_that_publish(),
+            held_actions=self._actions_held_without_a_spend(),
             is_approved=None if gate is None else gate.is_approved,
             spending_actions=self._spending_actions(),
             is_cleared_to_spend=None if budget is None else budget.is_cleared,
@@ -353,7 +352,8 @@ class AgentWorker:
             if may_wait_for_a_person(policy)
         ]
 
-    def _actions_that_publish(self) -> list[str]:
+    def _actions_held_without_a_spend(self) -> list[str]:
+        # Those that publish or confirm: the gate holds each for a person whatever it costs.
         spending = set(self._spending_actions())
         return [action for action in self._actions_that_may_wait() if action not in spending]
 

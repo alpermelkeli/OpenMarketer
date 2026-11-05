@@ -104,7 +104,7 @@ function route(
     throw new Error(`an image route is a GET: ${template}`);
   const pattern = template
     .replace(
-      /\{(project_id|run_id|proposal_id|chat_id|asset_id|version_id|image_id|item_id)\}/g,
+      /\{(project_id|run_id|proposal_id|chat_id|asset_id|version_id|image_id|item_id|task_id)\}/g,
       UUID,
     )
     .replace(/\{version\}/g, VERSION)
@@ -159,6 +159,7 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/projects/{project_id}/writing-runs/{run_id}"),
   route("GET", "/v1/projects/{project_id}/content-items", PAGED),
   route("GET", "/v1/projects/{project_id}/content-items/{item_id}"),
+  route("GET", "/v1/projects/{project_id}/tasks/{task_id}"),
   route("GET", "/v1/projects/{project_id}/repository-images", PAGED),
   route(
     "POST",

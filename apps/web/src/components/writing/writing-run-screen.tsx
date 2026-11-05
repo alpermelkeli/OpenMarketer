@@ -110,13 +110,13 @@ function PostRecord({ post, source, waitingOn }: PostRecordProps) {
     <>
       <PostReview
         post={post}
-        check={checkReportOf(post.check_report)}
-        review={reviewOf(post.critic_report)}
+        check={checkReportOf(post.check_report, post.platform)}
+        review={reviewOf(post.critic_report, post.platform)}
         flaggedNumbers={post.flagged_numbers}
         waitingOn={waitingOn}
       />
       <PostClaims claims={claimsOf(post.claims)} source={source} />
-      <PostAlternatives alternatives={alternativesOf(post.alternatives)} />
+      <PostAlternatives alternatives={alternativesOf(post.alternatives, post.platform)} platform={post.platform} />
       <PostPlan plan={planOf(post.plan)} changes={post.plan_changes} />
     </>
   );

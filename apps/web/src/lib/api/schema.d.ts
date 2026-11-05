@@ -92,11 +92,12 @@ export interface paths {
          *     That is its analyses, the evidence they found, every profile version, its
          *     proposals, its chats, its research runs with their reports and the pages
          *     they fetched, its studio runs with their assets and every version's image,
-         *     accepted ones included, and its writing runs with the posts they proposed.
-         *     Refused while an analysis, a research run, a studio run or a writing run of
-         *     the project is queued or running (409 `analysis_already_running`,
-         *     `research_unfinished`, `studio_run_unfinished`, `writing_run_unfinished`), or a
-         *     proposal of it waits for a decision. The pages and the images are in the
+         *     accepted ones included, its writing runs with the posts they proposed, and
+         *     its orchestrator tasks. Refused while an analysis, a research run, a studio
+         *     run, a writing run or a task of the project is queued or running (409
+         *     `analysis_already_running`, `research_unfinished`, `studio_run_unfinished`,
+         *     `writing_run_unfinished`, `task_unfinished`), or a proposal of it waits for
+         *     a decision. The pages and the images are in the
          *     installation's one bucket and are removed through the same store. 503
          *     `storage_unavailable` when an object could not be removed from object
          *     storage; the project stays then. The repository is not touched, nor what its
@@ -283,10 +284,11 @@ export interface paths {
          *     `chat_unanswered` when the agent gave no answer within its limits and
          *     `model_unavailable` when the provider could not answer; the turn is
          *     recorded as failed, no message is stored, and sending the message again
-         *     starts a new turn. A turn may start a research run when the operator asks for
-         *     research (the request action `start_research`), and says so in the answer;
-         *     a run whose workflow could not be started is recorded as failed and the
-         *     answer says it could not be started.
+         *     starts a new turn. A turn may start a research run, a studio run or an
+         *     orchestrator task when the operator asks for one (the request actions
+         *     `start_research`, `start_creative` and `start_task`), and says so in the
+         *     answer; a run whose workflow could not be started is recorded as failed and
+         *     the answer says it could not be started.
          */
         post: operations["sendChatMessage"];
         delete?: never;
@@ -923,6 +925,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Project Tasks
+         * @description The project's tasks as they are now, newest first, one page at a time.
+         *
+         *     Each with its plan's goal, without its request, plan, steps or report.
+         */
+        get: operations["listTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task
+         * @description The task as it is now, with its request, plan, plan changes, steps and report.
+         *
+         *     404 `task_not_found` when the project has no such task.
+         */
+        get: operations["getTask"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{project_id}/writing-runs": {
         parameters: {
             query?: never;
@@ -945,13 +991,14 @@ export interface paths {
          *     The post it proposes waits for a person on its proposal.
          *
          *     The brief may name `asset`, an image of the project's Studio library the post goes with,
-         *     and `research_run_id`, a research run of the project whose findings it may draw on. One
-         *     the project does not have is a 404 (`media_asset_not_found`, `research_not_found`); 409
-         *     `media_asset_not_usable` when the asset was rejected, has no image or is still being
-         *     made, and 409 `research_not_usable` when the research run has not succeeded. 503
-         *     `writing_not_started` when
-         *     the run could not be handed to a worker: it is then stored as failed and a new one can be
-         *     started.
+         *     and `research_run_id`, a research run of the project whose findings it may draw on. A
+         *     post for `instagram` is an image with its caption, so its brief must name an `asset`
+         *     (422 otherwise). One the project does not have is a 404 (`media_asset_not_found`,
+         *     `research_not_found`); 409 `media_asset_not_usable` when the asset was rejected, has no
+         *     image, is still being made or was made for another platform (an Instagram post goes with
+         *     an `instagram_*` image), and 409 `research_not_usable` when the research run has not
+         *     succeeded. 503 `writing_not_started` when the run could not be handed to a worker: it is
+         *     then stored as failed and a new one can be started.
          */
         post: operations["startWritingRun"];
         delete?: never;
@@ -1262,10 +1309,13 @@ export interface components {
          *     runs when the graph asks. ``PUBLISHES`` puts something in front of other people, and the
          *     gate holds it for a person's approval. ``SPENDS`` costs money: the gate reserves its
          *     estimate under the creative budget, which lets it run, holds it for a person or refuses it
-         *     (``gate.py``); its worker declares how its cost is estimated.
+         *     (``gate.py``); its worker declares how its cost is estimated. ``CONFIRMS`` changes nothing
+         *     by itself: it is a point where a person confirms before the run goes on (the orchestrator's
+         *     task asks for a plan that can spend to be confirmed), and the gate holds it exactly as it
+         *     holds an action that publishes.
          * @enum {string}
          */
-        ActionEffect: "internal" | "publishes" | "spends";
+        ActionEffect: "internal" | "publishes" | "spends" | "confirms";
         /** AnalysisLimitsBoundsResponse */
         AnalysisLimitsBoundsResponse: {
             /** Max Cost Usd */
@@ -1945,7 +1995,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "writing_run_not_found" | "content_item_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "writing_run_unfinished" | "media_asset_decided" | "media_asset_not_usable" | "research_not_usable" | "studio_run_used_by_post" | "research_used_by_post" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "writing_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
+        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "writing_run_not_found" | "content_item_not_found" | "task_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "writing_run_unfinished" | "task_unfinished" | "media_asset_decided" | "media_asset_not_usable" | "research_not_usable" | "studio_run_used_by_post" | "research_used_by_post" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "writing_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
         EventDetailScalar: string | number | boolean | null;
         EventDetailValue: components["schemas"]["EventDetailScalar"] | components["schemas"]["EventDetailScalar"][];
         /**
@@ -2654,6 +2704,22 @@ export interface components {
          */
         ResearchRunStatus: "queued" | "running" | "succeeded" | "failed";
         /**
+         * ResearchStep
+         * @description A step that runs the researcher.
+         */
+        ResearchStep: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            agent: "research";
+            /** Depends On */
+            depends_on?: string[];
+            /** Id */
+            id: string;
+            request: components["schemas"]["ResearchRequest"];
+        };
+        /**
          * ResolvedModelResponse
          * @description The model and parameters a role's request is made with.
          */
@@ -2970,6 +3036,282 @@ export interface components {
          */
         StudioRunStatus: "queued" | "running" | "succeeded" | "needs_review" | "failed";
         /**
+         * StudioStep
+         * @description A step that runs the creative studio. Its request refers to no other step.
+         */
+        StudioStep: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            agent: "studio";
+            /** Depends On */
+            depends_on?: string[];
+            /** Id */
+            id: string;
+            request: components["schemas"]["StudioStepRequest"];
+        };
+        /**
+         * StudioStepRequest
+         * @description A studio step's request: an ``AssetRequest`` without reference assets.
+         */
+        StudioStepRequest: {
+            /** Exact Copy */
+            exact_copy?: string[];
+            /** Goal */
+            goal: string;
+            platform: components["schemas"]["Platform"];
+            /**
+             * Style Notes
+             * @default
+             */
+            style_notes: string;
+        };
+        /**
+         * TaskAgentName
+         * @description The agents a task may start, one run per step: the ``agent`` of each kind of step.
+         * @enum {string}
+         */
+        TaskAgentName: "research" | "writing" | "studio";
+        /**
+         * TaskDetailResponse
+         * @description A task with what it was asked, its plan and its changes, its steps and its report.
+         */
+        TaskDetailResponse: {
+            /**
+             * Chat Thread Id
+             * @description The chat whose turn started the task; null when its chat was deleted.
+             */
+            chat_thread_id: string | null;
+            /**
+             * Cost Usd
+             * @description What the task's own model calls cost, in USD; each run it started has its own.
+             */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Goal
+             * @description The goal of the plan in use; null before it has one.
+             */
+            goal: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** @description How a succeeded task came out; null until it has ended with its report. */
+            outcome: components["schemas"]["TaskOutcome"] | null;
+            /** @description The plan in use; null before the first one. */
+            plan: components["schemas"]["TaskPlan"] | null;
+            /**
+             * Plan Changes
+             * @description Each change of the plan, oldest first, with the plan it replaced.
+             */
+            plan_changes: components["schemas"]["TaskPlanChange"][];
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** @description What the task did, as code wrote it; null until it has ended with it. */
+            report: components["schemas"]["TaskReport"] | null;
+            /** @description The operator's request in their words and the chat's understanding of it. */
+            request: components["schemas"]["TaskRequest"];
+            /**
+             * Requested By
+             * @description Who asked for the task: `orchestrator` (the chat) or `person`.
+             */
+            requested_by: string;
+            /** Started At */
+            started_at: string | null;
+            /** @description `queued`, `running` (planning, waiting for its plan to be confirmed or for a run it started), `succeeded` once it ended with its report, or `failed`. */
+            status: components["schemas"]["TaskStatus"];
+            /**
+             * Steps
+             * @description The steps dispatched so far, in the order they were dispatched.
+             */
+            steps: components["schemas"]["TaskStepResponse"][];
+        };
+        /** TaskListResponse */
+        TaskListResponse: {
+            /**
+             * Next Cursor
+             * @description Null on the last page; otherwise the `cursor` of the next request.
+             */
+            next_cursor: string | null;
+            /** Tasks */
+            tasks: components["schemas"]["TaskResponse"][];
+        };
+        /**
+         * TaskOutcome
+         * @description How a task that ended with its report came out; recorded with the report.
+         * @enum {string}
+         */
+        TaskOutcome: "completed" | "incomplete" | "plan_rejected" | "plan_expired";
+        /**
+         * TaskPlan
+         * @description The plan of a task: its goal, its steps in order, and its scope.
+         */
+        TaskPlan: {
+            /** Goal */
+            goal: string;
+            scope: components["schemas"]["TaskScope"];
+            /** Steps */
+            steps: (components["schemas"]["ResearchStep"] | components["schemas"]["StudioStep"] | components["schemas"]["WritingStep"])[];
+        };
+        /**
+         * TaskPlanChange
+         * @description One change of a task's plan: why it was changed, and the plan it replaced.
+         */
+        TaskPlanChange: {
+            /** Reason */
+            reason: string;
+            replaced: components["schemas"]["TaskPlan"];
+        };
+        /**
+         * TaskReport
+         * @description What a finished task did, as code wrote it from its steps' outcomes.
+         *
+         *     ``summary`` is the text the chat's follow-up turn is given; the ids link to what the
+         *     task's runs made: the posts (content items), the assets and the research runs whose
+         *     reports it used. ``rejected`` says, a sentence each, what a person turned down.
+         */
+        TaskReport: {
+            /** Asset Ids */
+            asset_ids?: string[];
+            /** Content Item Ids */
+            content_item_ids?: string[];
+            /** Rejected */
+            rejected?: string[];
+            /** Research Run Ids */
+            research_run_ids?: string[];
+            /** Summary */
+            summary: string;
+        };
+        /**
+         * TaskRequest
+         * @description What a task is asked: the operator's words, and the chat's understanding of them.
+         */
+        TaskRequest: {
+            /** Request */
+            request: string;
+            /** Understanding */
+            understanding: string;
+        };
+        /**
+         * TaskResponse
+         * @description A task as a list shows it: its state and its plan's goal.
+         */
+        TaskResponse: {
+            /**
+             * Chat Thread Id
+             * @description The chat whose turn started the task; null when its chat was deleted.
+             */
+            chat_thread_id: string | null;
+            /**
+             * Cost Usd
+             * @description What the task's own model calls cost, in USD; each run it started has its own.
+             */
+            cost_usd: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Goal
+             * @description The goal of the plan in use; null before it has one.
+             */
+            goal: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** @description How a succeeded task came out; null until it has ended with its report. */
+            outcome: components["schemas"]["TaskOutcome"] | null;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Requested By
+             * @description Who asked for the task: `orchestrator` (the chat) or `person`.
+             */
+            requested_by: string;
+            /** Started At */
+            started_at: string | null;
+            /** @description `queued`, `running` (planning, waiting for its plan to be confirmed or for a run it started), `succeeded` once it ended with its report, or `failed`. */
+            status: components["schemas"]["TaskStatus"];
+        };
+        /**
+         * TaskScope
+         * @description What a task keeps to: its steps, how often its plan may change, its deadline and cost.
+         *
+         *     ``max_cost_usd`` covers the task's own model calls; each run it starts keeps its own caps.
+         */
+        TaskScope: {
+            /** Deadline Days */
+            deadline_days: number;
+            /** Max Cost Usd */
+            max_cost_usd: number | string;
+            /** Max Plan Changes */
+            max_plan_changes: number;
+            /** Max Steps */
+            max_steps: number;
+        };
+        /**
+         * TaskStatus
+         * @enum {string}
+         */
+        TaskStatus: "queued" | "running" | "succeeded" | "failed";
+        /**
+         * TaskStepOutcome
+         * @description How the run a step started ended: the child run's own final status.
+         * @enum {string}
+         */
+        TaskStepOutcome: "succeeded" | "needs_review" | "failed";
+        /**
+         * TaskStepResponse
+         * @description A step of the plan that was dispatched: the run it started and how that run ended.
+         */
+        TaskStepResponse: {
+            agent: components["schemas"]["TaskAgentName"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
+            /** @description How the run ended; null while it is queued, running or waiting. */
+            outcome: components["schemas"]["TaskStepOutcome"] | null;
+            /**
+             * Run Id
+             * Format: uuid
+             * @description The run the step started: a research run, a studio run or a writing run, as `agent` says.
+             */
+            run_id: string;
+            /**
+             * Step Id
+             * @description The step's id in the plan, such as `image`.
+             */
+            step_id: string;
+        };
+        /**
          * TierModelSource
          * @description Where the model of a tier comes from.
          * @enum {string}
@@ -3067,7 +3409,7 @@ export interface components {
          * WritingPlatform
          * @enum {string}
          */
-        WritingPlatform: "x";
+        WritingPlatform: "x" | "instagram";
         /** WritingRunDetailResponse */
         WritingRunDetailResponse: {
             /** @description What the run was asked to write; null when the stored brief no longer fits the brief's schema, which a later version may have tightened. */
@@ -3177,6 +3519,46 @@ export interface components {
          * @enum {string}
          */
         WritingRunStatus: "queued" | "running" | "succeeded" | "failed";
+        /**
+         * WritingStep
+         * @description A step that runs the writer, with the earlier steps whose results its brief takes.
+         *
+         *     ``asset_from_step`` names a studio step, whose asset the post goes with;
+         *     ``research_from_step`` a research step, whose findings the writer may quote.
+         */
+        WritingStep: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            agent: "writing";
+            /** Asset From Step */
+            asset_from_step?: string | null;
+            /** Depends On */
+            depends_on?: string[];
+            /** Id */
+            id: string;
+            request: components["schemas"]["WritingStepRequest"];
+            /** Research From Step */
+            research_from_step?: string | null;
+        };
+        /**
+         * WritingStepRequest
+         * @description A writing step's request: a ``WritingBrief`` without the ids its references replace.
+         */
+        WritingStepRequest: {
+            /** Angle */
+            angle?: string | null;
+            /** Feature */
+            feature?: string | null;
+            goal: components["schemas"]["WritingGoal"];
+            platform: components["schemas"]["WritingPlatform"];
+            /**
+             * Variants
+             * @default 3
+             */
+            variants: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -6261,6 +6643,128 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listTasks: {
+        parameters: {
+            query?: {
+                /** @description The most items one response may hold. */
+                limit?: number;
+                /** @description `next_cursor` of the previous page, unchanged. Leave out for the first page. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskListResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDetailResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

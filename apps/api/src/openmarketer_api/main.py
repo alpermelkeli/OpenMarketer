@@ -43,6 +43,7 @@ from openmarketer_api.routes import (
     repository_images,
     research,
     studio,
+    tasks,
     writing,
 )
 from openmarketer_api.settings import Settings
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
         research,
         studio,
         writing,
+        tasks,
         repository_images,
         profiles,
         proposals,

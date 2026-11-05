@@ -58,6 +58,26 @@ export type ContentItemDetail = Schemas["ContentItemDetailResponse"];
 export type ContentItemList = Schemas["ContentItemListResponse"];
 export type ContentItemStatus = Schemas["ContentItemStatus"];
 
+/** A task of the orchestrator as a list shows it. */
+export type Task = Schemas["TaskResponse"];
+/** A task with its request, plan, plan changes, dispatched steps and report. */
+export type TaskDetail = Schemas["TaskDetailResponse"];
+export type TaskStatus = Schemas["TaskStatus"];
+export type TaskOutcome = Schemas["TaskOutcome"];
+export type TaskPlan = Schemas["TaskPlan"];
+export type TaskScope = Schemas["TaskScope"];
+/** One step of a task's plan: a research, studio or writing step with its request. */
+export type TaskPlanStep = TaskPlan["steps"][number];
+export type ResearchStep = Schemas["ResearchStep"];
+export type StudioStep = Schemas["StudioStep"];
+export type WritingStep = Schemas["WritingStep"];
+export type ResearchRequest = Schemas["ResearchRequest"];
+export type TaskAgentName = Schemas["TaskAgentName"];
+/** A step the task dispatched: the run it started and how that run ended. */
+export type TaskStepRun = Schemas["TaskStepResponse"];
+export type TaskStepOutcome = Schemas["TaskStepOutcome"];
+export type TaskReport = Schemas["TaskReport"];
+
 export type ProfileVersion = Schemas["ProfileVersionResponse"];
 export type ProfileVersionSummary = Schemas["ProfileVersionSummaryResponse"];
 export type ProfileVersionList = Schemas["ProfileVersionListResponse"];

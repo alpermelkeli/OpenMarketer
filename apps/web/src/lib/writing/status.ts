@@ -65,7 +65,7 @@ const POST_STATUS: Record<ContentItemStatus, PostStatusDisplay> = {
     label: "Approved, dry run",
     tone: "success",
     meaning:
-      "A person approved it and it was recorded as it would have been sent. The writer sends nothing to X yet.",
+      "A person approved it and it was recorded as it would have been sent. The writer sends nothing to the platform yet.",
     draft: false,
   },
   rejected: {
@@ -108,11 +108,21 @@ export function goalLabel(goal: string): string {
   return Object.hasOwn(GOALS, goal) ? GOALS[goal as WritingGoal] : goal;
 }
 
-const PLATFORMS: Record<WritingPlatform, string> = { x: "X" };
+const PLATFORMS: Record<WritingPlatform, string> = { x: "X", instagram: "Instagram" };
+
+/** Every platform the writer writes for, in the order a form offers them. */
+export const PLATFORM_OPTIONS: readonly { value: WritingPlatform; label: string }[] = (
+  Object.keys(PLATFORMS) as WritingPlatform[]
+).map((value) => ({ value, label: PLATFORMS[value] }));
 
 /** The platform's name; a slug the dashboard does not know yet is shown as it came. */
 export function writingPlatformLabel(platform: string): string {
   return Object.hasOwn(PLATFORMS, platform) ? PLATFORMS[platform as WritingPlatform] : platform;
+}
+
+/** "Counts 212 as X counts it": how the check measured a post's length on its platform. */
+export function countedAs(platform: string): string {
+  return `as ${writingPlatformLabel(platform)} counts it`;
 }
 
 /** The action a writing run asks a person to approve, by the name its agent declares. */

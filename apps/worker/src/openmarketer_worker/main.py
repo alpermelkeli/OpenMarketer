@@ -52,6 +52,7 @@ from openmarketer_worker.checkpoint_cleanup import (
 from openmarketer_worker.creative_studio.wiring import creative_studio
 from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.orchestrator.wiring import orchestrator
+from openmarketer_worker.orchestrator_task.wiring import orchestrator_task
 from openmarketer_worker.repository_analyzer.wiring import repository_analyzer
 from openmarketer_worker.researcher.wiring import researcher
 from openmarketer_worker.settings import Settings, SettingsError
@@ -77,8 +78,10 @@ def agents(
         researcher(environ, sessions, database_url, credentials, tracing),
         creative_studio(environ, sessions, database_url, credentials, tracing),
         writer(environ, sessions, database_url, credentials, tracing),
+        # The orchestrator's task: the runs of the agents above, planned, started and waited for.
+        orchestrator_task(environ, sessions, database_url, credentials, tracing),
         # Not an agent of its own: the follow-up turn the chat agent takes in the worker once a
-        # research run or a studio run a chat started has ended.
+        # research run, a studio run or a task a chat started has ended.
         orchestrator(environ, sessions, credentials, tracing),
     ]
 

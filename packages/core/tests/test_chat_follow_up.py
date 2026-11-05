@@ -18,6 +18,7 @@ from openmarketer_core.db.chat_turns import (
     MAX_FOLLOW_UP_TURNS,
     ChatBusy,
     FollowUpGivenUp,
+    finish_turn,
     start_turn,
 )
 from openmarketer_core.db.media_assets import NewAssetVersion, add_version, record_version_review
@@ -26,6 +27,7 @@ from openmarketer_core.db.models import (
     ChatRole,
     ChatTurnTrigger,
     Project,
+    TaskStepOutcome,
     Workspace,
 )
 from openmarketer_core.db.research_runs import (
@@ -41,16 +43,34 @@ from openmarketer_core.db.studio_runs import mark_run_failed as mark_studio_fail
 from openmarketer_core.db.studio_runs import mark_run_needs_review as mark_studio_needs_review
 from openmarketer_core.db.studio_runs import mark_run_started as mark_studio_started
 from openmarketer_core.db.studio_runs import mark_run_succeeded as mark_studio_succeeded
+from openmarketer_core.db.tasks import (
+    TaskNotFound,
+    mark_task_started,
+    mark_task_succeeded,
+    record_step_dispatched,
+    record_step_outcome,
+    record_task_plan,
+    request_task_run,
+)
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator import follow_up as follow_up_module
 from openmarketer_core.orchestrator.chat_agent.rules import SUBMIT, ChatTurnError
 from openmarketer_core.orchestrator.follow_up import (
     NOT_TAKEN,
+    STEP_NOT_TAKEN,
     RunNotEnded,
     follow_up_on_run,
     record_follow_up_not_taken,
 )
 from openmarketer_core.orchestrator.reads_postgres import PostgresChatReads
+from openmarketer_core.orchestrator.task.plan import (
+    TaskAgentName,
+    TaskOutcome,
+    TaskPlan,
+    TaskReport,
+    TaskRequest,
+)
+from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.request import REQUESTED_BY_THE_CHAT
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
@@ -141,6 +161,7 @@ def follow_up(
     model,
     *,
     run_kind: str = RESEARCH_RUN_KIND,
+    step: str | None = None,
 ):
     with transaction(sessions) as reading:
         return follow_up_on_run(
@@ -152,6 +173,7 @@ def follow_up(
             run_kind=run_kind,
             run_id=run_id,
             model=model,
+            step=step,
         )
 
 
@@ -588,3 +610,325 @@ def test_a_studio_follow_up_not_taken_tells_the_chat_why(sessions, scope, chat_i
     assert recorded_events[-1].detail == {
         "reason": NOT_TAKEN[STUDIO_RUN_KIND].format(cause="no worker took it")
     }
+
+
+# ------------------------------------------------------------------------------- a task
+TASK_PLAN = TaskPlan.model_validate(
+    {
+        "goal": "Announce offline sync.",
+        "steps": [
+            {"id": "post", "agent": "writing", "request": {"platform": "x", "goal": "introduce"}}
+        ],
+        "scope": {"max_steps": 6, "max_plan_changes": 2, "deadline_days": 7, "max_cost_usd": 1},
+    }
+)
+TASK_REPORT = TaskReport(
+    summary="Goal: Announce offline sync.\nStep 'post' (writing): succeeded.",
+    content_item_ids=[],
+)
+
+
+def task_of_chat(sessions, scope: RunScope, chat_id: uuid.UUID, *, ended: bool = True):
+    """A task the chat asked for, which ended with its report unless ``ended`` is false."""
+    with transaction(sessions) as session:
+        task = request_task_run(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            request=TaskRequest(request="Write a post.", understanding="One post on X."),
+            requested_by=REQUESTED_BY_THE_CHAT,
+            chat_thread_id=chat_id,
+        )
+        if ended:
+            ids = {"workspace_id": scope.workspace_id, "project_id": scope.project_id}
+            mark_task_started(session, **ids, task_id=task.id)
+            record_task_plan(session, **ids, task_id=task.id, plan=TASK_PLAN)
+            mark_task_succeeded(
+                session,
+                **ids,
+                task_id=task.id,
+                outcome=TaskOutcome.COMPLETED,
+                report=TASK_REPORT,
+                cost_usd=Decimal("0.02"),
+            )
+        return task.id
+
+
+def test_a_task_follow_up_reads_the_task_and_gives_its_report(sessions, scope, chat_id):
+    task_id = task_of_chat(sessions, scope, chat_id)
+    model = ScriptedModel(
+        [call("get_task", task_id=str(task_id))], [call(SUBMIT, answer="The post is written.")]
+    )
+
+    done = follow_up(sessions, scope, chat_id, task_id, model, run_kind=TASK_RUN_KIND)
+
+    assert done is not None
+    instruction = model.requests[0]["messages"][-1]["content"]
+    assert f"The task {task_id} that you started" in instruction
+    assert "status succeeded" in instruction
+    read = [m["content"] for m in model.requests[1]["messages"] if m["role"] == "tool"]
+    assert "Step 'post' (writing): succeeded." in read[0]
+
+
+def test_a_task_follow_up_is_a_task_finished_turn_taken_once(sessions, scope, chat_id):
+    task_id = task_of_chat(sessions, scope, chat_id)
+    follow_up(
+        sessions,
+        scope,
+        chat_id,
+        task_id,
+        ScriptedModel([call(SUBMIT, answer="Done.")]),
+        run_kind=TASK_RUN_KIND,
+    )
+    again = ScriptedModel([call(SUBMIT, answer="Twice.")])
+
+    assert follow_up(sessions, scope, chat_id, task_id, again, run_kind=TASK_RUN_KIND) is None
+    with transaction(sessions) as session:
+        recorded = events_of_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            after=None,
+            limit=100,
+        )
+    started = [event.detail for event in recorded if event.kind == TURN_STARTED]
+    assert started == [{"trigger": "task_finished"}]
+
+
+def test_a_task_that_has_not_ended_has_nothing_to_follow_up_on(sessions, scope, chat_id):
+    task_id = task_of_chat(sessions, scope, chat_id, ended=False)
+    model = ScriptedModel([call(SUBMIT, answer="unreached")])
+
+    with pytest.raises(RunNotEnded):
+        follow_up(sessions, scope, chat_id, task_id, model, run_kind=TASK_RUN_KIND)
+
+    assert model.requests == []
+
+
+def test_a_task_follow_up_on_a_task_the_chat_did_not_ask_for_is_not_found(sessions, scope, chat_id):
+    model = ScriptedModel([call(SUBMIT, answer="unreached")])
+
+    with pytest.raises(TaskNotFound):
+        follow_up(sessions, scope, chat_id, uuid.uuid4(), model, run_kind=TASK_RUN_KIND)
+
+
+def test_a_task_follow_up_not_taken_tells_the_chat_why(sessions, scope, chat_id):
+    task_id = task_of_chat(sessions, scope, chat_id)
+
+    recorded = record_follow_up_not_taken(
+        sessions,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        chat_id=chat_id,
+        run_kind=TASK_RUN_KIND,
+        run_id=task_id,
+        cause="no worker took it",
+    )
+
+    assert recorded
+    assert (
+        NOT_TAKEN[TASK_RUN_KIND]
+        .format(cause="no worker took it")
+        .startswith("The orchestrator could not report on the task")
+    )
+
+
+def test_a_task_follow_up_closes_the_chain_and_sums_up_every_step(sessions, scope, chat_id):
+    task_id = task_of_chat(sessions, scope, chat_id)
+    model = ScriptedModel([call(SUBMIT, answer="The task is done.")])
+
+    follow_up(sessions, scope, chat_id, task_id, model, run_kind=TASK_RUN_KIND)
+
+    instruction = model.requests[0]["messages"][-1]["content"]
+    assert "This is your last message about the task" in instruction
+    assert "sums up every step of it, the last one included" in instruction
+
+
+# ------------------------------------------------------------------- a step of a task
+RESEARCH_THEN_POST = TaskPlan.model_validate(
+    {
+        "goal": "Announce offline sync.",
+        "steps": [
+            {"id": "find", "agent": "research", "request": {"questions": ["Who?"]}},
+            {"id": "post", "agent": "writing", "request": {"platform": "x", "goal": "introduce"}},
+        ],
+        "scope": {"max_steps": 6, "max_plan_changes": 2, "deadline_days": 7, "max_cost_usd": 1},
+    }
+)
+
+
+def task_with_a_step(
+    sessions, scope: RunScope, chat_id: uuid.UUID, *, ended: bool = True
+) -> uuid.UUID:
+    """A running task the chat asked for, whose research step ``find`` ran and, unless
+    ``ended`` is false, ended."""
+    ids = ScopeIds(workspace_id=scope.workspace_id, project_id=scope.project_id)
+    with transaction(sessions) as session:
+        task = request_task_run(
+            session,
+            **ids,
+            request=TaskRequest(request="Research, then post.", understanding="Two steps."),
+            requested_by=REQUESTED_BY_THE_CHAT,
+            chat_thread_id=chat_id,
+        )
+        mark_task_started(session, **ids, task_id=task.id)
+        record_task_plan(session, **ids, task_id=task.id, plan=RESEARCH_THEN_POST)
+        research = request_research_run(
+            session,
+            **ids,
+            request=ResearchRequest(questions=["Who?"]),
+            requested_by="run",
+        )
+        record_step_dispatched(
+            session,
+            **ids,
+            task_id=task.id,
+            step_key="find",
+            agent=TaskAgentName.RESEARCH,
+            child_run_id=research.id,
+        )
+        if ended:
+            record_step_outcome(
+                session, **ids, task_id=task.id, step_key="find", outcome=TaskStepOutcome.FAILED
+            )
+        return task.id
+
+
+def follow_up_on_step(sessions, scope, chat_id, task_id, model):
+    return follow_up(sessions, scope, chat_id, task_id, model, run_kind=TASK_RUN_KIND, step="find")
+
+
+def test_a_step_follow_up_names_the_task_and_the_step_and_asks_for_the_progress_so_far(
+    sessions, scope, chat_id
+):
+    task_id = task_with_a_step(sessions, scope, chat_id)
+    model = ScriptedModel([call(SUBMIT, answer="The research found nothing; the post is next.")])
+
+    done = follow_up_on_step(sessions, scope, chat_id, task_id, model)
+
+    assert done is not None
+    instruction = model.requests[0]["messages"][-1]["content"]
+    assert f"The task {task_id} that you started in this chat goes on" in instruction
+    assert "its step find has ended with outcome failed" in instruction
+    assert "one line for each earlier step that has ended" in instruction
+    assert "what the task does next" in instruction
+    assert "Do not repeat at length" in instruction
+
+
+def test_a_step_follow_up_is_not_offered_to_start_another_run(sessions, scope, chat_id):
+    task_id = task_with_a_step(sessions, scope, chat_id)
+    model = ScriptedModel([call(SUBMIT, answer="Progress.")])
+
+    follow_up_on_step(sessions, scope, chat_id, task_id, model)
+
+    offered = {schema["function"]["name"] for schema in model.requests[0]["tools"]}
+    assert offered.isdisjoint({"start_research", "start_creative", "start_task"})
+    assert {"get_task", "read_research_report", "get_studio_run", "get_writing_run"} <= offered
+
+
+def test_a_step_follow_up_is_a_task_step_finished_turn_taken_once(sessions, scope, chat_id):
+    task_id = task_with_a_step(sessions, scope, chat_id)
+    follow_up_on_step(sessions, scope, chat_id, task_id, ScriptedModel([call(SUBMIT, answer="1")]))
+    again = ScriptedModel([call(SUBMIT, answer="Twice.")])
+
+    assert follow_up_on_step(sessions, scope, chat_id, task_id, again) is None
+    assert again.requests == []
+    with transaction(sessions) as session:
+        recorded = events_of_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            after=None,
+            limit=100,
+        )
+    started = [event.detail for event in recorded if event.kind == TURN_STARTED]
+    assert started == [{"trigger": "task_step_finished"}]
+
+
+def test_a_step_follow_up_does_not_stand_for_the_tasks_report(sessions, scope, chat_id):
+    task_id = task_with_a_step(sessions, scope, chat_id)
+    follow_up_on_step(sessions, scope, chat_id, task_id, ScriptedModel([call(SUBMIT, answer="1")]))
+    with transaction(sessions) as session:
+        mark_task_succeeded(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            task_id=task_id,
+            outcome=TaskOutcome.INCOMPLETE,
+            report=TASK_REPORT,
+            cost_usd=Decimal("0.02"),
+        )
+    report = ScriptedModel([call(SUBMIT, answer="The report.")])
+
+    assert follow_up(sessions, scope, chat_id, task_id, report, run_kind=TASK_RUN_KIND) is not None
+    assert [m.content for m in history(sessions, scope, chat_id)] == ["1", "The report."]
+
+
+def test_a_step_that_has_not_ended_has_nothing_to_follow_up_on(sessions, scope, chat_id):
+    task_id = task_with_a_step(sessions, scope, chat_id, ended=False)
+    model = ScriptedModel([call(SUBMIT, answer="unreached")])
+
+    with pytest.raises(RunNotEnded):
+        follow_up_on_step(sessions, scope, chat_id, task_id, model)
+
+    assert model.requests == []
+
+
+def test_a_step_follow_up_that_meets_a_busy_chat_is_taken_once_the_chat_is_free(
+    sessions, scope, chat_id
+):
+    task_id = task_with_a_step(sessions, scope, chat_id)
+    chat = ScopeIds(workspace_id=scope.workspace_id, project_id=scope.project_id)
+    with transaction(sessions) as session:
+        running = start_turn(session, **chat, chat_id=chat_id, trigger=ChatTurnTrigger.MESSAGE)
+    with pytest.raises(ChatBusy):
+        follow_up_on_step(sessions, scope, chat_id, task_id, ScriptedModel())
+    with transaction(sessions) as session:
+        finish_turn(session, **chat, chat_id=chat_id, turn_id=running.id)
+
+    done = follow_up_on_step(
+        sessions, scope, chat_id, task_id, ScriptedModel([call(SUBMIT, answer="Progress.")])
+    )
+
+    assert done is not None and done.answer.content == "Progress."
+
+
+def test_a_step_of_a_run_that_is_not_a_task_is_refused_before_anything_is_read(
+    sessions, scope, chat_id, run_id
+):
+    model = ScriptedModel([call(SUBMIT, answer="unreached")])
+
+    with pytest.raises(ValueError):
+        follow_up(sessions, scope, chat_id, run_id, model, step="find")
+
+    assert model.requests == []
+
+
+def test_a_step_follow_up_not_taken_tells_the_chat_why(sessions, scope, chat_id):
+    task_id = task_with_a_step(sessions, scope, chat_id)
+
+    recorded = record_follow_up_not_taken(
+        sessions,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        chat_id=chat_id,
+        run_kind=TASK_RUN_KIND,
+        run_id=task_id,
+        cause="the chat stayed busy with other turns",
+        step="find",
+    )
+
+    assert recorded
+    with transaction(sessions) as session:
+        last = events_of_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            after=None,
+            limit=100,
+        )[-1]
+    told = STEP_NOT_TAKEN.format(cause="the chat stayed busy with other turns")
+    assert last.detail == {"reason": told}

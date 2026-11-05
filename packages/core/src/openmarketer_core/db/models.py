@@ -1,9 +1,10 @@
 """Tables for projects, repository evidence, Product Profile versions, analysis runs and the
 product images they found in the repository, research runs and their reports and pages, studio
-runs and the media assets they made, writing runs and the content items they proposed, stored
-credentials, the settings a workspace chose from the dashboard, the proposals of actions that
-wait for a person, the operator's chat threads about a project with their turns, the events
-runs record for the person watching them, and the budget ledger of what runs spend.
+runs and the media assets they made, writing runs and the content items they proposed, the
+orchestrator's tasks and their steps, stored credentials, the settings a workspace chose from
+the dashboard, the proposals of actions that wait for a person, the operator's chat threads
+about a project with their turns, the events runs record for the person watching them, and the
+budget ledger of what runs spend.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project; ``credential`` and
@@ -45,6 +46,11 @@ from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.gate import ProposalStatus
 from openmarketer_core.budget.caps import SpendDecision
 from openmarketer_core.db.base import Base
+from openmarketer_core.orchestrator.task.plan import (
+    MAX_STEP_ID_CHARS,
+    TaskAgentName,
+    TaskOutcome,
+)
 from openmarketer_core.repository_analysis.repository_images.selection import (
     MAX_PATH_LENGTH,
     RepositoryImageKind,
@@ -97,6 +103,21 @@ class WritingRunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"  # its post was proposed and the proposal settled
+    FAILED = "failed"
+
+
+class TaskStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"  # it ended with its report
+    FAILED = "failed"
+
+
+class TaskStepOutcome(StrEnum):
+    """How the run a step started ended: the child run's own final status."""
+
+    SUCCEEDED = "succeeded"
+    NEEDS_REVIEW = "needs_review"  # a studio run that hit a limit; its asset waits for a person
     FAILED = "failed"
 
 
@@ -776,6 +797,10 @@ class WritingRunRecord(Base):
     )
     error: Mapped[str | None] = mapped_column(Text)
     requested_by: Mapped[str] = mapped_column(Text, server_default="person")
+    # The action id (its idempotency key) of the run that asked for this one through an action
+    # that starts a run; null for a run a person or the orchestrator's chat asked for. Unique,
+    # so an attempt that is tried again finds the run it made instead of creating a second.
+    origin_action_id: Mapped[str | None] = mapped_column(Text, unique=True)
     brief: Mapped[dict[str, Any]] = mapped_column(JSONB)
     platform: Mapped[str] = mapped_column(Text)
     profile_version_id: Mapped[uuid.UUID | None]
@@ -865,6 +890,104 @@ class ContentItemRecord(Base):
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+# ------------------------------------------------------------------- tasks
+_TASK_AGENTS = ", ".join(f"'{agent.value}'" for agent in TaskAgentName)
+
+
+class TaskRecord(Base):
+    """One task of the orchestrator: a request that needs several agents, carried to its report.
+
+    ``request`` is the operator's words and ``understanding`` the chat's paragraph about them,
+    both as the chat's request action stored them. ``plan`` is the plan the task carries out
+    now (a ``TaskPlan`` as JSON), null until the first is recorded; ``plan_changes`` lists the
+    changes made to it since, each with the plan it replaced and why. ``report`` is the
+    ``TaskReport`` a succeeded task ended with and ``outcome`` how it came out (a task whose
+    plan was rejected ends with a report too), and ``cost_usd`` what the task's own model calls
+    cost, recorded when it ends; each run it started records its own. ``chat_thread_id`` is the
+    chat whose turn started the task, which hears back when it ends.
+    """
+
+    __tablename__ = "orchestrator_task"
+    __table_args__ = (
+        CheckConstraint("(status = 'succeeded') = (report IS NOT NULL)", name="report"),
+        CheckConstraint("(status = 'succeeded') = (outcome IS NOT NULL)", name="outcome_of_end"),
+        CheckConstraint("(status = 'failed') = (error IS NOT NULL)", name="error"),
+        CheckConstraint(f"char_length(error) <= {RUN_ERROR_MAX_LENGTH}", name="error_length"),
+        # A task can fail before a worker picks it up, so a failed task may have no start.
+        CheckConstraint(
+            "status = 'failed' OR (status = 'queued') = (started_at IS NULL)", name="started_at"
+        ),
+        CheckConstraint(
+            "(status IN ('succeeded', 'failed')) = (finished_at IS NOT NULL)", name="finished_at"
+        ),
+        CheckConstraint("status <> 'succeeded' OR plan IS NOT NULL", name="plan"),
+        CheckConstraint("requested_by IN ('person', 'orchestrator', 'run')", name="requested_by"),
+        CheckConstraint("cost_usd >= 0", name="cost_usd"),
+        # Lets a step name its task together with the task's project.
+        UniqueConstraint("id", "project_id"),
+        # The tasks of a project read newest first in this order.
+        Index("ix_orchestrator_task_project_id_created_at", "project_id", "created_at", "id"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    status: Mapped[TaskStatus] = mapped_column(
+        _enum(TaskStatus, "status"), server_default=TaskStatus.QUEUED.value
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str] = mapped_column(Text, server_default="orchestrator")
+    request: Mapped[str] = mapped_column(Text)
+    understanding: Mapped[str] = mapped_column(Text)
+    plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    plan_changes: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    report: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    outcome: Mapped[TaskOutcome | None] = mapped_column(_enum(TaskOutcome, "outcome"))
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), server_default=text("0"))
+    chat_thread_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("chat_thread.id"), index=True
+    )
+    created_at: Mapped[datetime] = _created_at()
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TaskStepRecord(Base):
+    """One step of a task that was dispatched: the run it started and how that run ended.
+
+    ``step_key`` is the step's id in the task's plan, dispatched once; ``agent`` the agent of
+    the step, which says what kind of run ``child_run_id`` is: a research, a writing or a studio
+    run of the same project. The run is named without a foreign key, as run events name theirs:
+    one column for three tables, and a finished run can be deleted on its own while the task's
+    record of it stays. ``outcome`` is the run's final status, once it has ended.
+    """
+
+    __tablename__ = "orchestrator_task_step"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["task_id", "project_id"], ["orchestrator_task.id", "orchestrator_task.project_id"]
+        ),
+        UniqueConstraint("task_id", "step_key"),
+        CheckConstraint(f"agent IN ({_TASK_AGENTS})", name="agent"),
+        CheckConstraint(
+            f"char_length(step_key) BETWEEN 1 AND {MAX_STEP_ID_CHARS}", name="step_key"
+        ),
+        CheckConstraint("(outcome IS NULL) = (finished_at IS NULL)", name="finished_at"),
+        CheckConstraint(
+            "outcome <> 'needs_review' OR agent = 'studio'", name="needs_review_of_studio"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    task_id: Mapped[uuid.UUID]
+    step_key: Mapped[str] = mapped_column(Text)
+    agent: Mapped[str] = mapped_column(Text)
+    child_run_id: Mapped[uuid.UUID] = mapped_column(unique=True)
+    outcome: Mapped[TaskStepOutcome | None] = mapped_column(_enum(TaskStepOutcome, "outcome"))
+    created_at: Mapped[datetime] = _created_at()
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 # ------------------------------------------------------------------- chat
 class ChatRole(StrEnum):
     USER = "user"
@@ -875,6 +998,9 @@ class ChatTurnTrigger(StrEnum):
     MESSAGE = "message"  # the operator wrote a message
     RESEARCH_FINISHED = "research_finished"  # a research run the thread started has ended
     STUDIO_FINISHED = "studio_finished"  # a studio run the thread started has ended
+    TASK_FINISHED = "task_finished"  # a task the thread started has ended
+    # a step of a task the thread started has ended, and the task goes on
+    TASK_STEP_FINISHED = "task_step_finished"
 
 
 class ChatTurnStatus(StrEnum):
@@ -939,9 +1065,10 @@ class ChatMessageRecord(Base):
 class ChatTurnRecord(Base):
     """One turn of the orchestrator in a chat thread, from its start to its answer or failure.
 
-    A turn answers the operator's message, or follows up on a research run or a studio run
-    the thread started (``research_run_id`` or ``studio_run_id``, each set exactly for its
-    trigger). A thread
+    A turn answers the operator's message, or follows up on a research run, a studio run or a
+    task the thread started (``research_run_id``, ``studio_run_id`` or ``task_id``, each set
+    exactly for its trigger), or on one step of such a task that ended while the task goes on
+    (``task_id`` and ``task_step_key``, the step's id in the task's plan). A thread
     has at most one running turn; a failed turn keeps why, worded for the
     operator.
     """
@@ -955,6 +1082,18 @@ class ChatTurnRecord(Base):
         CheckConstraint(
             "(trigger = 'studio_finished') = (studio_run_id IS NOT NULL)",
             name="studio_run_id",
+        ),
+        CheckConstraint(
+            "(trigger IN ('task_finished', 'task_step_finished')) = (task_id IS NOT NULL)",
+            name="task_id",
+        ),
+        CheckConstraint(
+            "(trigger = 'task_step_finished') = (task_step_key IS NOT NULL)",
+            name="task_step_key",
+        ),
+        CheckConstraint(
+            f"char_length(task_step_key) BETWEEN 1 AND {MAX_STEP_ID_CHARS}",
+            name="task_step_key_length",
         ),
         CheckConstraint("(status = 'failed') = (error IS NOT NULL)", name="error"),
         CheckConstraint(f"char_length(error) <= {CHAT_TURN_ERROR_MAX_LENGTH}", name="error_length"),
@@ -976,6 +1115,8 @@ class ChatTurnRecord(Base):
     # each kind of run a chat can start, so that a CHECK can tie each to its trigger.
     research_run_id: Mapped[uuid.UUID | None] = mapped_column()
     studio_run_id: Mapped[uuid.UUID | None] = mapped_column()
+    task_id: Mapped[uuid.UUID | None] = mapped_column()
+    task_step_key: Mapped[str | None] = mapped_column(Text)
     status: Mapped[ChatTurnStatus] = mapped_column(
         _enum(ChatTurnStatus, "status"), server_default=ChatTurnStatus.RUNNING.value
     )

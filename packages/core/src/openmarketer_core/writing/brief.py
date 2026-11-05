@@ -14,9 +14,11 @@ A brief may also hand the writer two ready inputs, by id: ``asset``, an image of
 Studio library the post goes with (no image is made for it), and ``research_run_id``, a finished
 research run of the project whose findings the writer may quote as data. Agents do not start
 each other, so the writer never asks for either; whoever writes the brief names what exists.
-That each is the project's and usable is checked when the run is requested and again by the
-writer's ``prepare`` (``db/writing_runs.py``), not here. A brief stored before they existed
-reads without them.
+That each is the project's and usable, and that the image was made for the brief's platform, is
+checked when the run is requested and again by the writer's ``prepare`` (``db/writing_runs.py``,
+``db/media_assets.py``), not here. A brief stored before they existed reads without them. A
+post on a platform of ``PLATFORMS_WITH_IMAGE`` (Instagram) cannot be text alone, so its brief
+must name an asset: that much the brief itself holds.
 """
 
 from __future__ import annotations
@@ -50,6 +52,12 @@ class WritingGoal(StrEnum):
 
 class WritingPlatform(StrEnum):
     X = "x"
+    INSTAGRAM = "instagram"
+
+
+# The platforms a post cannot be published on without an image: an Instagram post is an image
+# with its caption. Which images fit a platform is the platform's rule (``platforms.py``).
+PLATFORMS_WITH_IMAGE = frozenset({WritingPlatform.INSTAGRAM})
 
 
 def _without_control_characters(text: str) -> str:
@@ -84,6 +92,10 @@ class WritingBrief(BaseModel):
             raise ValueError("an announcement names the feature it announces, and only it does")
         if (self.goal is WritingGoal.ANGLE) != (self.angle is not None):
             raise ValueError("an angle brief carries the angle, and only it does")
+        if self.platform in PLATFORMS_WITH_IMAGE and self.asset is None:
+            raise ValueError(
+                f"a post on {self.platform.value} is published with an image: name its asset"
+            )
         return self
 
 

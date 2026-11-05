@@ -1,8 +1,10 @@
 """Chat turns: each turn of the orchestrator in a chat thread, from its start to its outcome.
 
 A turn answers the operator's message (trigger ``message``) or follows up on a
-research run or a studio run the thread started, once that run has ended
-(trigger ``research_finished`` or ``studio_finished``, with the run). A thread
+research run, a studio run or a task the thread started, once it has ended
+(trigger ``research_finished``, ``studio_finished`` or ``task_finished``, with the run), or on
+one step of such a task that ended while the task goes on (trigger ``task_step_finished``,
+with the task and the step's id in its plan). A thread
 takes one turn at a time: while a turn runs, starting another is ``ChatBusy``.
 The workspace lock makes two starts run one after the other, so the second sees
 the first; the partial
@@ -22,10 +24,10 @@ it), and the next ``start_turn`` of the thread marks it failed with
 ``ABANDONED_TURN_ERROR`` first, and records ``turn_failed`` with that sentence,
 so a screen that showed it running sees it end.
 
-A run is followed up on once: ``start_turn`` of a follow-up turn is
-``FollowUpAnswered`` when a turn of the chat has answered about the run,
-and ``FollowUpGivenUp`` when ``MAX_FOLLOW_UP_TURNS`` turns were started about it
-already, each of which may have spent a model's turn. Both are decided after the
+A run is followed up on once, and so is each step of a task: ``start_turn`` of a
+follow-up turn is ``FollowUpAnswered`` when a turn of the chat has answered about the
+run (or the step), and ``FollowUpGivenUp`` when ``MAX_FOLLOW_UP_TURNS`` turns were
+started about it already, each of which may have spent a model's turn. Both are decided after the
 workspace lock, so two overlapping attempts cannot both pass. A follow-up that
 never got as far as a turn is recorded with ``record_unstarted_follow_up``: a
 turn that failed at once, so the chat shows why it heard nothing.
@@ -60,10 +62,12 @@ from openmarketer_core.db.models import (
     ChatTurnTrigger,
     ResearchRunRecord,
     StudioRunRecord,
+    TaskRecord,
 )
 from openmarketer_core.db.research_runs import ResearchRunNotFound
 from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.studio_runs import StudioRunNotFound
+from openmarketer_core.db.tasks import TaskNotFound
 from openmarketer_core.db.workspace_lock import wait_for_other_writes
 from openmarketer_core.orchestrator.chat_agent.definitions import CHAT_TURN_KIND
 from openmarketer_core.run_events import TURN_FAILED, TURN_STARTED, RunEvent
@@ -77,7 +81,11 @@ _RUNNING_INDEX = "uq_chat_turn_thread_id_running"
 _FOLLOW_UPS = {
     ChatTurnTrigger.RESEARCH_FINISHED: ChatTurnRecord.research_run_id,
     ChatTurnTrigger.STUDIO_FINISHED: ChatTurnRecord.studio_run_id,
+    ChatTurnTrigger.TASK_FINISHED: ChatTurnRecord.task_id,
+    ChatTurnTrigger.TASK_STEP_FINISHED: ChatTurnRecord.task_id,
 }
+# The triggers whose run is a task the chat asked for.
+_OF_A_TASK = (ChatTurnTrigger.TASK_FINISHED, ChatTurnTrigger.TASK_STEP_FINISHED)
 
 
 class ChatBusy(Exception):
@@ -121,6 +129,8 @@ class ChatTurn:
     trigger: ChatTurnTrigger
     research_run_id: uuid.UUID | None
     studio_run_id: uuid.UUID | None
+    task_id: uuid.UUID | None
+    task_step_key: str | None
     status: ChatTurnStatus
     error: str | None
     created_at: datetime
@@ -136,24 +146,29 @@ def start_turn(
     trigger: ChatTurnTrigger,
     research_run_id: uuid.UUID | None = None,
     studio_run_id: uuid.UUID | None = None,
+    task_id: uuid.UUID | None = None,
+    task_step_key: str | None = None,
 ) -> ChatTurn:
     """Start a running turn of the chat, unless another one is running.
 
-    ``research_run_id`` is given exactly for a ``research_finished`` turn, and
-    ``studio_run_id`` exactly for a ``studio_finished`` one; each names a run of
-    the project that this chat asked for, and any other run is
-    ``ResearchRunNotFound`` or ``StudioRunNotFound``. A turn left running for longer than
-    ``TURN_ABANDONED_AFTER`` is marked failed first, with its ``turn_failed``
-    event. Raises ``ChatBusy`` while another turn is running, and, for a
+    ``research_run_id`` is given exactly for a ``research_finished`` turn,
+    ``studio_run_id`` exactly for a ``studio_finished`` one and ``task_id`` exactly for a
+    ``task_finished`` or a ``task_step_finished`` one, with ``task_step_key`` exactly for the
+    latter; each names a run of the project that this chat asked for, and
+    any other run is ``ResearchRunNotFound``, ``StudioRunNotFound`` or ``TaskNotFound``.
+    A turn left running for longer than ``TURN_ABANDONED_AFTER`` is marked failed first,
+    with its ``turn_failed`` event. Raises ``ChatBusy`` while another turn is running, and, for a
     follow-up, ``FollowUpAnswered`` and ``FollowUpGivenUp`` (see the module).
     Takes the workspace lock like every write of a workspace.
     """
-    followed_run = _followed_run(trigger, research_run_id, studio_run_id)
+    followed_run = _followed_run(trigger, research_run_id, studio_run_id, task_id, task_step_key)
     wait_for_other_writes(session, workspace_id)
     require_chat(session, workspace_id=workspace_id, project_id=project_id, chat_id=chat_id)
     if followed_run is not None:
         _require_run_of_chat(session, project_id, chat_id, trigger, followed_run)
-        _require_follow_up_to_take(session, project_id, chat_id, trigger, followed_run)
+        _require_follow_up_to_take(
+            session, project_id, chat_id, trigger, followed_run, task_step_key
+        )
     _give_up_abandoned_turn(session, workspace_id, project_id, chat_id)
     if _running_record(session, project_id, chat_id) is not None:
         raise ChatBusy(chat_id)
@@ -163,6 +178,8 @@ def start_turn(
         trigger=trigger,
         research_run_id=research_run_id,
         studio_run_id=studio_run_id,
+        task_id=task_id,
+        task_step_key=task_step_key,
     )
     try:
         with session.begin_nested():
@@ -242,28 +259,39 @@ def record_unstarted_follow_up(
     error: str,
     research_run_id: uuid.UUID | None = None,
     studio_run_id: uuid.UUID | None = None,
+    task_id: uuid.UUID | None = None,
+    task_step_key: str | None = None,
 ) -> ChatTurn | None:
     """Record a follow-up on a run that never got to a turn, as a turn that failed.
 
-    The run is ``research_run_id`` or ``studio_run_id``, exactly one of them.
+    The run is ``research_run_id``, ``studio_run_id`` or ``task_id``, exactly one of them;
+    with ``task_id``, ``task_step_key`` names the step of the task the follow-up was about,
+    and is left out for the task's report.
 
     ``error`` is a sentence worded for the operator. The turn is stored failed at once,
     with ``turn_started`` and ``turn_failed`` events, so the chat shows why it heard
     nothing. Nothing is recorded, and ``None`` returned, when the chat has started a turn
     about the run already: that turn shows its own outcome. The run must be one this chat
-    asked for (``ResearchRunNotFound`` or ``StudioRunNotFound`` otherwise). Takes the
-    workspace lock like every write of a workspace.
+    asked for (``ResearchRunNotFound``, ``StudioRunNotFound`` or ``TaskNotFound``
+    otherwise). Takes the workspace lock like every write of a workspace.
     """
-    if research_run_id is not None and studio_run_id is None:
-        trigger, run_id = ChatTurnTrigger.RESEARCH_FINISHED, research_run_id
-    elif studio_run_id is not None and research_run_id is None:
-        trigger, run_id = ChatTurnTrigger.STUDIO_FINISHED, studio_run_id
-    else:
+    task_trigger = ChatTurnTrigger.TASK_FINISHED
+    if task_step_key is not None:
+        task_trigger = ChatTurnTrigger.TASK_STEP_FINISHED
+    named = {
+        ChatTurnTrigger.RESEARCH_FINISHED: research_run_id,
+        ChatTurnTrigger.STUDIO_FINISHED: studio_run_id,
+        task_trigger: task_id,
+    }
+    runs = [(trigger, run_id) for trigger, run_id in named.items() if run_id is not None]
+    if len(runs) != 1:
         raise ValueError("a follow-up is about exactly one run")
+    [(trigger, run_id)] = runs
+    _followed_run(trigger, research_run_id, studio_run_id, task_id, task_step_key)
     wait_for_other_writes(session, workspace_id)
     require_chat(session, workspace_id=workspace_id, project_id=project_id, chat_id=chat_id)
     _require_run_of_chat(session, project_id, chat_id, trigger, run_id)
-    if _follow_up_turns(session, project_id, chat_id, trigger, run_id) > 0:
+    if _follow_up_turns(session, project_id, chat_id, trigger, run_id, task_step_key) > 0:
         return None
     error = error[:CHAT_TURN_ERROR_MAX_LENGTH]
     record = ChatTurnRecord(
@@ -272,6 +300,8 @@ def record_unstarted_follow_up(
         trigger=trigger,
         research_run_id=research_run_id,
         studio_run_id=studio_run_id,
+        task_id=task_id,
+        task_step_key=task_step_key,
         status=ChatTurnStatus.FAILED,
         error=error,
         finished_at=func.now(),
@@ -292,14 +322,22 @@ def record_unstarted_follow_up(
 
 
 def _followed_run(
-    trigger: ChatTurnTrigger, research_run_id: uuid.UUID | None, studio_run_id: uuid.UUID | None
+    trigger: ChatTurnTrigger,
+    research_run_id: uuid.UUID | None,
+    studio_run_id: uuid.UUID | None,
+    task_id: uuid.UUID | None,
+    task_step_key: str | None,
 ) -> uuid.UUID | None:
     """The run a turn of ``trigger`` follows up on, checked against the trigger."""
     if (trigger is ChatTurnTrigger.RESEARCH_FINISHED) != (research_run_id is not None):
         raise ValueError("a research run is named exactly for a turn that follows up on one")
     if (trigger is ChatTurnTrigger.STUDIO_FINISHED) != (studio_run_id is not None):
         raise ValueError("a studio run is named exactly for a turn that follows up on one")
-    return research_run_id or studio_run_id
+    if (trigger in _OF_A_TASK) != (task_id is not None):
+        raise ValueError("a task is named exactly for a turn that follows up on one")
+    if (trigger is ChatTurnTrigger.TASK_STEP_FINISHED) != (task_step_key is not None):
+        raise ValueError("a task's step is named exactly for a turn that follows up on one")
+    return research_run_id or studio_run_id or task_id
 
 
 def _require_follow_up_to_take(
@@ -308,15 +346,17 @@ def _require_follow_up_to_take(
     chat_id: uuid.UUID,
     trigger: ChatTurnTrigger,
     run_id: uuid.UUID,
+    task_step_key: str | None,
 ) -> None:
     answered = (
-        _follow_ups_of_run(project_id, chat_id, trigger, run_id)
+        _follow_ups_of_run(project_id, chat_id, trigger, run_id, task_step_key)
         .where(ChatTurnRecord.status == ChatTurnStatus.ANSWERED)
         .exists()
     )
     if session.scalar(select(answered)) is True:
         raise FollowUpAnswered(chat_id, run_id)
-    if _follow_up_turns(session, project_id, chat_id, trigger, run_id) >= MAX_FOLLOW_UP_TURNS:
+    turns = _follow_up_turns(session, project_id, chat_id, trigger, run_id, task_step_key)
+    if turns >= MAX_FOLLOW_UP_TURNS:
         raise FollowUpGivenUp(chat_id, run_id)
 
 
@@ -326,19 +366,28 @@ def _follow_up_turns(
     chat_id: uuid.UUID,
     trigger: ChatTurnTrigger,
     run_id: uuid.UUID,
+    task_step_key: str | None,
 ) -> int:
     counted = select(func.count()).select_from(
-        _follow_ups_of_run(project_id, chat_id, trigger, run_id).subquery()
+        _follow_ups_of_run(project_id, chat_id, trigger, run_id, task_step_key).subquery()
     )
     return session.scalar(counted) or 0
 
 
 def _follow_ups_of_run(
-    project_id: uuid.UUID, chat_id: uuid.UUID, trigger: ChatTurnTrigger, run_id: uuid.UUID
+    project_id: uuid.UUID,
+    chat_id: uuid.UUID,
+    trigger: ChatTurnTrigger,
+    run_id: uuid.UUID,
+    task_step_key: str | None,
 ) -> Select[ChatTurnRecord]:
-    return _turns_of_chat(project_id, chat_id).where(
+    """The follow-ups of the run, or of its step ``task_step_key`` for a step's trigger."""
+    followed = _turns_of_chat(project_id, chat_id).where(
         ChatTurnRecord.trigger == trigger, _FOLLOW_UPS[trigger] == run_id
     )
+    if task_step_key is None:
+        return followed
+    return followed.where(ChatTurnRecord.task_step_key == task_step_key)
 
 
 def _record(
@@ -365,6 +414,17 @@ def _require_run_of_chat(
     trigger: ChatTurnTrigger,
     run_id: uuid.UUID,
 ) -> None:
+    if trigger in _OF_A_TASK:
+        found = session.scalar(
+            select(TaskRecord.id).where(
+                TaskRecord.id == run_id,
+                TaskRecord.project_id == project_id,
+                TaskRecord.chat_thread_id == chat_id,
+            )
+        )
+        if found is None:
+            raise TaskNotFound(project_id, run_id)
+        return
     if trigger is ChatTurnTrigger.STUDIO_FINISHED:
         found = session.scalar(
             select(StudioRunRecord.id).where(
@@ -463,6 +523,8 @@ def _turn(record: ChatTurnRecord) -> ChatTurn:
         trigger=record.trigger,
         research_run_id=record.research_run_id,
         studio_run_id=record.studio_run_id,
+        task_id=record.task_id,
+        task_step_key=record.task_step_key,
         status=record.status,
         error=record.error,
         created_at=record.created_at,

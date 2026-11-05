@@ -32,6 +32,12 @@ def test_action_that_publishes_waits_for_a_person_whatever_a_spend_decision_says
     assert verdict_for(published, SpendDecision.RUN_AUTOMATICALLY) is GateVerdict.ASK_A_PERSON
 
 
+def test_action_a_person_confirms_waits_for_a_person_as_one_that_publishes():
+    confirmed = policy(effect=ActionEffect.CONFIRMS)
+    assert verdict_for(confirmed) is GateVerdict.ASK_A_PERSON
+    assert verdict_for(confirmed, SpendDecision.RUN_AUTOMATICALLY) is GateVerdict.ASK_A_PERSON
+
+
 @pytest.mark.parametrize(
     ("decision", "verdict"),
     [
@@ -61,15 +67,25 @@ def test_value_that_is_not_a_decision_of_the_ledger_is_refused():
 
 @pytest.mark.parametrize(
     ("effect", "held"),
-    [(ActionEffect.INTERNAL, False), (ActionEffect.PUBLISHES, True), (ActionEffect.SPENDS, True)],
+    [
+        (ActionEffect.INTERNAL, False),
+        (ActionEffect.PUBLISHES, True),
+        (ActionEffect.SPENDS, True),
+        (ActionEffect.CONFIRMS, True),
+    ],
 )
-def test_actions_that_publish_or_spend_may_wait_for_a_person(effect, held):
+def test_actions_that_publish_spend_or_confirm_may_wait_for_a_person(effect, held):
     assert may_wait_for_a_person(policy(effect=effect)) is held
 
 
 @pytest.mark.parametrize(
     ("effect", "weighed"),
-    [(ActionEffect.INTERNAL, False), (ActionEffect.PUBLISHES, False), (ActionEffect.SPENDS, True)],
+    [
+        (ActionEffect.INTERNAL, False),
+        (ActionEffect.PUBLISHES, False),
+        (ActionEffect.SPENDS, True),
+        (ActionEffect.CONFIRMS, False),
+    ],
 )
 def test_only_an_action_that_spends_is_weighed_by_the_budget(effect, weighed):
     assert spends(policy(effect=effect)) is weighed

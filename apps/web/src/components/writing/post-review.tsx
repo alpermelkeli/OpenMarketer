@@ -10,7 +10,7 @@ import { formatCost } from "@/lib/studio/status";
 import { cn } from "@/lib/utils";
 import { postImageOf } from "@/lib/writing/attachments";
 import { postLengthOf, type CheckReport, type Review } from "@/lib/writing/record";
-import { postStatusDisplay, writingPlatformLabel } from "@/lib/writing/status";
+import { countedAs, postStatusDisplay, writingPlatformLabel } from "@/lib/writing/status";
 
 import { CodeChecks, CriticReview, FlaggedNumbers } from "./post-checks";
 
@@ -24,8 +24,8 @@ type PostReviewProps = {
 };
 
 /**
- * The post the run proposed: the text exactly as it would be sent, its length on X, what became of
- * it, and what the code and the critic found of it; with the image it was proposed with, the version
+ * The post the run proposed: the text exactly as it would be sent, its length on its platform, what
+ * became of it, and what the code and the critic found of it; with the image it was proposed with, the version
  * a person approves with the text, and a link to the research it drew on. A post that waits is drawn as a draft, an
  * approved one with a solid border and a lock. The text was written by a model: shown as text only.
  */
@@ -74,7 +74,7 @@ export function PostReview({ post, check, review, flaggedNumbers, waitingOn }: P
             <span>Length not recorded</span>
           ) : (
             <span className={length.kept === false ? "text-destructive" : undefined}>
-              Counts <span className="font-mono tabular-nums">{length.count}</span> as X counts it
+              Counts <span className="font-mono tabular-nums">{length.count}</span> {countedAs(post.platform)}
               {length.kept === false && ", over its limit"}
               {length.kept === true && ", within its limit"}
             </span>

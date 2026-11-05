@@ -9,6 +9,7 @@ import type { Proposal } from "@/lib/api/types";
 import { formatDateTime, shortId } from "@/lib/format";
 import {
   actionLabel,
+  decisionLabels,
   effectLabel,
   estimateText,
   payloadText,
@@ -17,7 +18,9 @@ import {
   timeLeftToDecide,
 } from "@/lib/proposals/proposal-display";
 import { proposalAnchor, writingHref } from "@/lib/projects/project-navigation";
+import { isPlanConfirmation } from "@/lib/tasks/plan";
 
+import { ProposedPlan } from "./proposed-plan";
 import { ProposedPostImage } from "./proposed-post-image";
 
 type ProposalCardProps = {
@@ -34,6 +37,8 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
   const label = actionLabel(proposal.action_name);
   const estimate = estimateText(proposal.estimate_usd);
   const post = proposedPostText(proposal);
+  const plan = isPlanConfirmation(proposal);
+  const labels = decisionLabels(proposal.effect);
 
   return (
     <article
@@ -65,7 +70,7 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
           </blockquote>
           <ProposedPostImage proposal={proposal} />
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-            <span>The writer sends nothing to X yet: an approved post is recorded as a dry run.</span>
+            <span>The writer sends nothing to a platform yet: an approved post is recorded as a dry run.</span>
             <Link
               href={writingHref(proposal.project_id, proposal.run_id)}
               className="inline-flex items-center gap-1 rounded-sm text-brand underline-offset-4 hover:underline"
@@ -76,6 +81,8 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
           </p>
         </div>
       )}
+
+      {plan && <ProposedPlan proposal={proposal} />}
 
       <div className="grid gap-1.5">
         <p className="text-2xs tracking-widest text-muted-foreground uppercase">What the agent asks</p>
@@ -93,11 +100,11 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
           </p>
           <Button variant="outline" onClick={() => onDecide(false)}>
             <XIcon data-icon="inline-start" aria-hidden="true" />
-            Reject
+            {labels.reject}
           </Button>
           <Button onClick={() => onDecide(true)}>
             <CheckIcon data-icon="inline-start" aria-hidden="true" />
-            Approve
+            {labels.approve}
           </Button>
         </div>
       )}
