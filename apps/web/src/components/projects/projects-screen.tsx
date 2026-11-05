@@ -2,10 +2,8 @@
 
 import { PlusIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
-import { LoadMore } from "@/components/common/load-more";
-import { PageHeader } from "@/components/common/page-header";
 import { RequestProblem } from "@/components/common/request-problem";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,10 +12,9 @@ import type { CreateProjectRequest } from "@/lib/api/types";
 import { createProjectErrors } from "@/lib/projects/create-project-errors";
 
 import { NewProjectForm } from "./new-project-form";
-import { ProjectList } from "./project-list";
-import { ProjectsEmptyState } from "./projects-empty-state";
+import { ProjectsIntro } from "./projects-intro";
 
-/** The projects screen: every project of the workspace, and the form that adds one. */
+/** The root screen: the landing that says what OpenMarketer does and starts a project. */
 export function ProjectsScreen() {
   const router = useRouter();
   const projects = useProjects();
@@ -39,24 +36,38 @@ export function ProjectsScreen() {
     />
   );
 
-  const isEmpty = projects.data !== undefined && projects.data.length === 0;
+  const loading = projects.data === undefined && projects.error === null;
+  const empty = projects.data !== undefined && projects.data.length === 0;
 
   return (
-    <div className="grid gap-10">
-      <PageHeader
-        title="Projects"
-        description="A project is one product and the repository its code lives in."
-        actions={
-          projects.data !== undefined &&
-          !isEmpty &&
-          !creating && (
-            <Button size="lg" onClick={() => setCreating(true)}>
+    <div className="grid gap-12">
+      <section className="grid animate-enter gap-12 md:grid-cols-[1fr_minmax(0,22rem)] md:gap-16">
+        <ProjectsIntro empty={empty} />
+        {loading ? (
+          <Skeleton className="h-72" />
+        ) : empty ? (
+          <Panel id="first-project" title="Your first project">
+            {form()}
+          </Panel>
+        ) : creating ? (
+          <Panel id="new-project" title="New project">
+            {form(() => {
+              setCreating(false);
+              createProject.reset();
+            })}
+          </Panel>
+        ) : (
+          <Panel id="new-project" title="New project">
+            <p className="max-w-prose text-pretty text-sm text-muted-foreground">
+              A project is one product and the repository its code lives in.
+            </p>
+            <Button size="lg" className="mt-5" onClick={() => setCreating(true)}>
               <PlusIcon data-icon="inline-start" aria-hidden="true" />
               New project
             </Button>
-          )
-        }
-      />
+          </Panel>
+        )}
+      </section>
 
       {projects.error !== null && (
         <RequestProblem
@@ -65,40 +76,20 @@ export function ProjectsScreen() {
           onRetry={() => void projects.refetch()}
         />
       )}
-
-      {projects.data === undefined && projects.error === null && (
-        <div className="grid gap-3" aria-busy="true" aria-label="Loading projects">
-          <Skeleton className="h-16" />
-          <Skeleton className="h-16" />
-        </div>
-      )}
-
-      {isEmpty && <ProjectsEmptyState>{form()}</ProjectsEmptyState>}
-
-      {projects.data !== undefined && !isEmpty && (
-        <>
-          {creating && (
-            <section aria-labelledby="new-project" className="max-w-prose animate-enter rounded-md border bg-card p-6">
-              <h2 id="new-project" className="mb-5 font-heading text-lg">
-                New project
-              </h2>
-              {form(() => {
-                setCreating(false);
-                createProject.reset();
-              })}
-            </section>
-          )}
-          <div>
-            <ProjectList projects={projects.data} />
-            <LoadMore
-              noun="projects"
-              hasMore={projects.hasNextPage}
-              loading={projects.isFetchingNextPage}
-              onLoadMore={() => void projects.fetchNextPage()}
-            />
-          </div>
-        </>
-      )}
     </div>
+  );
+}
+
+type PanelProps = { id: string; title: string; children: ReactNode };
+
+/** One of the landing's two cards: the form that starts a project, or the way to it. */
+function Panel({ id, title, children }: PanelProps) {
+  return (
+    <section aria-labelledby={id} className="self-start rounded-md border bg-card p-6">
+      <h2 id={id} className="mb-5 font-heading text-lg">
+        {title}
+      </h2>
+      {children}
+    </section>
   );
 }

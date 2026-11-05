@@ -94,6 +94,8 @@ export const queryKeys = {
    */
   shellProject: (projectId: string) =>
     ["projects", "one", projectId, "project", "shell"] as const,
+  /** The workspace's projects as the sidebar lists them, under a key of its own like the other shell copies. */
+  shellProjects: () => ["projects", "list", "shell"] as const,
   shellWaitingProposals: (projectId: string) =>
     ["projects", "one", projectId, "proposals", "list", "shell"] as const,
   shellChats: (projectId: string) =>

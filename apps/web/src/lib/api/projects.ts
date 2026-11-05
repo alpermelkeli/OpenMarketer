@@ -45,6 +45,25 @@ export function useShellProject(projectId: string) {
   });
 }
 
+/**
+ * Every project of the workspace, newest first, as the sidebar lists them, a page at a time. Under
+ * a key of its own (see `queryKeys.shellProjects`), so the sidebar and the landing do not share a cache.
+ */
+export function useShellProjects() {
+  return useInfiniteQuery<ProjectList, ApiError, Project[], ReturnType<typeof queryKeys.shellProjects>, string | undefined>({
+    queryKey: queryKeys.shellProjects(),
+    queryFn: async ({ pageParam }) =>
+      dataOf(await api.GET("/v1/projects", { params: { query: { limit: PAGE_SIZE, cursor: pageParam } } })),
+    initialPageParam: undefined,
+    getNextPageParam: nextCursor,
+    select: (data) =>
+      mergePages(
+        data.pages.map((page) => page.projects),
+        (project) => project.id,
+      ),
+  });
+}
+
 export function useCreateProject() {
   const queryClient = useQueryClient();
   return useMutation<Project, ApiError, CreateProjectRequest>({
