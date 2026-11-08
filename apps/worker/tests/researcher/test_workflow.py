@@ -234,6 +234,8 @@ async def test_run_asked_for_by_a_chat_starts_the_chats_follow_up(temporal, task
         "chat_id": str(chat_id),
         "run_kind": RESEARCH_RUN_KIND,
         "run_id": str(run.run_id),
+        # The run itself, not one step of a task.
+        "step": None,
     }
 
 
