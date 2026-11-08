@@ -115,8 +115,8 @@ class PlatformRules:
 
     ``count`` is how the platform counts a text's length and ``counting`` the sentence that
     says so to a model; ``max_length`` is the most it may count. ``habits`` are the sentences
-    of what a good post on it does, told to the writer and the critic and checked by neither
-    code nor a refusal. ``image_platforms`` are the studio's platforms whose images a post on
+    of what a good post on it does, told to the writer and checked by neither code nor a
+    refusal. ``image_platforms`` are the studio's platforms whose images a post on
     it may go with.
     """
 

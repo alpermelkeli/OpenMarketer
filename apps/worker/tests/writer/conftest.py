@@ -2,7 +2,7 @@
 
 Handlers and activities are tested as plain functions against PostgreSQL; the workflow on the
 dev stack's Temporal server, on the test's own task queue. Both are skipped when they are not
-reachable. The writer and the critic are scripted (``writer_fakes.py``): no test needs a model.
+reachable. The writer is scripted (``writer_fakes.py``): no test needs a model.
 """
 
 import sys

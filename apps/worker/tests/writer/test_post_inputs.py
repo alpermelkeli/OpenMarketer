@@ -3,8 +3,8 @@
 The readings of an attempt's context (``post_image``, ``research_findings``), which read them
 within the run's project as they are now and word why one cannot be used, and the handlers of
 ``store_draft``, which stores them with the draft, and ``publish_post``, which records only the
-image the person approved and nobody rejected since. Against PostgreSQL, with the writer and the
-critic scripted; the graph's steps run through the activities the worker registers.
+image the person approved and nobody rejected since. Against PostgreSQL, with the writer
+scripted; the graph's steps run through the activities the worker registers.
 """
 
 import uuid

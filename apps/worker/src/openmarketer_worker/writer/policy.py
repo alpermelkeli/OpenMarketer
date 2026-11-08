@@ -7,9 +7,9 @@ then either the write that settles the post and ends the run, or, if anything di
 the write that records why. Then its checkpoints are forgotten.
 
 The graph takes three steps whatever its rounds: an attempt runs node after node until it asks
-for an action or ends, so the first step plans, drafts, checks, reviews and revises every round
-and asks for ``store_draft``, the second asks for ``publish_post``, and the third records the
-result. ``WriterPolicy`` limits each of them and is configuration (``settings.py`` reads what an
+for an action or ends, so the first step writes, checks and revises every round and asks for
+``store_draft``, the second asks for ``publish_post``, and the third records the result.
+``WriterPolicy`` limits each of them and is configuration (``settings.py`` reads what an
 operator changed; the defaults are here); the worker hands it to the workflow through the first
 activity, because workflow code cannot read the environment. The actions' limits are not
 configuration: they are constants declared on the actions in core (``writer_agent/
@@ -18,10 +18,10 @@ that publishes. This module imports nothing with a side effect: the workflow san
 
 Why these defaults:
 
-- The first step makes every model call of the run: a plan and a draft, and for each of the
-  three rounds a review and a rewrite, each asked again once when it does not fit: up to
-  fourteen calls. Half an hour, the researcher's, ends an attempt that hangs without cutting a
-  slow model short.
+- The first step makes every model call of the run: the variants and, for each round after
+  the first of three, a rewrite, each asked again once when it does not fit: up to six calls.
+  Half an hour, the researcher's, ends an attempt that hangs without cutting a slow model
+  short.
 - An attempt continues from the checkpoints of the one before it, so another attempt pays for
   at most the model call that was in flight. A step is tried five times, the first retry after
   a minute and each later one after twice as long: a rate limit or an outage of a quarter of an

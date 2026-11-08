@@ -10,7 +10,6 @@ and need neither. How an agent is wired is tested in the agent's folder.
 import asyncio
 import base64
 import json
-import logging
 import re
 import threading
 import uuid
@@ -555,22 +554,6 @@ def test_worker_serves_the_writer_on_a_queue_of_its_own(engine, sessions):
     )
     [writer] = [r for r in served if r.task_queue == WRITING_TASK_QUEUE]
     assert [workflow.__name__ for workflow in writer.workflows] == ["WritePost"]
-
-
-def test_worker_warns_and_still_starts_when_the_writer_and_its_critic_share_a_model(
-    engine, sessions, caplog
-):
-    with caplog.at_level(logging.WARNING, logger="openmarketer_worker.writer.wiring"):
-        served = main.agents(
-            {**MODEL, "LLM_MODEL__WRITER": "vendor/one", "LLM_MODEL__CRITIC": "vendor/one"},
-            sessions,
-            engine.url.render_as_string(hide_password=False),
-            WorkspaceCredentials(sessions, {}, None),
-            NOT_TRACING,
-        )
-
-    assert WRITING_TASK_QUEUE in [registration.task_queue for registration in served]
-    assert any("vendor/one" in record.getMessage() for record in caplog.records)
 
 
 async def test_worker_does_not_start_with_a_token_host_that_is_not_a_host():

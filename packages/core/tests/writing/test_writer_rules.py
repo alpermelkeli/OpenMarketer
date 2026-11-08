@@ -1,21 +1,16 @@
-"""Tests for the writer's rules: the writing context, the plan held, the code rules, the critic's
-report, the decide rule and the prompts, which come from the same definitions as the checks."""
+"""Tests for the writer's rules: the writing context, the code rules, the decide rule, the plan
+the content item stores and the prompts, which come from the same definitions as the checks."""
 
 from typing import Any
 
 import pytest
 
 from openmarketer_core.profile import ProductProfile
-from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
+from openmarketer_core.writing.brief import WritingPlatform
 from openmarketer_core.writing.writer_agent import rules
 from openmarketer_core.writing.writer_agent.rules import (
-    CRITERIA,
-    Criterion,
-    CriticReport,
     Draft,
     Limits,
-    Plan,
-    PostFormat,
     PostStatus,
     Variant,
 )
@@ -44,7 +39,6 @@ RESEARCH = {"run_id": "r", "questions": ["q"], "findings": [{"statement": "s", "
 X_WITH_INPUTS = rules.situation(
     WritingPlatform.X, {**CONTEXT, "image": IMAGE, "research": RESEARCH}
 )
-INTRODUCE = WritingBrief(platform=WritingPlatform.X, goal=WritingGoal.INTRODUCE)
 
 
 def variant(text: str = "Write anywhere.", **changes: Any) -> Variant:
@@ -63,28 +57,6 @@ def failures(v: Variant, s: rules.Situation = X) -> list[str]:
 # ---------------------------------------------------------------------- writing context
 def test_the_writing_context_holds_live_features_only():
     assert rules.live_feature_ids(CONTEXT) == ["offline-sync", "tags"]
-
-
-# ------------------------------------------------------------------------------- the plan
-def test_a_plan_keeps_live_features_once_and_records_what_it_dropped():
-    plan = Plan(angle="a", feature_ids=["tags", "tags", "ai-summary"], format=PostFormat.TIP)
-
-    held = rules.held_plan(plan, INTRODUCE, CONTEXT)
-
-    assert held.plan == {"angle": "a", "feature_ids": ["tags"], "format": "tip"}
-    assert held.changes == ["dropped the feature 'ai-summary': not a live feature of the profile"]
-
-
-def test_an_announcement_rests_on_its_feature_first():
-    brief = WritingBrief(
-        platform=WritingPlatform.X, goal=WritingGoal.ANNOUNCE, feature="offline-sync"
-    )
-    plan = Plan(angle="a", feature_ids=["tags", "offline-sync"], format=PostFormat.STATEMENT)
-
-    held = rules.held_plan(plan, brief, CONTEXT)
-
-    assert held.plan["feature_ids"] == ["offline-sync", "tags"]
-    assert held.changes == []
 
 
 # --------------------------------------------------------------------------- code rules
@@ -135,20 +107,18 @@ def test_an_instagram_caption_may_carry_30_hashtags_and_not_31():
     assert failures(variant(" ".join(f"#tag{n}" for n in range(31))), INSTAGRAM) == ["hashtags"]
 
 
-def test_the_writer_and_the_critic_are_told_instagrams_habits():
-    draft = rules.draft_system_prompt(INSTAGRAM, 3)
-    critic = rules.critic_system_prompt(INSTAGRAM)
+def test_the_writer_is_told_instagrams_habits():
+    prompt = rules.write_system_prompt(INSTAGRAM, 3)
 
-    assert "at most 2200 as Instagram counts it" in draft
-    assert "At most 30 hashtags." in draft
+    assert "at most 2200 as Instagram counts it" in prompt
+    assert "At most 30 hashtags." in prompt
     for habit in INSTAGRAM.platform.habits:
-        assert habit in draft and habit in critic
-    assert '"link in bio"' in draft
+        assert habit in prompt
+    assert '"link in bio"' in prompt
 
 
 def test_an_x_post_is_told_no_habits_of_another_platform():
-    assert "link in bio" not in rules.draft_system_prompt(X, 3)
-    assert "habits" not in rules.critic_system_prompt(X)
+    assert "link in bio" not in rules.write_system_prompt(X, 3)
 
 
 def test_a_bare_domain_under_any_top_level_domain_fails_as_a_link():
@@ -172,94 +142,65 @@ def test_the_numbers_of_the_profile_are_read_from_its_words():
     assert rules.profile_numbers(CONTEXT) == {"30"}
 
 
-# ------------------------------------------------------------------------------ the critic
-def review(index: int, *, risky: bool = False, **failing: str) -> dict[str, Any]:
-    return {
-        "variant": index,
-        "criteria": [
-            {
-                "criterion": c.value,
-                "passed": c.value not in failing,
-                "severity": failing.get(c.value, "none"),
-                "note": "",
-            }
-            for c in Criterion
-        ],
-        "risky_claim": risky,
-        "risky_note": "",
-        "suggestions": [],
-    }
-
-
-def test_a_report_must_review_every_variant_sent_on_every_criterion_once():
-    partial = review(0)
-    partial["criteria"] = partial["criteria"][:2]
-    report = CriticReport.model_validate({"reviews": [partial, review(5)], "ranking": []})
-
-    problems = rules.critic_problems(report, [0, 1])
-
-    assert "reviews name variants you were not given: [5]" in problems
-    assert "no review for the variants [1]" in problems
-    assert any("each criterion once" in problem for problem in problems)
-
-
-def test_a_long_note_of_the_critic_is_cut_not_refused():
-    long = review(0)
-    long["criteria"][0]["note"] = "x" * 1000
-    report = CriticReport.model_validate({"reviews": [long], "ranking": [0]})
-    assert len(report.reviews[0].criteria[0].note) == rules.MAX_NOTE_CHARS
-
-
-def test_a_major_failure_or_a_risky_claim_fails_the_variant_and_a_minor_one_does_not():
-    assert rules.critic_passes(review(0, facts="minor"))
-    assert not rules.critic_passes(review(0, facts="major"))
-    assert not rules.critic_passes(review(0, facts="none"))  # failed without a severity
-    assert not rules.critic_passes(review(0, risky=True))
-
-
 # ---------------------------------------------------------------------------- decide rule
-PASSED = {"passed": True, "failures": [], "flagged_numbers": []}
-BROKEN = {"passed": False, "failures": [{"rule": "length", "finding": ""}]}
+def kept(*flagged: str) -> dict[str, Any]:
+    return {"passed": True, "failures": [], "flagged_numbers": list(flagged)}
 
 
-def decide(checks, reviews, ranking=(), round_no=1, cost_usd=0.0):
-    critique = {"reviews": reviews, "ranking": list(ranking)} if reviews else {}
-    return rules.decide(
-        checks=checks, critique=critique, round_no=round_no, cost_usd=cost_usd, limits=Limits()
+BROKEN = {"passed": False, "failures": [{"rule": "length", "finding": ""}], "flagged_numbers": []}
+
+
+def decide(checks, round_no=1, cost_usd=0.0):
+    return rules.decide(checks=checks, round_no=round_no, cost_usd=cost_usd, limits=Limits())
+
+
+def test_the_first_variant_that_keeps_every_code_rule_is_proposed():
+    decision = decide([BROKEN, kept(), kept()])
+    assert (decision.next, decision.chosen) == ("propose", 1)
+
+
+def test_the_variant_with_fewer_flagged_numbers_is_preferred():
+    assert decide([kept("3", "40"), kept("3"), kept("7")]).chosen == 1
+
+
+def test_a_variant_that_keeps_every_code_rule_is_proposed_at_the_limit_too():
+    decision = decide([kept()], round_no=3, cost_usd=0.5)
+    assert (decision.next, decision.chosen) == ("propose", 0)
+
+
+def test_no_variant_that_keeps_the_code_rules_with_rounds_and_cost_left_revises():
+    assert decide([BROKEN, BROKEN]).next == "revise"
+
+
+@pytest.mark.parametrize(("round_no", "cost_usd", "limit"), [(3, 0.0, "round"), (1, 0.5, "cost")])
+def test_no_variant_that_keeps_the_code_rules_at_a_limit_fails_naming_it(round_no, cost_usd, limit):
+    decision = decide([BROKEN], round_no=round_no, cost_usd=cost_usd)
+    assert (decision.next, decision.chosen) == ("fail", -1)
+    assert f"the {limit} limit was hit" in decision.reason
+
+
+# ------------------------------------------------------------------------------ the draft
+def test_the_stored_plan_is_the_chosen_variants_angle_and_the_features_of_its_claims():
+    claims = [
+        {"statement": "a", "feature_ids": ["tags", "offline-sync"]},
+        {"statement": "b", "feature_ids": ["offline-sync", "search", "export"]},
+    ]
+
+    plan = rules.plan_of({"angle": "A question.", "claims": claims})
+
+    assert plan == {"angle": "A question.", "feature_ids": ["tags", "offline-sync", "search"]}
+
+
+def test_the_draft_keeps_the_shape_the_content_item_stores_with_no_review():
+    variants = [variant().model_dump(), variant("Offline? Keep writing.").model_dump()]
+
+    draft = rules.draft_of(
+        chosen=1, variants=variants, checks=[kept(), kept()], context=CONTEXT, cost_usd=0.01
     )
 
-
-def test_the_passing_variant_the_critic_ranks_first_is_proposed():
-    decision = decide([PASSED, PASSED], [review(0), review(1)], ranking=[1, 0])
-    assert (decision.next, decision.chosen, decision.passed_critic) == ("propose", 1, True)
-
-
-def test_a_ranking_that_names_a_failing_variant_is_not_followed():
-    decision = decide([BROKEN, PASSED], [review(1)], ranking=[0])
-    assert decision.chosen == 1
-
-
-def test_no_pass_with_rounds_and_cost_left_revises():
-    assert decide([PASSED], [review(0, facts="major")]).next == "revise"
-
-
-def test_no_pass_at_the_cost_limit_falls_back_as_at_the_round_limit():
-    decision = decide([PASSED], [review(0, facts="major")], cost_usd=0.5)
-    assert (decision.next, decision.chosen, decision.passed_critic) == ("propose", 0, False)
-    assert "cost limit" in decision.reason
-
-
-def test_at_the_limit_the_fallback_prefers_the_variant_with_fewer_failed_criteria():
-    reviews = [review(0, facts="major", brand_voice="major"), review(1, facts="major")]
-    assert decide([PASSED, PASSED], reviews, round_no=3).chosen == 1
-
-
-def test_at_the_limit_a_variant_the_critic_did_not_review_is_never_proposed():
-    assert decide([PASSED], [], round_no=3).next == "fail"
-
-
-def test_at_the_limit_a_variant_that_broke_a_code_rule_is_never_proposed():
-    assert decide([BROKEN], [review(0)], round_no=3).next == "fail"
+    assert (draft["plan_changes"], draft["critic_report"]) == ([], {})
+    [alternative] = draft["alternatives"]
+    assert (alternative["index"], alternative["review"]) == (0, None)
 
 
 # --------------------------------------------------------------------------- the outcome
@@ -271,18 +212,20 @@ def test_the_outcome_of_publish_post_says_how_the_post_ended():
 
 
 # ----------------------------------------------------------------- prompts and schemas
-def test_every_field_a_model_fills_is_described_in_its_prompt():
-    assert set(rules.PLAN_FIELDS) == set(Plan.model_fields)
+def test_every_field_the_writer_fills_is_described_in_its_prompt():
     assert set(rules.VARIANT_FIELDS) == set(Variant.model_fields)
     assert set(rules.CLAIM_FIELDS) == set(rules.Claim.model_fields)
-    assert set(rules.REPORT_FIELDS) == set(CriticReport.model_fields)
-    assert set(rules.REVIEW_FIELDS) == set(rules.VariantReview.model_fields)
-    assert set(rules.CRITERION_FIELDS) == set(rules.CriterionVerdict.model_fields)
     assert set(Draft.model_fields) == {"variants"}
 
 
-def test_the_draft_prompt_tells_every_code_rule_with_the_platforms_values():
-    prompt = rules.draft_system_prompt(X_WITH_INPUTS, 3)
+def test_the_writer_is_asked_for_variants_that_are_different_takes():
+    prompt = rules.write_system_prompt(X, 3)
+    assert "Write 3 variants" in prompt
+    assert "Variants are different ideas, not rewordings." in prompt
+
+
+def test_the_prompt_tells_every_code_rule_with_the_platforms_values():
+    prompt = rules.write_system_prompt(X_WITH_INPUTS, 3)
     for rule in rules.CODE_RULES:
         told = rule.told(X_WITH_INPUTS)
         assert told is not None and told in prompt
@@ -295,19 +238,13 @@ def test_a_rule_that_does_not_apply_is_neither_told_nor_checked():
     bare = rules.situation(
         WritingPlatform.X, {**CONTEXT, "do_not_mention": [], "product": {"languages": []}}
     )
-    prompt = rules.draft_system_prompt(bare, 1)
+    prompt = rules.write_system_prompt(bare, 1)
     assert "do_not_mention" not in prompt and "product's languages" not in prompt
     report = rules.check_variant(variant("BetaCorp", language="de"), bare, set())
     assert report["passed"]
 
 
-def test_the_critic_prompt_names_every_criterion():
-    prompt = rules.critic_system_prompt(X)
-    for criterion, meaning in CRITERIA.items():
-        assert f"- {criterion.value}: {meaning}" in prompt
-
-
-@pytest.mark.parametrize("schema", [Plan, Draft, Variant, rules.Claim, CriticReport])
+@pytest.mark.parametrize("schema", [Draft, Variant, rules.Claim])
 def test_the_submission_schemas_forbid_extra_fields(schema):
     assert schema.model_json_schema()["additionalProperties"] is False
 
@@ -341,34 +278,20 @@ def test_a_post_without_an_image_is_neither_told_nor_checked_the_image_rule():
     assert failures(variant("Write anywhere. Even offline.")) == []
 
 
-@pytest.mark.parametrize(
-    "prompt",
-    [
-        rules.plan_system_prompt(X_WITH_INPUTS),
-        rules.draft_system_prompt(X_WITH_INPUTS, 1),
-        rules.critic_system_prompt(X_WITH_INPUTS),
-    ],
-)
-def test_every_prompt_of_a_run_given_inputs_says_how_to_use_them(prompt):
+def test_the_prompt_of_a_run_given_inputs_says_how_to_use_them():
+    prompt = rules.write_system_prompt(X_WITH_INPUTS, 1)
     assert "\nThe image\n" in prompt and "\nThe research\n" in prompt
     assert "(image)" in prompt and "(research)" in prompt
 
 
-@pytest.mark.parametrize(
-    "prompt",
-    [rules.plan_system_prompt(X), rules.draft_system_prompt(X, 1), rules.critic_system_prompt(X)],
-)
-def test_no_prompt_of_a_run_without_inputs_names_them(prompt):
+def test_the_prompt_of_a_run_without_inputs_names_none():
+    prompt = rules.write_system_prompt(X, 1)
     assert "The image" not in prompt and "The research" not in prompt
     assert "(image)" not in prompt and "(research)" not in prompt
 
 
-def test_the_writer_is_told_a_finding_is_never_a_claim_and_the_critic_fails_it_on_facts():
-    writer = rules.draft_system_prompt(X_WITH_INPUTS, 1)
-    critic = rules.critic_system_prompt(X_WITH_INPUTS)
-
-    assert "It is never a claim about the product" in writer
-    assert "facts fails when the text presents a finding" in critic
+def test_the_writer_is_told_a_finding_is_never_a_claim():
+    assert "It is never a claim about the product" in rules.write_system_prompt(X_WITH_INPUTS, 1)
 
 
 def test_claims_take_the_evidence_of_their_features_in_the_writing_context():

@@ -105,7 +105,6 @@ from openmarketer_core.studio.requests import AssetRequest, StoredAssetRequestIn
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 from openmarketer_core.writing.brief import StoredWritingBriefInvalid
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
-from openmarketer_core.writing.writer_agent.rules import critic_passes
 
 
 @dataclass
@@ -498,13 +497,20 @@ def _post(item: ContentItem, waiting_proposal_id: uuid.UUID | None) -> WritingPo
 
 
 def _passed_critic(report: Mapping[str, Any]) -> bool | None:
-    """Whether the critic passed the post, by the writer's own rule; ``None`` if unreadable.
+    """Whether the critic passed the post, read from the report stored with it; ``None`` when
+    it holds no verdict.
 
-    The report is JSON the worker stored; one that does not have the shape the rule reads is
-    not a verdict either way.
+    Only a post written while the writer had a critic has one, and the rule is the one that
+    critic's verdict was given by: no risky claim, and no criterion failed but as minor. A post
+    written since stores an empty report, and a report that does not have the shape the rule
+    reads is not a verdict either way.
     """
     try:
-        return critic_passes(report)
+        if report["risky_claim"]:
+            return False
+        return all(
+            verdict["passed"] or verdict["severity"] == "minor" for verdict in report["criteria"]
+        )
     except (KeyError, TypeError):
         return None
 

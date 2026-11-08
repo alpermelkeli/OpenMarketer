@@ -150,9 +150,12 @@ export function postLengthOf(report: CheckReport | null): PostLength | null {
   return { count: report.length, kept: broken ? false : report.passed === null ? null : true };
 }
 
-/** The critic's review of a post on `platform` (the slug the run recorded). */
+/**
+ * The critic's review of a post on `platform` (the slug the run recorded); null when there is none, as
+ * for a post written since the writer has no critic, which stores an empty report.
+ */
 export function reviewOf(review: unknown, platform: string): Review | null {
-  if (!isRecord(review)) return null;
+  if (!isRecord(review) || Object.keys(review).length === 0) return null;
   const CRITERIA = criteriaOn(writingPlatformLabel(platform));
   const criteria = Array.isArray(review.criteria)
     ? review.criteria.flatMap((entry): CriterionVerdict[] => {

@@ -3,7 +3,7 @@
 Handlers and activities are tested as plain functions against PostgreSQL; the workflow on the
 dev stack's Temporal server, on the test's own task queue, with the runs it starts served by the
 writer's and the studio's real wiring on queues of the test's own too (``children``). Both are
-skipped when they are not reachable. The orchestrator, the writer, the critic and the studio's
+skipped when they are not reachable. The orchestrator, the writer and the studio's
 models, image provider, sandbox and object storage are scripted or fakes: no test needs a model.
 """
 

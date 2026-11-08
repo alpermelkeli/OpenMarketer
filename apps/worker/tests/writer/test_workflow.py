@@ -1,7 +1,7 @@
 """Tests for the ``WritePost`` workflow: the writer's graph run on a real Temporal server.
 
 The worker is built the way the process builds it, with the writer's real wiring, graph, gate
-and database, and the writer and the critic scripted (``writer_fakes.py``). It runs on the dev
+and database, and the writer scripted (``writer_fakes.py``). It runs on the dev
 stack's Temporal server, on the test's own task queue; skipped when it, or PostgreSQL, is not
 reachable. Timeouts are real, so the limits are short. A person's decision on the post is made
 the way the API makes it: stored, then signalled to the run.
@@ -30,8 +30,6 @@ from writer_fakes import (
     POST,
     ScriptedChat,
     a_draft,
-    a_plan,
-    a_review,
     one_round_that_passes,
 )
 
@@ -126,7 +124,7 @@ async def test_approved_post_is_recorded_as_a_dry_run_and_the_run_succeeds(
     item = writer_database.item(asked.run)
     assert stored.status is WritingRunStatus.SUCCEEDED
     assert (stored.profile_version_id, stored.content_item_id) == (asked.version_id, item.id)
-    assert stored.cost_usd == item.cost_usd == Decimal("0.03")
+    assert stored.cost_usd == item.cost_usd == Decimal("0.01")
     assert (item.status, item.text, item.proposal_id) == (
         ContentItemStatus.DRY_RUN,
         POST,
@@ -177,21 +175,21 @@ async def test_rejected_post_is_recorded_rejected_and_the_run_succeeds_without_s
 async def test_model_provider_that_limited_the_rate_is_tried_again_and_the_run_proposes(
     serving, start, writer_database
 ):
-    model = ScriptedChat(writer=[RATE_LIMITED, a_plan(), a_draft()], critic=[a_review()])
+    model = ScriptedChat(writer=[RATE_LIMITED, a_draft()])
     asked = writer_database.requested()
     async with serving(model=model):
         handle = await start(asked.run)
         await decided(writer_database, handle, asked.run, approved=True)
 
     assert writer_database.run(asked.run).status is WritingRunStatus.SUCCEEDED
-    assert model.calls == ["writer", "writer", "writer", "critic"]
+    assert model.calls == ["writer", "writer"]
 
 
 # ------------------------------------------------------------ failures that end it
 async def test_request_the_model_provider_refuses_ends_the_run_failed_at_once(
     serving, start, writer_database
 ):
-    model = ScriptedChat(writer=[REFUSED, a_plan()])
+    model = ScriptedChat(writer=[REFUSED, a_draft()])
     asked = writer_database.requested()
     async with serving(model=model):
         with pytest.raises(WorkflowFailureError):
@@ -241,7 +239,7 @@ async def test_approved_post_that_cannot_be_recorded_ends_the_run_failed_with_wh
     assert stored.status is WritingRunStatus.FAILED
     assert stored.error is not None
     assert stored.error.startswith("the approved post could not be recorded: content item")
-    assert stored.cost_usd == Decimal("0.03")
+    assert stored.cost_usd == Decimal("0.01")
 
 
 async def test_run_without_the_model_providers_key_ends_failed_with_what_to_set(
