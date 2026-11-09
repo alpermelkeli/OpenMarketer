@@ -42,7 +42,7 @@ async def with_a_post_recorded_as_sent(activities, writer_database) -> tuple:
     return asked.run, uuid.UUID(stored.result["content_item_id"])
 
 
-def outcome(run, item_id, status: str, cost: str = "0.03") -> steps.RunOutcome:
+def outcome(run, item_id, status: str, cost: str = "0.01") -> steps.RunOutcome:
     return steps.RunOutcome(run=run, content_item_id=item_id, status=status, cost_usd=cost)
 
 
@@ -182,7 +182,7 @@ async def test_failure_records_the_reason_and_the_drafts_cost_and_settles_the_po
 
     stored = writer_database.run(run)
     assert (stored.status, stored.error) == (WritingRunStatus.FAILED, "it broke")
-    assert stored.cost_usd == writer_database.item(run).cost_usd == Decimal("0.03")
+    assert stored.cost_usd == writer_database.item(run).cost_usd == Decimal("0.01")
     assert writer_database.item(run).status is ContentItemStatus.FAILED
 
 

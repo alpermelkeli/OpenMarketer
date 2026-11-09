@@ -9,8 +9,8 @@ graph imports; importing it is what puts them on ``agent``.
   approved profile into it, with the version's id, so every later step and every later attempt
   writes from that version, whatever a person approves meanwhile.
 - ``WriterContext`` is what a node needs that is not state: the model of the attempt, which
-  answers the roles ``writer`` and ``critic``, the limits, and three readings ``prepare`` asks
-  for: the project's approved profile, and the asset and the research run a brief may name.
+  answers the role ``writer``, the limits, and three readings ``prepare`` asks for: the
+  project's approved profile, and the asset and the research run a brief may name.
 - The two actions. ``StoreDraft`` is internal: it stores the draft the person will review as
   the run's content item, ``proposed``, and answers ``{"content_item_id"}``; storing the same
   draft again gives back the stored item, so repeating it is harmless (keyed by the action's
@@ -20,7 +20,10 @@ graph imports; importing it is what puts them on ``agent``.
   evidence of a claim, which names files of the repository: each claim names the features it
   rests on, and the handler stores the evidence of those features in the profile version the
   run recorded. It names the brief's asset, the version of it the post was written for and the
-  research run, when the brief named them.
+  research run, when the brief named them. It keeps the shape it had when a critic reviewed
+  the variants and code held a plan, so the content item, the API and the dashboard read it as
+  before: ``plan`` is what the chosen variant did, ``plan_changes`` is empty, ``critic_report``
+  is ``{}`` and each alternative's ``review`` is ``None``.
   ``PublishPost`` publishes, so the policy gate holds it as a proposal until a person approves
   or rejects it; its payload names the content item and carries the text and the image's
   version, so what the person approves is in the proposal itself. In the first step of the
@@ -46,13 +49,12 @@ from openmarketer_core.writing.brief import WritingBrief
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND, WritingRunInput
 from openmarketer_core.writing.writer_agent import rules
 from openmarketer_core.writing.writer_agent.rules import (
+    AngleText,
     Limits,
-    Plan,
     PostImage,
     PostStatus,
     ResearchFindings,
     Variant,
-    VariantReview,
     WritingResult,
 )
 
@@ -78,21 +80,15 @@ class WriterState(TypedDict):
     # (``rules.writing_context``); "" and {} until ``prepare``.
     profile_version_id: str
     writing_context: dict[str, Any]
-    # The plan as code held it ({} until ``plan``), and what the code changed in it.
-    plan: dict[str, Any]
-    plan_changes: list[str]
-    round: int  # 0 until the first draft, then the round being checked
-    # This round: the variants as written, their code-rule reports (``rules.check_variant``),
-    # and the critic's report ({} until it reviewed, and when it was not asked or not read).
+    round: int  # 0 until the first variants are written, then the round being checked
+    # This round: the variants as written and their code-rule reports (``rules.check_variant``).
     variants: list[dict[str, Any]]
     checks: list[dict[str, Any]]
-    critique: dict[str, Any]
-    # The rounds before this one: {"round", "variants", "checks", "critique"}.
+    # The rounds before this one: {"round", "variants", "checks"}.
     earlier_rounds: list[dict[str, Any]]
     decision: str  # what the last decide chose: "propose" or "revise"
     reason: str  # the code's sentence of why
     chosen: int  # the proposed variant's index in this round, -1 until one is chosen
-    passed_critic: bool
     # The draft as ``store_draft`` stored it (``rules.draft_of``, fitted to its size), and the
     # content item it was stored as; {} and "" until then.
     draft: dict[str, Any]
@@ -117,15 +113,15 @@ class ApprovedProfile:
 class WriterContext:
     """What the nodes of one attempt are given besides the state.
 
-    ``model`` answers the roles ``writer`` and ``critic`` (the router resolves each to its own
-    model). ``approved_profile`` reads the project's approved profile, or gives ``None`` when it
-    has none. ``post_image`` reads an asset of the project's Studio library as the writer reads
-    it (never its image), and raises ``rules.PostImageNotUsable`` when the project has no such
-    asset or a post cannot go with it; ``research_findings`` reads a succeeded research run of
-    the project with the first ``rules.MAX_POST_FINDINGS`` findings of its report, each source
-    with ``rules.MAX_SITE_QUOTES`` quotes, and raises ``rules.ResearchNotUsable`` when the
-    project has no such run or it has not succeeded. Only ``prepare`` calls them, the last two
-    only for a brief that names one, once per run unless an attempt dies before its checkpoint.
+    ``model`` answers the role ``writer``. ``approved_profile`` reads the project's approved
+    profile, or gives ``None`` when it has none. ``post_image`` reads an asset of the project's
+    Studio library as the writer reads it (never its image), and raises
+    ``rules.PostImageNotUsable`` when the project has no such asset or a post cannot go with it;
+    ``research_findings`` reads a succeeded research run of the project with the first
+    ``rules.MAX_POST_FINDINGS`` findings of its report, each source with
+    ``rules.MAX_SITE_QUOTES`` quotes, and raises ``rules.ResearchNotUsable`` when the project
+    has no such run or it has not succeeded. Only ``prepare`` calls them, the last two only for
+    a brief that names one, once per run unless an attempt dies before its checkpoint.
     A context serves one attempt, in one thread.
     """
 
@@ -144,7 +140,6 @@ RuleName = Annotated[str, StringConstraints(min_length=1, max_length=40)]
 Finding = Annotated[str, StringConstraints(max_length=rules.MAX_FINDING_CHARS)]
 FlaggedNumber = Annotated[str, StringConstraints(max_length=rules.MAX_NUMBER_CHARS)]
 ClaimStatement = Annotated[str, StringConstraints(min_length=1, max_length=rules.MAX_CLAIM_CHARS)]
-PlanChange = Annotated[str, StringConstraints(max_length=rules.MAX_NOTE_CHARS)]
 
 
 class _Payload(BaseModel):
@@ -184,13 +179,28 @@ class DraftClaim(_Payload):
     feature_ids: list[FeatureId] = Field(max_length=rules.MAX_CLAIM_FEATURES)
 
 
+class DraftPlan(_Payload):
+    """What the chosen variant did (``rules.plan_of``): its angle and the features it rests on."""
+
+    angle: AngleText
+    feature_ids: list[FeatureId] = Field(max_length=rules.MAX_PLAN_FEATURES)
+
+
+class NoReview(_Payload):
+    """The critic's report of a post written since the writer has no critic: empty, so the
+    content item keeps the field it had."""
+
+
 class Alternative(_Payload):
-    """Another variant of the round, for the person to read, with what the checks found."""
+    """Another variant of the round, for the person to read, with what the code found.
+
+    ``review`` is always ``None``: no critic reviews a variant.
+    """
 
     index: Annotated[int, Field(ge=0)]
     variant: Variant
     check: CheckReport
-    review: VariantReview | None
+    review: None
 
 
 @agent.action(
@@ -213,12 +223,13 @@ class StoreDraft(_Payload):
     project_id: uuid.UUID
     run_id: uuid.UUID
     text: PostText
-    plan: Plan
-    plan_changes: list[PlanChange] = Field(max_length=rules.MAX_PLAN_CHANGES)
+    plan: DraftPlan
+    # Always empty: no code changes a plan any more.
+    plan_changes: list[str] = Field(max_length=0)
     alternatives: list[Alternative] = Field(max_length=rules.MAX_SUBMITTED_VARIANTS)
     claims: list[DraftClaim] = Field(max_length=rules.MAX_CLAIMS)
     check_report: CheckReport
-    critic_report: VariantReview
+    critic_report: NoReview
     flagged_numbers: list[FlaggedNumber] = Field(max_length=rules.MAX_FLAGGED_NUMBERS)
     cost_usd: Annotated[float, Field(ge=0)]
     asset_id: InputId = None
@@ -255,17 +266,13 @@ def initial_state(run: WritingRunInput, brief: WritingBrief) -> WriterState:
         "brief": brief.model_dump(mode="json"),
         "profile_version_id": "",
         "writing_context": {},
-        "plan": {},
-        "plan_changes": [],
         "round": 0,
         "variants": [],
         "checks": [],
-        "critique": {},
         "earlier_rounds": [],
         "decision": "",
         "reason": "",
         "chosen": -1,
-        "passed_critic": False,
         "draft": {},
         "content_item_id": "",
         "status": "",

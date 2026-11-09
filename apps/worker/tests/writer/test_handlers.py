@@ -2,7 +2,7 @@
 
 The context of an attempt (its model and the reading of the approved profile), the handlers of
 ``store_draft`` and ``publish_post``, and the projection a finished run reports, against
-PostgreSQL, with the writer and the critic scripted. The graph's own steps are run through the
+PostgreSQL, with the writer scripted. The graph's own steps are run through the
 activities the worker registers, in Temporal's activity environment, which needs no server.
 """
 
@@ -12,7 +12,7 @@ from dataclasses import replace
 
 import pytest
 from temporalio.exceptions import ApplicationError
-from writer_fakes import POST, ScriptedChat, a_draft, a_plan, a_review, one_round_that_passes
+from writer_fakes import POST, ScriptedChat, a_draft, one_round_that_passes
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef
@@ -139,7 +139,7 @@ async def test_draft_is_stored_as_the_runs_proposed_item_with_its_version_and_co
     assert answer == {"content_item_id": str(item.id)}
     assert (item.status, item.text, item.proposal_id) == (ContentItemStatus.PROPOSED, POST, None)
     assert item.profile_version_id == asked.version_id
-    assert str(item.cost_usd) == "0.030000"  # a plan, a draft and a review, a cent each
+    assert str(item.cost_usd) == "0.010000"  # one call to the writer, a cent
     assert item.plan["feature_ids"] == ["offline-sync"]
     assert item.claims[0]["evidence"] == [
         {"feature_id": "offline-sync", "file": "src/sync.ts", "lines": "10-40"}
@@ -406,9 +406,9 @@ async def test_finished_run_reports_identifiers_status_and_cost_and_no_post(
         "status": "dry_run",
         "content_item_id": str(payload.content_item_id),
         "profile_version_id": str(asked.version_id),
-        "cost_usd": "0.03",
+        "cost_usd": "0.01",
         "rounds": 1,
-        "passed_critic": True,
+        "passed_critic": None,
         "error": "",
     }
 
@@ -432,7 +432,7 @@ async def test_model_provider_that_limited_the_rate_is_worth_another_attempt(
     writer_registration, activities_of, writer_database
 ):
     limited = LLMError("the model provider answered HTTP 429", status=429)
-    model = ScriptedChat(writer=[limited, a_plan(), a_draft()], critic=[a_review()])
+    model = ScriptedChat(writer=[limited, a_draft()])
     activities = activities_of(writer_registration(model=model))
     asked = writer_database.requested(started=True)
 

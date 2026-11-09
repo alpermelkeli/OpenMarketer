@@ -1,11 +1,10 @@
 """Tests for the writer's settings, its longest run, its wiring and how the workflow reads a result.
 
 All plain functions: the settings from an environment mapping, the policy's arithmetic, what
-the registration holds, the warning of one model for both roles, and ``outcome_of``, which is
+the registration holds, the roles the wiring needs, and ``outcome_of``, which is
 workflow code that calls nothing of Temporal's.
 """
 
-import logging
 import uuid
 from pathlib import Path
 
@@ -22,7 +21,7 @@ from openmarketer_worker.settings import SettingsError
 from openmarketer_worker.writer import steps
 from openmarketer_worker.writer.policy import WriterPolicy, longest_writing_seconds
 from openmarketer_worker.writer.settings import WriterSettings
-from openmarketer_worker.writer.wiring import warn_of_one_model_for_both_roles
+from openmarketer_worker.writer.wiring import require_the_writer_role
 from openmarketer_worker.writer.workflow import outcome_of
 
 MODELS = Path(__file__).resolve().parents[4] / "config" / "models.yaml"
@@ -108,35 +107,23 @@ def test_registration_removes_left_over_checkpoints_of_writing_runs(writer_regis
     assert len(runs) == 2  # the writing runs' rule, and core's rule for the kind's threads
 
 
-def test_one_model_for_the_writer_and_the_critic_is_a_warning(caplog):
-    writer = ModelRouter.from_file(MODELS, env={}).resolve("writer").model
-    router = ModelRouter.from_file(MODELS, env={"LLM_MODEL__CRITIC": writer})
+def test_a_configuration_without_the_writer_stops_the_worker(tmp_path):
+    config = yaml.safe_load(MODELS.read_text())
+    del config["roles"]["writer"]
+    path = tmp_path / "models.yaml"
+    path.write_text(yaml.safe_dump(config))
 
-    with caplog.at_level(logging.WARNING, logger="openmarketer_worker.writer.wiring"):
-        warn_of_one_model_for_both_roles(router)
-
-    [warning] = caplog.records
-    assert warning.levelno == logging.WARNING
-    assert router.resolve("writer").model in warning.getMessage()
+    with pytest.raises(ConfigError, match="the role writer"):
+        require_the_writer_role(ModelRouter.from_file(path, env={}))
 
 
-def test_a_critic_of_another_model_is_no_warning(caplog):
-    router = ModelRouter.from_file(MODELS, env={"LLM_MODEL__CRITIC": "vendor/another-model"})
-
-    with caplog.at_level(logging.WARNING, logger="openmarketer_worker.writer.wiring"):
-        warn_of_one_model_for_both_roles(router)
-
-    assert caplog.records == []
-
-
-def test_a_configuration_without_the_critic_stops_the_worker(tmp_path):
+def test_a_configuration_without_the_critic_is_enough_for_the_writer(tmp_path):
     config = yaml.safe_load(MODELS.read_text())
     del config["roles"]["critic"]
     path = tmp_path / "models.yaml"
     path.write_text(yaml.safe_dump(config))
 
-    with pytest.raises(ConfigError, match="critic"):
-        warn_of_one_model_for_both_roles(ModelRouter.from_file(path, env={}))
+    require_the_writer_role(ModelRouter.from_file(path, env={}))
 
 
 # ------------------------------------------------------------------ the result, as read

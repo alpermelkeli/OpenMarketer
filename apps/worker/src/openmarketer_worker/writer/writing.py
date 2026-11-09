@@ -6,7 +6,7 @@ for:
 
 - ``initial_state``: what a run starts from, which is the run's own brief;
 - ``context``: what the nodes of one attempt are given: a chat model of the attempt's own,
-  which answers the roles ``writer`` and ``critic``, the run's limits, the reading of the
+  which answers the role ``writer``, the run's limits, the reading of the
   project's approved profile, which records the version the run writes from on the run, and
   the readings of the asset and the research run the brief may name, each within the run's
   project and as it is now (a person may have rejected the asset since the run was asked);

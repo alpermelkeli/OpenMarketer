@@ -1,7 +1,7 @@
 """What the writer's tests are made of: scripted models, the profile, and its runs in the database.
 
-The writer and the critic are scripted per role (``ScriptedChat``), with answers built the way
-the core tests of the writer's graph build them. ``WriterDatabase`` sets up a project with an
+The writer is scripted (``ScriptedChat``), with answers built the way the core tests of the
+writer's graph build them. ``WriterDatabase`` sets up a project with an
 approved profile and a requested writing run, with an image of the project's Studio library and
 a research run it may name, and reads back what a run left. Nothing here reaches a model or a
 network, and no image is stored anywhere: an asset's version is a row only.
@@ -53,7 +53,6 @@ from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
 from openmarketer_core.writing.request import REQUESTED_BY_A_PERSON
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND, WritingRunInput
-from openmarketer_core.writing.writer_agent import rules
 from openmarketer_worker.writer.policy import WriterPolicy
 
 PERSON = uuid.UUID("99999999-9999-4999-8999-999999999999")
@@ -116,11 +115,6 @@ def text(content: Any, *, cost_usd: float = 0.01) -> ChatReply:
     )
 
 
-def a_plan() -> ChatReply:
-    plan = {"angle": "Write anywhere.", "feature_ids": ["offline-sync"], "format": "statement"}
-    return text(plan)
-
-
 def a_draft(body: str = POST) -> ChatReply:
     variant = {
         "text": body,
@@ -131,23 +125,9 @@ def a_draft(body: str = POST) -> ChatReply:
     return text({"variants": [variant]})
 
 
-def a_review() -> ChatReply:
-    review = {
-        "variant": 0,
-        "criteria": [
-            {"criterion": criterion.value, "passed": True, "severity": "none", "note": ""}
-            for criterion in rules.Criterion
-        ],
-        "risky_claim": False,
-        "risky_note": "",
-        "suggestions": [],
-    }
-    return text({"reviews": [review], "ranking": [0]})
-
-
 def one_round_that_passes() -> ScriptedChat:
-    """A plan, one variant and a review that passes it: the run proposes it after one round."""
-    return ScriptedChat(writer=[a_plan(), a_draft()], critic=[a_review()])
+    """One variant that keeps every code rule: the run proposes it after one round."""
+    return ScriptedChat(writer=[a_draft()])
 
 
 # ------------------------------------------------------------------------------- the database

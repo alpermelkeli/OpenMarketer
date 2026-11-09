@@ -2,15 +2,14 @@
 
 What an operator can change about a writing run: how long one attempt at a step may take
 (``WRITER_TIMEOUT_MINUTES``), how many attempts a step gets (``WRITER_MAX_ATTEMPTS``), how many
-rounds of drafting and review a run may make (``WRITER_MAX_ROUNDS``) and what its model calls
+rounds of writing and checking a run may make (``WRITER_MAX_ROUNDS``) and what its model calls
 may cost (``WRITER_MAX_COST_USD``). The other limits and every default, with their reasons, are
 in ``policy.py`` and core's ``rules.Limits``; this module only fills them. It takes the
 environment as an argument and is called when the worker starts; the workflow and the
 activities read none of it.
 
 A value that does not fit stops the worker at start-up with the variable's name, not every run.
-Which models the roles ``writer`` and ``critic`` resolve to is the model configuration's, read
-by the wiring; that both resolve to one model is a warning there, never a refusal.
+Which model the role ``writer`` resolves to is the model configuration's, read by the wiring.
 """
 
 from __future__ import annotations

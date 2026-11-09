@@ -363,6 +363,8 @@ async def test_run_a_chat_asked_for_starts_the_chats_follow_up_with_its_kind(
         "chat_id": str(asked.chat_id),
         "run_kind": STUDIO_RUN_KIND,
         "run_id": str(run.run_id),
+        # The run itself, not one step of a task.
+        "step": None,
     }
     with transaction(sessions) as session:
         events = events_of_chat(

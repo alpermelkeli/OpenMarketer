@@ -12,10 +12,7 @@ worker started, so it is resolved for the run's workspace when an attempt needs 
 (``new_model``): the worker starts without a model key, and a run that finds none is told so.
 The same holds for what a workspace chose in the dashboard's settings, its models: the
 configuration file is read now, and the workspace's choices are laid over it at each attempt.
-
-That the roles ``writer`` and ``critic`` resolve to one model in the configuration file is
-logged as a warning when the worker starts, and refuses nothing: a critic of the same model
-judges the writer's text less independently, which an operator may accept.
+A configuration without the role ``writer`` stops the worker at start-up.
 
 ``writer`` reads the environment; ``registration`` takes what was built (``WriterParts``) and
 declares the agent's worker side: the handlers of its two actions, the steps of its graph
@@ -31,7 +28,6 @@ refuses.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -67,8 +63,6 @@ from openmarketer_worker.writer.settings import WriterSettings
 from openmarketer_worker.writer.workflow import WritePost
 from openmarketer_worker.writer.writing import WordedSteps, WritingWork
 
-logger = logging.getLogger(__name__)
-
 
 @dataclass(frozen=True)
 class WriterParts:
@@ -102,7 +96,7 @@ def writer(
     router = ModelRouter.from_file(
         environ.get("LLM_CONFIG_PATH") or DEFAULT_CONFIG_PATH, env=environ
     )
-    warn_of_one_model_for_both_roles(router)
+    require_the_writer_role(router)
     workspace_settings = WorkspaceSettings(sessions)
     return registration(
         WriterParts(
@@ -120,23 +114,13 @@ def writer(
     )
 
 
-def warn_of_one_model_for_both_roles(router: ModelRouter) -> None:
-    """Log a warning when ``writer`` and ``critic`` resolve to the same model; refuse nothing.
-
-    Raises ``ConfigError`` for a configuration that lacks either role: every run would fail.
-    """
+def require_the_writer_role(router: ModelRouter) -> None:
+    """Raises ``ConfigError`` for a configuration that lacks the role ``writer``: every run
+    would fail."""
     try:
-        writing, critique = router.resolve(rules.WRITER_ROLE), router.resolve(rules.CRITIC_ROLE)
+        router.resolve(rules.WRITER_ROLE)
     except KeyError as e:
-        raise ConfigError(f"the writer needs the roles writer and critic: {e}") from None
-    if writing.model == critique.model:
-        logger.warning(
-            "the roles %s and %s both resolve to %s: the critic reviews posts with the model "
-            "that wrote them; give the critic another model in the model configuration",
-            rules.WRITER_ROLE,
-            rules.CRITIC_ROLE,
-            writing.model,
-        )
+        raise ConfigError(f"the writer needs the role writer: {e}") from None
 
 
 def _model_of_workspace(

@@ -5,27 +5,26 @@ This module is wiring only. The rules live in ``rules.py``, model access goes th
 reach the database and the world only through the workflow that runs them, the second after
 the policy gate. The state holds plain data only.
 
-    prepare -> plan -> draft -> check -> critique -> decide -> store -> propose -> record -> END
-                                  ^                    |
-                                  +----- revise <------+
+    prepare -> write -> check -> decide -> store -> propose -> record -> END
+                         ^          |
+                         +- revise -+
 
 ``prepare`` reads the project's approved profile, keeps its version's id and builds the
 writing context from it, with the asset and the research run the brief names, read through the
 context and kept as bounded data; a project without a profile, a brief that announces a feature
 that is not live, or an asset or a research run that cannot be used, ends the run here.
-``plan`` has the writer plan the post, which code holds to the brief and the project; ``draft``
-has it write the variants, without tools. ``check`` runs the code rules on every variant;
-``critique`` has the critic, another role, review those that kept them; ``decide`` applies
-``rules.decide``, and ends the run when nothing can be proposed; ``revise`` has the writer
-rewrite from the findings, for another round. ``store`` asks for ``store_draft``, which stores
-the draft the person will review as the run's content item, and keeps the item's id;
-``propose`` asks for ``publish_post`` with that id, the text and the image's version: the gate
-holds it until a person decides, and a rejection or an expiry comes back as the outcome. Each
-action is asked for by a node of its own. ``record`` sets the result, which whoever runs the
-graph stores.
+``write`` has the writer write the variants, each with an angle and a form of its own, in one
+call without tools. ``check`` runs the code rules on every variant, the run's only review;
+``decide`` applies ``rules.decide``, and ends the run when nothing can be proposed; ``revise``
+has the writer rewrite from the code's findings, for another round. ``store`` asks for
+``store_draft``, which stores the draft the person will review as the run's content item, and
+keeps the item's id; ``propose`` asks for ``publish_post`` with that id, the text and the
+image's version: the gate holds it until a person decides, and a rejection or an expiry comes
+back as the outcome. Each action is asked for by a node of its own. ``record`` sets the
+result, which whoever runs the graph stores.
 
-The writer and the critic have no tools: each answers with one JSON object, read strictly.
-An answer that does not fit is told what was wrong and asked once more, inside the node.
+The writer has no tools: it answers with one JSON object, read strictly. An answer that does
+not fit is told what was wrong and asked once more, inside the node.
 
 What each node shows of the run's progress is ``progress.py``'s, declared on the agent here.
 
@@ -57,12 +56,10 @@ from openmarketer_core.writing.writer_agent.definitions import (
     agent,
 )
 from openmarketer_core.writing.writer_agent.rules import (
-    CriticReport,
     Draft,
     FeatureNotPublishable,
     NoApprovedProfile,
     NoVariantToPropose,
-    Plan,
 )
 
 Problems = Callable[[Any], list[str]]
@@ -198,34 +195,15 @@ def prepare(state: WriterState, context: WriterContext) -> dict[str, Any]:
 
 
 @agent.node
-def plan(state: WriterState, context: WriterContext) -> dict[str, Any]:
-    """Have the writer plan the post, and hold the plan to the brief and the project."""
-    _cost_left(state, context, "before the post was planned")
-    brief = _brief(state)
-    spent = _Spent()
-    submitted = _ask(
-        context,
-        rules.WRITER_ROLE,
-        rules.plan_messages(brief, state["writing_context"]),
-        model_type=Plan,
-        spent=spent,
-    )
-    if submitted is None:
-        raise WritingError(spent.unread("the writer's plan"))
-    held = rules.held_plan(submitted, brief, state["writing_context"])
-    return {"plan": held.plan, "plan_changes": held.changes, **spent.update(state)}
-
-
-@agent.node
-def draft(state: WriterState, context: WriterContext) -> dict[str, Any]:
-    """Have the writer write the first round's variants from the plan."""
+def write(state: WriterState, context: WriterContext) -> dict[str, Any]:
+    """Have the writer write the first round's variants."""
     _cost_left(state, context, "before the post was written")
     brief = _brief(state)
     spent = _Spent()
     submitted = _ask(
         context,
         rules.WRITER_ROLE,
-        rules.draft_messages(brief, state["writing_context"], state["plan"]),
+        rules.write_messages(brief, state["writing_context"]),
         model_type=Draft,
         spent=spent,
     )
@@ -254,47 +232,10 @@ def check(state: WriterState, context: WriterContext) -> dict[str, Any]:
 
 
 @agent.node
-def critique(state: WriterState, context: WriterContext) -> dict[str, Any]:
-    """Have the critic review the variants that kept every code rule, and rank those it passes.
-
-    Nothing is asked when no variant kept them. When the run's cost is used up, or the critic's
-    report cannot be read, the round has no review, and ``decide`` proposes nothing of it.
-    """
-    sent = [index for index, check in enumerate(state["checks"]) if check["passed"]]
-    if not sent:
-        return {"critique": {}}
-    if state["cost_usd"] >= context.limits.max_cost_usd:
-        note = f"round {state['round']}: the critic was not asked, the cost limit was hit"
-        return {"critique": {}, "notes": [*state["notes"], note]}
-    brief = _brief(state)
-    spent = _Spent()
-    submitted = _ask(
-        context,
-        rules.CRITIC_ROLE,
-        rules.critic_messages(
-            brief,
-            state["writing_context"],
-            state["plan"],
-            variants=state["variants"],
-            checks=state["checks"],
-            sent=sent,
-        ),
-        model_type=CriticReport,
-        spent=spent,
-        problems=lambda report: rules.critic_problems(report, sent),
-    )
-    if submitted is None:
-        note = f"round {state['round']}: " + spent.unread("the critic's report")
-        return {"critique": {}, "notes": [*state["notes"], note], **spent.update(state)}
-    return {"critique": submitted.model_dump(mode="json"), **spent.update(state)}
-
-
-@agent.node
 def decide(state: WriterState, context: WriterContext) -> dict[str, Any]:
     """Apply the decide rule to the round: propose a variant, revise, or end the run."""
     decision = rules.decide(
         checks=state["checks"],
-        critique=state["critique"],
         round_no=state["round"],
         cost_usd=state["cost_usd"],
         limits=context.limits,
@@ -305,13 +246,12 @@ def decide(state: WriterState, context: WriterContext) -> dict[str, Any]:
         "decision": decision.next,
         "reason": decision.reason,
         "chosen": decision.chosen,
-        "passed_critic": decision.passed_critic,
     }
 
 
 @agent.node
 def revise(state: WriterState, context: WriterContext) -> dict[str, Any]:
-    """Have the writer rewrite the variants from the round's findings, for the next round.
+    """Have the writer rewrite the variants from the code's findings, for the next round.
 
     A rewrite that cannot be read keeps the round's variants for the next, with a note: they
     fail as they did, and the round limit ends the run.
@@ -322,7 +262,6 @@ def revise(state: WriterState, context: WriterContext) -> dict[str, Any]:
         "round": round_no,
         "variants": state["variants"],
         "checks": state["checks"],
-        "critique": state["critique"],
     }
     spent = _Spent()
     submitted = _ask(
@@ -331,11 +270,9 @@ def revise(state: WriterState, context: WriterContext) -> dict[str, Any]:
         rules.revise_messages(
             brief,
             state["writing_context"],
-            state["plan"],
             round_no=round_no,
             variants=state["variants"],
             checks=state["checks"],
-            critique=state["critique"],
         ),
         model_type=Draft,
         spent=spent,
@@ -349,7 +286,6 @@ def revise(state: WriterState, context: WriterContext) -> dict[str, Any]:
         "round": round_no + 1,
         "variants": variants,
         "checks": [],
-        "critique": {},
         "earlier_rounds": [*state["earlier_rounds"], finished],
         "chosen": -1,
         "notes": [*state["notes"], *notes],
@@ -377,9 +313,6 @@ def store(state: WriterState, context: WriterContext) -> dict[str, Any]:
         chosen=state["chosen"],
         variants=state["variants"],
         checks=state["checks"],
-        critique=state["critique"],
-        plan=state["plan"],
-        plan_changes=state["plan_changes"],
         context=state["writing_context"],
         cost_usd=state["cost_usd"],
     )
@@ -439,7 +372,8 @@ def record(state: WriterState) -> dict[str, Any]:
         "critic_report": draft["critic_report"],
         "flagged_numbers": draft["flagged_numbers"],
         "content_item_id": state["content_item_id"],
-        "passed_critic": state["passed_critic"],
+        # No critic reviews the post; a draft stored before carries its report all the same.
+        "passed_critic": None,
         "reason": state["reason"],
         "action_error": state["action_error"],
         "rounds": state["round"],
@@ -455,11 +389,9 @@ def record(state: WriterState) -> dict[str, Any]:
 
 
 agent.progress(progress.progress_of)
-agent.edge(prepare, plan)
-agent.edge(plan, draft)
-agent.edge(draft, check)
-agent.edge(check, critique)
-agent.edge(critique, decide)
+agent.edge(prepare, write)
+agent.edge(write, check)
+agent.edge(check, decide)
 agent.edge(revise, check)
 agent.edge(store, propose)
 agent.edge(propose, record)
@@ -473,6 +405,5 @@ def after_decide(state: WriterState) -> str:
 
 def recursion_limit(limits: rules.Limits) -> int:
     """How many graph steps a run under ``limits`` may take before it is stopped as a defect."""
-    # prepare, plan and draft; check, critique, decide and revise per round; store, propose
-    # and record
-    return 3 + 4 * limits.max_rounds + 3 + 10
+    # prepare and write; check, decide and revise per round; store, propose and record
+    return 2 + 3 * limits.max_rounds + 3 + 10

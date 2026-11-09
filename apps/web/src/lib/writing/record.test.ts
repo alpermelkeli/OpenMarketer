@@ -119,6 +119,10 @@ describe("the critic's review", () => {
     expect(reviewOf(null, "x")).toBeNull();
     expect(reviewOf("passed", "x")).toBeNull();
   });
+
+  it("is none for the empty report of a post written without a critic", () => {
+    expect(reviewOf({}, "x")).toBeNull();
+  });
 });
 
 describe("the claims", () => {
