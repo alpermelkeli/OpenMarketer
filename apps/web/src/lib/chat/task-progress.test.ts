@@ -101,6 +101,9 @@ describe("what a task's node did, as a line of its card", () => {
     expect(taskStageText({ ...finished, postStatus: "dry_run" })).toBe(
       "Step 2 (Writing) finished: the post was approved and recorded as a dry run",
     );
+    expect(taskStageText({ ...finished, postStatus: "published" })).toBe(
+      "Step 2 (Writing) finished: the post was published",
+    );
     expect(taskStageText({ ...finished, runId: null, status: "failed", postStatus: null })).toBe(
       "Step 2 (Writing) failed before its run started",
     );

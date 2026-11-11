@@ -12,6 +12,8 @@ import {
   estimateText,
   payloadText,
   planDecisionWording,
+  postDecisionWording,
+  postDestinationDisplay,
   proposalStatusDisplay,
   proposedPostText,
   splitByDecision,
@@ -35,6 +37,7 @@ function proposal(id: string, status: Proposal["status"]): Proposal {
     expires_at: "2026-10-17T11:00:00Z",
     decided_by: null,
     decided_at: null,
+    post_destination: null,
   };
 }
 
@@ -159,5 +162,56 @@ describe("a task's plan to confirm", () => {
       "The task ends without running any of its steps, and reports so in its chat.",
     );
     expect(planDecisionWording(true).title).toBe("Confirm this plan?");
+  });
+});
+
+describe("where a writer's post goes once approved", () => {
+  const live = { live: true, account_id: "1", username: "openmarketer", cost_estimate_usd: 0.015 };
+  const dryRun = { live: false, account_id: null, username: null, cost_estimate_usd: null };
+
+  it("names the account it publishes from and what that is reckoned to cost", () => {
+    expect(postDestinationDisplay(live)).toEqual({
+      live: true,
+      text: "Publishes from @openmarketer on X · about $0.015",
+    });
+  });
+
+  it("leaves the cost out when there is no estimate", () => {
+    expect(postDestinationDisplay({ ...live, cost_estimate_usd: null })?.text).toBe("Publishes from @openmarketer on X");
+  });
+
+  it("says a dry run posts nothing", () => {
+    expect(postDestinationDisplay(dryRun)).toEqual({
+      live: false,
+      text: "Dry run: no X account connected — nothing will be posted",
+    });
+  });
+
+  it("is nothing for a proposal that is not a writer's post", () => {
+    expect(postDestinationDisplay(null)).toBeNull();
+    expect(postDecisionWording(null, true)).toBeNull();
+  });
+
+  it("makes the approve button say it publishes, and only when it does", () => {
+    expect(decisionLabels("publishes", live)).toEqual({ approve: "Approve and publish", reject: "Reject" });
+    expect(decisionLabels("publishes", dryRun)).toEqual({ approve: "Approve", reject: "Reject" });
+  });
+
+  it("says before approving where it is published, and that it cannot be taken back", () => {
+    const wording = postDecisionWording(live, true);
+    expect(wording?.title).toBe("Publish this post?");
+    expect(wording?.description).toMatch(/^Publishes from @openmarketer on X · about \$0\.015\./);
+    expect(wording?.description).toMatch(/cannot be taken back/);
+    expect(wording?.action).toBe("Approve and publish");
+  });
+
+  it("says before approving a dry run that nothing is posted", () => {
+    const wording = postDecisionWording(dryRun, true);
+    expect(wording?.title).toBe("Approve this post as a dry run?");
+    expect(wording?.description).toMatch(/nothing is posted/);
+  });
+
+  it("says before rejecting that the post is sent nowhere", () => {
+    expect(postDecisionWording(live, false)?.description).toBe("The post is not sent anywhere, and its run ends.");
   });
 });

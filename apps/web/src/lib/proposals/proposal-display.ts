@@ -6,7 +6,7 @@
 import type { Tone } from "@/lib/analysis/run-status";
 import type { ApiError } from "@/lib/api/api-error";
 import { errorMessage } from "@/lib/api/error-message";
-import type { ActionEffect, Proposal, ProposalStatus } from "@/lib/api/types";
+import type { ActionEffect, PostDestination, Proposal, ProposalStatus } from "@/lib/api/types";
 
 type StatusDisplay = { label: string; tone: Tone };
 
@@ -83,6 +83,20 @@ export function estimateText(estimateUsd: number | null): string | null {
   return estimateUsd === null ? null : `Estimated cost ${ESTIMATE.format(estimateUsd)}`;
 }
 
+/**
+ * Where a writer's post goes once approved, as a sentence to read before deciding: "Publishes from
+ * @name on X · about $0.015", or a dry run that sends nothing. `live` is the server's word for it;
+ * the username is the platform's own, read when the account was connected. Null for a proposal
+ * that is not a writer's post. Accounts are connected on X only, so X is named.
+ */
+export function postDestinationDisplay(destination: PostDestination | null): { live: boolean; text: string } | null {
+  if (destination === null) return null;
+  if (!destination.live) return { live: false, text: "Dry run: no X account connected — nothing will be posted" };
+  const account = destination.username === null ? "the connected account" : `@${destination.username}`;
+  const cost = destination.cost_estimate_usd === null ? "" : ` · about ${ESTIMATE.format(destination.cost_estimate_usd)}`;
+  return { live: true, text: `Publishes from ${account} on X${cost}` };
+}
+
 /** The proposals that wait for a decision, and those that have one, each newest first. */
 export function splitByDecision(proposals: readonly Proposal[]): { waiting: Proposal[]; decided: Proposal[] } {
   return {
@@ -121,12 +135,48 @@ function within(count: number, unit: string): string {
 
 /**
  * The words of the two buttons that decide a proposal: a plan to confirm is confirmed or
- * rejected, any other action approved or rejected.
+ * rejected, a post that would be published is approved and published, any other action approved
+ * or rejected.
  */
-export function decisionLabels(effect: string): { approve: string; reject: string } {
-  return effect === "confirms"
-    ? { approve: "Confirm the plan", reject: "Reject the plan" }
-    : { approve: "Approve", reject: "Reject" };
+export function decisionLabels(
+  effect: string,
+  destination: PostDestination | null = null,
+): { approve: string; reject: string } {
+  if (effect === "confirms") return { approve: "Confirm the plan", reject: "Reject the plan" };
+  if (destination?.live === true) return { approve: "Approve and publish", reject: "Reject" };
+  return { approve: "Approve", reject: "Reject" };
+}
+
+/**
+ * What the step before deciding on a writer's post says: where approving sends it, or that it is
+ * a dry run, and that a rejection sends nothing. Null for a proposal that is not a writer's post.
+ */
+export function postDecisionWording(
+  destination: PostDestination | null,
+  approve: boolean,
+): { title: string; description: string; action: string } | null {
+  const display = postDestinationDisplay(destination);
+  if (display === null) return null;
+  if (!approve) {
+    return {
+      title: "Reject this post?",
+      description: "The post is not sent anywhere, and its run ends.",
+      action: "Reject",
+    };
+  }
+  if (!display.live) {
+    return {
+      title: "Approve this post as a dry run?",
+      description:
+        "No X account was connected when the post was proposed, so it is recorded as it would have been sent and nothing is posted.",
+      action: "Approve",
+    };
+  }
+  return {
+    title: "Publish this post?",
+    description: `${display.text}. The run publishes it exactly as shown, with its image when it has one. Once it is on X, it cannot be taken back from here.`,
+    action: "Approve and publish",
+  };
 }
 
 /**

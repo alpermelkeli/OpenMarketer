@@ -132,7 +132,7 @@ export function refreshedByStudioRunEnd(projectId: string): Refresh[] {
 
 /**
  * What a writing run that has just ended makes out of date: the list of runs, the posts, and its
- * own post, whose state the end settled (approved as a dry run, rejected or expired).
+ * own post, whose state the end settled (published, approved as a dry run, refused, rejected or expired).
  */
 export function refreshedByWritingRunEnd(projectId: string, contentItemId: string | null): Refresh[] {
   const lists = [{ queryKey: queryKeys.writingRuns(projectId) }, { queryKey: queryKeys.contentItems(projectId) }];

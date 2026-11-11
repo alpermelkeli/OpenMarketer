@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { Proposal } from "@/lib/api/types";
+import type { ContentItemStatus, Proposal } from "@/lib/api/types";
 
 import {
   GOAL_OPTIONS,
   goalLabel,
+  isPostApproved,
+  isPostPublishing,
   isWritingRunFinished,
   isWritingRunWaitingForWorker,
   postStatusDisplay,
@@ -39,19 +41,47 @@ describe("a writing run's state", () => {
 });
 
 describe("a post's state", () => {
+  function post(status: ContentItemStatus, publishingUnconfirmed = false) {
+    return { status, platform: "x" as const, publishing_unconfirmed: publishingUnconfirmed };
+  }
+
   it("draws a waiting post as a draft, in the colour of what needs attention", () => {
-    expect(postStatusDisplay("proposed")).toMatchObject({ tone: "warning", draft: true });
+    expect(postStatusDisplay(post("proposed"))).toMatchObject({ tone: "warning", draft: true });
   });
 
-  it("says an approved post was a dry run and sent nowhere", () => {
-    const display = postStatusDisplay("dry_run");
-    expect(display).toMatchObject({ tone: "success", draft: false });
-    expect(display.meaning).toMatch(/sends nothing/);
+  it("says an approved dry run was posted nowhere", () => {
+    const display = postStatusDisplay(post("dry_run"));
+    expect(display).toMatchObject({ label: "Approved, dry run", tone: "success", draft: false });
+    expect(display.meaning).toMatch(/nothing was posted/);
   });
 
-  it("says a rejected, expired or failed post was not sent", () => {
-    for (const status of ["rejected", "expired", "failed"] as const) {
-      expect(postStatusDisplay(status).meaning).toMatch(/not sent/);
+  it("says a post being sent is publishing on its platform, as work in progress", () => {
+    expect(postStatusDisplay(post("publishing"))).toMatchObject({ label: "Publishing on X…", tone: "progress" });
+    expect(isPostPublishing(post("publishing"))).toBe(true);
+  });
+
+  it("says a published post is published on its platform", () => {
+    expect(postStatusDisplay(post("published"))).toMatchObject({ label: "Published on X", tone: "success", draft: false });
+  });
+
+  it("warns of a send never confirmed instead of calling it publishing or failed", () => {
+    expect(postStatusDisplay(post("publishing", true))).toMatchObject({ label: "Not confirmed", tone: "warning" });
+    expect(isPostPublishing(post("publishing", true))).toBe(false);
+  });
+
+  it("says a rejected or expired post was not sent, and a failed one not published", () => {
+    for (const status of ["rejected", "expired"] as const) {
+      expect(postStatusDisplay(post(status)).meaning).toMatch(/not sent/);
+    }
+    expect(postStatusDisplay(post("failed"))).toMatchObject({ tone: "danger", meaning: "The post was not published." });
+  });
+
+  it("is approved once a person approved it, whether it was sent or not", () => {
+    for (const status of ["dry_run", "publishing", "published"] as const) {
+      expect(isPostApproved(post(status))).toBe(true);
+    }
+    for (const status of ["proposed", "rejected", "expired", "failed"] as const) {
+      expect(isPostApproved(post(status))).toBe(false);
     }
   });
 });
@@ -85,6 +115,7 @@ describe("the proposal a post waits on", () => {
       expires_at: "2026-10-30T10:00:00Z",
       decided_by: null,
       decided_at: null,
+      post_destination: null,
       ...changes,
     };
   }

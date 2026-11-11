@@ -14,12 +14,12 @@ import { queryKeys, refreshedByWorkspaceEvent } from "@/lib/api/query-keys";
 import type { RunEvent } from "@/lib/api/types";
 import { useWorkspaceEvents } from "@/lib/api/workspace-events";
 import { shortId } from "@/lib/format";
-import { effectLabel } from "@/lib/proposals/proposal-display";
+import { effectLabel, postDestinationDisplay } from "@/lib/proposals/proposal-display";
 
 /**
  * What waits for a person, told wherever they are: a bell at the top right with how many proposals
- * are waiting, and the list of them behind it. Each one links to its project's approvals screen,
- * where the decision is made.
+ * are waiting, and the list of them behind it, a writer's post with where it would be published.
+ * Each one links to its project's approvals screen, where the decision is made.
  *
  * The list is read once and then refreshed the moment the workspace's event stream says a proposal
  * was stored or decided; nothing is polled. The workspace stream starts at the newest event, so
@@ -93,25 +93,37 @@ export function NotificationBell() {
         )}
         {waiting.data !== undefined && waiting.data.length > 0 && (
           <ul className="grid gap-2">
-            {waiting.data.map((proposal) => (
-              <li key={proposal.id}>
-                <Link
-                  href={`/projects/${encodeURIComponent(proposal.project_id)}/approvals`}
-                  className="block rounded-md border bg-card p-3 transition-colors hover:bg-muted"
-                >
-                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="font-mono text-sm">{proposal.action_name}</span>
-                    <span className="text-2xs tracking-widest text-muted-foreground uppercase">
-                      {effectLabel(proposal.effect)}
+            {waiting.data.map((proposal) => {
+              const destination = postDestinationDisplay(proposal.post_destination);
+              return (
+                <li key={proposal.id}>
+                  <Link
+                    href={`/projects/${encodeURIComponent(proposal.project_id)}/approvals`}
+                    className="block rounded-md border bg-card p-3 transition-colors hover:bg-muted"
+                  >
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="font-mono text-sm">{proposal.action_name}</span>
+                      <span className="text-2xs tracking-widest text-muted-foreground uppercase">
+                        {effectLabel(proposal.effect)}
+                      </span>
                     </span>
-                  </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {names.get(proposal.project_id) ?? shortId(proposal.project_id)} is waiting for
-                    your decision
-                  </span>
-                </Link>
-              </li>
-            ))}
+                    {destination !== null && (
+                      <span
+                        className={
+                          destination.live ? "mt-1 block text-xs" : "mt-1 block text-xs text-muted-foreground"
+                        }
+                      >
+                        {destination.text}
+                      </span>
+                    )}
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {names.get(proposal.project_id) ?? shortId(proposal.project_id)} is waiting for
+                      your decision
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         )}
       </PopoverContent>

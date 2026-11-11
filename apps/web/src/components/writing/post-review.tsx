@@ -2,6 +2,7 @@ import { ArrowRightIcon, LockIcon } from "lucide-react";
 import Link from "next/link";
 
 import { StatusPill } from "@/components/common/status-pill";
+import { PostDestinationNote } from "@/components/proposals/post-destination-note";
 import { VersionImage } from "@/components/studio/version-image";
 import type { ContentItem, Proposal } from "@/lib/api/types";
 import { formatDateTime } from "@/lib/format";
@@ -10,9 +11,16 @@ import { formatCost } from "@/lib/studio/status";
 import { cn } from "@/lib/utils";
 import { postImageOf } from "@/lib/writing/attachments";
 import { postLengthOf, type CheckReport, type Review } from "@/lib/writing/record";
-import { countedAs, postStatusDisplay, writingPlatformLabel } from "@/lib/writing/status";
+import {
+  countedAs,
+  isPostApproved,
+  isPostPublishing,
+  postStatusDisplay,
+  writingPlatformLabel,
+} from "@/lib/writing/status";
 
 import { CodeChecks, CriticReview, FlaggedNumbers } from "./post-checks";
+import { PostPublication } from "./post-publication";
 
 type PostReviewProps = {
   post: ContentItem;
@@ -27,12 +35,13 @@ type PostReviewProps = {
  * The post the run proposed: the text exactly as it would be sent, its length on its platform, what
  * became of it, and what the code and the critic found of it; with the image it was proposed with, the version
  * a person approves with the text, and a link to the research it drew on. A post that waits is drawn as a draft, an
- * approved one with a solid border and a lock. The text was written by a model: shown as text only.
+ * approved one with a solid border and a lock. While it waits, where approving it would send it; once
+ * sent, where it is on X or why X refused it. The text was written by a model: shown as text only.
  */
 export function PostReview({ post, check, review, flaggedNumbers, waitingOn }: PostReviewProps) {
-  const status = postStatusDisplay(post.status);
+  const status = postStatusDisplay(post);
   const length = postLengthOf(check);
-  const approved = post.status === "dry_run";
+  const approved = isPostApproved(post);
   const image = postImageOf(post);
 
   return (
@@ -41,9 +50,14 @@ export function PostReview({ post, check, review, flaggedNumbers, waitingOn }: P
         <h2 id="post" className="font-heading text-lg">
           The post
         </h2>
-        <StatusPill tone={status.tone}>{status.label}</StatusPill>
+        <StatusPill tone={status.tone} live={isPostPublishing(post)}>
+          {status.label}
+        </StatusPill>
       </div>
       <p className="max-w-prose text-sm text-pretty text-muted-foreground">{status.meaning}</p>
+      <div className="max-w-prose empty:hidden">
+        <PostPublication post={post} />
+      </div>
 
       <figure
         className={cn(
@@ -101,6 +115,9 @@ export function PostReview({ post, check, review, flaggedNumbers, waitingOn }: P
         </p>
       )}
 
+      {post.status === "proposed" && waitingOn !== null && (
+        <PostDestinationNote projectId={post.project_id} destination={waitingOn.post_destination} />
+      )}
       {post.status === "proposed" && (
         <p className="text-sm">
           <Link

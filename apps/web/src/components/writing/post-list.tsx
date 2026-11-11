@@ -6,19 +6,21 @@ import type { ContentItem } from "@/lib/api/types";
 import { formatDateTime } from "@/lib/format";
 import { writingHref } from "@/lib/projects/project-navigation";
 import { cn } from "@/lib/utils";
-import { postStatusDisplay, writingPlatformLabel } from "@/lib/writing/status";
+import { isPostPublishing, postStatusDisplay, writingPlatformLabel } from "@/lib/writing/status";
+
+import { PostPublication } from "./post-publication";
 
 type PostListProps = { posts: readonly ContentItem[] };
 
 /**
- * The posts the project's runs wrote, newest first, each with what became of it. A post that still
- * waits for a person is drawn as a draft. The texts were written by a model: shown as text only.
+ * The posts the project's runs wrote, newest first, each with what became of it: where a published
+ * one is on X, or why X refused it. A post that still waits for a person is drawn as a draft. The texts were written by a model: shown as text only.
  */
 export function PostList({ posts }: PostListProps) {
   return (
     <ul className="grid gap-3">
       {posts.map((post) => {
-        const status = postStatusDisplay(post.status);
+        const status = postStatusDisplay(post);
         return (
           <li
             key={post.id}
@@ -28,7 +30,9 @@ export function PostList({ posts }: PostListProps) {
             )}
           >
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              <StatusPill tone={status.tone}>{status.label}</StatusPill>
+              <StatusPill tone={status.tone} live={isPostPublishing(post)}>
+                {status.label}
+              </StatusPill>
               <p className="text-sm">{writingPlatformLabel(post.platform)}</p>
               <p className="text-sm text-muted-foreground">
                 Written {formatDateTime(post.created_at)} from profile version{" "}
@@ -36,6 +40,7 @@ export function PostList({ posts }: PostListProps) {
               </p>
             </div>
             <p className="max-w-prose text-pretty break-words whitespace-pre-wrap">{post.text}</p>
+            <PostPublication post={post} />
             <p>
               <Link
                 href={writingHref(post.project_id, post.run_id)}
