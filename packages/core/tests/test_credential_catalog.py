@@ -13,6 +13,8 @@ from openmarketer_core.credentials.catalog import (
     GITLAB_TOKEN,
     MAX_VALUE_LENGTH,
     OPENROUTER_API_KEY,
+    X_API_KEY,
+    X_API_SECRET,
     CredentialValueRefused,
     SealedValue,
     UnknownCredential,
@@ -23,13 +25,15 @@ from openmarketer_core.credentials.catalog import (
 SECRET = "sk-or-v1-0123456789abcdef"
 
 
-def test_catalog_holds_the_three_credentials_and_their_environment_variables():
+def test_catalog_holds_the_five_credentials_and_their_environment_variables():
     assert {c.name: c.environment_variable for c in CREDENTIALS} == {
         "openrouter_api_key": "OPENROUTER_API_KEY",
         "github_token": "GITHUB_TOKEN",
         "gitlab_token": "GITLAB_TOKEN",
+        "x_api_key": "X_API_KEY",
+        "x_api_secret": "X_API_SECRET",
     }
-    assert CREDENTIALS == (OPENROUTER_API_KEY, GITHUB_TOKEN, GITLAB_TOKEN)
+    assert CREDENTIALS == (OPENROUTER_API_KEY, GITHUB_TOKEN, GITLAB_TOKEN, X_API_KEY, X_API_SECRET)
 
 
 @pytest.mark.parametrize("credential", CREDENTIALS, ids=lambda credential: credential.name)

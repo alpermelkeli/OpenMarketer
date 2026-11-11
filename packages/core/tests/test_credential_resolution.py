@@ -16,6 +16,8 @@ from openmarketer_core.credentials.catalog import (
     GITHUB_TOKEN,
     GITLAB_TOKEN,
     OPENROUTER_API_KEY,
+    X_API_KEY,
+    X_API_SECRET,
     CredentialValueRefused,
     UnknownCredential,
 )
@@ -256,6 +258,8 @@ def test_each_credential_has_its_own_status(session, workspace_id, cipher):
         OPENROUTER_API_KEY: CredentialSource.ENVIRONMENT,
         GITHUB_TOKEN: CredentialSource.NOT_SET,
         GITLAB_TOKEN: CredentialSource.STORED,
+        X_API_KEY: CredentialSource.NOT_SET,
+        X_API_SECRET: CredentialSource.NOT_SET,
     }
 
 

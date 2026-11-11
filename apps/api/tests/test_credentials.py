@@ -52,6 +52,18 @@ NOT_SET = [
         "environment_variable": "GITLAB_TOKEN",
         "stored": None,
     },
+    {
+        "name": "x_api_key",
+        "source": "not_set",
+        "environment_variable": "X_API_KEY",
+        "stored": None,
+    },
+    {
+        "name": "x_api_secret",
+        "source": "not_set",
+        "environment_variable": "X_API_SECRET",
+        "stored": None,
+    },
 ]
 
 
@@ -134,6 +146,8 @@ def test_storing_one_credential_leaves_the_others_not_set(client):
         "openrouter_api_key": "not_set",
         "github_token": "stored",
         "gitlab_token": "not_set",
+        "x_api_key": "not_set",
+        "x_api_secret": "not_set",
     }
 
 

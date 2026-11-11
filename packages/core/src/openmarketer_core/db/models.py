@@ -3,13 +3,14 @@ product images they found in the repository, research runs and their reports and
 runs and the media assets they made, writing runs and the content items they proposed, the
 orchestrator's tasks and their steps, stored credentials, the settings a workspace chose from
 the dashboard, the proposals of actions that wait for a person, the operator's chat threads
-about a project with their turns, the events runs record for the person watching them, and the
-budget ledger of what runs spend.
+about a project with their turns, the events runs record for the person watching them, the
+budget ledger of what runs spend, and a project's connected social accounts with the
+connections still waiting for the platform's answer.
 
 Every table below ``workspace`` carries ``project_id`` so that row-level
 security can bind a database session to one project; ``credential`` and
 ``workspace_setting`` belong to the workspace itself and carry ``workspace_id``, and
-``budget_ledger_entry`` carries both.
+``budget_ledger_entry``, ``social_account`` and ``social_connection_attempt`` carry both.
 """
 
 from __future__ import annotations
@@ -56,6 +57,14 @@ from openmarketer_core.repository_analysis.repository_images.selection import (
     RepositoryImageKind,
 )
 from openmarketer_core.research.questions import MAX_SOURCES
+from openmarketer_core.social_accounts.catalog import (
+    MAX_ACCOUNT_ID_LENGTH,
+    MAX_DISPLAY_NAME_LENGTH,
+    MAX_PICTURE_URL_LENGTH,
+    MAX_STATE_LENGTH,
+    MAX_USERNAME_LENGTH,
+    SocialPlatform,
+)
 from openmarketer_core.studio.platforms import PLATFORMS
 from openmarketer_core.writing.brief import WritingPlatform
 
@@ -1205,3 +1214,83 @@ class BudgetLedgerEntryRecord(Base):
     amount_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6))
     decision: Mapped[SpendDecision | None] = mapped_column(_enum(SpendDecision, "decision"))
     created_at: Mapped[datetime] = _created_at()
+
+
+# -------------------------------------------------------- social accounts
+_SOCIAL_PLATFORM_SLUGS = ", ".join(f"'{platform.value}'" for platform in SocialPlatform)
+
+
+class SocialAccountRecord(Base):
+    """A project's account on a social platform, and the token it was authorized with, sealed.
+
+    A project has at most one account per platform: connecting another replaces it.
+    ``account_id`` is the platform's own identifier of the account; the username, the
+    display name and the picture are what the platform said when it was connected, kept to
+    show it. The access token and its secret are sealed by the application under the
+    installation's key, as stored credentials are (``credentials/cipher.py``).
+    ``connected_at`` is when this account was connected to the project, ``updated_at`` when
+    it was last authorized again.
+    """
+
+    __tablename__ = "social_account"
+    __table_args__ = (
+        UniqueConstraint("project_id", "platform"),
+        CheckConstraint(f"platform IN ({_SOCIAL_PLATFORM_SLUGS})", name="platform"),
+        CheckConstraint(
+            f"char_length(account_id) BETWEEN 1 AND {MAX_ACCOUNT_ID_LENGTH}", name="account_id"
+        ),
+        CheckConstraint(
+            f"char_length(username) BETWEEN 1 AND {MAX_USERNAME_LENGTH}", name="username"
+        ),
+        CheckConstraint(
+            f"char_length(display_name) <= {MAX_DISPLAY_NAME_LENGTH}", name="display_name"
+        ),
+        CheckConstraint(
+            f"char_length(picture_url) <= {MAX_PICTURE_URL_LENGTH}", name="picture_url"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspace.id"), index=True)
+    # The unique constraint on (project_id, platform) is the project's index.
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("project.id"))
+    platform: Mapped[str] = mapped_column(Text)
+    account_id: Mapped[str] = mapped_column(Text)
+    username: Mapped[str] = mapped_column(Text)
+    display_name: Mapped[str] = mapped_column(Text)
+    picture_url: Mapped[str | None] = mapped_column(Text)
+    access_token_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    access_token_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    access_secret_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    access_secret_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    connected_by: Mapped[uuid.UUID]
+    connected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SocialConnectionAttemptRecord(Base):
+    """A connection a person started and the platform has not answered yet.
+
+    ``state`` is what the platform's answer names the attempt by (with OAuth 1.0a, the request
+    token). The secret kept for the answer (the request token's secret) is sealed like an
+    account's token. An attempt is taken once, when the answer arrives, and is no use after
+    ``expires_at``.
+    """
+
+    __tablename__ = "social_connection_attempt"
+    __table_args__ = (
+        CheckConstraint(f"platform IN ({_SOCIAL_PLATFORM_SLUGS})", name="platform"),
+        CheckConstraint(f"char_length(state) BETWEEN 1 AND {MAX_STATE_LENGTH}", name="state"),
+        Index("ix_social_connection_attempt_workspace_id_expires_at", "workspace_id", "expires_at"),
+    )
+
+    state: Mapped[str] = mapped_column(Text, primary_key=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspace.id"))
+    project_id: Mapped[uuid.UUID] = _project_fk()
+    platform: Mapped[str] = mapped_column(Text)
+    secret_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    secret_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = _created_at()
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
