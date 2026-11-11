@@ -14,6 +14,10 @@ names for its key (``provider.api_key_env``) is the catalog's. A configuration t
 another variable is another provider's: its key comes from that variable alone, so the key of
 one provider is never sent to another.
 
+A project's connected account on a social platform carries a token of its own, sealed in its
+row: ``account_tokens`` opens it, with the account it belongs to, for the activity that acts as
+the account, at each attempt like every other credential.
+
 What cannot be resolved is said in an error whose message may be shown and never holds a
 value: core's ``CredentialUnreadable`` for a stored value that does not open, and core's
 ``ModelKeyNotSet`` when the provider's key is set nowhere. Neither passes by itself, so
@@ -31,6 +35,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -39,7 +44,19 @@ from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.credentials.resolution import credential_value
 from openmarketer_core.credentials.resolution import model_key as resolve_model_key
 from openmarketer_core.db.session import transaction
+from openmarketer_core.db.social_accounts import connected_account
 from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.social_accounts.catalog import SocialPlatform
+from openmarketer_core.social_accounts.connection import AccountTokens
+from openmarketer_core.social_accounts.connection import account_tokens as open_account_tokens
+
+
+@dataclass(frozen=True)
+class ConnectedAccountTokens:
+    """A project's connected account, by the platform's identifier, and its opened token."""
+
+    account_id: str
+    tokens: AccountTokens
 
 
 class WorkspaceCredentials:
@@ -90,6 +107,31 @@ class WorkspaceCredentials:
                 router=router,
                 cipher=self._cipher,
             )
+
+    def account_tokens(
+        self, workspace_id: uuid.UUID, project_id: uuid.UUID, platform: SocialPlatform
+    ) -> ConnectedAccountTokens | None:
+        """The project's account on ``platform`` with its opened token, or ``None`` without one.
+
+        Read in one transaction. Raises core's ``EncryptionKeyMissing`` and
+        ``ConnectionSecretUnreadable`` for a token that cannot be opened, and ``DatabaseError``.
+        """
+        with transaction(self._sessions) as session:
+            account = connected_account(
+                session, workspace_id=workspace_id, project_id=project_id, platform=platform
+            )
+            if account is None:
+                return None
+            tokens = open_account_tokens(
+                session,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                platform=platform,
+                cipher=self._cipher,
+            )
+        if tokens is None:
+            return None
+        return ConnectedAccountTokens(account_id=account.account_id, tokens=tokens)
 
     def __repr__(self) -> str:
         # Never the environment: a repr ends up in logs and tracebacks.

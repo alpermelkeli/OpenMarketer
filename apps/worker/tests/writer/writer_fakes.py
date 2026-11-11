@@ -3,13 +3,16 @@
 The writer is scripted (``ScriptedChat``), with answers built the way the core tests of the
 writer's graph build them. ``WriterDatabase`` sets up a project with an
 approved profile and a requested writing run, with an image of the project's Studio library and
-a research run it may name, and reads back what a run left. Nothing here reaches a model or a
-network, and no image is stored anywhere: an asset's version is a row only.
+a research run it may name, and reads back what a run left; it connects the project's X account
+as the dashboard does. ``FakeX`` is a platform an approved post is published on, which keeps the
+account's posts and refuses the same text twice as X does, and ``FakeAssets`` the object storage
+of the posts' images. Nothing here reaches a model or a network.
 """
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -19,8 +22,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
+from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.content_items import ContentItem, content_item
-from openmarketer_core.db.media_assets import NewAssetVersion, add_version, reject_asset
+from openmarketer_core.db.media_assets import (
+    NewAssetVersion,
+    add_version,
+    asset_version,
+    reject_asset,
+)
 from openmarketer_core.db.models import AssetTechnique, ProductProfileRecord, Project, Workspace
 from openmarketer_core.db.profile_versions import approve_profile_version
 from openmarketer_core.db.proposals import (
@@ -34,6 +43,7 @@ from openmarketer_core.db.research_runs import mark_run_succeeded as mark_resear
 from openmarketer_core.db.research_runs import request_research_run
 from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.db.session import transaction
+from openmarketer_core.db.social_accounts import remove_connected_account
 from openmarketer_core.db.studio_runs import mark_run_needs_review as mark_studio_needs_review
 from openmarketer_core.db.studio_runs import mark_run_started as mark_studio_started
 from openmarketer_core.db.studio_runs import request_studio_run
@@ -47,7 +57,25 @@ from openmarketer_core.llm import ChatReply
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import CheckedFinding, Report
-from openmarketer_core.studio.asset_store import asset_key
+from openmarketer_core.social_accounts.catalog import AccountDescription, SocialPlatform
+from openmarketer_core.social_accounts.connection import (
+    AccountTokens,
+    AuthorizationStart,
+    AuthorizedAccount,
+    PlatformApp,
+    finish_connection,
+    start_connection,
+)
+from openmarketer_core.social_accounts.publishing import (
+    PostImageFile,
+    PublishedPost,
+    PublishingAccount,
+    PublishingRefused,
+    PublishingUnavailable,
+    RefusalReason,
+    text_key,
+)
+from openmarketer_core.studio.asset_store import AssetStoreUnavailable, asset_key
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
@@ -83,6 +111,16 @@ IMAGE_REQUEST = AssetRequest(
 RESEARCH_REQUEST = ResearchRequest(questions=["How do note apps announce offline sync?"])
 FINDING = "Note apps announce offline sync with a short demo."
 QUOTES = ("Most launches show a ten second demo.", "Users ask for offline mode first.")
+# The installation's app on X and an account's token, made up for the tests: no result, log,
+# failure, history or checkpoint may hold any of them.
+APP_KEY = "x-app-key-0123456789"
+APP_SECRET = "x-app-secret-0123456789"
+ACCESS_TOKEN = "42-x-access-token-0123456789"
+ACCESS_SECRET = "x-access-secret-0123456789"
+SECRETS = (APP_KEY, APP_SECRET, ACCESS_TOKEN, ACCESS_SECRET)
+X_APP = {"X_API_KEY": APP_KEY, "X_API_SECRET": APP_SECRET}
+ACME = AccountDescription(account_id="42", username="acme", display_name="Acme", picture_url=None)
+IMAGE_BYTES = b"\x89PNG the post's image"
 # Short limits for a workflow on a real server: a step is tried twice, a second apart.
 QUICK = WriterPolicy(
     attempt_timeout_seconds=60, heartbeat_timeout_seconds=10, max_attempts=2, retry_after_seconds=1
@@ -128,6 +166,107 @@ def a_draft(body: str = POST) -> ChatReply:
 def one_round_that_passes() -> ScriptedChat:
     """One variant that keeps every code rule: the run proposes it after one round."""
     return ScriptedChat(writer=[a_draft()])
+
+
+# --------------------------------------------------------------------------- the platform
+# What one send does on ``FakeX``: publish, publish and lose the answer, fail without publishing,
+# or raise what is given.
+PUBLISHES = "publishes"
+ANSWER_LOST = "answer lost"
+
+
+@dataclass
+class Sent:
+    """A request ``FakeX`` was sent, with the app, the token and the account it was signed as."""
+
+    app: PlatformApp
+    tokens: AccountTokens
+    account: PublishingAccount
+    text: str
+    image: PostImageFile | None = None
+    since: datetime | None = None
+
+
+@dataclass
+class FakeX:
+    """A ``PostPublisher`` that keeps the account's posts, refusing a text it has as X does.
+
+    ``sends`` says what each send does in turn (``PUBLISHES`` once they are used up);
+    ``lookups`` holds an exception to raise for each lookup in turn, then a lookup reads the
+    posts. ``hidden`` are texts a lookup does not see (a post older than the lookup reads).
+    """
+
+    sends: list[str | Exception] = field(default_factory=list)
+    lookups: list[Exception] = field(default_factory=list)
+    hidden: set[str] = field(default_factory=set)
+    posts: list[tuple[str, PublishedPost]] = field(default_factory=list)
+    publish_calls: list[Sent] = field(default_factory=list)
+    lookup_calls: list[Sent] = field(default_factory=list)
+
+    def publish(self, app, tokens, account, *, text: str, image) -> PublishedPost:
+        self.publish_calls.append(Sent(app, tokens, account, text, image=image))
+        behaviour = self.sends.pop(0) if self.sends else PUBLISHES
+        if isinstance(behaviour, Exception):
+            raise behaviour
+        if any(text_key(text) == text_key(shown) for shown, _ in self.posts):
+            raise PublishingRefused("X", RefusalReason.DUPLICATE)
+        post = self.has_published(text, account.username)
+        if behaviour == ANSWER_LOST:
+            raise PublishingUnavailable("X could not be reached")
+        return post
+
+    def find_published(self, app, tokens, account, *, text: str, since) -> PublishedPost | None:
+        self.lookup_calls.append(Sent(app, tokens, account, text, since=since))
+        if self.lookups:
+            raise self.lookups.pop(0)
+        for shown, post in self.posts:
+            if text_key(shown) == text_key(text) and shown not in self.hidden:
+                return post
+        return None
+
+    def has_published(self, text: str, username: str = "acme") -> PublishedPost:
+        """A post of ``text`` on the account, as an earlier send or a person published it."""
+        # Digits, as X's are, unique across tests: the database keeps every test's posts.
+        post_id = str(uuid.uuid4().int)[:19]
+        post = PublishedPost(external_id=post_id, url=f"https://x.com/{username}/status/{post_id}")
+        self.posts.append((text, post))
+        return post
+
+
+@dataclass
+class FakeAssets:
+    """An ``AssetStore`` holding the posts' images in memory; ``down`` refuses every read."""
+
+    images: dict[str, bytes] = field(default_factory=dict)
+    down: bool = False
+
+    def put(self, key: str, body: bytes, *, content_type) -> None:
+        self.images[key] = body
+
+    def get(self, key: str) -> bytes:
+        if self.down:
+            raise AssetStoreUnavailable("the object storage could not read an image")
+        return self.images[key]
+
+    def remove(self, key: str) -> None:
+        self.images.pop(key, None)
+
+
+@dataclass
+class FakeAuthorization:
+    """An ``AccountAuthorization`` that authorizes ``account`` with the test's token."""
+
+    account: AccountDescription = ACME
+
+    def start(self, app: PlatformApp, *, callback_url: str) -> AuthorizationStart:
+        return AuthorizationStart(
+            authorize_url="https://x.example/authorize", state="state", secret_to_keep="kept"
+        )
+
+    def finish(self, app, *, state: str, grant: str, kept_secret: str) -> AuthorizedAccount:
+        return AuthorizedAccount(
+            account=self.account, access_token=ACCESS_TOKEN, access_secret=ACCESS_SECRET
+        )
 
 
 # ------------------------------------------------------------------------------- the database
@@ -239,6 +378,45 @@ class WriterDatabase:
         session.add(ProductProfileRecord(project_id=project_id, version=number, content=content))
         session.flush()
         return approve_profile_version(session, **scope, version=number, approved_by=PERSON).id
+
+    def connect(
+        self, run: WritingRunInput, cipher: CredentialCipher, account: AccountDescription = ACME
+    ) -> None:
+        """Connect ``account`` as the project's X account, the way the dashboard connects it."""
+        authorization = FakeAuthorization(account)
+        scope = _scope(run)
+        with transaction(self.sessions) as session:
+            start_connection(
+                session,
+                X_APP,
+                **scope,
+                platform=SocialPlatform.X,
+                callback_url="http://localhost:8000/v1/social-accounts/x/callback",
+                authorization=authorization,
+                cipher=cipher,
+            )
+            finish_connection(
+                session,
+                X_APP,
+                workspace_id=run.workspace_id,
+                platform=SocialPlatform.X,
+                state="state",
+                grant="verifier",
+                connected_by=PERSON,
+                authorization=authorization,
+                cipher=cipher,
+            )
+
+    def disconnect(self, run: WritingRunInput) -> None:
+        """Forget the project's X account, as the dashboard does."""
+        with transaction(self.sessions) as session:
+            remove_connected_account(session, **_scope(run), platform=SocialPlatform.X)
+
+    def store_image(self, run: WritingRunInput, image: Image, assets: FakeAssets) -> None:
+        """Store the bytes of ``image``'s version where the studio stores them."""
+        with transaction(self.sessions) as session:
+            version = asset_version(session, **_scope(run), version_id=image.version_id)
+        assets.images[version.storage_key] = IMAGE_BYTES
 
     def run(self, run: WritingRunInput) -> WritingRun:
         with transaction(self.sessions) as session:

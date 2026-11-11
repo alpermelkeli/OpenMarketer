@@ -5,6 +5,7 @@ the post and marks the run succeeded, both or neither; ``record_failure`` record
 with what its draft cost. Each is safe to repeat.
 """
 
+import contextlib
 import uuid
 from decimal import Decimal
 
@@ -13,6 +14,7 @@ from temporalio.exceptions import ApplicationError
 from writer_fakes import QUICK
 
 from openmarketer_core.db.models import ContentItemStatus, WritingRunStatus
+from openmarketer_core.social_accounts.publishing import PublishingUnavailable
 from openmarketer_core.writing.workflow_contract import WritingRunInput
 from openmarketer_worker.writer import steps
 
@@ -39,6 +41,24 @@ async def with_a_post_recorded_as_sent(activities, writer_database) -> tuple:
     request = (await activities.step(asked.run, stored)).action
     writer_database.held(asked.run, request)
     await activities.act(request)
+    return asked.run, uuid.UUID(stored.result["content_item_id"])
+
+
+async def with_a_post_sent_from_the_account(
+    activities, writer_database, cipher, x, *, answered: bool = True
+) -> tuple:
+    """A started run whose post a person approved and ``publish_post`` sent from the project's
+    X account: recorded ``published``, or still ``publishing`` when X never ``answered``."""
+    asked = writer_database.requested()
+    writer_database.connect(asked.run, cipher)
+    activities.start(asked.run)
+    stored = await activities.act((await activities.step(asked.run)).action)
+    request = (await activities.step(asked.run, stored)).action
+    writer_database.held(asked.run, request)
+    if not answered:
+        x.sends = [PublishingUnavailable("X could not be reached")]
+    with contextlib.suppress(ApplicationError):
+        await activities.act(request)
     return asked.run, uuid.UUID(stored.result["content_item_id"])
 
 
@@ -104,6 +124,44 @@ async def test_outcome_of_a_post_recorded_as_sent_marks_the_run_succeeded(
     stored = writer_database.run(run)
     assert (stored.status, stored.cost_usd) == (WritingRunStatus.SUCCEEDED, Decimal("0.031"))
     assert writer_database.item(run).status is ContentItemStatus.DRY_RUN
+
+
+async def test_outcome_of_a_published_post_marks_the_run_succeeded_and_keeps_the_post(
+    activities, writer_database, cipher, x
+):
+    run, item_id = await with_a_post_sent_from_the_account(activities, writer_database, cipher, x)
+    published = writer_database.item(run)
+
+    activities.run(steps.RECORD_OUTCOME, outcome(run, item_id, "published", "0.031"))
+
+    stored = writer_database.run(run)
+    assert (stored.status, stored.cost_usd) == (WritingRunStatus.SUCCEEDED, Decimal("0.031"))
+    assert writer_database.item(run) == published
+
+
+@pytest.mark.parametrize("status", ["published", "dry_run"])
+async def test_outcome_cannot_record_a_post_as_published_unless_the_handler_did(
+    activities, writer_database, status
+):
+    run, item_id = await with_a_stored_post(activities, writer_database)
+
+    failure = refused(activities, steps.RECORD_OUTCOME, outcome(run, item_id, status))
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    assert writer_database.item(run).status is ContentItemStatus.PROPOSED
+
+
+async def test_outcome_of_a_post_still_publishing_is_refused_and_keeps_it_publishing(
+    activities, writer_database, cipher, x
+):
+    run, item_id = await with_a_post_sent_from_the_account(
+        activities, writer_database, cipher, x, answered=False
+    )
+
+    failure = refused(activities, steps.RECORD_OUTCOME, outcome(run, item_id, "published"))
+
+    assert (failure.type, failure.non_retryable) == (steps.WRITING_FAILED, True)
+    assert writer_database.item(run).status is ContentItemStatus.PUBLISHING
 
 
 async def test_outcome_cannot_record_a_proposed_post_as_sent(activities, writer_database):
@@ -184,6 +242,21 @@ async def test_failure_records_the_reason_and_the_drafts_cost_and_settles_the_po
     assert (stored.status, stored.error) == (WritingRunStatus.FAILED, "it broke")
     assert stored.cost_usd == writer_database.item(run).cost_usd == Decimal("0.01")
     assert writer_database.item(run).status is ContentItemStatus.FAILED
+
+
+async def test_failure_of_a_run_whose_post_was_never_confirmed_keeps_it_publishing_saying_so(
+    activities, writer_database, cipher, x
+):
+    run, _ = await with_a_post_sent_from_the_account(
+        activities, writer_database, cipher, x, answered=False
+    )
+
+    activities.run(steps.RECORD_FAILURE, steps.RunFailure(run=run, error="X was unavailable"))
+
+    stored = writer_database.run(run)
+    assert stored.status is WritingRunStatus.FAILED
+    assert stored.error == f"{steps.PUBLISHING_NOT_CONFIRMED}: X was unavailable"
+    assert writer_database.item(run).status is ContentItemStatus.PUBLISHING
 
 
 def test_failure_of_a_run_that_stored_no_draft_is_recorded_at_no_cost(activities, writer_database):

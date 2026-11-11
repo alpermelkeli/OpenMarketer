@@ -8,14 +8,17 @@ hooks, and decides nothing about the post:
 
 - ``before`` marks the run started and takes, from that activity, the limits this worker was
   configured with for the steps of the graph: workflow code cannot read the environment;
-- ``after`` settles the run's post as the graph's result says it ended (recorded as a dry run,
-  rejected or expired) and marks the run succeeded, both in one write. A post that a person
-  approved and that could not be recorded, and a result that cannot be read, end the run as a
-  failure instead, which ``failed`` records;
+- ``after`` settles the run's post as the graph's result says it ended (published, recorded
+  as a dry run, rejected or expired) and marks the run succeeded, both in one write. A post
+  that a person approved and that could not be published or recorded, and a result that cannot
+  be read, end the run as a failure instead, which ``failed`` records;
 - ``failed`` records why on the run, with what its stored draft cost; a post the run proposed
   and nobody settled is settled ``failed`` with it. Every way a run can end without a settled
   post (no approved profile, a model's answers that cannot be read, attempts used up, a
-  timeout, a worker that died, a cancellation, the post that could not be recorded) leads here.
+  timeout, a worker that died, a cancellation, the post that could not be published) leads
+  here. A post whose send started and was never confirmed (the platform stayed unavailable
+  through every attempt) stays ``publishing``, since the platform may have it, and the run is
+  told so first (``record_failure``).
 
 The writer has no chat request action yet, so no run is followed up on in a chat: a run that a
 chat asked for (``chat_thread_id``) ends like any other, and the chat is not told.
@@ -56,7 +59,12 @@ with workflow.unsafe.imports_passed_through():
     from openmarketer_worker.writer.policy import WriterPolicy
 
 # How a post that a person decided on may end a run that succeeds.
-SETTLED_BY_THE_RUN = (PostStatus.DRY_RUN, PostStatus.REJECTED, PostStatus.EXPIRED)
+SETTLED_BY_THE_RUN = (
+    PostStatus.PUBLISHED,
+    PostStatus.DRY_RUN,
+    PostStatus.REJECTED,
+    PostStatus.EXPIRED,
+)
 
 
 def run_of(run: WritingRunInput) -> GraphRunRef:

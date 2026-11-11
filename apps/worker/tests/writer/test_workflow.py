@@ -25,9 +25,11 @@ from google.protobuf.json_format import MessageToDict
 from sqlalchemy import text
 from temporalio.client import WorkflowFailureError, WorkflowHandle, WorkflowHistory
 from writer_fakes import (
+    ACCESS_TOKEN,
     BRAND_VOICE,
     FEATURE_DESCRIPTION,
     POST,
+    SECRETS,
     ScriptedChat,
     a_draft,
     one_round_that_passes,
@@ -41,6 +43,12 @@ from openmarketer_core.db.models import ContentItemStatus, WritingRunStatus
 from openmarketer_core.db.session import transaction
 from openmarketer_core.llm import LLMError
 from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.social_accounts.publishing import (
+    PublishingFailure,
+    PublishingRefused,
+    PublishingUnavailable,
+    RefusalReason,
+)
 from openmarketer_core.writing.workflow_contract import WRITING_WORKFLOW, writing_workflow_id
 from openmarketer_worker import main
 from openmarketer_worker.credentials import WorkspaceCredentials
@@ -260,6 +268,88 @@ async def test_run_without_the_model_providers_key_ends_failed_with_what_to_set(
     stored = writer_database.run(asked.run)
     assert stored.status is WritingRunStatus.FAILED
     assert stored.error is not None and "OPENROUTER_API_KEY" in stored.error
+
+
+# ------------------------------------------------- published from the connected account
+async def test_approved_post_is_published_from_the_account_and_the_run_succeeds(
+    serving, start, writer_database, cipher, x
+):
+    asked = writer_database.requested()
+    writer_database.connect(asked.run, cipher)
+    async with serving():
+        handle = await start(asked.run)
+        proposal = await pending_proposal(writer_database, asked.run)
+        output = await decided(writer_database, handle, asked.run, approved=True)
+
+    item = writer_database.item(asked.run)
+    ((_, post),) = x.posts
+    assert writer_database.run(asked.run).status is WritingRunStatus.SUCCEEDED
+    assert output["status"] == "published"
+    assert (item.status, item.external_id, item.proposal_id) == (
+        ContentItemStatus.PUBLISHED,
+        post.external_id,
+        proposal.id,
+    )
+    assert proposal.payload["username"] == "acme"
+    assert proposal.payload["cost_estimate_usd"] == "0.015"
+
+
+async def test_platform_that_limited_the_rate_is_waited_for_and_the_post_published_once(
+    serving, start, writer_database, cipher, x
+):
+    asked = writer_database.requested()
+    writer_database.connect(asked.run, cipher)
+    x.sends = [PublishingUnavailable("X limits the rate", retry_after_seconds=1)]
+    async with serving():
+        handle = await start(asked.run)
+        output = await decided(writer_database, handle, asked.run, approved=True)
+
+    assert output["status"] == "published"
+    assert writer_database.item(asked.run).status is ContentItemStatus.PUBLISHED
+    assert len(x.posts) == 1 and len(x.publish_calls) == 2 and len(x.lookup_calls) == 1
+
+
+async def test_post_the_platform_refused_ends_the_run_failed_and_the_post_failed_with_why(
+    serving, start, writer_database, cipher, x
+):
+    asked = writer_database.requested()
+    writer_database.connect(asked.run, cipher)
+    x.sends = [PublishingRefused("X", RefusalReason.TOO_LONG)]
+    async with serving():
+        handle = await start(asked.run)
+        with pytest.raises(WorkflowFailureError):
+            await decided(writer_database, handle, asked.run, approved=True)
+
+    stored = writer_database.run(asked.run)
+    item = writer_database.item(asked.run)
+    assert stored.status is WritingRunStatus.FAILED
+    assert stored.error == (
+        "the approved post could not be recorded: X refused the post: the platform says the "
+        "text is too long"
+    )
+    assert (item.status, item.publishing_failure) == (
+        ContentItemStatus.FAILED,
+        PublishingFailure.TOO_LONG,
+    )
+    assert len(x.publish_calls) == 1  # a refusal is not tried again
+
+
+async def test_history_and_checkpoints_hold_no_app_key_or_token_of_a_published_post(
+    serving, start, writer_database, sessions, cipher, x
+):
+    asked = writer_database.requested()
+    writer_database.connect(asked.run, cipher)
+    async with serving():
+        handle = await start(asked.run)
+        await pending_proposal(writer_database, asked.run)
+        kept = checkpoints_as_text(sessions)
+        await decided(writer_database, handle, asked.run, approved=True)
+    history = readable(await handle.fetch_history())
+
+    assert x.publish_calls[0].tokens.access_token == ACCESS_TOKEN
+    for shown in (history, kept):
+        for secret in SECRETS:
+            assert secret not in shown and secret.encode().hex() not in shown
 
 
 # --------------------------------------------------------------------- the history

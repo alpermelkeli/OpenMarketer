@@ -30,6 +30,10 @@ Why these defaults:
 - Marking a run started, settling its post and recording its failure are single database
   writes, tried as the researcher's are; settling the post and recording a failure keep trying
   for an hour, because a run nobody marks finished keeps its checkpoints.
+- Publishing a post is tried as core declares it (``PUBLISH_ATTEMPTS``, about sixteen minutes
+  of waits). A platform that limits the rate says how long to wait, and the next attempt waits
+  that long instead, up to ``LONGEST_PLATFORM_WAIT_SECONDS``: X's rate-limit window is fifteen
+  minutes, and a longer wait asked for is a reason to give up, not to sit idle.
 - A run whose workflow is gone stays ``running`` and would keep its checkpoints for good, so
   the cleanup takes those of a run that started longer ago than its workflow can last
   (``longest_writing_seconds``): every step and action at its limits, the longest a person may
@@ -78,6 +82,9 @@ RECORD_FAILURE = DatabaseWritePolicy(
     max_retry_wait_seconds=60,
     give_up_after_seconds=60 * 60,
 )
+
+# The longest wait before another attempt at publishing that a platform's answer may ask for.
+LONGEST_PLATFORM_WAIT_SECONDS: float = 15 * 60
 
 # Temporal's own default: no wait between two attempts is longer than this many first waits.
 LONGEST_RETRY_WAIT_IN_FIRST_WAITS = 100
@@ -128,6 +135,15 @@ def _longest_action(name: str) -> float:
         action.retry_after_seconds,
         longest_wait=action.retry_after_seconds * LONGEST_RETRY_WAIT_IN_FIRST_WAITS,
     )
+    if name == PUBLISH_POST:
+        # Every wait may be the longest a platform's answer can ask for instead.
+        asked_for = _attempts_and_waits(
+            action.attempt_timeout_seconds,
+            action.max_attempts,
+            LONGEST_PLATFORM_WAIT_SECONDS,
+            longest_wait=LONGEST_PLATFORM_WAIT_SECONDS,
+        )
+        attempts = max(attempts, asked_for)
     if not may_wait_for_a_person(action):
         return attempts
     # Storing the proposal and settling it once a person decided or its deadline passed.

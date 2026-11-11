@@ -112,7 +112,14 @@ def test_context_makes_no_model_and_resolves_no_key_until_a_node_asks_one(
         raise ModelKeyNotSet("OPENROUTER_API_KEY")
 
     parts = writer_parts(new_model=new_model)
-    work = WritingWork(parts.sessions, parts.checkpoints, new_model=new_model, limits=parts.limits)
+    work = WritingWork(
+        parts.sessions,
+        parts.checkpoints,
+        new_model=new_model,
+        limits=parts.limits,
+        publishing=parts.publishing,
+        publishing_costs=parts.publishing_costs,
+    )
     context = work.context(graph_run(asked.run), None)  # type: ignore[arg-type]
     assert made == []
     with pytest.raises(ModelKeyNotSet):

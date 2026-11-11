@@ -1,7 +1,8 @@
 """Setting the writer up for this installation, when the worker starts.
 
 Everything a writing run depends on is built here once (its settings, the model router, access
-to the runs' checkpoints) and handed to what runs it; the result says what the worker
+to the runs' checkpoints, what a post is reckoned to cost, the object storage of the posts'
+images and each platform's publisher) and handed to what runs it; the result says what the worker
 registers: the agent's worker side, with the policy gate's activities for its post, and the
 cleanup of its runs' left-over checkpoints. The process's own things come in as arguments: the
 environment mapping, the session factory, the database URL, the installation's credentials
@@ -12,7 +13,11 @@ worker started, so it is resolved for the run's workspace when an attempt needs 
 (``new_model``): the worker starts without a model key, and a run that finds none is told so.
 The same holds for what a workspace chose in the dashboard's settings, its models: the
 configuration file is read now, and the workspace's choices are laid over it at each attempt.
-A configuration without the role ``writer`` stops the worker at start-up.
+A configuration without the role ``writer`` stops the worker at start-up, and so does a
+publishing configuration (``PUBLISHING_CONFIG_PATH``, ``config/publishing.yaml`` by default)
+that does not fit. The installation's app on a platform and an account's token are not read
+here either: ``publish_post``'s handler resolves them for the run's workspace at the attempt
+that sends.
 
 ``writer`` reads the environment; ``registration`` takes what was built (``WriterParts``) and
 declares the agent's worker side: the handlers of its two actions, the steps of its graph
@@ -40,6 +45,15 @@ from openmarketer_core.agent_runtime.langgraph_agent import AgentSteps
 from openmarketer_core.db.checkpoint_cleanup import remove_checkpoints_of_writing_runs
 from openmarketer_core.llm import ChatModel, RouterChatModel
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ConfigError, ModelRouter
+from openmarketer_core.social_accounts.catalog import SocialPlatform
+from openmarketer_core.social_accounts.publishing_costs import (
+    DEFAULT_PUBLISHING_CONFIG_PATH,
+    PublishingCosts,
+    PublishingCostsInvalid,
+    read_publishing_costs,
+)
+from openmarketer_core.social_accounts.x.publishing import XPublisher
+from openmarketer_core.studio.asset_store import S3AssetStore
 from openmarketer_core.tracing import Tracing
 from openmarketer_core.writing.workflow_contract import (
     WRITING_LONGEST_RUN_SECONDS,
@@ -59,6 +73,7 @@ from openmarketer_worker.workspace_settings import WorkspaceSettings
 from openmarketer_worker.writer import steps
 from openmarketer_worker.writer.activities import WriterActivities
 from openmarketer_worker.writer.policy import WriterPolicy, longest_writing_seconds
+from openmarketer_worker.writer.publishing import PostPublishing
 from openmarketer_worker.writer.settings import WriterSettings
 from openmarketer_worker.writer.workflow import WritePost
 from openmarketer_worker.writer.writing import WordedSteps, WritingWork
@@ -73,6 +88,9 @@ class WriterParts:
     # The chat model of one attempt, made for the workspace of the run when a node first asks
     # it something, so no credential or choice of the workspace is held between attempts.
     new_model: Callable[[uuid.UUID], ChatModel]
+    # What publishes an approved post once its send began, and what a post is reckoned to cost.
+    publishing: PostPublishing
+    publishing_costs: PublishingCosts
     policy: WriterPolicy = field(default_factory=WriterPolicy)
     limits: rules.Limits = field(default_factory=rules.Limits)
 
@@ -97,6 +115,7 @@ def writer(
         environ.get("LLM_CONFIG_PATH") or DEFAULT_CONFIG_PATH, env=environ
     )
     require_the_writer_role(router)
+    publishing_costs = publishing_costs_of(environ)
     workspace_settings = WorkspaceSettings(sessions)
     return registration(
         WriterParts(
@@ -108,6 +127,13 @@ def writer(
                     workspace_settings.router_for(workspace_id, router), workspace_id, credentials
                 )
             ),
+            publishing=PostPublishing(
+                sessions,
+                credentials,
+                S3AssetStore.from_env(environ),
+                {SocialPlatform.X: XPublisher()},
+            ),
+            publishing_costs=publishing_costs,
             policy=settings.policy,
             limits=settings.limits,
         )
@@ -121,6 +147,19 @@ def require_the_writer_role(router: ModelRouter) -> None:
         router.resolve(rules.WRITER_ROLE)
     except KeyError as e:
         raise ConfigError(f"the writer needs the role writer: {e}") from None
+
+
+def publishing_costs_of(environ: Mapping[str, str]) -> PublishingCosts:
+    """What a post is reckoned to cost, from ``PUBLISHING_CONFIG_PATH`` or the default file.
+
+    Raises ``ConfigError`` for a file that does not fit: every proposal would name a wrong
+    estimate, or none.
+    """
+    path = environ.get("PUBLISHING_CONFIG_PATH") or DEFAULT_PUBLISHING_CONFIG_PATH
+    try:
+        return read_publishing_costs(path)
+    except PublishingCostsInvalid as e:
+        raise ConfigError(str(e)) from None
 
 
 def _model_of_workspace(
@@ -139,7 +178,12 @@ def registration(parts: WriterParts) -> AgentRegistration:
         longest_writing_seconds(parts.policy), WRITING_LONGEST_RUN_SECONDS, runs="writing"
     )
     work = WritingWork(
-        parts.sessions, parts.checkpoints, new_model=parts.new_model, limits=parts.limits
+        parts.sessions,
+        parts.checkpoints,
+        new_model=parts.new_model,
+        limits=parts.limits,
+        publishing=parts.publishing,
+        publishing_costs=parts.publishing_costs,
     )
     # One queue, the one the API starts the workflow on.
     worker = AgentWorker(agent, task_queue=WRITING_TASK_QUEUE)
@@ -151,8 +195,8 @@ def registration(parts: WriterParts) -> AgentRegistration:
 
     @worker.handler(PublishPost)
     def publish_post(payload: PublishPost, context: ActionContext) -> Mapping[str, Any]:
-        # The item is the key: it is recorded as a dry run once, and again changes nothing.
-        # The action's id finds the proposal the gate held it as, which the item names.
+        # The item is the key: it is published, or recorded as a dry run, once; again changes
+        # nothing. The action's id finds the proposal the gate held it as, which the item names.
         return work.publish_post(payload, context.action_id)
 
     graph_steps = AgentSteps(

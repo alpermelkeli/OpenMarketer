@@ -75,12 +75,20 @@ from openmarketer_core.writing.writer_agent.rules import (
 STORE_DRAFT = "store_draft"
 PUBLISH_POST = "publish_post"
 
-# How the actions are tried. Constants of the actions and not settings: storing a draft and
-# recording a dry run are each one short write, which three attempts five seconds apart ride
-# out; each handler keys its write so that a repeat writes once.
+# How the actions are tried. Constants of the actions and not settings: storing a draft is one
+# short write, which three attempts five seconds apart ride out; each handler keys its write so
+# that a repeat writes once.
 WRITE_TIMEOUT_SECONDS = 60
 WRITE_ATTEMPTS = 3
 WRITE_RETRY_AFTER_SECONDS = 5
+# Publishing is tried until a rate limit of the platform has passed: an attempt that finds the
+# send started looks the post up before it sends again (``social_accounts/publishing.py``), so a
+# repeat publishes once. Seven attempts, the first retry after 15 seconds and each later wait
+# twice as long, span about sixteen minutes, past X's rate-limit window of fifteen; an attempt
+# uploads an image, sends the post and may look it up, each request within 30 seconds.
+PUBLISH_TIMEOUT_SECONDS = 120
+PUBLISH_ATTEMPTS = 7
+PUBLISH_RETRY_AFTER_SECONDS = 15
 
 
 class WriterState(TypedDict):
@@ -277,9 +285,9 @@ class StoreDraft(_Payload):
 
 @agent.action(
     PUBLISH_POST,
-    timeout=WRITE_TIMEOUT_SECONDS,
-    attempts=WRITE_ATTEMPTS,
-    retry_after=WRITE_RETRY_AFTER_SECONDS,
+    timeout=PUBLISH_TIMEOUT_SECONDS,
+    attempts=PUBLISH_ATTEMPTS,
+    retry_after=PUBLISH_RETRY_AFTER_SECONDS,
     # Publishing puts the post in front of other people: the gate holds it for a person.
     effect=ActionEffect.PUBLISHES,
 )
