@@ -103,9 +103,11 @@ const STEP_ENDINGS = new Map<string, string>([
 
 const POST_ENDINGS = new Map<string, string>([
   ["dry_run", "the post was approved and recorded as a dry run"],
+  ["publishing", "the post was approved and is being published"],
+  ["published", "the post was published"],
   ["rejected", "the post was rejected"],
   ["expired", "nobody decided on the post in time"],
-  ["failed", "the approved post could not be recorded"],
+  ["failed", "the post was not published"],
 ]);
 
 /** What one node did, as a line of the task's card. A step's run is linked beside it (`stepRunHref`). */

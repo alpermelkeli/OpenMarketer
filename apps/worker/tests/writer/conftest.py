@@ -7,7 +7,7 @@ reachable. The writer is scripted (``writer_fakes.py``): no test needs a model.
 
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -16,13 +16,18 @@ from temporalio.testing import ActivityEnvironment
 
 from openmarketer_core.agent_runtime.actions import ActionOutcome, ActionRequest
 from openmarketer_core.agent_runtime.steps import GraphRunRef, StepOutcome
+from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.llm import ChatModel
+from openmarketer_core.social_accounts.catalog import SocialPlatform
+from openmarketer_core.social_accounts.publishing_costs import read_publishing_costs
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND, WritingRunInput
 from openmarketer_core.writing.writer_agent import rules
 from openmarketer_worker import AgentRegistration
 from openmarketer_worker.agent_runtime.vocabulary import RUN_ACTION, RUN_GRAPH_STEP, StepInput
+from openmarketer_worker.credentials import WorkspaceCredentials
 from openmarketer_worker.writer import steps, wiring
 from openmarketer_worker.writer.policy import WriterPolicy
+from openmarketer_worker.writer.publishing import PostPublishing
 from openmarketer_worker.writer.writing import WritingWork
 
 # The fakes are a module beside the tests, which are not a package.
@@ -30,10 +35,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from writer_fakes import (  # noqa: E402
     QUICK,
+    X_APP,
+    FakeAssets,
+    FakeX,
     ScriptedChat,
     WriterDatabase,
     one_round_that_passes,
 )
+
+PUBLISHING = Path(__file__).resolve().parents[4] / "config" / "publishing.yaml"
 
 
 @pytest.fixture
@@ -42,8 +52,21 @@ def writer_database(sessions) -> WriterDatabase:
 
 
 @pytest.fixture
-def writer_parts(sessions, checkpoints):
-    """The writer's parts with a scripted model in place, and what a test changes of them."""
+def x() -> FakeX:
+    """The platform an approved post is published on, keeping the account's posts."""
+    return FakeX()
+
+
+@pytest.fixture
+def assets() -> FakeAssets:
+    return FakeAssets()
+
+
+@pytest.fixture
+def writer_parts(sessions, checkpoints, cipher: CredentialCipher, x: FakeX, assets: FakeAssets):
+    """The writer's parts with a scripted model and a fake X in place, and what a test changes
+    of them. The environment sets the installation's app on X, and the test's ``cipher`` opens
+    the token of an account a test connects."""
 
     def parts(
         *,
@@ -51,6 +74,7 @@ def writer_parts(sessions, checkpoints):
         new_model: Callable[[uuid.UUID], ChatModel] | None = None,
         policy: WriterPolicy = QUICK,
         limits: rules.Limits | None = None,
+        environ: Mapping[str, str] = X_APP,
     ) -> wiring.WriterParts:
         def scripted(workspace_id: uuid.UUID) -> ChatModel:
             # A model given is shared by every attempt; without one, each attempt that asks a
@@ -61,6 +85,13 @@ def writer_parts(sessions, checkpoints):
             sessions=sessions,
             checkpoints=checkpoints,
             new_model=new_model or scripted,
+            publishing=PostPublishing(
+                sessions,
+                WorkspaceCredentials(sessions, environ, cipher),
+                assets,
+                {SocialPlatform.X: x},
+            ),
+            publishing_costs=read_publishing_costs(PUBLISHING),
             policy=policy,
             limits=limits or rules.Limits(),
         )
@@ -73,7 +104,12 @@ def work(writer_parts) -> WritingWork:
     """The writer's work as the wiring builds it, for its handlers as plain functions."""
     parts = writer_parts()
     return WritingWork(
-        parts.sessions, parts.checkpoints, new_model=parts.new_model, limits=parts.limits
+        parts.sessions,
+        parts.checkpoints,
+        new_model=parts.new_model,
+        limits=parts.limits,
+        publishing=parts.publishing,
+        publishing_costs=parts.publishing_costs,
     )
 
 

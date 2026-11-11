@@ -69,6 +69,8 @@ from openmarketer_core.orchestrator.task.workflow_contract import (
     TASK_WORKFLOW,
     task_workflow_id,
 )
+from openmarketer_core.social_accounts.catalog import SocialPlatform
+from openmarketer_core.social_accounts.publishing_costs import read_publishing_costs
 from openmarketer_core.studio.studio_agent import rules as studio_rules
 from openmarketer_core.writing.writer_agent.definitions import PUBLISH_POST
 from openmarketer_worker import main
@@ -84,10 +86,12 @@ from openmarketer_worker.orchestrator.contract import (
 )
 from openmarketer_worker.orchestrator.workflow import ChatFollowUp
 from openmarketer_worker.writer import wiring as writer_wiring
+from openmarketer_worker.writer.publishing import PostPublishing
 
 RATE_LIMITED = LLMError("the model provider answered HTTP 429", status=429)
 REFUSED = LLMError("the model provider refused the request (HTTP 400)", status=400)
 MODELS = str(Path(__file__).resolve().parents[4] / "config" / "models.yaml")
+PUBLISHING = Path(__file__).resolve().parents[4] / "config" / "publishing.yaml"
 STORED_KEY = "sk-stored-0123456789"
 
 
@@ -156,6 +160,14 @@ def serving(temporal, task_queue, children, task_registration, sessions, checkpo
                 sessions=sessions,
                 checkpoints=checkpoints,
                 new_model=a_writer,
+                # The task's projects connect no account: every post is a dry run.
+                publishing=PostPublishing(
+                    sessions,
+                    WorkspaceCredentials(sessions, writer_fakes.X_APP, None),
+                    writer_fakes.FakeAssets(),
+                    {SocialPlatform.X: writer_fakes.FakeX()},
+                ),
+                publishing_costs=read_publishing_costs(PUBLISHING),
                 policy=writer_fakes.QUICK,
             )
         )

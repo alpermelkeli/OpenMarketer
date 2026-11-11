@@ -20,6 +20,7 @@ import {
 import { proposalAnchor, writingHref } from "@/lib/projects/project-navigation";
 import { isPlanConfirmation } from "@/lib/tasks/plan";
 
+import { PostDestinationNote } from "./post-destination-note";
 import { ProposedPlan } from "./proposed-plan";
 import { ProposedPostImage } from "./proposed-post-image";
 
@@ -38,7 +39,7 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
   const estimate = estimateText(proposal.estimate_usd);
   const post = proposedPostText(proposal);
   const plan = isPlanConfirmation(proposal);
-  const labels = decisionLabels(proposal.effect);
+  const labels = decisionLabels(proposal.effect, proposal.post_destination);
 
   return (
     <article
@@ -69,8 +70,8 @@ export function ProposalCard({ proposal, now, onDecide }: ProposalCardProps) {
             {post}
           </blockquote>
           <ProposedPostImage proposal={proposal} />
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-            <span>The writer sends nothing to a platform yet: an approved post is recorded as a dry run.</span>
+          <PostDestinationNote projectId={proposal.project_id} destination={proposal.post_destination} />
+          <p className="text-sm">
             <Link
               href={writingHref(proposal.project_id, proposal.run_id)}
               className="inline-flex items-center gap-1 rounded-sm text-brand underline-offset-4 hover:underline"

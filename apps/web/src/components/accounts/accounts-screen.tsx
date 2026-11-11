@@ -76,8 +76,9 @@ export function AccountsScreen({ projectId }: AccountsScreenProps) {
         </h2>
         <p className="mt-2 text-pretty text-muted-foreground">
           Connect the project&rsquo;s account on each platform. The platform asks you to sign in and agree on its own
-          page; this installation then keeps the account&rsquo;s access token, encrypted, and never shows it. Nothing
-          is posted yet: an approved post is still recorded as a dry run and sent nowhere.
+          page; this installation then keeps the account&rsquo;s access token, encrypted, and never shows it. A post
+          you approve in Approvals is published from the account connected here; without one, it stays a dry run and
+          is sent nowhere. Which account a post goes to is fixed when it is proposed.
         </p>
       </section>
 

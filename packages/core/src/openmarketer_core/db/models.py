@@ -65,6 +65,11 @@ from openmarketer_core.social_accounts.catalog import (
     MAX_USERNAME_LENGTH,
     SocialPlatform,
 )
+from openmarketer_core.social_accounts.publishing import (
+    MAX_EXTERNAL_ID_LENGTH,
+    MAX_EXTERNAL_URL_LENGTH,
+    PublishingFailure,
+)
 from openmarketer_core.studio.platforms import PLATFORMS
 from openmarketer_core.writing.brief import WritingPlatform
 
@@ -133,9 +138,11 @@ class TaskStepOutcome(StrEnum):
 class ContentItemStatus(StrEnum):
     PROPOSED = "proposed"  # waits for a person's decision
     DRY_RUN = "dry_run"  # approved, and recorded as it would have been sent
+    PUBLISHING = "publishing"  # approved; its send started and its outcome is not known yet
+    PUBLISHED = "published"  # approved, and published from the project's connected account
     REJECTED = "rejected"
     EXPIRED = "expired"  # nobody decided in time; counts as a rejection
-    FAILED = "failed"  # the run ended without settling it
+    FAILED = "failed"  # the run ended without settling it, or the platform refused the post
 
 
 class MediaAssetStatus(StrEnum):
@@ -753,6 +760,7 @@ class ProposalRecord(Base):
 
 # ----------------------------------------------------------------- writing
 _WRITING_PLATFORM_SLUGS = ", ".join(f"'{platform.value}'" for platform in WritingPlatform)
+_PUBLISHING_FAILURES = ", ".join(f"'{failure.value}'" for failure in PublishingFailure)
 
 
 class WritingRunRecord(Base):
@@ -842,8 +850,13 @@ class ContentItemRecord(Base):
     project's, and its run cannot be deleted while an item names it.
 
     An item is ``proposed`` until it is settled, once: ``dry_run`` when the person approved it
-    (nothing is sent anywhere yet), ``rejected``, ``expired``, or ``failed`` when the run ended
-    without settling it.
+    and no account was named (nothing is sent), ``rejected``, ``expired``, or ``failed`` when
+    the run ended without settling it. An approved item that names an account is
+    ``publishing`` from the moment its send starts (``publishing_started_at``, the account it
+    is sent from and the fingerprint of its text, ``social_accounts/publishing.text_fingerprint``),
+    then ``published`` with the platform's identifier and address of the post, when it was
+    published and what it was reckoned to cost, or ``failed`` with why the platform refused it
+    (``publishing_failure``). A platform's post is recorded for one item.
     """
 
     __tablename__ = "content_item"
@@ -856,7 +869,58 @@ class ContentItemRecord(Base):
         ),
         CheckConstraint(f"platform IN ({_WRITING_PLATFORM_SLUGS})", name="platform"),
         CheckConstraint("char_length(text) > 0", name="text"),
-        CheckConstraint("(status = 'proposed') = (settled_at IS NULL)", name="settled_at"),
+        CheckConstraint(
+            "(status IN ('proposed', 'publishing')) = (settled_at IS NULL)", name="settled_at"
+        ),
+        CheckConstraint(
+            "status NOT IN ('publishing', 'published') OR num_nulls(publishing_started_at,"
+            " published_account_id, published_username, published_text_sha256) = 0",
+            name="publishing",
+        ),
+        CheckConstraint(
+            "CASE WHEN status = 'published'"
+            " THEN num_nulls(external_id, external_url, published_at, publishing_cost_usd) = 0"
+            " ELSE num_nonnulls(external_id, external_url, published_at, publishing_cost_usd) = 0"
+            " END",
+            name="published",
+        ),
+        CheckConstraint(
+            "publishing_failure IS NULL"
+            " OR (status = 'failed' AND publishing_started_at IS NOT NULL"
+            f" AND publishing_failure IN ({_PUBLISHING_FAILURES}))",
+            name="publishing_failure",
+        ),
+        CheckConstraint(
+            f"char_length(published_account_id) BETWEEN 1 AND {MAX_ACCOUNT_ID_LENGTH}",
+            name="published_account_id",
+        ),
+        CheckConstraint(
+            f"char_length(published_username) BETWEEN 1 AND {MAX_USERNAME_LENGTH}",
+            name="published_username",
+        ),
+        CheckConstraint("published_text_sha256 ~ '^[0-9a-f]{64}$'", name="published_text_sha256"),
+        CheckConstraint(
+            f"char_length(external_id) BETWEEN 1 AND {MAX_EXTERNAL_ID_LENGTH}", name="external_id"
+        ),
+        CheckConstraint(
+            f"char_length(external_url) BETWEEN 1 AND {MAX_EXTERNAL_URL_LENGTH}",
+            name="external_url",
+        ),
+        CheckConstraint("publishing_cost_usd >= 0", name="publishing_cost_usd"),
+        # A platform's post is recorded for one item.
+        Index(
+            "ux_content_item_platform_external_id",
+            "platform",
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
+        ),
+        # The posts of a workspace sent or being sent with the same text are found by it.
+        Index(
+            "ix_content_item_published_text_sha256",
+            "published_text_sha256",
+            postgresql_where=text("published_text_sha256 IS NOT NULL"),
+        ),
         ForeignKeyConstraint(
             ["asset_id", "project_id"], ["media_asset.id", "media_asset.project_id"]
         ),
@@ -897,6 +961,15 @@ class ContentItemRecord(Base):
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), server_default="0")
     created_at: Mapped[datetime] = _created_at()
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    publishing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_account_id: Mapped[str | None] = mapped_column(Text)
+    published_username: Mapped[str | None] = mapped_column(Text)
+    published_text_sha256: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str | None] = mapped_column(Text)
+    external_url: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    publishing_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
+    publishing_failure: Mapped[str | None] = mapped_column(Text)
 
 
 # ------------------------------------------------------------------- tasks

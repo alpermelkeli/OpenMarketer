@@ -22,6 +22,9 @@ from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.content_items import (
     NewContentItem,
+    begin_publishing,
+    record_published,
+    record_publishing_failed,
     settle_content_item,
     store_proposed_content_item,
 )
@@ -46,12 +49,18 @@ from openmarketer_core.db.studio_runs import mark_run_needs_review as mark_studi
 from openmarketer_core.db.studio_runs import mark_run_started as mark_studio_started
 from openmarketer_core.db.studio_runs import request_studio_run
 from openmarketer_core.db.writing_runs import (
+    mark_run_failed,
     mark_run_started,
     mark_run_succeeded,
     request_writing_run,
 )
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import Report
+from openmarketer_core.social_accounts.publishing import (
+    PublishedPost,
+    PublishingAccount,
+    PublishingFailure,
+)
 from openmarketer_core.studio.asset_store import asset_key
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
@@ -86,6 +95,7 @@ ITEM = NewContentItem(
 ASSET_REQUEST = AssetRequest(
     goal="Announce offline sync", exact_copy=["Offline sync is here"], platform=Platform.X_POST
 )
+ACCOUNT = PublishingAccount(account_id="1500000000000000001", username="memoria_app")
 RESEARCH_REQUEST = ResearchRequest(questions=["How do note apps announce offline sync?"])
 
 
@@ -337,6 +347,27 @@ def proposed_post(
             )
             mark_run_succeeded(session, **ids(scope), run_id=run_id, cost_usd=Decimal("0.03"))
     return StoredPost(run_id=run_id, item_id=stored.id, proposal_id=proposal.id)
+
+
+def publishing_post(sessions: sessionmaker[Session], scope: RunScope) -> StoredPost:
+    """A proposed post a person approved, whose send to ``ACCOUNT`` started."""
+    post = proposed_post(sessions, scope)
+    with transaction(sessions) as session:
+        decide_proposal(
+            session,
+            **ids(scope),
+            proposal_id=post.proposal_id,
+            approved=True,
+            decided_by=uuid.uuid4(),
+        )
+        begin_publishing(
+            session,
+            **ids(scope),
+            item_id=post.item_id,
+            proposal_id=post.proposal_id,
+            account=ACCOUNT,
+        )
+    return post
 
 
 # ------------------------------------------------------------------------------- start
@@ -626,6 +657,15 @@ def test_an_item_is_read_with_the_record_of_how_it_was_written(
         "cost_usd": 0.021,
         "created_at": item["created_at"],
         "settled_at": None,
+        "publishing_unconfirmed": False,
+        "publishing_started_at": None,
+        "published_account_id": None,
+        "published_username": None,
+        "external_id": None,
+        "external_url": None,
+        "published_at": None,
+        "publishing_cost_usd": None,
+        "publishing_failure": None,
         "plan": dict(ITEM.plan),
         "plan_changes": list(ITEM.plan_changes),
         "alternatives": list(ITEM.alternatives),
@@ -754,3 +794,82 @@ def test_items_of_a_project_of_another_workspace_are_not_found(
     assert client.get(items_url(other)).json()["code"] == "project_not_found"
     response = client.get(items_url(other, f"/{post.item_id}"))
     assert (response.status_code, response.json()["code"]) == (404, "content_item_not_found")
+
+
+def test_an_item_being_published_names_its_account_and_is_not_unconfirmed(
+    client: TestClient, services, scope, sessions
+):
+    post = publishing_post(sessions, scope)
+
+    item = client.get(items_url(scope, f"/{post.item_id}")).json()
+
+    assert (item["status"], item["publishing_unconfirmed"]) == ("publishing", False)
+    assert (item["published_account_id"], item["published_username"]) == (
+        ACCOUNT.account_id,
+        ACCOUNT.username,
+    )
+    assert item["publishing_started_at"] is not None
+    assert (item["external_id"], item["published_at"]) == (None, None)
+
+
+def test_a_published_item_links_its_post_with_what_it_cost(
+    client: TestClient, services, scope, sessions
+):
+    post = publishing_post(sessions, scope)
+    with transaction(sessions) as session:
+        record_published(
+            session,
+            **ids(scope),
+            item_id=post.item_id,
+            post=PublishedPost(
+                external_id="1800000000000000001",
+                url="https://x.com/memoria_app/status/1800000000000000001",
+            ),
+            cost_usd=Decimal("0.015"),
+        )
+
+    [listed] = client.get(items_url(scope)).json()["items"]
+    one = client.get(items_url(scope, f"/{post.item_id}")).json()
+
+    for body in (listed, one):
+        assert body["status"] == "published"
+        assert body["external_id"] == "1800000000000000001"
+        assert body["external_url"] == "https://x.com/memoria_app/status/1800000000000000001"
+        assert body["published_at"] is not None
+        assert (body["publishing_cost_usd"], body["publishing_failure"]) == (0.015, None)
+        assert body["publishing_unconfirmed"] is False
+
+
+def test_a_post_the_platform_refused_is_failed_with_why(
+    client: TestClient, services, scope, sessions
+):
+    post = publishing_post(sessions, scope)
+    with transaction(sessions) as session:
+        record_publishing_failed(
+            session, **ids(scope), item_id=post.item_id, failure=PublishingFailure.DUPLICATE
+        )
+
+    item = client.get(items_url(scope, f"/{post.item_id}")).json()
+
+    assert (item["status"], item["publishing_failure"]) == ("failed", "duplicate")
+    assert item["publishing_unconfirmed"] is False
+
+
+def test_a_send_whose_run_ended_without_an_outcome_is_unconfirmed(
+    client: TestClient, services, scope, sessions
+):
+    post = publishing_post(sessions, scope)
+    with transaction(sessions) as session:
+        mark_run_failed(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            run_id=post.run_id,
+            error="X did not answer",
+        )
+
+    [listed] = client.get(items_url(scope)).json()["items"]
+    one = client.get(items_url(scope, f"/{post.item_id}")).json()
+
+    for body in (listed, one):
+        assert (body["status"], body["publishing_unconfirmed"]) == ("publishing", True)

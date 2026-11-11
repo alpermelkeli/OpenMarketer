@@ -10,7 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { effectNote, planDecisionWording } from "@/lib/proposals/proposal-display";
+import { effectNote, planDecisionWording, postDecisionWording } from "@/lib/proposals/proposal-display";
 import type { Proposal } from "@/lib/api/types";
 
 type DecideDialogProps = {
@@ -24,11 +24,16 @@ type DecideDialogProps = {
   onConfirm: () => void;
 };
 
-/** The deliberate step before an action an agent asked for runs, or is refused. Says what follows. */
+/**
+ * The deliberate step before an action an agent asked for runs, or is refused. Says what follows:
+ * for a writer's post, the account it is published from or that it is a dry run.
+ */
 export function DecideDialog({ proposal, approving, onOpenChange, pending, problem, onConfirm }: DecideDialogProps) {
   const approve = approving === true;
   const what = <span className="font-mono">{proposal.action_name}</span>;
-  const plan = proposal.effect === "confirms" ? planDecisionWording(approve) : null;
+  // A plan and a writer's post each say what follows in their own words; any other action in general ones.
+  const plan =
+    proposal.effect === "confirms" ? planDecisionWording(approve) : postDecisionWording(proposal.post_destination, approve);
   return (
     <AlertDialog open={approving !== null} onOpenChange={onOpenChange}>
       <AlertDialogContent className="data-[size=default]:sm:max-w-md">

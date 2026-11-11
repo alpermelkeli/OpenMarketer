@@ -17,6 +17,33 @@ it the same way again changes nothing; another way is ``ContentItemSettled``. An
 proposed when its run fails is settled ``failed`` by the run (``db/writing_runs.py``). A
 finished run's item is never changed.
 
+An approved post that names an account is published, and its item moves through one more
+state, ``publishing``, whose job is that a retried send never posts twice:
+
+    proposed --approved, no account--> dry_run
+    proposed --approved, send starts--> publishing --the platform has it--> published
+                                                   +--the platform refused it--> failed
+    proposed --rejected | expired | the run fails--> rejected | expired | failed
+
+``begin_publishing`` moves a proposed item to ``publishing`` and records the account it is sent
+from, when the send started and the fingerprint of its text, in a transaction the caller
+commits before it sends. It answers the stage the item was at (``PublishingStage``): an item
+already ``publishing`` from the same account is a send whose outcome is not known (``resumed``:
+look the post up before sending again, ``social_accounts/publishing.next_publishing_step``),
+one already ``published`` from it is done. ``record_published`` settles a publishing item
+``published`` with the platform's post and what it was reckoned to cost, and the same post
+again changes nothing; ``record_publishing_failed`` settles it ``failed`` with why the platform
+refused it. Neither applies to an item whose send never started (``PublishingNotBegun``). A
+publishing item of a run that fails stays ``publishing``: the platform may have the post, and
+nothing here claims it does not; the item reads it as ``publishing_unconfirmed``, which every
+item carries with its run's status.
+
+A text is published once in a workspace on a platform: ``begin_publishing`` refuses an item
+whose text (compared by ``text_fingerprint``: its words one space apart) another item of the
+workspace is publishing or published on the same platform (``TextAlreadyPublished``), from any
+account. X refuses identical posts from one account and from several, and a lookup for the
+outcome of a send would otherwise take the other item's post for this one's.
+
 An item may name the image of the project's library it goes with, an asset with its version,
 both or neither, and the research run whose findings it drew on; the version must be one of
 that asset's and the asset and the run the project's (``MediaAssetNotFound``,
@@ -72,16 +99,26 @@ from openmarketer_core.db.writing_runs import (
     WritingRunNotFound,
     WritingRunNotStarted,
 )
+from openmarketer_core.social_accounts.publishing import (
+    PublishedPost,
+    PublishingAccount,
+    PublishingFailure,
+    PublishingStage,
+    text_fingerprint,
+)
 from openmarketer_core.writing.brief import WritingPlatform
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
-# The ways an item ends; ``proposed`` is how it starts.
+# The ways ``settle_content_item`` ends an item; ``proposed`` is how it starts, and
+# ``published`` is recorded by ``record_published`` only.
 SETTLED = (
     ContentItemStatus.DRY_RUN,
     ContentItemStatus.REJECTED,
     ContentItemStatus.EXPIRED,
     ContentItemStatus.FAILED,
 )
+# The statuses of an item whose text a platform has, or may have.
+SENT = (ContentItemStatus.PUBLISHING, ContentItemStatus.PUBLISHED)
 
 
 class ContentItemNotFound(Exception):
@@ -128,6 +165,47 @@ class ProposalNotApproved(Exception):
             f"content item {item_id} is recorded as a dry run only with an approved proposal "
             "of its run"
         )
+
+
+class PublishingNotBegun(Exception):
+    """The item's send never started (``begin_publishing``): it has no outcome to record."""
+
+    def __init__(self, item_id: uuid.UUID) -> None:
+        super().__init__(f"content item {item_id} was never being published")
+
+
+class PublishingFromAnotherAccount(Exception):
+    """The item's send started, or ended, from another account than the one given."""
+
+    def __init__(self, item_id: uuid.UUID) -> None:
+        super().__init__(f"content item {item_id} is being published from another account")
+
+
+class PublishedAsAnotherPost(Exception):
+    """The item was recorded as another post of the platform, or the post is another item's."""
+
+    def __init__(self, item_id: uuid.UUID) -> None:
+        super().__init__(f"content item {item_id} and that post are recorded apart already")
+
+
+class TextAlreadyPublished(Exception):
+    """Another item of the workspace is publishing or published this text on the platform."""
+
+    def __init__(self, other_item_id: uuid.UUID, other_project_id: uuid.UUID) -> None:
+        super().__init__(
+            f"this text was already published by content item {other_item_id} of project "
+            f"{other_project_id}: the platform refuses the same post twice, so change the text"
+        )
+        self.other_item_id = other_item_id
+        self.other_project_id = other_project_id
+
+
+@dataclass(frozen=True)
+class PublishingBegun:
+    """The item after ``begin_publishing``, and the stage it was at when the call began."""
+
+    item: ContentItem
+    stage: PublishingStage
 
 
 @dataclass(frozen=True)
@@ -183,6 +261,26 @@ class ContentItem:
     cost_usd: Decimal
     created_at: datetime
     settled_at: datetime | None
+    run_status: WritingRunStatus  # how its run is now, which says whether a send can still end
+    # Its publishing, once it started: the account it was sent from, when, the platform's post,
+    # when it was published and what that was reckoned to cost, or why it was refused.
+    publishing_started_at: datetime | None = None
+    published_account_id: str | None = None
+    published_username: str | None = None
+    external_id: str | None = None
+    external_url: str | None = None
+    published_at: datetime | None = None
+    publishing_cost_usd: Decimal | None = None
+    publishing_failure: PublishingFailure | None = None
+
+    @property
+    def publishing_unconfirmed(self) -> bool:
+        """Whether its send started and its run ended with no outcome recorded.
+
+        Nothing will record one now: the platform may have the post or not, and only a look at
+        the account tells, so a person is told rather than shown it as still being published.
+        """
+        return self.status is ContentItemStatus.PUBLISHING and self.run_status in FINISHED
 
 
 def store_proposed_content_item(
@@ -297,6 +395,138 @@ def settle_content_item(
     return _content_item(session, record)
 
 
+def begin_publishing(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    item_id: uuid.UUID,
+    proposal_id: uuid.UUID,
+    account: PublishingAccount,
+) -> PublishingBegun:
+    """Record that the item's send from ``account`` starts, before it is sent.
+
+    The item must be ``proposed`` (it becomes ``publishing``, ``stage`` ``started``), or
+    already ``publishing`` (``resumed``) or ``published`` (``done``) from the same account.
+    ``proposal_id`` is the proposal of the item's run a person approved, named on the item if
+    it names none yet (``ProposalNotApproved``, ``ProposalOfAnotherRun``). Raises
+    ``TextAlreadyPublished`` for a text another item of the workspace sent on the platform,
+    ``PublishingFromAnotherAccount``, ``ContentItemSettled`` for an item settled another way,
+    ``ContentItemNotFound`` and ``WritingRunFinished``. Takes the workspace lock, which holds
+    every other begin of the workspace until the caller commits.
+    """
+    wait_for_other_writes(session, workspace_id)
+    record = _found_item(session, workspace_id, project_id, item_id)
+    _running_run(session, workspace_id, project_id, record.run_id)
+    record = _found_item(session, workspace_id, project_id, item_id, for_update=True)
+    if record.proposal_id is not None and record.proposal_id != proposal_id:
+        raise ProposalOfAnotherRun(record.run_id, proposal_id)
+    _require_approved_proposal_of_run(session, project_id, record, proposal_id)
+    if record.status in SENT:
+        if record.published_account_id != account.account_id:
+            raise PublishingFromAnotherAccount(item_id)
+        done = record.status is ContentItemStatus.PUBLISHED
+        stage = PublishingStage.DONE if done else PublishingStage.RESUMED
+        return PublishingBegun(_content_item(session, record), stage)
+    if record.status is not ContentItemStatus.PROPOSED:
+        raise ContentItemSettled(item_id, record.status)
+    fingerprint = text_fingerprint(record.text)
+    _require_text_not_sent(session, workspace_id, record, fingerprint)
+    session.execute(
+        update(ContentItemRecord)
+        .where(ContentItemRecord.id == item_id)
+        .values(
+            status=ContentItemStatus.PUBLISHING,
+            proposal_id=proposal_id,
+            publishing_started_at=func.now(),
+            published_account_id=account.account_id,
+            published_username=account.username,
+            published_text_sha256=fingerprint,
+        )
+    )
+    session.refresh(record)
+    return PublishingBegun(_content_item(session, record), PublishingStage.STARTED)
+
+
+def record_published(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    item_id: uuid.UUID,
+    post: PublishedPost,
+    cost_usd: Decimal,
+) -> ContentItem:
+    """Settle the publishing item ``published`` as ``post``, reckoned to cost ``cost_usd``.
+
+    The same post again changes nothing. Raises ``PublishedAsAnotherPost`` for an item
+    published as another post or a post recorded for another item, ``PublishingNotBegun``,
+    ``ContentItemSettled``, ``ContentItemNotFound`` and ``WritingRunFinished``. Takes the
+    workspace lock.
+    """
+    record = _publishing_item(session, workspace_id, project_id, item_id)
+    if record.status is ContentItemStatus.PUBLISHED:
+        if record.external_id != post.external_id:
+            raise PublishedAsAnotherPost(item_id)
+        return _content_item(session, record)
+    if record.status is not ContentItemStatus.PUBLISHING:
+        raise ContentItemSettled(item_id, record.status)
+    recorded_for = session.scalar(
+        select(ContentItemRecord.id).where(
+            ContentItemRecord.platform == record.platform,
+            ContentItemRecord.external_id == post.external_id,
+        )
+    )
+    if recorded_for is not None:
+        raise PublishedAsAnotherPost(item_id)
+    session.execute(
+        update(ContentItemRecord)
+        .where(ContentItemRecord.id == item_id)
+        .values(
+            status=ContentItemStatus.PUBLISHED,
+            external_id=post.external_id,
+            external_url=post.url,
+            published_at=func.now(),
+            publishing_cost_usd=cost_usd,
+            settled_at=func.now(),
+        )
+    )
+    session.refresh(record)
+    return _content_item(session, record)
+
+
+def record_publishing_failed(
+    session: Session,
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+    item_id: uuid.UUID,
+    failure: PublishingFailure,
+) -> ContentItem:
+    """Settle the publishing item ``failed``: the platform refused it for ``failure``.
+
+    The same failure again changes nothing. Raises ``PublishingNotBegun``,
+    ``ContentItemSettled`` (another failure is another way), ``ContentItemNotFound`` and
+    ``WritingRunFinished``. Takes the workspace lock.
+    """
+    record = _publishing_item(session, workspace_id, project_id, item_id)
+    if record.status is ContentItemStatus.FAILED and record.publishing_failure == failure.value:
+        return _content_item(session, record)
+    if record.status is not ContentItemStatus.PUBLISHING:
+        raise ContentItemSettled(item_id, record.status)
+    session.execute(
+        update(ContentItemRecord)
+        .where(ContentItemRecord.id == item_id)
+        .values(
+            status=ContentItemStatus.FAILED,
+            publishing_failure=failure.value,
+            settled_at=func.now(),
+        )
+    )
+    session.refresh(record)
+    return _content_item(session, record)
+
+
 def content_item(
     session: Session, *, workspace_id: uuid.UUID, project_id: uuid.UUID, item_id: uuid.UUID
 ) -> ContentItem:
@@ -318,9 +548,11 @@ def list_content_items(
     page) or at the newest. Raises ``ProjectNotFound`` when the workspace has no such project.
     """
     get_project(session, workspace_id=workspace_id, project_id=project_id)
-    query = _items_of_project(workspace_id, project_id).add_columns(ProductProfileRecord.version)
-    query = query.join(
-        ProductProfileRecord, ProductProfileRecord.id == ContentItemRecord.profile_version_id
+    query = (
+        _items_of_project(workspace_id, project_id)
+        .add_columns(ProductProfileRecord.version, WritingRunRecord.status)
+        .join(ProductProfileRecord, ProductProfileRecord.id == ContentItemRecord.profile_version_id)
+        .join(WritingRunRecord, WritingRunRecord.id == ContentItemRecord.run_id)
     )
     if before is not None:
         query = query.where(
@@ -332,7 +564,7 @@ def list_content_items(
             rows_to_fetch(limit)
         )
     )
-    items = [_item_of_version(record, version) for record, version in rows]
+    items = [_item_of_version(record, version, run_status) for record, version, run_status in rows]
     return page_of(items, limit, lambda last: CreatedPosition(last.created_at, last.id))
 
 
@@ -358,6 +590,38 @@ def _running_run(
     if record.status in FINISHED:
         raise WritingRunFinished(run_id, record.status)
     return record
+
+
+def _publishing_item(
+    session: Session, workspace_id: uuid.UUID, project_id: uuid.UUID, item_id: uuid.UUID
+) -> ContentItemRecord:
+    """The item, held with its running run, refused when its send never started."""
+    wait_for_other_writes(session, workspace_id)
+    record = _found_item(session, workspace_id, project_id, item_id)
+    _running_run(session, workspace_id, project_id, record.run_id)
+    record = _found_item(session, workspace_id, project_id, item_id, for_update=True)
+    if record.publishing_started_at is None:
+        raise PublishingNotBegun(item_id)
+    return record
+
+
+def _require_text_not_sent(
+    session: Session, workspace_id: uuid.UUID, record: ContentItemRecord, fingerprint: str
+) -> None:
+    """Refuse an item whose text another item of the workspace sent on its platform."""
+    other = session.execute(
+        _items_of_workspace(workspace_id)
+        .with_only_columns(ContentItemRecord.id, ContentItemRecord.project_id)
+        .where(
+            ContentItemRecord.id != record.id,
+            ContentItemRecord.platform == record.platform,
+            ContentItemRecord.published_text_sha256 == fingerprint,
+            ContentItemRecord.status.in_(SENT),
+        )
+        .limit(1)
+    ).first()
+    if other is not None:
+        raise TextAlreadyPublished(other.id, other.project_id)
 
 
 def _require_proposal_of_run(
@@ -428,12 +692,16 @@ def _require_research_run(session: Session, project_id: uuid.UUID, run_id: uuid.
         raise ResearchRunNotFound(project_id, run_id)
 
 
-def _items_of_project(workspace_id: uuid.UUID, project_id: uuid.UUID) -> Select[ContentItemRecord]:
+def _items_of_workspace(workspace_id: uuid.UUID) -> Select[ContentItemRecord]:
     return (
         select(ContentItemRecord)
         .join(Project, Project.id == ContentItemRecord.project_id)
-        .where(Project.workspace_id == workspace_id, ContentItemRecord.project_id == project_id)
+        .where(Project.workspace_id == workspace_id)
     )
+
+
+def _items_of_project(workspace_id: uuid.UUID, project_id: uuid.UUID) -> Select[ContentItemRecord]:
+    return _items_of_workspace(workspace_id).where(ContentItemRecord.project_id == project_id)
 
 
 def _found_item(
@@ -456,16 +724,21 @@ def _found_item(
 
 
 def _content_item(session: Session, record: ContentItemRecord) -> ContentItem:
-    # The item's foreign key keeps its version for as long as the item exists.
+    # The item's foreign keys keep its version and its run for as long as the item exists.
     version = session.execute(
         select(ProductProfileRecord.version).where(
             ProductProfileRecord.id == record.profile_version_id
         )
     ).scalar_one()
-    return _item_of_version(record, version)
+    run_status = session.execute(
+        select(WritingRunRecord.status).where(WritingRunRecord.id == record.run_id)
+    ).scalar_one()
+    return _item_of_version(record, version, run_status)
 
 
-def _item_of_version(record: ContentItemRecord, profile_version: int) -> ContentItem:
+def _item_of_version(
+    record: ContentItemRecord, profile_version: int, run_status: WritingRunStatus
+) -> ContentItem:
     return ContentItem(
         id=record.id,
         project_id=record.project_id,
@@ -489,4 +762,15 @@ def _item_of_version(record: ContentItemRecord, profile_version: int) -> Content
         cost_usd=record.cost_usd,
         created_at=record.created_at,
         settled_at=record.settled_at,
+        run_status=run_status,
+        publishing_started_at=record.publishing_started_at,
+        published_account_id=record.published_account_id,
+        published_username=record.published_username,
+        external_id=record.external_id,
+        external_url=record.external_url,
+        published_at=record.published_at,
+        publishing_cost_usd=record.publishing_cost_usd,
+        publishing_failure=(
+            PublishingFailure(record.publishing_failure) if record.publishing_failure else None
+        ),
     )

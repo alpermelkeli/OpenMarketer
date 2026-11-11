@@ -38,6 +38,9 @@ WRITING_FAILED = "WritingFailed"  # the brief, the profile, a model's answers or
 RUN_UNAVAILABLE = "RunUnavailable"  # the run or its post does not exist or is already settled
 RUN_NOT_FOUND_YET = "RunNotFoundYet"  # the run may not have been committed yet
 MODEL_UNAVAILABLE = "ModelUnavailable"  # the provider failed or limited the rate
+# The platform a post is published on, or the object storage its image is read from, failed or
+# limited the rate: the post may have been published, and the next attempt looks it up first.
+PUBLISHING_UNAVAILABLE = "PublishingUnavailable"
 NOT_RETRIED = (WRITING_FAILED, RUN_UNAVAILABLE)
 # Failures of these types carry a message written for the run's reader (and, for an action,
 # for the writer's graph): the writer's own, and the runtime's.
@@ -46,6 +49,7 @@ WORDED_BY_THE_ACTIVITY = (
     RUN_UNAVAILABLE,
     RUN_NOT_FOUND_YET,
     MODEL_UNAVAILABLE,
+    PUBLISHING_UNAVAILABLE,
     *WORDED_BY_THE_RUNTIME,
 )
 
@@ -60,6 +64,12 @@ WRITING_TEXTS = FailureTexts(
 DRAFT_NOT_STORED = "the draft could not be stored"
 POST_NOT_RECORDED = "the approved post could not be recorded"
 EARLIER_ATTEMPT_RUNNING = "an earlier attempt at the writing run is still running"
+# What a run that failed while its post's send was started and never confirmed is told first:
+# the platform may have the post, and its item stays ``publishing``.
+PUBLISHING_NOT_CONFIRMED = (
+    "the post's publishing started and was never confirmed, so it may be on the account: "
+    "check its posts before requesting it again"
+)
 # What a run whose result cannot be read ends with: a defect of the graph's ``record``.
 RESULT_UNREADABLE = "the writer finished without a post it could record"
 
@@ -82,9 +92,9 @@ def in_the_writers_words(reason: str) -> str:
 class RunOutcome:
     """How the post of a run whose graph finished ended, as ``record_outcome`` settles it.
 
-    ``status`` is the value of core's ``PostStatus``: ``dry_run``, ``rejected`` or ``expired``
-    (a post that ``failed`` ends the run through ``failed`` instead). ``cost_usd`` is what the
-    run's model calls cost, as text, exact as the graph counted it.
+    ``status`` is the value of core's ``PostStatus``: ``published``, ``dry_run``, ``rejected``
+    or ``expired`` (a post that ``failed`` ends the run through ``failed`` instead).
+    ``cost_usd`` is what the run's model calls cost, as text, exact as the graph counted it.
     """
 
     run: WritingRunInput

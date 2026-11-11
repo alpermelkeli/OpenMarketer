@@ -5,6 +5,10 @@ project's proposals, read one, and approve or reject one as the current user; th
 told, and runs the action or hears that it was refused. No request field names a decider, and
 no route decides on behalf of a model. Editing what a proposal asks for is not here.
 
+A writing run's ``publish_post`` proposal also carries where the post goes
+(``post_destination``): the account it would be published from and the estimate, or a dry run,
+read from its payload in core so that a screen need not read the payload's keys.
+
 ``workspace_router`` adds the workspace's own view, beside the project's: every pending proposal
 of every project, which the dashboard tells a person about wherever they are.
 """
@@ -32,6 +36,7 @@ from openmarketer_core.db.proposals import (
     list_proposals,
     list_waiting_proposals,
 )
+from openmarketer_core.writing.post_destination import PostDestination, post_destination
 
 router = APIRouter(prefix="/projects/{project_id}/proposals", tags=["proposals"])
 workspace_router = APIRouter(prefix="/proposals", tags=["proposals"])
@@ -40,6 +45,28 @@ StatusFilter = Annotated[
     ProposalStatus | SkipJsonSchema[None],
     Query(description="Only the proposals with this status. Leave out for all of them."),
 ]
+
+
+class PostDestinationResponse(BaseModel):
+    """Where a proposed post goes once approved: an account, or nowhere (a dry run)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    live: bool = Field(
+        description=(
+            "True when approving publishes the post from `username`'s account; false when it "
+            "is recorded as a dry run and sent nowhere."
+        )
+    )
+    account_id: str | None = Field(
+        description="The platform's identifier of the account; null for a dry run."
+    )
+    username: str | None = Field(
+        description="The account's username, without `@`; null for a dry run."
+    )
+    cost_estimate_usd: float | None = Field(
+        description="What publishing it is reckoned to cost, in USD; null for a dry run."
+    )
 
 
 class ProposalResponse(BaseModel):
@@ -65,6 +92,12 @@ class ProposalResponse(BaseModel):
     decided_at: datetime | None
     estimate_usd: float | None = Field(
         description="What an action that spends was estimated to cost, in USD; null otherwise."
+    )
+    post_destination: PostDestinationResponse | None = Field(
+        description=(
+            "For a writing run's `publish_post`: where the post goes once approved. Null for "
+            "any other action."
+        )
     )
 
 
@@ -92,6 +125,21 @@ def _response(proposal: ActionProposal) -> ProposalResponse:
         decided_by=proposal.decided_by,
         decided_at=proposal.decided_at,
         estimate_usd=None if proposal.estimate_usd is None else float(proposal.estimate_usd),
+        post_destination=_destination_response(
+            post_destination(proposal.run_kind, proposal.action_name, proposal.payload)
+        ),
+    )
+
+
+def _destination_response(destination: PostDestination | None) -> PostDestinationResponse | None:
+    if destination is None:
+        return None
+    estimate = destination.cost_estimate_usd
+    return PostDestinationResponse(
+        live=destination.live,
+        account_id=destination.account_id,
+        username=destination.username,
+        cost_estimate_usd=None if estimate is None else float(estimate),
     )
 
 

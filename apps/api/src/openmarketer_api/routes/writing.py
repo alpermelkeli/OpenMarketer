@@ -4,8 +4,10 @@ A writing run is executed by the worker; its state and its content item are read
 database only, and no route asks the workflow engine about a run. A project may have several
 writing runs at once, and each proposes one post, its content item. Whether a post is sent is
 decided on its proposal (``routes/proposals.py``), by a person; nothing here approves,
-rejects or edits a post, and in the writer's first step an approved post is recorded as a dry
-run and sent nowhere.
+rejects or edits a post. An approved post whose proposal names the project's connected account
+is published from it, and its item says where and when; one that names none is recorded as a
+dry run and sent nowhere. An item names the account by the platform's identifier and username
+and holds nothing of its token.
 
 A single run is read with its brief, read back strictly; a stored brief that no longer fits
 the schema is answered as no brief rather than as an error. The list of runs leaves the brief
@@ -36,6 +38,7 @@ from openmarketer_core.db.writing_runs import (
     requested_brief,
     writing_run,
 )
+from openmarketer_core.social_accounts.publishing import PublishingFailure
 from openmarketer_core.writing.brief import (
     StoredWritingBriefInvalid,
     WritingBrief,
@@ -98,8 +101,17 @@ class ContentItemResponse(BaseModel):
     platform: WritingPlatform
     status: ContentItemStatus = Field(
         description=(
-            "`proposed` while it waits for a person; `dry_run` once approved and recorded as "
-            "it would have been sent (nothing is sent yet), `rejected`, `expired` or `failed`."
+            "`proposed` while it waits for a person; once approved, `dry_run` when its proposal "
+            "named no account (recorded as it would have been sent, nothing sent), or "
+            "`publishing` while its send to the account is under way and `published` once the "
+            "platform has it; `rejected`, `expired`, or `failed` (the run ended without settling "
+            "it, or the platform refused the post: `publishing_failure` says why)."
+        )
+    )
+    publishing_unconfirmed: bool = Field(
+        description=(
+            "True when its send started and its run ended with no outcome recorded: the "
+            "platform may have the post or not, and only the account tells. False otherwise."
         )
     )
     text: str = Field(description="The post as it would be sent.")
@@ -122,6 +134,28 @@ class ContentItemResponse(BaseModel):
     cost_usd: float
     created_at: datetime
     settled_at: datetime | None
+    publishing_started_at: datetime | None = Field(
+        description="When its send to the account started; null when it never did."
+    )
+    published_account_id: str | None = Field(
+        description="The platform's identifier of the account it is sent from, once sending."
+    )
+    published_username: str | None = Field(
+        description="The username of that account, without `@`, once sending."
+    )
+    external_id: str | None = Field(description="The platform's id of the post, once published.")
+    external_url: str | None = Field(description="The link to the post, once published.")
+    published_at: datetime | None = Field(description="When the platform published it.")
+    publishing_cost_usd: float | None = Field(
+        description="What publishing it was reckoned to cost, in USD, once published."
+    )
+    publishing_failure: PublishingFailure | None = Field(
+        description=(
+            "Why a post whose send started was not published: `access_revoked` (connect the "
+            "account again), `duplicate`, `too_long`, `media_refused`, `not_permitted`, "
+            "`out_of_credits` or `refused`; null otherwise."
+        )
+    )
 
 
 class ContentItemDetailResponse(ContentItemResponse):
@@ -175,6 +209,7 @@ def _item_response(item: ContentItem) -> ContentItemResponse:
         run_id=item.run_id,
         platform=item.platform,
         status=item.status,
+        publishing_unconfirmed=item.publishing_unconfirmed,
         text=item.text,
         profile_version=item.profile_version,
         proposal_id=item.proposal_id,
@@ -184,6 +219,16 @@ def _item_response(item: ContentItem) -> ContentItemResponse:
         cost_usd=float(item.cost_usd),
         created_at=item.created_at,
         settled_at=item.settled_at,
+        publishing_started_at=item.publishing_started_at,
+        published_account_id=item.published_account_id,
+        published_username=item.published_username,
+        external_id=item.external_id,
+        external_url=item.external_url,
+        published_at=item.published_at,
+        publishing_cost_usd=(
+            None if item.publishing_cost_usd is None else float(item.publishing_cost_usd)
+        ),
+        publishing_failure=item.publishing_failure,
     )
 
 

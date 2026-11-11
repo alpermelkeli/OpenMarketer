@@ -12,8 +12,18 @@ from sqlalchemy.orm import sessionmaker
 
 from openmarketer_core.credentials.catalog import GITHUB_TOKEN, GITLAB_TOKEN, OPENROUTER_API_KEY
 from openmarketer_core.credentials.resolution import CredentialUnreadable, ModelKeyNotSet
-from openmarketer_core.db.session import DatabaseError, session_factory
+from openmarketer_core.db.projects import create_project
+from openmarketer_core.db.session import DatabaseError, session_factory, transaction
 from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.social_accounts.catalog import AccountDescription, SocialPlatform
+from openmarketer_core.social_accounts.connection import (
+    AuthorizationStart,
+    AuthorizedAccount,
+    ConnectionSecretUnreadable,
+    PlatformApp,
+    finish_connection,
+    start_connection,
+)
 from openmarketer_worker.credentials import WorkspaceCredentials
 
 MODELS = Path(__file__).resolve().parents[3] / "config" / "models.yaml"
@@ -194,3 +204,93 @@ def test_no_credential_is_in_the_text_of_the_credentials(sessions: sessionmaker,
     credentials = WorkspaceCredentials(sessions, environ, cipher)
     shown = repr(credentials) + str(credentials) + repr(vars(credentials)["_cipher"])
     assert ENVIRONMENT_KEY not in shown and "ghp_environment" not in shown
+
+
+# ------------------------------------------------------- a connected account's token
+ACCESS_TOKEN = "42-x-access-token-0123456789"
+ACCESS_SECRET = "x-access-secret-0123456789"
+X_APP = {"X_API_KEY": "x-app-key", "X_API_SECRET": "x-app-secret"}
+
+
+class Authorization:
+    """An ``AccountAuthorization`` that authorizes account 42 with the test's token."""
+
+    def start(self, app: PlatformApp, *, callback_url: str) -> AuthorizationStart:
+        return AuthorizationStart(authorize_url="https://x.example/", state="s", secret_to_keep="k")
+
+    def finish(self, app, *, state: str, grant: str, kept_secret: str) -> AuthorizedAccount:
+        account = AccountDescription("42", "acme", "Acme", None)
+        return AuthorizedAccount(account, access_token=ACCESS_TOKEN, access_secret=ACCESS_SECRET)
+
+
+@pytest.fixture
+def project_id(sessions, workspace_id) -> uuid.UUID:
+    with transaction(sessions) as session:
+        return create_project(
+            session, workspace_id=workspace_id, name="app", source_repo_url="https://x.example/a"
+        ).id
+
+
+def connect(sessions, workspace_id: uuid.UUID, project_id: uuid.UUID, cipher) -> None:
+    with transaction(sessions) as session:
+        start_connection(
+            session,
+            X_APP,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            platform=SocialPlatform.X,
+            callback_url="http://localhost/callback",
+            authorization=Authorization(),
+            cipher=cipher,
+        )
+        finish_connection(
+            session,
+            X_APP,
+            workspace_id=workspace_id,
+            platform=SocialPlatform.X,
+            state="s",
+            grant="v",
+            connected_by=uuid.uuid4(),
+            authorization=Authorization(),
+            cipher=cipher,
+        )
+
+
+def test_token_of_the_projects_account_is_opened_with_the_account_it_belongs_to(
+    sessions, workspace_id, project_id, cipher
+):
+    connect(sessions, workspace_id, project_id, cipher)
+
+    found = WorkspaceCredentials(sessions, {}, cipher).account_tokens(
+        workspace_id, project_id, SocialPlatform.X
+    )
+
+    assert found is not None and found.account_id == "42"
+    assert (found.tokens.access_token, found.tokens.access_secret) == (ACCESS_TOKEN, ACCESS_SECRET)
+    assert ACCESS_TOKEN not in repr(found) and ACCESS_SECRET not in repr(found)
+
+
+def test_project_without_an_account_has_no_token(sessions, workspace_id, project_id, cipher):
+    credentials = WorkspaceCredentials(sessions, {}, cipher)
+
+    assert credentials.account_tokens(workspace_id, project_id, SocialPlatform.X) is None
+
+
+def test_token_of_another_workspace_is_not_found(
+    sessions, database, workspace_id, project_id, cipher
+):
+    connect(sessions, workspace_id, project_id, cipher)
+    other = database.new_workspace()
+    credentials = WorkspaceCredentials(sessions, {}, cipher)
+
+    assert credentials.account_tokens(other, project_id, SocialPlatform.X) is None
+
+
+def test_token_sealed_under_another_encryption_key_is_unreadable(
+    sessions, workspace_id, project_id, cipher, another_cipher
+):
+    connect(sessions, workspace_id, project_id, cipher)
+    credentials = WorkspaceCredentials(sessions, {}, another_cipher)
+
+    with pytest.raises(ConnectionSecretUnreadable):
+        credentials.account_tokens(workspace_id, project_id, SocialPlatform.X)

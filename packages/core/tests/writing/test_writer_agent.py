@@ -12,6 +12,7 @@ import subprocess
 import sys
 import uuid
 from collections.abc import Callable, Mapping
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -26,6 +27,7 @@ from openmarketer_core.agent_runtime.langgraph_agent import (
     AgentSteps,
     run_from,
 )
+from openmarketer_core.agent_runtime.model_input import read_strict_json
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.agent_runtime.threads import thread_id
 from openmarketer_core.db.media_assets import AssetForPost
@@ -39,6 +41,9 @@ from openmarketer_core.graph_checkpoints import RunCheckpoints
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.profile import ProductProfile
 from openmarketer_core.run_events import RunEvent
+from openmarketer_core.social_accounts.catalog import SocialPlatform
+from openmarketer_core.social_accounts.publishing import PublishingAccount
+from openmarketer_core.social_accounts.publishing_costs import PublishingCosts
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
 from openmarketer_core.writing.failures import WRITING_FAILURES, WritingError
@@ -70,6 +75,10 @@ ITEM_ID = "88888888-8888-4888-8888-888888888888"
 ASSET_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 ASSET_VERSION_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 RESEARCH_RUN_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
+ACCOUNT = PublishingAccount(account_id="42", username="acme")
+COSTS = PublishingCosts.model_validate(
+    {"version": 1, "platforms": {"x": {"post_usd": "0.015", "post_with_image_usd": "0.02"}}}
+)
 
 
 def a_profile(**changes: Any) -> ProductProfile:
@@ -146,6 +155,10 @@ def no_reading(what: uuid.UUID) -> Any:
     raise AssertionError(f"{what} was read, and the brief names none")
 
 
+def no_account(platform: SocialPlatform) -> PublishingAccount | None:
+    return None
+
+
 # ------------------------------------------------------------------------ the scripted models
 class ScriptedChat:
     """Prepared answers per role, in order; each call records what it was sent."""
@@ -209,7 +222,9 @@ class Run:
         limits: Limits | None = None,
         post_image: Callable[[uuid.UUID], Any] = no_reading,
         research_findings: Callable[[uuid.UUID], Any] = no_reading,
+        account: PublishingAccount | None = None,
         while_waiting: Callable[[InMemorySaver, RunCheckpoints], None] | None = None,
+        while_storing: Callable[[InMemorySaver, RunCheckpoints], None] | None = None,
     ):
         self.brief = brief or WritingBrief(
             platform=WritingPlatform.X, goal=WritingGoal.INTRODUCE, variants=2
@@ -217,12 +232,20 @@ class Run:
         run = WritingRunInput(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
         self.run = run
         stored = ApprovedProfile(VERSION_ID, profile or a_profile()) if approved else None
+        self.accounts_read: list[SocialPlatform] = []
+
+        def publishing_account(platform: SocialPlatform) -> PublishingAccount | None:
+            self.accounts_read.append(platform)
+            return account
+
         context = WriterContext(
             model=chat,
             limits=limits or Limits(),
             approved_profile=lambda: stored,
             post_image=post_image,
             research_findings=research_findings,
+            publishing_account=publishing_account,
+            publishing_costs=COSTS,
         )
         self.events: list[RunEvent] = []
         self.asked: list[tuple[str, dict[str, Any]]] = []
@@ -250,6 +273,8 @@ class Run:
                 break
             self.asked.append((step.action.name, step.action.payload))
             if step.action.name == STORE_DRAFT:
+                if while_storing is not None:
+                    while_storing(store, checkpoints)
                 resume = _stored(step.action.action_id, store_error)
             else:
                 if while_waiting is not None:
@@ -590,10 +615,86 @@ def test_a_run_shows_its_progress_node_by_node():
         progress.VARIANTS_CHECKED,
         progress.VARIANT_CHOSEN,
         progress.DRAFT_STORED,
+        progress.TARGET_CHOSEN,
         progress.POST_RECORDED,
     ]
     assert run.events[3].detail == {"round": 1, "variant": 0, "flagged_numbers": 0}
+    assert run.events[5].detail == {"live": False, "username": None, "cost_estimate_usd": None}
     assert run.events[-1].detail == {"status": "dry_run"}
+
+
+# ------------------------------------------------------------------- where the post is published
+def test_a_project_with_a_connected_account_proposes_the_post_from_it_with_its_estimate():
+    chat = ScriptedChat(writer=[a_draft()])
+
+    run = Run(chat, account=ACCOUNT)
+
+    [_, (_, proposal)] = run.asked
+    assert run.accounts_read == [SocialPlatform.X]
+    assert (proposal["account_id"], proposal["username"]) == ("42", "acme")
+    assert proposal["cost_estimate_usd"] == "0.015"
+    assert run.events[5].detail == {"live": True, "username": "acme", "cost_estimate_usd": "0.015"}
+
+
+def test_a_post_with_an_image_is_reckoned_at_the_price_of_a_post_with_an_image():
+    chat = ScriptedChat(writer=[a_draft(a_variant())])
+
+    run = Run(chat, brief=with_inputs(asset=True), account=ACCOUNT, post_image=lambda a: an_asset())
+
+    [_, (_, proposal)] = run.asked
+    assert proposal["cost_estimate_usd"] == "0.02"
+
+
+def test_a_project_without_a_connected_account_proposes_a_dry_run_naming_no_account():
+    chat = ScriptedChat(writer=[a_draft()])
+
+    run = Run(chat)
+
+    [_, (_, proposal)] = run.asked
+    assert run.accounts_read == [SocialPlatform.X]
+    assert not {"account_id", "username", "cost_estimate_usd"} & set(proposal)
+
+
+def test_a_post_the_handler_published_is_recorded_as_published():
+    chat = ScriptedChat(writer=[a_draft()])
+    published = ActionOutcome("", True, {"content_item_id": ITEM_ID, "status": "published"}, "")
+
+    run = Run(chat, account=ACCOUNT, decision=published)
+
+    assert run.result.status is PostStatus.PUBLISHED
+    assert run.events[-1].detail == {"status": "published"}
+
+
+def test_a_proposal_names_its_account_its_username_and_its_estimate_together_or_none():
+    ids = {
+        "workspace_id": uuid.uuid4(),
+        "project_id": uuid.uuid4(),
+        "run_id": uuid.uuid4(),
+        "content_item_id": uuid.UUID(ITEM_ID),
+        "text": "Offline? Keep writing.",
+    }
+
+    with pytest.raises(ValueError, match="or none"):
+        PublishPost(**ids, account_id="42", username="acme")
+
+
+def test_a_live_proposal_reads_back_as_the_handler_reads_it():
+    proposal = PublishPost(
+        workspace_id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        run_id=uuid.uuid4(),
+        content_item_id=uuid.UUID(ITEM_ID),
+        text="Offline? Keep writing.",
+        account_id="42",
+        username="acme",
+        cost_estimate_usd=Decimal("0.015"),
+    )
+
+    stored = proposal.model_dump(mode="json")
+
+    assert stored["cost_estimate_usd"] == "0.015"
+    assert read_strict_json(PublishPost, stored) == proposal
+    assert not read_strict_json(PublishPost, stored).dry_run
 
 
 # ------------------------------------------------------------------------- the boundaries
@@ -607,6 +708,8 @@ def test_a_run_with_no_workflow_stops_where_it_asks_for_store_draft():
         approved_profile=lambda: stored,
         post_image=no_reading,
         research_findings=no_reading,
+        publishing_account=no_account,
+        publishing_costs=COSTS,
     )
     brief = WritingBrief(platform=WritingPlatform.X, goal=WritingGoal.INTRODUCE, variants=2)
 
@@ -724,6 +827,24 @@ def test_an_instagram_caption_longer_than_a_post_on_x_is_proposed_with_its_image
     assert draft["check_report"]["passed"]
     assert draft["check_report"]["length"] > 280
     assert "Instagram" in chat.sent_to("writer")[0][0]["content"]
+
+
+def test_a_post_for_a_platform_with_no_connectable_account_is_proposed_as_a_dry_run():
+    instagram = WritingBrief(
+        platform=WritingPlatform.INSTAGRAM, goal=WritingGoal.INTRODUCE, variants=1, asset=ASSET_ID
+    )
+    chat = ScriptedChat(writer=[a_draft(a_variant("Write anywhere. #notes"))])
+
+    run = Run(
+        chat,
+        brief=instagram,
+        account=ACCOUNT,
+        post_image=lambda asset_id: an_asset(platform=Platform.INSTAGRAM_PORTRAIT),
+    )
+
+    [_, (_, proposal)] = run.asked
+    assert run.accounts_read == []
+    assert not {"account_id", "username", "cost_estimate_usd"} & set(proposal)
 
 
 def test_the_writer_is_shown_what_the_image_was_asked_for_and_never_its_ids():
@@ -954,6 +1075,40 @@ def test_a_thread_of_the_critics_version_waiting_for_its_post_continues():
     assert run.result.plan == OLD_PLAN
     assert run.result.critic_report == OLD_REVIEW
     assert run.result.passed_critic is None
+
+
+def forgetting_the_target(store: InMemorySaver, checkpoints: RunCheckpoints) -> None:
+    """Rewrite the thread's last checkpoint as the version before ``target`` stored it: with
+    no such channel."""
+    config: RunnableConfig = {"configurable": {"thread_id": checkpoints.thread_id}}
+    stored = store.get_tuple(config)
+    assert stored is not None and stored.parent_config is not None
+    checkpoint = stored.checkpoint
+    values = {k: v for k, v in checkpoint["channel_values"].items() if k != "target"}
+    versions = {k: v for k, v in checkpoint["channel_versions"].items() if k != "target"}
+    rewritten: Checkpoint = {**checkpoint, "channel_values": values, "channel_versions": versions}
+    store.put(stored.parent_config, rewritten, stored.metadata, {})
+
+
+def test_a_thread_waiting_for_its_post_from_before_targets_asks_for_the_same_dry_run():
+    chat = ScriptedChat(writer=[a_draft(a_variant())])
+
+    run = Run(chat, brief=ONE_VARIANT, while_waiting=forgetting_the_target)
+
+    [_, (_, proposal)] = run.asked
+    assert "target" not in run.final
+    assert not {"account_id", "username", "cost_estimate_usd"} & set(proposal)
+    assert run.result.status is PostStatus.DRY_RUN
+
+
+def test_a_thread_storing_its_draft_from_before_targets_passes_through_the_target():
+    chat = ScriptedChat(writer=[a_draft(a_variant())])
+
+    run = Run(chat, brief=ONE_VARIANT, account=ACCOUNT, while_storing=forgetting_the_target)
+
+    [_, (_, proposal)] = run.asked
+    assert proposal["account_id"] == "42"
+    assert run.accounts_read == [SocialPlatform.X]
 
 
 def test_a_proposal_without_an_image_asks_for_what_the_previous_version_asked():

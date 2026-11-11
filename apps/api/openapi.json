@@ -1271,6 +1271,30 @@
             "title": "Critic Report",
             "type": "object"
           },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The platform's id of the post, once published.",
+            "title": "External Id"
+          },
+          "external_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The link to the post, once published.",
+            "title": "External Url"
+          },
           "flagged_numbers": {
             "description": "Numbers in the post the profile does not hold, for a person to check.",
             "items": {
@@ -1324,6 +1348,84 @@
             "description": "The proposal a person decides the post on, once the item names it.",
             "title": "Proposal Id"
           },
+          "published_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The platform's identifier of the account it is sent from, once sending.",
+            "title": "Published Account Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the platform published it.",
+            "title": "Published At"
+          },
+          "published_username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The username of that account, without `@`, once sending.",
+            "title": "Published Username"
+          },
+          "publishing_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What publishing it was reckoned to cost, in USD, once published.",
+            "title": "Publishing Cost Usd"
+          },
+          "publishing_failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublishingFailure"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why a post whose send started was not published: `access_revoked` (connect the account again), `duplicate`, `too_long`, `media_refused`, `not_permitted`, `out_of_credits` or `refused`; null otherwise."
+          },
+          "publishing_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When its send to the account started; null when it never did.",
+            "title": "Publishing Started At"
+          },
+          "publishing_unconfirmed": {
+            "description": "True when its send started and its run ended with no outcome recorded: the platform may have the post or not, and only the account tells. False otherwise.",
+            "title": "Publishing Unconfirmed",
+            "type": "boolean"
+          },
           "research_run_id": {
             "anyOf": [
               {
@@ -1356,7 +1458,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/ContentItemStatus",
-            "description": "`proposed` while it waits for a person; `dry_run` once approved and recorded as it would have been sent (nothing is sent yet), `rejected`, `expired` or `failed`."
+            "description": "`proposed` while it waits for a person; once approved, `dry_run` when its proposal named no account (recorded as it would have been sent, nothing sent), or `publishing` while its send to the account is under way and `published` once the platform has it; `rejected`, `expired`, or `failed` (the run ended without settling it, or the platform refused the post: `publishing_failure` says why)."
           },
           "text": {
             "description": "The post as it would be sent.",
@@ -1370,6 +1472,7 @@
           "run_id",
           "platform",
           "status",
+          "publishing_unconfirmed",
           "text",
           "profile_version",
           "proposal_id",
@@ -1379,6 +1482,14 @@
           "cost_usd",
           "created_at",
           "settled_at",
+          "publishing_started_at",
+          "published_account_id",
+          "published_username",
+          "external_id",
+          "external_url",
+          "published_at",
+          "publishing_cost_usd",
+          "publishing_failure",
           "plan",
           "plan_changes",
           "alternatives",
@@ -1459,6 +1570,30 @@
             "title": "Created At",
             "type": "string"
           },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The platform's id of the post, once published.",
+            "title": "External Id"
+          },
+          "external_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The link to the post, once published.",
+            "title": "External Url"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -1489,6 +1624,84 @@
             ],
             "description": "The proposal a person decides the post on, once the item names it.",
             "title": "Proposal Id"
+          },
+          "published_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The platform's identifier of the account it is sent from, once sending.",
+            "title": "Published Account Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the platform published it.",
+            "title": "Published At"
+          },
+          "published_username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The username of that account, without `@`, once sending.",
+            "title": "Published Username"
+          },
+          "publishing_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What publishing it was reckoned to cost, in USD, once published.",
+            "title": "Publishing Cost Usd"
+          },
+          "publishing_failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublishingFailure"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why a post whose send started was not published: `access_revoked` (connect the account again), `duplicate`, `too_long`, `media_refused`, `not_permitted`, `out_of_credits` or `refused`; null otherwise."
+          },
+          "publishing_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When its send to the account started; null when it never did.",
+            "title": "Publishing Started At"
+          },
+          "publishing_unconfirmed": {
+            "description": "True when its send started and its run ended with no outcome recorded: the platform may have the post or not, and only the account tells. False otherwise.",
+            "title": "Publishing Unconfirmed",
+            "type": "boolean"
           },
           "research_run_id": {
             "anyOf": [
@@ -1522,7 +1735,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/ContentItemStatus",
-            "description": "`proposed` while it waits for a person; `dry_run` once approved and recorded as it would have been sent (nothing is sent yet), `rejected`, `expired` or `failed`."
+            "description": "`proposed` while it waits for a person; once approved, `dry_run` when its proposal named no account (recorded as it would have been sent, nothing sent), or `publishing` while its send to the account is under way and `published` once the platform has it; `rejected`, `expired`, or `failed` (the run ended without settling it, or the platform refused the post: `publishing_failure` says why)."
           },
           "text": {
             "description": "The post as it would be sent.",
@@ -1536,6 +1749,7 @@
           "run_id",
           "platform",
           "status",
+          "publishing_unconfirmed",
           "text",
           "profile_version",
           "proposal_id",
@@ -1544,7 +1758,15 @@
           "research_run_id",
           "cost_usd",
           "created_at",
-          "settled_at"
+          "settled_at",
+          "publishing_started_at",
+          "published_account_id",
+          "published_username",
+          "external_id",
+          "external_url",
+          "published_at",
+          "publishing_cost_usd",
+          "publishing_failure"
         ],
         "title": "ContentItemResponse",
         "type": "object"
@@ -1553,6 +1775,8 @@
         "enum": [
           "proposed",
           "dry_run",
+          "publishing",
+          "published",
           "rejected",
           "expired",
           "failed"
@@ -2525,6 +2749,61 @@
         "title": "Platform",
         "type": "string"
       },
+      "PostDestinationResponse": {
+        "additionalProperties": false,
+        "description": "Where a proposed post goes once approved: an account, or nowhere (a dry run).",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The platform's identifier of the account; null for a dry run.",
+            "title": "Account Id"
+          },
+          "cost_estimate_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What publishing it is reckoned to cost, in USD; null for a dry run.",
+            "title": "Cost Estimate Usd"
+          },
+          "live": {
+            "description": "True when approving publishes the post from `username`'s account; false when it is recorded as a dry run and sent nowhere.",
+            "title": "Live",
+            "type": "boolean"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The account's username, without `@`; null for a dry run.",
+            "title": "Username"
+          }
+        },
+        "required": [
+          "live",
+          "account_id",
+          "username",
+          "cost_estimate_usd"
+        ],
+        "title": "PostDestinationResponse",
+        "type": "object"
+      },
       "Problem": {
         "additionalProperties": false,
         "description": "The body of every error response except request validation (422).",
@@ -3050,6 +3329,17 @@
             "title": "Payload",
             "type": "object"
           },
+          "post_destination": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostDestinationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a writing run's `publish_post`: where the post goes once approved. Null for any other action."
+          },
           "project_id": {
             "format": "uuid",
             "title": "Project Id",
@@ -3082,7 +3372,8 @@
           "expires_at",
           "decided_by",
           "decided_at",
-          "estimate_usd"
+          "estimate_usd",
+          "post_destination"
         ],
         "title": "ProposalResponse",
         "type": "object"
@@ -3096,6 +3387,20 @@
           "expired"
         ],
         "title": "ProposalStatus",
+        "type": "string"
+      },
+      "PublishingFailure": {
+        "description": "Why a post whose send started was not published, as a content item records it.",
+        "enum": [
+          "access_revoked",
+          "duplicate",
+          "too_long",
+          "media_refused",
+          "not_permitted",
+          "out_of_credits",
+          "refused"
+        ],
+        "title": "PublishingFailure",
         "type": "string"
       },
       "RejectedParametersResponse": {

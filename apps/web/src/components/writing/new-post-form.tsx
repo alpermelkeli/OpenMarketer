@@ -282,7 +282,8 @@ export function NewPostForm({
         <p className="text-sm text-pretty text-muted-foreground">
           The run writes from the approved profile: it plans the post, writes the texts, checks them in code and has the
           critic read them, then asks you in Approvals to approve the best one, with its image when one is chosen.
-          Nothing is sent to {writingPlatformLabel(form.platform)}: an approved post is recorded as a dry run.
+          Approving it publishes it from the project&rsquo;s connected X account; without one, it is recorded as a dry
+          run and sent nowhere.
         </p>
         <div>
           <Button type="submit" disabled={pending}>

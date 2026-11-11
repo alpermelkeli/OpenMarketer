@@ -68,7 +68,15 @@ export function WritingScreen({ projectId }: WritingScreenProps) {
           >
             Approvals
           </Link>{" "}
-          for you. Nothing is sent to a platform yet: an approved post is recorded as a dry run.
+          for you, with the account it would be published from. An approved post is published from the project&rsquo;s
+          connected X account; without one connected in{" "}
+          <Link
+            href={projectPageHref(projectId, "accounts")}
+            className="rounded-sm text-brand underline-offset-4 hover:underline"
+          >
+            Accounts
+          </Link>
+          , it is recorded as a dry run and sent nowhere.
         </p>
       </section>
 

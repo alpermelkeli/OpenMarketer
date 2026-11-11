@@ -23,6 +23,8 @@ from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.run_events import TOOL_CALLED, RunEvent
 from openmarketer_core.workflow_start import WorkflowStart
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
+from openmarketer_core.writing.writer_agent.progress import TARGET_CHOSEN
 
 STREAM_URL = "/v1/events/stream"
 
@@ -220,3 +222,26 @@ def test_a_cursor_of_the_stream_that_is_not_an_event_id_is_refused(
     quick_streams(app)
 
     assert client.get(STREAM_URL, params={"after": "x"}).status_code == 422
+
+
+def test_a_writing_runs_chosen_target_is_streamed_as_the_run_wrote_it(
+    client, services, sessions, scope, app
+):
+    quick_streams(app)
+    live = {"live": True, "username": "memoria_app", "cost_estimate_usd": "0.015"}
+    dry_run = {"live": False, "username": None, "cost_estimate_usd": None}
+    with transaction(sessions) as session:
+        append_events(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            run_kind=WRITING_RUN_KIND,
+            run_id=uuid.uuid4(),
+            events=[RunEvent(TARGET_CHOSEN, live), RunEvent(TARGET_CHOSEN, dry_run)],
+        )
+
+    sent = streamed_events(client.get(STREAM_URL, params={"after": 0}).text)
+
+    assert [event["event"] for event in sent] == [TARGET_CHOSEN, TARGET_CHOSEN]
+    assert [event["data"]["detail"] for event in sent] == [live, dry_run]
+    assert {event["data"]["run_kind"] for event in sent} == {WRITING_RUN_KIND}

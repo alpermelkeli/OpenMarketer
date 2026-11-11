@@ -57,6 +57,8 @@ export type ContentItem = Schemas["ContentItemResponse"];
 export type ContentItemDetail = Schemas["ContentItemDetailResponse"];
 export type ContentItemList = Schemas["ContentItemListResponse"];
 export type ContentItemStatus = Schemas["ContentItemStatus"];
+/** Why X refused a post whose send started. */
+export type PublishingFailure = Schemas["PublishingFailure"];
 
 /** A task of the orchestrator as a list shows it. */
 export type Task = Schemas["TaskResponse"];
@@ -98,6 +100,8 @@ export type Proposal = Schemas["ProposalResponse"];
 export type ProposalList = Schemas["ProposalListResponse"];
 export type ProposalStatus = Schemas["ProposalStatus"];
 export type ActionEffect = Schemas["ActionEffect"];
+/** Where a writer's proposed post goes once approved: an account, or nowhere (a dry run). */
+export type PostDestination = Schemas["PostDestinationResponse"];
 
 export type Chat = Schemas["ChatThreadResponse"];
 export type ChatList = Schemas["ChatThreadListResponse"];

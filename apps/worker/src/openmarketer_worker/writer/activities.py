@@ -6,11 +6,13 @@ engine: every failure is raised with a type that says whether another attempt is
 and with a message that may be stored and shown, and each can run twice without doing its work
 twice, because a transition to where a run or an item already is changes nothing.
 ``record_outcome`` settles the post and marks the run succeeded in one transaction, both or
-neither; it never records a post as sent: ``dry_run`` is reached only through the handler of
-``publish_post``, once a person approved the post, and ``record_outcome`` accepts it only for an
-item that handler recorded so, naming an approved proposal (core refuses the rest);
-``record_failure`` records the run failed with what its stored draft cost, which settles a post
-nobody decided on ``failed`` with it.
+neither; it never records a post as sent: ``published`` and ``dry_run`` are reached only through
+the handler of ``publish_post``, once a person approved the post, and ``record_outcome`` accepts
+them only for an item that handler recorded so, naming an approved proposal (core refuses the
+rest); ``record_failure`` records the run failed with what its stored draft cost, which settles
+a post nobody decided on ``failed`` with it. A post whose send started and was never confirmed
+stays ``publishing`` (core leaves it so: the platform may have it), and the run's error says
+that first, so whoever reads it checks the account before asking for the post again.
 
 None writes or stores a post: the steps of the graph and its two actions are the agent
 runtime's activities, with what ``writing.py`` hands them, and a run that is over is forgotten
@@ -57,6 +59,9 @@ from openmarketer_worker.writer.policy import WriterPolicy
 
 logger = logging.getLogger(__name__)
 
+# The ways a post ends that only ``publish_post``'s handler records, for an approved post.
+RECORDED_BY_THE_HANDLER = (ContentItemStatus.PUBLISHED, ContentItemStatus.DRY_RUN)
+
 
 class WriterActivities:
     def __init__(self, sessions: sessionmaker[Session], policy: WriterPolicy) -> None:
@@ -86,8 +91,9 @@ class WriterActivities:
         """Settle the run's post as it ended and mark the run succeeded, with what it cost.
 
         The item must be the run's own. A run that succeeded before records nothing again. A
-        post that ended ``dry_run`` must have been recorded so by ``publish_post``'s handler,
-        with the proposal a person approved: an outcome cannot record a post as sent.
+        post that ended ``published`` or ``dry_run`` must have been recorded so by
+        ``publish_post``'s handler, with the proposal a person approved: an outcome cannot
+        record a post as sent.
         """
         run = outcome.run
         with worded_failures(steps.WRITING_TEXTS, subject=subject_of(run.run_id)):
@@ -105,15 +111,17 @@ class WriterActivities:
                             f"content item {outcome.content_item_id} is not the post of "
                             f"writing run {run.run_id}",
                         )
-                    if status is ContentItemStatus.DRY_RUN:
-                        _require_recorded_as_sent(session, run, outcome.content_item_id)
-                    settle_content_item(
-                        session,
-                        workspace_id=run.workspace_id,
-                        project_id=run.project_id,
-                        item_id=outcome.content_item_id,
-                        status=status,
-                    )
+                    if status in RECORDED_BY_THE_HANDLER:
+                        _require_recorded_as_sent(session, run, outcome.content_item_id, status)
+                    if status is not ContentItemStatus.PUBLISHED:
+                        # Published is recorded by the handler alone, with the platform's post.
+                        settle_content_item(
+                            session,
+                            workspace_id=run.workspace_id,
+                            project_id=run.project_id,
+                            item_id=outcome.content_item_id,
+                            status=status,
+                        )
                     mark_run_succeeded(session, **scope_of(run), cost_usd=cost)
             except ProposalNotApproved as e:
                 raise failure(steps.WRITING_FAILED, str(e)) from None
@@ -132,10 +140,11 @@ class WriterActivities:
     def record_failure(self, failed: steps.RunFailure) -> None:
         """Mark the run failed with the reason and what its stored draft cost.
 
-        A post the run stored that nobody settled is settled ``failed`` with it. Nothing is
-        recorded for a run that is finished or does not exist. What the run spent before it
-        stored a draft is not known here (it is in the graph's state only), so a run that
-        failed before then is recorded as having cost nothing.
+        A post the run stored that nobody settled is settled ``failed`` with it; one whose send
+        started and was never confirmed stays ``publishing``, and the error recorded says so
+        first. Nothing is recorded for a run that is finished or does not exist. What the run
+        spent before it stored a draft is not known here (it is in the graph's state only), so
+        a run that failed before then is recorded as having cost nothing.
         """
         run = failed.run
         with worded_failures(steps.WRITING_TEXTS, subject=subject_of(run.run_id)):
@@ -143,35 +152,42 @@ class WriterActivities:
                 with transaction(self._sessions) as session:
                     stored = writing_run(session, **scope_of(run))
                     spent = Decimal(0)
+                    error = failed.error
                     if stored.content_item_id is not None:
-                        spent = content_item(
+                        item = content_item(
                             session,
                             workspace_id=run.workspace_id,
                             project_id=run.project_id,
                             item_id=stored.content_item_id,
-                        ).cost_usd
-                    mark_run_failed(session, **scope_of(run), error=failed.error, cost_usd=spent)
+                        )
+                        spent = item.cost_usd
+                        if item.status is ContentItemStatus.PUBLISHING:
+                            error = f"{steps.PUBLISHING_NOT_CONFIRMED}: {failed.error}"
+                    mark_run_failed(session, **scope_of(run), error=error, cost_usd=spent)
             except (WritingRunNotFound, WritingRunFinished, ContentItemNotFound) as e:
                 # Nothing to record: no such run for this workspace and project, or its post
                 # was settled and the run succeeded, or it failed before.
                 logger.info("failure of writing run %s not recorded: %s", run.run_id, e)
 
 
-def _require_recorded_as_sent(session: Session, run: WritingRunInput, item_id: uuid.UUID) -> None:
-    """Refuse for good a ``dry_run`` outcome for an item ``publish_post`` did not record so."""
+def _require_recorded_as_sent(
+    session: Session, run: WritingRunInput, item_id: uuid.UUID, status: ContentItemStatus
+) -> None:
+    """Refuse for good an outcome of ``status`` (``published`` or ``dry_run``) for an item
+    ``publish_post`` did not record so."""
     item = content_item(
         session, workspace_id=run.workspace_id, project_id=run.project_id, item_id=item_id
     )
-    if item.status is not ContentItemStatus.DRY_RUN or item.proposal_id is None:
+    if item.status is not status or item.proposal_id is None:
         raise failure(
             steps.WRITING_FAILED,
-            f"content item {item_id} was not recorded as a dry run of an approved post",
+            f"content item {item_id} was not recorded as {status.value} for an approved post",
         )
 
 
 def _settled_status(value: str) -> ContentItemStatus:
     """The status a run that succeeded settles its post as; anything else is refused."""
-    succeeding = (ContentItemStatus.DRY_RUN, ContentItemStatus.REJECTED, ContentItemStatus.EXPIRED)
+    succeeding = (*RECORDED_BY_THE_HANDLER, ContentItemStatus.REJECTED, ContentItemStatus.EXPIRED)
     for status in succeeding:
         if status.value == value:
             return status

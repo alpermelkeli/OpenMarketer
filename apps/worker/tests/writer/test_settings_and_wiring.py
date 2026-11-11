@@ -14,14 +14,24 @@ from temporalio.exceptions import ApplicationError
 
 from openmarketer_core.agent_runtime.actions import DEFAULT_APPROVAL_WAIT_SECONDS
 from openmarketer_core.llm_config import ConfigError, ModelRouter
+from openmarketer_core.social_accounts.catalog import SocialPlatform
 from openmarketer_core.writing.workflow_contract import WRITING_TASK_QUEUE, WritingRunInput
+from openmarketer_core.writing.writer_agent.definitions import PUBLISH_POST, agent
 from openmarketer_core.writing.writer_agent.rules import Limits
-from openmarketer_worker.agent_runtime.vocabulary import PROPOSE_ACTION, SETTLE_PROPOSAL
+from openmarketer_worker.agent_runtime.vocabulary import (
+    PROPOSE_ACTION,
+    RETRY_BACKOFF,
+    SETTLE_PROPOSAL,
+)
 from openmarketer_worker.settings import SettingsError
 from openmarketer_worker.writer import steps
-from openmarketer_worker.writer.policy import WriterPolicy, longest_writing_seconds
+from openmarketer_worker.writer.policy import (
+    LONGEST_PLATFORM_WAIT_SECONDS,
+    WriterPolicy,
+    longest_writing_seconds,
+)
 from openmarketer_worker.writer.settings import WriterSettings
-from openmarketer_worker.writer.wiring import require_the_writer_role
+from openmarketer_worker.writer.wiring import publishing_costs_of, require_the_writer_role
 from openmarketer_worker.writer.workflow import outcome_of
 
 MODELS = Path(__file__).resolve().parents[4] / "config" / "models.yaml"
@@ -117,6 +127,42 @@ def test_a_configuration_without_the_writer_stops_the_worker(tmp_path):
         require_the_writer_role(ModelRouter.from_file(path, env={}))
 
 
+def test_the_publishing_configuration_of_the_repository_is_read_by_default(monkeypatch):
+    monkeypatch.chdir(MODELS.parents[1])  # the worker runs from the repository's root
+
+    costs = publishing_costs_of({})
+
+    assert costs.estimate(SocialPlatform.X, with_image=False) > 0
+
+
+@pytest.mark.parametrize("content", ["version: 1\nplatforms: {}\n", "version: [\n"])
+def test_a_publishing_configuration_that_does_not_fit_stops_the_worker(tmp_path, content):
+    path = tmp_path / "publishing.yaml"
+    path.write_text(content)
+
+    with pytest.raises(ConfigError, match="publishing.yaml"):
+        publishing_costs_of({"PUBLISHING_CONFIG_PATH": str(path)})
+
+
+def test_longest_run_covers_the_longest_waits_a_platform_may_ask_for_between_publishing():
+    publish = agent.policies[PUBLISH_POST]
+    waits = (publish.max_attempts - 1) * LONGEST_PLATFORM_WAIT_SECONDS
+    without_publishing = longest_writing_seconds(WriterPolicy()) - (
+        publish.max_attempts * publish.attempt_timeout_seconds + waits
+    )
+
+    assert without_publishing > DEFAULT_APPROVAL_WAIT_SECONDS
+
+
+def test_publishing_is_tried_through_a_quarter_of_an_hour_of_rate_limit():
+    publish = agent.policies[PUBLISH_POST]
+    waits = sum(
+        publish.retry_after_seconds * RETRY_BACKOFF**n for n in range(publish.max_attempts - 1)
+    )
+
+    assert waits >= 15 * 60
+
+
 def test_a_configuration_without_the_critic_is_enough_for_the_writer(tmp_path):
     config = yaml.safe_load(MODELS.read_text())
     del config["roles"]["critic"]
@@ -127,7 +173,7 @@ def test_a_configuration_without_the_critic_is_enough_for_the_writer(tmp_path):
 
 
 # ------------------------------------------------------------------ the result, as read
-@pytest.mark.parametrize("status", ["dry_run", "rejected", "expired"])
+@pytest.mark.parametrize("status", ["published", "dry_run", "rejected", "expired"])
 def test_a_post_a_person_decided_on_is_settled_as_it_ended(status):
     output = {"status": status, "content_item_id": ITEM, "cost_usd": "0.03", "error": ""}
 
