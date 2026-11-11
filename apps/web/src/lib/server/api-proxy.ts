@@ -29,8 +29,9 @@
  * the image's 8 MiB in base64, with room for the rest of the JSON. A body is refused as
  * soon as it passes its route's limit, before it is read whole.
  *
- * A request body can hold a secret (a credential being stored). It is passed on to
- * the API and nowhere else: nothing here logs it or puts it in an answer.
+ * A request body can hold a secret (a credential being stored, or what a platform sent
+ * back when a person connected an account). It is passed on to the API and nowhere else:
+ * nothing here logs it or puts it in an answer.
  */
 
 import type { paths } from "@/lib/api/schema";
@@ -70,6 +71,8 @@ const VERSION = "[1-9][0-9]{0,8}";
 const CREDENTIAL_NAME = "[a-z][a-z0-9_]{0,63}";
 // The form of a tier's and a role's name in the model configuration, as the API matches it.
 const SETTING_KEY = "[a-z][a-z0-9_]{0,63}";
+// The form of a social platform's slug (`x`); the API answers 422 for one it does not know.
+const PLATFORM = "[a-z][a-z0-9]{0,31}";
 
 // The whole of a Host header that names this machine, as the API itself matches it.
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i;
@@ -109,7 +112,8 @@ function route(
     )
     .replace(/\{version\}/g, VERSION)
     .replace(/\{name\}/g, CREDENTIAL_NAME)
-    .replace(/\{(tier|role)\}/g, SETTING_KEY);
+    .replace(/\{(tier|role)\}/g, SETTING_KEY)
+    .replace(/\{platform\}/g, PLATFORM);
   return {
     method,
     template,
@@ -197,6 +201,10 @@ export const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   route("GET", "/v1/projects/{project_id}/proposals", PAGED),
   route("POST", "/v1/projects/{project_id}/proposals/{proposal_id}/approval"),
   route("POST", "/v1/projects/{project_id}/proposals/{proposal_id}/rejection"),
+  route("GET", "/v1/projects/{project_id}/social-accounts"),
+  route("POST", "/v1/projects/{project_id}/social-accounts/{platform}/connect"),
+  route("DELETE", "/v1/projects/{project_id}/social-accounts/{platform}"),
+  route("POST", "/v1/social-accounts/{platform}/callback"),
   route("GET", "/v1/proposals", PAGED),
   route("GET", "/v1/events/stream", STREAM),
   route("GET", "/v1/settings/credentials"),

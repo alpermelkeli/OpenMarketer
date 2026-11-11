@@ -249,3 +249,17 @@ describe("what a task's event refreshes", () => {
     }
   });
 });
+
+describe("the key of a project's accounts", () => {
+  it("sits under the project, so deleting the project drops it", () => {
+    const scope = queryKeys.projectScope(PROJECT);
+    expect(queryKeys.socialAccounts(PROJECT).slice(0, scope.length)).toEqual(scope);
+  });
+
+  it("is no other key's prefix, so reading it again reads nothing else", () => {
+    const accounts = queryKeys.socialAccounts(PROJECT);
+    for (const key of [queryKeys.project(PROJECT), queryKeys.proposals(PROJECT), queryKeys.credentials()]) {
+      expect(key.slice(0, accounts.length)).not.toEqual(accounts);
+    }
+  });
+});

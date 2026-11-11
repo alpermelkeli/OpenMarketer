@@ -2,6 +2,7 @@
 
 import {
   ArrowLeftIcon,
+  AtSignIcon,
   CheckSquareIcon,
   FileTextIcon,
   ImageIcon,
@@ -36,6 +37,7 @@ const PAGE_ICONS = {
   studio: ImageIcon,
   writing: PenLineIcon,
   approvals: CheckSquareIcon,
+  accounts: AtSignIcon,
 };
 
 type ProjectNavProps = { projectId: string; pathname: string };

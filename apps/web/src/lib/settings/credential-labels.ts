@@ -13,6 +13,8 @@ export type CredentialLabel = {
   purpose: string;
   /** What no longer works once its value is removed. */
   withoutIt: string;
+  /** What has to be set up outside the dashboard for it to work, when there is something. */
+  setup?: string;
 };
 
 // A map, not an object: a name such as "constructor" must not find something inherited.
@@ -44,6 +46,26 @@ const KNOWN = new Map<string, CredentialLabel>([
         "Lets an analysis clone private repositories on GitLab. Read-only repository access (`read_repository`) is enough, and it is sent only to gitlab.com, or to the host the installation's `GITLAB_HOST` names.",
       withoutIt:
         "Private repositories on that GitLab host can no longer be cloned, so their analyses fail. Public repositories are not affected.",
+    },
+  ],
+  [
+    "x_api_key",
+    {
+      label: "X API key",
+      purpose:
+        "The Consumer Key of your X app, listed under OAuth 1.0 Keys in the X developer portal. With the X API secret it lets a project connect its X account. It is sent only to X.",
+      withoutIt: "No project can connect an X account until a key is set again.",
+      setup:
+        "In the X developer portal, give the app Read and write permission and register `http://127.0.0.1:3000/connections/x/callback` as its callback URL (if the API's `DASHBOARD_URL` is set, that address followed by `/connections/x/callback`). X sends the browser back to that address, so open the dashboard at http://127.0.0.1:3000 rather than at localhost.",
+    },
+  ],
+  [
+    "x_api_secret",
+    {
+      label: "X API secret",
+      purpose:
+        "The Consumer Secret of your X app, listed with its Consumer Key under OAuth 1.0 Keys. It signs the requests that connect a project's X account and is never sent itself.",
+      withoutIt: "No project can connect an X account until a secret is set again.",
     },
   ],
 ]);

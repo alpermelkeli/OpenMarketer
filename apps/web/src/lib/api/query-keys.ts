@@ -70,6 +70,9 @@ export const queryKeys = {
     ["projects", "one", projectId, "versions", "list"] as const,
   profileVersion: (projectId: string, version: number) =>
     ["projects", "one", projectId, "versions", "one", version] as const,
+  /** The project's connected accounts and the platforms one can be connected on. Never a token. */
+  socialAccounts: (projectId: string) =>
+    ["projects", "one", projectId, "social-accounts"] as const,
   proposals: (projectId: string) =>
     ["projects", "one", projectId, "proposals", "list"] as const,
   /** Every proposal of the workspace that waits for a person, wherever it is: the notifications. */
