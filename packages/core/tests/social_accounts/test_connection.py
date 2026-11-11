@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from openmarketer_core.credentials.catalog import X_API_KEY, X_API_SECRET
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.credentials.resolution import EncryptionKeyMissing, set_credential
 from openmarketer_core.db.models import (
@@ -21,7 +22,7 @@ from openmarketer_core.db.models import (
     Workspace,
 )
 from openmarketer_core.db.projects import ProjectNotFound, create_project
-from openmarketer_core.social_accounts.catalog import AccountDescription, SocialPlatform
+from openmarketer_core.social_accounts.catalog import AccountDescription, SocialPlatform, X
 from openmarketer_core.social_accounts.connection import (
     AuthorizationStart,
     AuthorizedAccount,
@@ -31,8 +32,10 @@ from openmarketer_core.social_accounts.connection import (
     ConnectionSecretUnreadable,
     PlatformApp,
     PlatformAppNotSet,
+    PlatformReadiness,
     abandon_connection,
     account_tokens,
+    connectable_platforms,
     disconnect,
     finish_connection,
     list_accounts,
@@ -133,6 +136,7 @@ def finish(session, workspace_id, platform, cipher, state=STATE, environ=ENVIRON
         session,
         environ,
         workspace_id=workspace_id,
+        platform=SocialPlatform.X,
         state=state,
         grant=VERIFIER,
         connected_by=OWNER,
@@ -324,10 +328,81 @@ def test_finish_without_an_encryption_key_is_refused(
 
 def test_abandoned_attempt_cannot_be_finished(session, workspace_id, project_id, platform, cipher):
     start(session, workspace_id, project_id, platform, cipher)
-    assert abandon_connection(session, workspace_id=workspace_id, state=STATE) is True
-    assert abandon_connection(session, workspace_id=workspace_id, state=STATE) is False
+    assert abandon(session, workspace_id) == project_id
+    assert abandon(session, workspace_id) is None
     with pytest.raises(ConnectionAttemptNotFound):
         finish(session, workspace_id, platform, cipher)
+
+
+def abandon(session, workspace_id):
+    return abandon_connection(
+        session, workspace_id=workspace_id, platform=SocialPlatform.X, state=STATE
+    )
+
+
+def started_on_another_platform(session) -> None:
+    """Move the attempts to a platform the catalog does not have yet, as a second one would."""
+    session.execute(
+        text(
+            "ALTER TABLE social_connection_attempt"
+            " DROP CONSTRAINT ck_social_connection_attempt_platform"
+        )
+    )
+    session.execute(text("UPDATE social_connection_attempt SET platform = 'linkedin'"))
+
+
+def test_answer_from_another_platform_than_the_attempt_s_is_not_found(
+    session, workspace_id, project_id, platform, cipher
+):
+    start(session, workspace_id, project_id, platform, cipher)
+    started_on_another_platform(session)
+    with pytest.raises(ConnectionAttemptNotFound):
+        finish(session, workspace_id, platform, cipher)
+    assert platform.finishes == []
+    assert session.scalar(select(SocialConnectionAttemptRecord.state)) == STATE
+
+
+def test_decline_from_another_platform_than_the_attempt_s_forgets_nothing(
+    session, workspace_id, project_id, platform, cipher
+):
+    start(session, workspace_id, project_id, platform, cipher)
+    started_on_another_platform(session)
+    assert abandon(session, workspace_id) is None
+    assert session.scalar(select(SocialConnectionAttemptRecord.state)) == STATE
+
+
+# ------------------------------------------------------------- readiness
+def test_platform_whose_app_is_set_is_ready(session, workspace_id):
+    assert connectable_platforms(session, ENVIRON, workspace_id=workspace_id) == [
+        PlatformReadiness(platform=X, missing=())
+    ]
+
+
+def test_platform_names_the_app_credentials_still_to_set(session, workspace_id):
+    [readiness] = connectable_platforms(
+        session, {"X_API_SECRET": APP_SECRET}, workspace_id=workspace_id
+    )
+    assert (readiness.ready, readiness.missing) == (False, (X_API_KEY,))
+
+
+def test_app_credentials_stored_from_the_dashboard_count(session, workspace_id, cipher):
+    for name, value in (("x_api_key", APP_KEY), ("x_api_secret", APP_SECRET)):
+        set_credential(
+            session,
+            {},
+            workspace_id=workspace_id,
+            name=name,
+            value=value,
+            set_by=OWNER,
+            cipher=cipher,
+        )
+    [readiness] = connectable_platforms(session, {}, workspace_id=workspace_id)
+    assert readiness.ready
+
+
+def test_platform_with_no_app_credential_misses_both(session, workspace_id):
+    [readiness] = connectable_platforms(session, {}, workspace_id=workspace_id)
+    assert readiness.missing == (X_API_KEY, X_API_SECRET)
 
 
 # ------------------------------------------------------------- reconnect

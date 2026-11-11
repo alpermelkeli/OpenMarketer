@@ -6,7 +6,8 @@ runs: it reads the settings and attaches the database, the workflow starter,
 the environment, the cipher credentials are stored with, the model
 configuration, the provider's catalogue of models, the object storage the pages
 of deleted research runs are removed from, the object storage the studio's
-images are read from and removed from, and whether its turns are traced to
+images are read from and removed from, the dashboard's origin a social
+account's connection comes back to, and whether its turns are traced to
 Langfuse. Neither connects to anything: the database, the workflow server and
 the object storage are reached when a request first needs them.
 
@@ -42,6 +43,7 @@ from openmarketer_api.routes import (
     proposals,
     repository_images,
     research,
+    social_accounts,
     studio,
     tasks,
     writing,
@@ -87,11 +89,14 @@ def create_app() -> FastAPI:
         model_settings,
         analysis_settings,
         creative_budget,
+        social_accounts,
     ):
         workspace_routes.include_router(resource.router)
     # Beside the per-project views: every pending proposal of the workspace, for the
     # dashboard's notifications wherever the person is.
     workspace_routes.include_router(proposals.workspace_router)
+    # Where a platform's answer to a connection lands, found by the attempt rather than a project.
+    workspace_routes.include_router(social_accounts.callback_router)
     app.include_router(workspace_routes)
     return app
 
@@ -111,5 +116,6 @@ def app_from_env() -> FastAPI:
         page_store=S3PageStore.from_env(os.environ),
         asset_store=S3AssetStore.from_env(os.environ),
         tracing=tracing,
+        dashboard_url=settings.dashboard_url,
     )
     return app

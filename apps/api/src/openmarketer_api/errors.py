@@ -14,6 +14,11 @@ like a field of the wrong type.
 A chat turn the agent gave no answer for is answered with a fixed message: the
 agent's own wording of a failed turn may repeat what the model sent.
 
+What a social platform answered is never in an error: core's messages about a
+connection say which step failed and the HTTP status, and nothing of the answer
+or of a token. A platform that refused a step is a 400; one that could not be
+reached, or answered something unusable, a 502.
+
 An error body carries what a client needs to act on it as a field of its own,
 never inside the message: ``existing_project_id`` with ``project_already_exists``.
 """
@@ -86,6 +91,15 @@ from openmarketer_core.repository_analysis.repository_images.uploads import Uplo
 from openmarketer_core.repository_analysis.request import AnalysisNotStarted
 from openmarketer_core.research.page_store import PageStoreUnavailable
 from openmarketer_core.research.request import ResearchNotStarted
+from openmarketer_core.social_accounts.catalog import UnknownPlatform
+from openmarketer_core.social_accounts.connection import (
+    AuthorizationRefused,
+    AuthorizationUnavailable,
+    ConnectionAttemptExpired,
+    ConnectionAttemptNotFound,
+    ConnectionSecretUnreadable,
+    PlatformAppNotSet,
+)
 from openmarketer_core.studio.asset_store import AssetStoreUnavailable
 from openmarketer_core.studio.request import StudioNotStarted
 from openmarketer_core.workspace_settings.analysis_limits import AnalysisLimitsRefused
@@ -128,6 +142,14 @@ class ErrorCode(StrEnum):
     CREDENTIAL_NOT_FOUND = "credential_not_found"
     PROPOSAL_NOT_FOUND = "proposal_not_found"
     TIER_NOT_FOUND = "tier_not_found"
+    PLATFORM_NOT_FOUND = "platform_not_found"
+    SOCIAL_ACCOUNT_NOT_FOUND = "social_account_not_found"
+    CONNECTION_NOT_FOUND = "connection_not_found"
+    CONNECTION_EXPIRED = "connection_expired"
+    AUTHORIZATION_REFUSED = "authorization_refused"
+    PLATFORM_APP_NOT_SET = "platform_app_not_set"
+    CONNECTION_SECRET_UNREADABLE = "connection_secret_unreadable"
+    PLATFORM_UNAVAILABLE = "platform_unavailable"
     ROLE_NOT_FOUND = "role_not_found"
     PROJECT_ALREADY_EXISTS = "project_already_exists"
     ANALYSIS_ALREADY_RUNNING = "analysis_already_running"
@@ -166,6 +188,10 @@ class ErrorCode(StrEnum):
 
 class ProfileNotFound(Exception):
     """The project has no draft, or no approved, profile to return."""
+
+
+class SocialAccountNotFound(Exception):
+    """The project has no account connected on the platform."""
 
 
 class Problem(BaseModel):
@@ -209,6 +235,13 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     ProposalNotFound: (404, ErrorCode.PROPOSAL_NOT_FOUND),
     UnknownTier: (404, ErrorCode.TIER_NOT_FOUND),
     UnknownRole: (404, ErrorCode.ROLE_NOT_FOUND),
+    UnknownPlatform: (404, ErrorCode.PLATFORM_NOT_FOUND),
+    SocialAccountNotFound: (404, ErrorCode.SOCIAL_ACCOUNT_NOT_FOUND),
+    ConnectionAttemptNotFound: (404, ErrorCode.CONNECTION_NOT_FOUND),
+    ConnectionAttemptExpired: (410, ErrorCode.CONNECTION_EXPIRED),
+    AuthorizationRefused: (400, ErrorCode.AUTHORIZATION_REFUSED),
+    PlatformAppNotSet: (409, ErrorCode.PLATFORM_APP_NOT_SET),
+    ConnectionSecretUnreadable: (409, ErrorCode.CONNECTION_SECRET_UNREADABLE),
     AnalysisAlreadyRunning: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProjectHasUnfinishedRun: (409, ErrorCode.ANALYSIS_ALREADY_RUNNING),
     ProjectHasUnfinishedResearch: (409, ErrorCode.RESEARCH_UNFINISHED),
@@ -241,6 +274,7 @@ _DOMAIN_ERRORS: dict[type[Exception], tuple[int, ErrorCode]] = {
     PageStoreUnavailable: (503, ErrorCode.STORAGE_UNAVAILABLE),
     AssetStoreUnavailable: (503, ErrorCode.STORAGE_UNAVAILABLE),
     LLMError: (503, ErrorCode.MODEL_UNAVAILABLE),
+    AuthorizationUnavailable: (502, ErrorCode.PLATFORM_UNAVAILABLE),
     TooManyStreams: (503, ErrorCode.TOO_MANY_STREAMS),
 }
 

@@ -1014,6 +1014,194 @@
         "title": "ChosenCreativeBudgetResponse",
         "type": "object"
       },
+      "ConnectablePlatformResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "missing_credentials": {
+            "description": "The app's credentials still to set; empty when `ready`.",
+            "items": {
+              "$ref": "#/components/schemas/MissingCredentialResponse"
+            },
+            "title": "Missing Credentials",
+            "type": "array"
+          },
+          "name": {
+            "description": "The name a person knows the platform by.",
+            "title": "Name",
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/SocialPlatform"
+          },
+          "ready": {
+            "description": "Whether the installation's app on the platform has its credentials, set or stored. Connecting while it has not is answered 409 `platform_app_not_set`.",
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "platform",
+          "name",
+          "ready",
+          "missing_credentials"
+        ],
+        "title": "ConnectablePlatformResponse",
+        "type": "object"
+      },
+      "ConnectedAccountResponse": {
+        "additionalProperties": false,
+        "description": "A project's account on a platform, as the platform described it; never its token.",
+        "properties": {
+          "account_id": {
+            "description": "The platform's identifier of the account.",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "connected_at": {
+            "description": "When this account was connected to the project.",
+            "format": "date-time",
+            "title": "Connected At",
+            "type": "string"
+          },
+          "connected_by": {
+            "format": "uuid",
+            "title": "Connected By",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "picture_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picture Url"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/SocialPlatform"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When this account was last authorized.",
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "platform",
+          "account_id",
+          "username",
+          "display_name",
+          "picture_url",
+          "connected_by",
+          "connected_at",
+          "updated_at"
+        ],
+        "title": "ConnectedAccountResponse",
+        "type": "object"
+      },
+      "ConnectionCallbackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "grant": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the person's agreement brought. X: the `oauth_verifier`. Left out when the person declined, which forgets the connection.",
+            "title": "Grant"
+          },
+          "state": {
+            "description": "What the platform names the connection by. X: the `oauth_token` of the callback, or its `denied` when the person cancelled.",
+            "format": "password",
+            "title": "State",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "ConnectionCallbackRequest",
+        "type": "object"
+      },
+      "ConnectionCallbackResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConnectedAccountResponse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The account connected; null when the person declined."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ConnectionOutcome"
+          },
+          "project_id": {
+            "description": "The project the connection was started for, connected or declined.",
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "project_id",
+          "account"
+        ],
+        "title": "ConnectionCallbackResponse",
+        "type": "object"
+      },
+      "ConnectionOutcome": {
+        "enum": [
+          "connected",
+          "declined"
+        ],
+        "title": "ConnectionOutcome",
+        "type": "string"
+      },
+      "ConnectionStartResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authorize_url": {
+            "description": "The platform's page where the person agrees; send the browser there.",
+            "title": "Authorize Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorize_url"
+        ],
+        "title": "ConnectionStartResponse",
+        "type": "object"
+      },
       "ContentItemDetailResponse": {
         "additionalProperties": false,
         "description": "A post with the record of how it was written, as the worker stored it.",
@@ -1626,6 +1814,14 @@
           "credential_not_found",
           "proposal_not_found",
           "tier_not_found",
+          "platform_not_found",
+          "social_account_not_found",
+          "connection_not_found",
+          "connection_expired",
+          "authorization_refused",
+          "platform_app_not_set",
+          "connection_secret_unreadable",
+          "platform_unavailable",
           "role_not_found",
           "project_already_exists",
           "analysis_already_running",
@@ -2141,6 +2337,27 @@
           "created_at"
         ],
         "title": "MediaAssetVersionResponse",
+        "type": "object"
+      },
+      "MissingCredentialResponse": {
+        "additionalProperties": false,
+        "description": "A credential of the installation's app on a platform that is neither set nor stored.",
+        "properties": {
+          "environment_variable": {
+            "title": "Environment Variable",
+            "type": "string"
+          },
+          "name": {
+            "description": "The credential's name in Settings, Credentials.",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "environment_variable"
+        ],
+        "title": "MissingCredentialResponse",
         "type": "object"
       },
       "ModelCatalogResponse": {
@@ -3828,6 +4045,47 @@
         ],
         "title": "SettingChangeResponse",
         "type": "object"
+      },
+      "SocialAccountsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "accounts": {
+            "description": "The project's connected accounts, one per platform at most, by platform.",
+            "items": {
+              "$ref": "#/components/schemas/ConnectedAccountResponse"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "can_connect": {
+            "description": "Whether this API has an `ENCRYPTION_KEY`, which an account's token is stored under. Without one, connecting is answered 409 `encryption_key_missing`.",
+            "title": "Can Connect",
+            "type": "boolean"
+          },
+          "platforms": {
+            "description": "Every platform an account can be connected on.",
+            "items": {
+              "$ref": "#/components/schemas/ConnectablePlatformResponse"
+            },
+            "title": "Platforms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "accounts",
+          "platforms",
+          "can_connect"
+        ],
+        "title": "SocialAccountsResponse",
+        "type": "object"
+      },
+      "SocialPlatform": {
+        "description": "A platform an account can be connected on, by its slug.",
+        "enum": [
+          "x"
+        ],
+        "title": "SocialPlatform",
+        "type": "string"
       },
       "StoredCredentialResponse": {
         "additionalProperties": false,
@@ -9711,6 +9969,257 @@
         ]
       }
     },
+    "/v1/projects/{project_id}/social-accounts": {
+      "get": {
+        "description": "The project's connected accounts, and every platform one can be connected on.\n\n404 for a project the workspace does not have.",
+        "operationId": "listSocialAccounts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocialAccountsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List All",
+        "tags": [
+          "social accounts"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/social-accounts/{platform}": {
+      "delete": {
+        "description": "Forget the project's account on the platform and its token.\n\n404 for a project the workspace does not have, or when no account is connected on the\nplatform. The token is not revoked on the platform.",
+        "operationId": "disconnectSocialAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SocialPlatform"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Remove",
+        "tags": [
+          "social accounts"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/social-accounts/{platform}/connect": {
+      "post": {
+        "description": "Start connecting the project's account on the platform; where to send the person.\n\nThe platform sends the person back to the dashboard's\n`/connections/{platform}/callback`, which must be registered in the platform's app.\n404 for a project the workspace does not have; 409 without an `ENCRYPTION_KEY` or while\na credential of the platform's app is not set; 400 when the platform refuses (often a\nwrong app key, or a callback URL the app does not allow); 502 when it cannot be reached.",
+        "operationId": "connectSocialAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SocialPlatform"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Connect",
+        "tags": [
+          "social accounts"
+        ]
+      }
+    },
     "/v1/projects/{project_id}/studio-runs": {
       "get": {
         "description": "The project's studio runs as they are now, newest first, one page at a time.",
@@ -11616,6 +12125,128 @@
         "summary": "Set Tier",
         "tags": [
           "settings"
+        ]
+      }
+    },
+    "/v1/social-accounts/{platform}/callback": {
+      "post": {
+        "description": "Finish the connection the platform answered, or forget it when the person declined.\n\n404 when the workspace started no such connection on this platform, or it was finished\nor declined already, 410 when it was started too long ago (both: connect again); 409\nwithout an `ENCRYPTION_KEY`, when a credential of the platform's app is not set, or when\na secret of the connection can no longer be read; 400 when the platform refuses the\ngrant; 502 when it cannot be reached.",
+        "operationId": "finishSocialAccountConnection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "platform",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SocialPlatform"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionCallbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionCallbackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Gone"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Bad Gateway"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Callback",
+        "tags": [
+          "social accounts"
         ]
       }
     }

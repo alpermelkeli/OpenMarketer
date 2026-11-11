@@ -58,7 +58,9 @@ def attempts(session) -> int:
 
 def test_attempt_is_taken_with_its_project_and_secret(session, workspace_id, project_id):
     store(session, workspace_id, project_id)
-    taken = take_connection_attempt(session, workspace_id=workspace_id, state="request-token")
+    taken = take_connection_attempt(
+        session, workspace_id=workspace_id, platform=SocialPlatform.X, state="request-token"
+    )
     assert taken == TakenAttempt(
         project_id=project_id, platform=SocialPlatform.X, secret=SECRET, expired=False
     )
@@ -66,8 +68,12 @@ def test_attempt_is_taken_with_its_project_and_secret(session, workspace_id, pro
 
 def test_attempt_is_taken_once(session, workspace_id, project_id):
     store(session, workspace_id, project_id)
-    take_connection_attempt(session, workspace_id=workspace_id, state="request-token")
-    again = take_connection_attempt(session, workspace_id=workspace_id, state="request-token")
+    take_connection_attempt(
+        session, workspace_id=workspace_id, platform=SocialPlatform.X, state="request-token"
+    )
+    again = take_connection_attempt(
+        session, workspace_id=workspace_id, platform=SocialPlatform.X, state="request-token"
+    )
     assert again is None
     assert attempts(session) == 0
 
@@ -79,14 +85,42 @@ def test_attempt_expires_after_its_lifetime_by_the_databases_clock(
     expires_at = session.scalar(select(SocialConnectionAttemptRecord.expires_at))
     assert expires_at == session.scalar(select(func.now())) + LIFETIME
     session.execute(text("UPDATE social_connection_attempt SET expires_at = now()"))
-    taken = take_connection_attempt(session, workspace_id=workspace_id, state="request-token")
+    taken = take_connection_attempt(
+        session, workspace_id=workspace_id, platform=SocialPlatform.X, state="request-token"
+    )
     assert taken is not None and taken.expired
 
 
 def test_attempt_of_another_workspace_is_not_found_and_stays(session, workspace_id, project_id):
     store(session, workspace_id, project_id)
     other = new_workspace(session)
-    assert take_connection_attempt(session, workspace_id=other, state="request-token") is None
+    assert (
+        take_connection_attempt(
+            session, workspace_id=other, platform=SocialPlatform.X, state="request-token"
+        )
+        is None
+    )
+    assert attempts(session) == 1
+
+
+def on_another_platform(session: Session) -> None:
+    """Move every attempt to a platform the catalog does not have yet, as a second one would."""
+    session.execute(
+        text(
+            "ALTER TABLE social_connection_attempt"
+            " DROP CONSTRAINT ck_social_connection_attempt_platform"
+        )
+    )
+    session.execute(text("UPDATE social_connection_attempt SET platform = 'linkedin'"))
+
+
+def test_attempt_of_another_platform_is_not_found_and_stays(session, workspace_id, project_id):
+    store(session, workspace_id, project_id)
+    on_another_platform(session)
+    taken = take_connection_attempt(
+        session, workspace_id=workspace_id, platform=SocialPlatform.X, state="request-token"
+    )
+    assert taken is None
     assert attempts(session) == 1
 
 
@@ -124,11 +158,15 @@ def test_storing_and_taking_wait_for_other_writes_in_the_workspace_first(
     store(session, workspace_id, project_id)
     assert "FOR UPDATE" in statements[0]
     statements.clear()
-    take_connection_attempt(session, workspace_id=workspace_id, state="request-token")
+    take_connection_attempt(
+        session, workspace_id=workspace_id, platform=SocialPlatform.X, state="request-token"
+    )
     assert "FOR UPDATE" in statements[0]
 
 
 def test_taken_attempt_does_not_show_its_secret(session, workspace_id, project_id):
     store(session, workspace_id, project_id)
-    taken = take_connection_attempt(session, workspace_id=workspace_id, state="request-token")
+    taken = take_connection_attempt(
+        session, workspace_id=workspace_id, platform=SocialPlatform.X, state="request-token"
+    )
     assert repr(SECRET.ciphertext) not in repr(taken)

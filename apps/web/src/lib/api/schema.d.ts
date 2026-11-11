@@ -863,6 +863,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/projects/{project_id}/social-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List All
+         * @description The project's connected accounts, and every platform one can be connected on.
+         *
+         *     404 for a project the workspace does not have.
+         */
+        get: operations["listSocialAccounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/social-accounts/{platform}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove
+         * @description Forget the project's account on the platform and its token.
+         *
+         *     404 for a project the workspace does not have, or when no account is connected on the
+         *     platform. The token is not revoked on the platform.
+         */
+        delete: operations["disconnectSocialAccount"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/projects/{project_id}/social-accounts/{platform}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect
+         * @description Start connecting the project's account on the platform; where to send the person.
+         *
+         *     The platform sends the person back to the dashboard's
+         *     `/connections/{platform}/callback`, which must be registered in the platform's app.
+         *     404 for a project the workspace does not have; 409 without an `ENCRYPTION_KEY` or while
+         *     a credential of the platform's app is not set; 400 when the platform refuses (often a
+         *     wrong app key, or a callback URL the app does not allow); 502 when it cannot be reached.
+         */
+        post: operations["connectSocialAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects/{project_id}/studio-runs": {
         parameters: {
             query?: never;
@@ -1297,6 +1368,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/social-accounts/{platform}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Callback
+         * @description Finish the connection the platform answered, or forget it when the person declined.
+         *
+         *     404 when the workspace started no such connection on this platform, or it was finished
+         *     or declined already, 410 when it was started too long ago (both: connect again); 409
+         *     without an `ENCRYPTION_KEY`, when a credential of the platform's app is not set, or when
+         *     a secret of the connection can no longer be read; 400 when the platform refuses the
+         *     grant; 502 when it cannot be reached.
+         */
+        post: operations["finishSocialAccountConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1721,6 +1818,104 @@ export interface components {
             /** Monthly Usd */
             monthly_usd: number | null;
         };
+        /** ConnectablePlatformResponse */
+        ConnectablePlatformResponse: {
+            /**
+             * Missing Credentials
+             * @description The app's credentials still to set; empty when `ready`.
+             */
+            missing_credentials: components["schemas"]["MissingCredentialResponse"][];
+            /**
+             * Name
+             * @description The name a person knows the platform by.
+             */
+            name: string;
+            platform: components["schemas"]["SocialPlatform"];
+            /**
+             * Ready
+             * @description Whether the installation's app on the platform has its credentials, set or stored. Connecting while it has not is answered 409 `platform_app_not_set`.
+             */
+            ready: boolean;
+        };
+        /**
+         * ConnectedAccountResponse
+         * @description A project's account on a platform, as the platform described it; never its token.
+         */
+        ConnectedAccountResponse: {
+            /**
+             * Account Id
+             * @description The platform's identifier of the account.
+             */
+            account_id: string;
+            /**
+             * Connected At
+             * Format: date-time
+             * @description When this account was connected to the project.
+             */
+            connected_at: string;
+            /**
+             * Connected By
+             * Format: uuid
+             */
+            connected_by: string;
+            /** Display Name */
+            display_name: string;
+            /** Picture Url */
+            picture_url: string | null;
+            platform: components["schemas"]["SocialPlatform"];
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             * @description When this account was last authorized.
+             */
+            updated_at: string;
+            /** Username */
+            username: string;
+        };
+        /** ConnectionCallbackRequest */
+        ConnectionCallbackRequest: {
+            /**
+             * Grant
+             * @description What the person's agreement brought. X: the `oauth_verifier`. Left out when the person declined, which forgets the connection.
+             */
+            grant?: string | null;
+            /**
+             * State
+             * Format: password
+             * @description What the platform names the connection by. X: the `oauth_token` of the callback, or its `denied` when the person cancelled.
+             */
+            state: string;
+        };
+        /** ConnectionCallbackResponse */
+        ConnectionCallbackResponse: {
+            /** @description The account connected; null when the person declined. */
+            account: components["schemas"]["ConnectedAccountResponse"] | null;
+            outcome: components["schemas"]["ConnectionOutcome"];
+            /**
+             * Project Id
+             * Format: uuid
+             * @description The project the connection was started for, connected or declined.
+             */
+            project_id: string;
+        };
+        /**
+         * ConnectionOutcome
+         * @enum {string}
+         */
+        ConnectionOutcome: "connected" | "declined";
+        /** ConnectionStartResponse */
+        ConnectionStartResponse: {
+            /**
+             * Authorize Url
+             * @description The platform's page where the person agrees; send the browser there.
+             */
+            authorize_url: string;
+        };
         /**
          * ContentItemDetailResponse
          * @description A post with the record of how it was written, as the worker stored it.
@@ -1995,7 +2190,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "writing_run_not_found" | "content_item_not_found" | "task_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "writing_run_unfinished" | "task_unfinished" | "media_asset_decided" | "media_asset_not_usable" | "research_not_usable" | "studio_run_used_by_post" | "research_used_by_post" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "writing_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
+        ErrorCode: "invalid_repository_url" | "repository_image_refused" | "repository_image_too_large" | "too_many_repository_images" | "not_local_request" | "project_not_found" | "analysis_not_found" | "research_not_found" | "research_report_not_found" | "studio_run_not_found" | "media_asset_not_found" | "media_asset_version_not_found" | "writing_run_not_found" | "content_item_not_found" | "task_not_found" | "repository_image_not_found" | "chat_not_found" | "profile_not_found" | "credential_not_found" | "proposal_not_found" | "tier_not_found" | "platform_not_found" | "social_account_not_found" | "connection_not_found" | "connection_expired" | "authorization_refused" | "platform_app_not_set" | "connection_secret_unreadable" | "platform_unavailable" | "role_not_found" | "project_already_exists" | "analysis_already_running" | "research_unfinished" | "studio_run_unfinished" | "writing_run_unfinished" | "task_unfinished" | "media_asset_decided" | "media_asset_not_usable" | "research_not_usable" | "studio_run_used_by_post" | "research_used_by_post" | "profile_already_approved" | "proposal_not_pending" | "proposal_pending" | "chat_busy" | "credential_set_by_environment" | "credential_unreadable" | "encryption_key_missing" | "model_set_by_environment" | "cap_set_by_environment" | "environment_setting_invalid" | "model_key_not_set" | "stored_setting_invalid" | "internal_error" | "analysis_not_started" | "research_not_started" | "studio_not_started" | "writing_not_started" | "model_unavailable" | "chat_unanswered" | "database_unavailable" | "storage_unavailable" | "too_many_streams";
         EventDetailScalar: string | number | boolean | null;
         EventDetailValue: components["schemas"]["EventDetailScalar"] | components["schemas"]["EventDetailScalar"][];
         /**
@@ -2184,6 +2379,19 @@ export interface components {
             } | null;
             /** Width */
             width: number;
+        };
+        /**
+         * MissingCredentialResponse
+         * @description A credential of the installation's app on a platform that is neither set nor stored.
+         */
+        MissingCredentialResponse: {
+            /** Environment Variable */
+            environment_variable: string;
+            /**
+             * Name
+             * @description The credential's name in Settings, Credentials.
+             */
+            name: string;
         };
         /** ModelCatalogResponse */
         ModelCatalogResponse: {
@@ -2899,6 +3107,30 @@ export interface components {
              */
             set_by: string;
         };
+        /** SocialAccountsResponse */
+        SocialAccountsResponse: {
+            /**
+             * Accounts
+             * @description The project's connected accounts, one per platform at most, by platform.
+             */
+            accounts: components["schemas"]["ConnectedAccountResponse"][];
+            /**
+             * Can Connect
+             * @description Whether this API has an `ENCRYPTION_KEY`, which an account's token is stored under. Without one, connecting is answered 409 `encryption_key_missing`.
+             */
+            can_connect: boolean;
+            /**
+             * Platforms
+             * @description Every platform an account can be connected on.
+             */
+            platforms: components["schemas"]["ConnectablePlatformResponse"][];
+        };
+        /**
+         * SocialPlatform
+         * @description A platform an account can be connected on, by its slug.
+         * @enum {string}
+         */
+        SocialPlatform: "x";
         /**
          * StoredCredentialResponse
          * @description That a value is stored: who stored it and when, never the value.
@@ -6424,6 +6656,198 @@ export interface operations {
             };
         };
     };
+    listSocialAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SocialAccountsResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    disconnectSocialAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                platform: components["schemas"]["SocialPlatform"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    connectSocialAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                platform: components["schemas"]["SocialPlatform"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionStartResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listStudioRuns: {
         parameters: {
             query?: {
@@ -7898,6 +8322,104 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    finishSocialAccountConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                platform: components["schemas"]["SocialPlatform"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionCallbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionCallbackResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
                 };
             };
             /** @description Service Unavailable */

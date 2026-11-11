@@ -6,7 +6,10 @@ platform, through its adapter, where to send the person, and keeps an attempt na
 on the platform, which sends them back to the callback URL with that state and a grant (with
 OAuth 1.0a, the ``oauth_token`` and the ``oauth_verifier``); ``finish_connection`` takes the
 attempt, which is used once, has the adapter exchange the grant for the account's token, and
-stores the account. ``abandon_connection`` forgets an attempt the person turned down.
+stores the account. ``abandon_connection`` forgets an attempt the person turned down. Both
+are given the platform the answer came from, and an attempt started on another platform is
+not found. ``connectable_platforms`` says which platforms can be connected now: those whose
+app has its credentials, set or stored.
 
 A project has one account per platform. Connecting the account it has again updates it;
 connecting another replaces it, and the replaced account's token is forgotten. One account
@@ -43,7 +46,12 @@ from sqlalchemy.orm import Session
 
 from openmarketer_core.credentials.catalog import Credential, SealedValue
 from openmarketer_core.credentials.cipher import CredentialCipher, SealedValueDoesNotOpen
-from openmarketer_core.credentials.resolution import EncryptionKeyMissing, credential_value
+from openmarketer_core.credentials.resolution import (
+    CredentialSource,
+    EncryptionKeyMissing,
+    credential_statuses,
+    credential_value,
+)
 from openmarketer_core.db.projects import get_project
 from openmarketer_core.db.social_accounts import (
     ConnectedAccount,
@@ -59,6 +67,7 @@ from openmarketer_core.db.social_connection_attempts import (
 )
 from openmarketer_core.social_accounts.catalog import (
     MAX_STATE_LENGTH,
+    PLATFORMS,
     AccountDescription,
     ConnectablePlatform,
     SocialPlatform,
@@ -164,6 +173,19 @@ class AccountTokens:
     access_secret: str = field(repr=False)
 
 
+@dataclass(frozen=True)
+class PlatformReadiness:
+    """A platform of the catalog and the credentials of its app that are neither set nor stored."""
+
+    platform: ConnectablePlatform
+    missing: tuple[Credential, ...]
+
+    @property
+    def ready(self) -> bool:
+        """Whether the app has every credential, so that an account can be connected."""
+        return not self.missing
+
+
 class AccountAuthorization(Protocol):
     """One platform's authorization flow: what its adapter does for a connection."""
 
@@ -227,22 +249,26 @@ def finish_connection(
     environ: Mapping[str, str],
     *,
     workspace_id: uuid.UUID,
+    platform: SocialPlatform,
     state: str,
     grant: str,
     connected_by: uuid.UUID,
     authorization: AccountAuthorization,
     cipher: CredentialCipher | None,
 ) -> ConnectedAccount:
-    """Finish the attempt named ``state`` with the platform's ``grant``; the account connected.
+    """Finish the attempt on ``platform`` named ``state`` with the platform's ``grant``; the
+    account connected.
 
-    ``authorization`` is the adapter of the platform the attempt was started on. Raises
-    ``EncryptionKeyMissing``, ``ConnectionAttemptNotFound``, ``ConnectionAttemptExpired``,
-    ``ConnectionSecretUnreadable``, ``PlatformAppNotSet``, ``CredentialUnreadable``,
-    ``AuthorizationRefused`` and ``AuthorizationUnavailable``.
+    ``authorization`` is the adapter of ``platform``. An attempt started on another platform
+    is not found, and stays. Raises ``EncryptionKeyMissing``, ``ConnectionAttemptNotFound``,
+    ``ConnectionAttemptExpired``, ``ConnectionSecretUnreadable``, ``PlatformAppNotSet``,
+    ``CredentialUnreadable``, ``AuthorizationRefused`` and ``AuthorizationUnavailable``.
     """
     if cipher is None:
         raise EncryptionKeyMissing
-    attempt = take_connection_attempt(session, workspace_id=workspace_id, state=state)
+    attempt = take_connection_attempt(
+        session, workspace_id=workspace_id, platform=platform, state=state
+    )
     if attempt is None:
         raise ConnectionAttemptNotFound
     if attempt.expired:
@@ -267,9 +293,44 @@ def finish_connection(
     )
 
 
-def abandon_connection(session: Session, *, workspace_id: uuid.UUID, state: str) -> bool:
-    """Forget the attempt named ``state``, which the person turned down; whether there was one."""
-    return take_connection_attempt(session, workspace_id=workspace_id, state=state) is not None
+def abandon_connection(
+    session: Session, *, workspace_id: uuid.UUID, platform: SocialPlatform, state: str
+) -> uuid.UUID | None:
+    """Forget the attempt on ``platform`` named ``state``, which the person turned down.
+
+    The project the attempt was for, or ``None`` when there was no such attempt (an attempt
+    started on another platform is not one, and stays).
+    """
+    attempt = take_connection_attempt(
+        session, workspace_id=workspace_id, platform=platform, state=state
+    )
+    return None if attempt is None else attempt.project_id
+
+
+def connectable_platforms(
+    session: Session, environ: Mapping[str, str], *, workspace_id: uuid.UUID
+) -> list[PlatformReadiness]:
+    """Every platform of the catalog, in its order, with the app credentials it still needs.
+
+    A credential counts as there when the environment sets it or the workspace stored it;
+    nothing is decrypted, so a stored value that no longer opens still counts.
+    """
+    unset = {
+        status.credential
+        for status in credential_statuses(session, environ, workspace_id=workspace_id)
+        if status.source is CredentialSource.NOT_SET
+    }
+    return [
+        PlatformReadiness(
+            platform=connectable,
+            missing=tuple(
+                credential
+                for credential in (connectable.app_key, connectable.app_secret)
+                if credential in unset
+            ),
+        )
+        for connectable in PLATFORMS
+    ]
 
 
 def list_accounts(

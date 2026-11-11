@@ -1,8 +1,10 @@
 """Settings of the API process, read from the environment at the edge.
 
 Only what the API itself needs is here: the database, the workflow server, the
-key that credentials are stored under, the model configuration and whether its
-chat turns are traced to Langfuse. It reads the model configuration
+key that credentials are stored under, the model configuration, whether its
+chat turns are traced to Langfuse, and the dashboard's public origin
+(``DASHBOARD_URL``), which the callback of a social account's connection is
+built on. It reads the model configuration
 (``LLM_CONFIG_PATH``) to show what each role resolves to and to store a
 workspace's choices of models; a configuration that cannot be read stops the
 start, as it stops the worker's. ``ENCRYPTION_KEY`` is read to encrypt a
@@ -18,11 +20,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from openmarketer_core.credentials.cipher import CredentialCipher, EncryptionKeyInvalid
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ModelRouter
 from openmarketer_core.tracing import TracingNotConfigured, TracingSettings
 from openmarketer_core.workflow_server import WorkflowServer
+
+# X refuses a callback on ``localhost``, so the default names the loopback address instead.
+DEFAULT_DASHBOARD_URL = "http://127.0.0.1:3000"
 
 
 class SettingsError(Exception):
@@ -40,6 +46,11 @@ class Settings:
     model_router: ModelRouter = field(repr=False)
     # Whether a chat turn is traced to Langfuse; off unless the environment gives its keys.
     tracing: TracingSettings
+    # The dashboard's origin as the person's browser reaches it, without a trailing slash. A
+    # platform sends the person back to ``{dashboard_url}/connections/{platform}/callback``,
+    # and that exact URL must be registered in the platform's app (X: the app's
+    # "Callback URI / Redirect URL").
+    dashboard_url: str = DEFAULT_DASHBOARD_URL
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Settings:
@@ -56,6 +67,7 @@ class Settings:
             credential_cipher=_credential_cipher(environ),
             model_router=_model_router(environ),
             tracing=tracing,
+            dashboard_url=_dashboard_url(environ),
         )
 
 
@@ -81,3 +93,26 @@ def _credential_cipher(environ: Mapping[str, str]) -> CredentialCipher | None:
     except EncryptionKeyInvalid as invalid:
         # The message says what to set and holds nothing of the key.
         raise SettingsError(str(invalid)) from None
+
+
+def _dashboard_url(environ: Mapping[str, str]) -> str:
+    url = environ.get("DASHBOARD_URL", "").strip() or DEFAULT_DASHBOARD_URL
+    if not _is_origin_url(url):
+        raise SettingsError(
+            "DASHBOARD_URL must be the dashboard's absolute http or https URL,"
+            " such as http://127.0.0.1:3000"
+        )
+    return url.rstrip("/")
+
+
+def _is_origin_url(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    return (
+        parts.scheme in ("http", "https")
+        and bool(parts.hostname)
+        and not parts.query
+        and not parts.fragment
+    )

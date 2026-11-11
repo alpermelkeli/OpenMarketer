@@ -77,18 +77,21 @@ def store_connection_attempt(
 
 
 def take_connection_attempt(
-    session: Session, *, workspace_id: uuid.UUID, state: str
+    session: Session, *, workspace_id: uuid.UUID, platform: SocialPlatform, state: str
 ) -> TakenAttempt | None:
-    """Delete the workspace's attempt named ``state`` and return it, or ``None`` if there is none.
+    """Delete the workspace's attempt on ``platform`` named ``state`` and return it, or ``None``
+    if there is none.
 
-    An expired attempt is taken as well, and says so. Of two callers that take the same
-    attempt, the second waits for the first and finds nothing.
+    An attempt started on another platform is not taken: an answer is finished by the platform
+    it was started on, or not at all. An expired attempt is taken as well, and says so. Of two
+    callers that take the same attempt, the second waits for the first and finds nothing.
     """
     wait_for_other_writes(session, workspace_id)
     row = session.execute(
         delete(SocialConnectionAttemptRecord)
         .where(
             SocialConnectionAttemptRecord.workspace_id == workspace_id,
+            SocialConnectionAttemptRecord.platform == platform.value,
             SocialConnectionAttemptRecord.state == state,
         )
         .returning(
