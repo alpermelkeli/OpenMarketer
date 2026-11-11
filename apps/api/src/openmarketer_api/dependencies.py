@@ -23,12 +23,16 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session, sessionmaker
 
 from openmarketer_api.event_stream import OpenStreams, StreamTiming
+from openmarketer_api.settings import DEFAULT_DASHBOARD_URL
 from openmarketer_api.workflows import Workflows
 from openmarketer_core.credentials.cipher import CredentialCipher
 from openmarketer_core.db.session import transaction
 from openmarketer_core.llm_catalog import ModelCatalog
 from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.research.page_store import PageStore
+from openmarketer_core.social_accounts.catalog import SocialPlatform
+from openmarketer_core.social_accounts.connection import AccountAuthorization
+from openmarketer_core.social_accounts.x.authorization import XAuthorization
 from openmarketer_core.studio.asset_store import AssetStore
 from openmarketer_core.tracing import NOT_TRACING, Tracing
 from openmarketer_core.workflow_start import WorkflowStart
@@ -54,6 +58,8 @@ class Services:
     asset_store: AssetStore
     # The process's tracing: off unless the environment gave Langfuse's keys (``main.py``).
     tracing: Tracing = NOT_TRACING
+    # The dashboard's origin, which a social account's connection comes back to (``settings.py``).
+    dashboard_url: str = DEFAULT_DASHBOARD_URL
 
 
 def _services(request: Request) -> Services:
@@ -126,6 +132,15 @@ def process_tracing(services: Annotated[Services, Depends(_services)]) -> Tracin
     return services.tracing
 
 
+def dashboard_url(services: Annotated[Services, Depends(_services)]) -> str:
+    return services.dashboard_url
+
+
+def account_authorizations() -> Mapping[SocialPlatform, AccountAuthorization]:
+    """Each platform's authorization flow, by platform; a test gives fakes that reach no network."""
+    return {SocialPlatform.X: XAuthorization()}
+
+
 def event_stream_timing() -> StreamTiming:
     """How a stream of events polls, keeps alive and ends; a test makes it quick."""
     return StreamTiming()
@@ -163,6 +178,10 @@ Catalog = Annotated[ModelCatalog, Depends(model_catalog)]
 Pages = Annotated[PageStore, Depends(page_store)]
 Assets = Annotated[AssetStore, Depends(asset_store)]
 ProcessTracing = Annotated[Tracing, Depends(process_tracing)]
+DashboardUrl = Annotated[str, Depends(dashboard_url)]
+AccountAuthorizations = Annotated[
+    Mapping[SocialPlatform, AccountAuthorization], Depends(account_authorizations)
+]
 StartWorkflow = Annotated[Callable[[WorkflowStart], None], Depends(start_workflow)]
 EventStreamTiming = Annotated[StreamTiming, Depends(event_stream_timing)]
 EventStreamsOpen = Annotated[OpenStreams, Depends(open_event_streams)]

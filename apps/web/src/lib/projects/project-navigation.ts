@@ -6,7 +6,15 @@
 
 import { isProjectId } from "./project-id";
 
-export type ProjectPage = "chat" | "profile" | "analyses" | "research" | "studio" | "writing" | "approvals";
+export type ProjectPage =
+  | "chat"
+  | "profile"
+  | "analyses"
+  | "research"
+  | "studio"
+  | "writing"
+  | "approvals"
+  | "accounts";
 
 /** The project's pages, in the order the sidebar lists them under the project. */
 export const PROJECT_PAGES: readonly {
@@ -19,6 +27,7 @@ export const PROJECT_PAGES: readonly {
   { page: "studio", label: "Studio" },
   { page: "writing", label: "Writing" },
   { page: "approvals", label: "Approvals" },
+  { page: "accounts", label: "Accounts" },
 ];
 
 /** The project an address is inside, or null outside a project or for a segment that is no project's ID. */

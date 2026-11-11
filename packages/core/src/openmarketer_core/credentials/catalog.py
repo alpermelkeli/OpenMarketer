@@ -1,14 +1,17 @@
 """Which credentials an installation can set, and what an acceptable value is.
 
-There are three, the secrets the code uses: the model provider's API key and
-the access tokens of the two repository hosts. Each has an environment
-variable, which is where it was configured before it could be stored.
+There are five, the secrets the code uses: the model provider's API key, the
+access tokens of the two repository hosts, and the consumer key and secret of
+the installation's X app, with which a project's X account is connected. Each
+has an environment variable, which is where it was configured before it could
+be stored.
 
-A value ends up in an HTTP ``Authorization`` header, the model provider's or
-the one git sends to a repository host, so it must not be able to break out of
-one: it is printable ASCII without a space, of a bounded length. A refusal names the rule
-and never repeats the value or a part of it. A name the catalog does not have
-is not repeated either: it may be a secret written in the wrong place.
+A value ends up in an HTTP ``Authorization`` header, the model provider's, the
+one git sends to a repository host or an OAuth 1.0a header signed with the X
+app's secret, so it must not be able to break out of one: it is printable ASCII
+without a space, of a bounded length. A refusal names the rule and never
+repeats the value or a part of it. A name the catalog does not have is not
+repeated either: it may be a secret written in the wrong place.
 
 ``SealedValue`` is the shape a value has once encrypted; the cipher makes it
 and the store keeps it.
@@ -54,8 +57,10 @@ class SealedValue:
 OPENROUTER_API_KEY = Credential("openrouter_api_key", "OPENROUTER_API_KEY")
 GITHUB_TOKEN = Credential("github_token", "GITHUB_TOKEN")
 GITLAB_TOKEN = Credential("gitlab_token", "GITLAB_TOKEN")
+X_API_KEY = Credential("x_api_key", "X_API_KEY")
+X_API_SECRET = Credential("x_api_secret", "X_API_SECRET")
 
-CREDENTIALS = (OPENROUTER_API_KEY, GITHUB_TOKEN, GITLAB_TOKEN)
+CREDENTIALS = (OPENROUTER_API_KEY, GITHUB_TOKEN, GITLAB_TOKEN, X_API_KEY, X_API_SECRET)
 
 
 def credential_named(name: str) -> Credential:

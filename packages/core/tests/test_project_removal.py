@@ -1,6 +1,7 @@
 """Tests for deleting a project. They need PostgreSQL (see the root ``conftest.py``)."""
 
 import uuid
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
+from openmarketer_core.credentials.catalog import SealedValue
 from openmarketer_core.db.analysis_runs import (
     mark_run_failed,
     mark_run_started,
@@ -48,6 +50,8 @@ from openmarketer_core.db.models import (
     ResearchReportRecord,
     ResearchRunRecord,
     RunEventRecord,
+    SocialAccountRecord,
+    SocialConnectionAttemptRecord,
     StudioRunRecord,
     Workspace,
     WritingRunRecord,
@@ -83,6 +87,8 @@ from openmarketer_core.db.research_runs import (
 )
 from openmarketer_core.db.research_store import save_research_report
 from openmarketer_core.db.run_events import append_events
+from openmarketer_core.db.social_accounts import SealedAccountTokens, store_connected_account
+from openmarketer_core.db.social_connection_attempts import store_connection_attempt
 from openmarketer_core.db.studio_runs import (
     mark_run_needs_review as mark_studio_needs_review,
 )
@@ -104,6 +110,7 @@ from openmarketer_core.repository_analysis.repository_images.selection import (
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.research_agent.rules import Report
 from openmarketer_core.run_events import TURN_ANSWERED, TURN_STARTED, RunEvent
+from openmarketer_core.social_accounts.catalog import AccountDescription, SocialPlatform
 from openmarketer_core.studio.asset_store import asset_key
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
@@ -381,6 +388,8 @@ def rows_of(session: Session, project_id: uuid.UUID) -> dict[str, int]:
         "repository_image": RepositoryImageRecord.project_id,
         "writing_run": WritingRunRecord.project_id,
         "content_item": ContentItemRecord.project_id,
+        "social_account": SocialAccountRecord.project_id,
+        "social_connection_attempt": SocialConnectionAttemptRecord.project_id,
     }
     return {
         name: session.scalar(select(func.count()).where(column == project_id)) or 0
@@ -408,6 +417,8 @@ NOTHING = {
     "repository_image": 0,
     "writing_run": 0,
     "content_item": 0,
+    "social_account": 0,
+    "social_connection_attempt": 0,
 }
 
 WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message", "chat_turn", "run_event") + (
@@ -420,6 +431,8 @@ WITHOUT_HISTORY = ("proposal", "chat_thread", "chat_message", "chat_turn", "run_
     "repository_image",
     "writing_run",
     "content_item",
+    "social_account",
+    "social_connection_attempt",
 )
 
 
@@ -598,6 +611,33 @@ def test_project_with_an_unfinished_writing_run_is_not_deleted(session, workspac
         delete_project(session, workspace_id=workspace_id, project_id=project_id)
 
     assert rows_of(session, project_id)["writing_run"] == 1
+
+
+def test_project_is_deleted_with_its_social_accounts_and_connection_attempts(session, workspace_id):
+    project_id = new_project(session, workspace_id)
+    sealed = SealedValue(nonce=b"nonce-012345", ciphertext=b"sealed")
+    store_connected_account(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        platform=SocialPlatform.X,
+        account=AccountDescription("42", "acme", "Acme", None),
+        tokens=SealedAccountTokens(access_token=sealed, access_secret=sealed),
+        connected_by=REVIEWER,
+    )
+    store_connection_attempt(
+        session,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        platform=SocialPlatform.X,
+        state="request-token",
+        secret=sealed,
+        lifetime=timedelta(minutes=15),
+    )
+    assert rows_of(session, project_id)["social_account"] == 1
+    assert rows_of(session, project_id)["social_connection_attempt"] == 1
+    delete_project(session, workspace_id=workspace_id, project_id=project_id)
+    assert rows_of(session, project_id) == NOTHING
 
 
 def test_approved_and_edited_versions_are_deleted_too(session, workspace_id):

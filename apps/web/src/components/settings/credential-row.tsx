@@ -76,6 +76,11 @@ export function CredentialRow({ credential, canStore }: CredentialRowProps) {
         <p className="max-w-prose text-sm text-pretty text-muted-foreground">
           <InlineCodeText text={label.purpose} />
         </p>
+        {label.setup !== undefined && (
+          <p className="max-w-prose text-sm text-pretty text-muted-foreground">
+            <InlineCodeText text={label.setup} />
+          </p>
+        )}
       </div>
 
       {/* Polite, so a screen reader hears the state change after a save or a removal. */}

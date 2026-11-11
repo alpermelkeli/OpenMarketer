@@ -7,9 +7,10 @@ messages, its research runs with their reports and the pages they fetched, its
 studio runs with the media assets they made and every version of each, accepted
 ones included, its writing runs with the content items they proposed, its
 tasks with their steps, the product images its analyses found in the
-repository, and the events its runs recorded. Nothing is kept to restore it
-from: deleting is final, and a project made again for the same repository
-starts with no history.
+repository, the events its runs recorded, and its connected social accounts
+with their tokens and the connections still waiting for a platform's answer.
+Nothing is kept to restore it from: deleting is final, and a project made
+again for the same repository starts with no history.
 
 A project with an unfinished run is not deleted (``ProjectHasUnfinishedRun``):
 the worker that runs it would store a profile for a project that is gone, and
@@ -70,6 +71,8 @@ from openmarketer_core.db.models import (
     ResearchReportRecord,
     ResearchRunRecord,
     RunEventRecord,
+    SocialAccountRecord,
+    SocialConnectionAttemptRecord,
     StudioRunRecord,
     TaskRecord,
     TaskStepRecord,
@@ -220,6 +223,12 @@ def delete_project(
         delete(RepositoryImageRecord).where(RepositoryImageRecord.project_id == project_id)
     )
     session.execute(delete(AnalysisRunRecord).where(AnalysisRunRecord.project_id == project_id))
+    session.execute(delete(SocialAccountRecord).where(SocialAccountRecord.project_id == project_id))
+    session.execute(
+        delete(SocialConnectionAttemptRecord).where(
+            SocialConnectionAttemptRecord.project_id == project_id
+        )
+    )
     session.execute(delete(Evidence).where(Evidence.project_id == project_id))
     _delete_profile_versions(session, project_id)
     session.execute(delete(RepoSnapshot).where(RepoSnapshot.project_id == project_id))

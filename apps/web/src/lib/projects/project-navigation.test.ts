@@ -134,3 +134,17 @@ describe("the address of a proposal", () => {
     expect(projectPageOfPath(proposalHref(ID, PROPOSAL).split("#")[0])).toBe("approvals");
   });
 });
+
+describe("the accounts", () => {
+  it("are listed last, after the approvals", () => {
+    const pages = PROJECT_PAGES.map((entry) => entry.page);
+    expect(pages.indexOf("accounts")).toBe(pages.indexOf("approvals") + 1);
+    expect(pages.at(-1)).toBe("accounts");
+    expect(PROJECT_PAGES.find((entry) => entry.page === "accounts")?.label).toBe("Accounts");
+  });
+
+  it("are a page of the project, also when the address says how a connection ended", () => {
+    expect(projectPageHref(ID, "accounts")).toBe(`/projects/${ID}/accounts`);
+    expect(projectPageOfPath(`/projects/${ID}/accounts`)).toBe("accounts");
+  });
+});

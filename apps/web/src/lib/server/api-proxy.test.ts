@@ -519,6 +519,74 @@ describe("the routes of the writer", () => {
   });
 });
 
+describe("the routes of a project's social accounts", () => {
+  const ACCOUNTS = ["projects", PROJECT, "social-accounts"];
+  const CALLBACK = ["social-accounts", "x", "callback"];
+  // Not a real token: a marker that must never turn up where it does not belong.
+  const TOKEN = "oauth-token-that-must-not-be-repeated";
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("forward the list, connecting, disconnecting and the platform's callback", () => {
+    expect(allowedApiPath("GET", ACCOUNTS)).toBe(`/v1/projects/${PROJECT}/social-accounts`);
+    expect(allowedApiPath("POST", [...ACCOUNTS, "x", "connect"])).toBe(
+      `/v1/projects/${PROJECT}/social-accounts/x/connect`,
+    );
+    expect(allowedApiPath("DELETE", [...ACCOUNTS, "x"])).toBe(`/v1/projects/${PROJECT}/social-accounts/x`);
+    expect(allowedApiPath("POST", CALLBACK)).toBe("/v1/social-accounts/x/callback");
+  });
+
+  it("do not include any other method on these paths", () => {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      expect(() => allowedApiPath(method, ACCOUNTS)).toThrow();
+    }
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      expect(() => allowedApiPath(method, [...ACCOUNTS, "x", "connect"])).toThrow();
+      expect(() => allowedApiPath(method, CALLBACK)).toThrow();
+    }
+    expect(() => allowedApiPath("GET", [...ACCOUNTS, "x"])).toThrow();
+    expect(() => allowedApiPath("POST", [...ACCOUNTS, "x"])).toThrow();
+  });
+
+  it("do not include a platform of another form, or a callback under a project", () => {
+    for (const platform of ["", "X", "x.com", "x-y", "..", "x%2F..", `a${"b".repeat(32)}`]) {
+      expect(() => allowedApiPath("POST", [...ACCOUNTS, platform, "connect"])).toThrow();
+      expect(() => allowedApiPath("POST", ["social-accounts", platform, "callback"])).toThrow();
+    }
+    expect(() => allowedApiPath("POST", [...ACCOUNTS, "x", "callback"])).toThrow();
+  });
+
+  it("take no query parameter: X's answer travels in the body, never in the address", () => {
+    expect(() => allowedApiTarget("POST", CALLBACK, new URLSearchParams(`oauth_token=${TOKEN}`))).toThrow();
+    expect(() => allowedApiTarget("GET", ACCOUNTS, new URLSearchParams("limit=20"))).toThrow();
+  });
+
+  it("refuse the callback from another site, so it cannot connect an account it chose", async () => {
+    const send = apiAnswering(200, "{}");
+    const body = JSON.stringify({ state: TOKEN, grant: "verifier" });
+    const foreign = { ...fromDashboard, origin: "https://evil.example", "content-type": "application/json" };
+    const response = await proxyToApi(request("POST", foreign, body), CALLBACK, undefined, send);
+    expect(response.status).toBe(403);
+    expect(send).not.toHaveBeenCalled();
+    expect(await response.text()).not.toContain(TOKEN);
+  });
+
+  it("pass the callback's body on to the API, and only there", async () => {
+    const send = apiAnswering(404, JSON.stringify({ code: "connection_not_found", message: "connect again" }));
+    const body = JSON.stringify({ state: TOKEN, grant: "verifier" });
+    const json = { ...fromDashboard, "content-type": "application/json" };
+    const response = await proxyToApi(request("POST", json, body), CALLBACK, undefined, send);
+    expect(response.status).toBe(404);
+    expect(send).toHaveBeenCalledOnce();
+    const [target, init] = send.mock.calls[0];
+    expect(String(target)).toBe("http://127.0.0.1:8000/v1/social-accounts/x/callback");
+    expect(init?.body).toBe(body);
+    expect(await response.text()).not.toContain(TOKEN);
+  });
+});
+
 describe("the routes of the orchestrator's tasks", () => {
   const TASKS = ["projects", PROJECT, "tasks"];
   const TASK = "0b0e6c6e-2222-4333-8444-555566667777";

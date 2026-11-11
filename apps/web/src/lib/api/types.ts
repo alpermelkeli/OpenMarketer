@@ -141,3 +141,13 @@ export type MonthlySpend = Schemas["MonthlySpendResponse"];
 export type Problem = Schemas["Problem"];
 export type ErrorCode = Schemas["ErrorCode"];
 export type RequestValidationError = Schemas["HTTPValidationError"];
+
+/** A project's connected accounts, every platform one can be connected on, and whether the API can store a token. */
+export type SocialAccounts = Schemas["SocialAccountsResponse"];
+/** A project's account on a platform, as the platform described it; never its token. */
+export type ConnectedAccount = Schemas["ConnectedAccountResponse"];
+export type ConnectablePlatform = Schemas["ConnectablePlatformResponse"];
+export type SocialPlatform = Schemas["SocialPlatform"];
+export type ConnectionStart = Schemas["ConnectionStartResponse"];
+export type ConnectionCallbackResult = Schemas["ConnectionCallbackResponse"];
+export type ConnectionOutcome = Schemas["ConnectionOutcome"];

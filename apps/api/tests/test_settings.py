@@ -132,3 +132,20 @@ def test_start_with_one_of_langfuses_keys_is_refused_naming_the_missing_one(give
     with pytest.raises(SettingsError, match=missing) as refused:
         Settings.from_env({**DATABASE, given: "pk-made-up-value"})
     assert "pk-made-up-value" not in str(refused.value)
+
+
+def test_dashboard_url_defaults_to_the_loopback_address_x_accepts():
+    assert Settings.from_env(DATABASE).dashboard_url == "http://127.0.0.1:3000"
+
+
+def test_dashboard_url_is_read_without_its_trailing_slash():
+    settings = Settings.from_env({**DATABASE, "DASHBOARD_URL": "https://marketing.example/"})
+    assert settings.dashboard_url == "https://marketing.example"
+
+
+@pytest.mark.parametrize(
+    "url", ["127.0.0.1:3000", "ftp://host", "https://", "https://host/?a=1", "http://[::1"]
+)
+def test_dashboard_url_that_is_not_an_http_origin_stops_the_start(url):
+    with pytest.raises(SettingsError, match="DASHBOARD_URL"):
+        Settings.from_env({**DATABASE, "DASHBOARD_URL": url})

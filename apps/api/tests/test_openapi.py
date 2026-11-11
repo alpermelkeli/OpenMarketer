@@ -91,6 +91,13 @@ OPERATIONS = {
     "setRejectedParameters": ("put", "/v1/settings/models/rejected-parameters"),
     "getModelCatalog": ("get", "/v1/settings/models/catalog"),
     "checkModelSettings": ("get", "/v1/settings/models/check"),
+    "listSocialAccounts": ("get", "/v1/projects/{project_id}/social-accounts"),
+    "connectSocialAccount": (
+        "post",
+        "/v1/projects/{project_id}/social-accounts/{platform}/connect",
+    ),
+    "disconnectSocialAccount": ("delete", "/v1/projects/{project_id}/social-accounts/{platform}"),
+    "finishSocialAccountConnection": ("post", "/v1/social-accounts/{platform}/callback"),
     "getAnalysisSettings": ("get", "/v1/settings/analysis"),
     "setAnalysisLimits": ("put", "/v1/settings/analysis"),
     "removeAnalysisLimits": ("delete", "/v1/settings/analysis"),
@@ -273,3 +280,35 @@ def test_routes_import_no_database_or_agent_code():
         source = module.read_text()
         assert "sqlalchemy" not in source, module.name
         assert "openmarketer_core.repository_analysis.analyzer_agent" not in source, module.name
+
+
+def test_connection_callback_takes_its_grant_write_only(schema):
+    request = schema["components"]["schemas"]["ConnectionCallbackRequest"]
+    assert set(request["properties"]) == {"state", "grant"}
+    assert request["additionalProperties"] is False
+    state = request["properties"]["state"]
+    assert (state["writeOnly"], state["format"]) == (True, "password")
+    [grant, _null] = request["properties"]["grant"]["anyOf"]
+    assert (grant["writeOnly"], grant["format"]) == (True, "password")
+
+
+def test_social_account_responses_have_no_field_for_a_token_or_a_row_id(schema):
+    account = set(schema["components"]["schemas"]["ConnectedAccountResponse"]["properties"])
+    assert account == {
+        "project_id",
+        "platform",
+        "account_id",
+        "username",
+        "display_name",
+        "picture_url",
+        "connected_by",
+        "connected_at",
+        "updated_at",
+    }
+
+
+def test_connecting_and_disconnecting_take_no_request_body(schema):
+    connect = schema["paths"]["/v1/projects/{project_id}/social-accounts/{platform}/connect"]
+    removal = schema["paths"]["/v1/projects/{project_id}/social-accounts/{platform}"]
+    assert "requestBody" not in connect["post"]
+    assert "requestBody" not in removal["delete"]
