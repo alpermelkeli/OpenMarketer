@@ -35,7 +35,8 @@ one already ``published`` from it is done. ``record_published`` settles a publis
 again changes nothing; ``record_publishing_failed`` settles it ``failed`` with why the platform
 refused it. Neither applies to an item whose send never started (``PublishingNotBegun``). A
 publishing item of a run that fails stays ``publishing``: the platform may have the post, and
-nothing here claims it does not.
+nothing here claims it does not; the item reads it as ``publishing_unconfirmed``, which every
+item carries with its run's status.
 
 A text is published once in a workspace on a platform: ``begin_publishing`` refuses an item
 whose text (compared by ``text_fingerprint``: its words one space apart) another item of the
@@ -260,6 +261,7 @@ class ContentItem:
     cost_usd: Decimal
     created_at: datetime
     settled_at: datetime | None
+    run_status: WritingRunStatus  # how its run is now, which says whether a send can still end
     # Its publishing, once it started: the account it was sent from, when, the platform's post,
     # when it was published and what that was reckoned to cost, or why it was refused.
     publishing_started_at: datetime | None = None
@@ -270,6 +272,15 @@ class ContentItem:
     published_at: datetime | None = None
     publishing_cost_usd: Decimal | None = None
     publishing_failure: PublishingFailure | None = None
+
+    @property
+    def publishing_unconfirmed(self) -> bool:
+        """Whether its send started and its run ended with no outcome recorded.
+
+        Nothing will record one now: the platform may have the post or not, and only a look at
+        the account tells, so a person is told rather than shown it as still being published.
+        """
+        return self.status is ContentItemStatus.PUBLISHING and self.run_status in FINISHED
 
 
 def store_proposed_content_item(
@@ -537,9 +548,11 @@ def list_content_items(
     page) or at the newest. Raises ``ProjectNotFound`` when the workspace has no such project.
     """
     get_project(session, workspace_id=workspace_id, project_id=project_id)
-    query = _items_of_project(workspace_id, project_id).add_columns(ProductProfileRecord.version)
-    query = query.join(
-        ProductProfileRecord, ProductProfileRecord.id == ContentItemRecord.profile_version_id
+    query = (
+        _items_of_project(workspace_id, project_id)
+        .add_columns(ProductProfileRecord.version, WritingRunRecord.status)
+        .join(ProductProfileRecord, ProductProfileRecord.id == ContentItemRecord.profile_version_id)
+        .join(WritingRunRecord, WritingRunRecord.id == ContentItemRecord.run_id)
     )
     if before is not None:
         query = query.where(
@@ -551,7 +564,7 @@ def list_content_items(
             rows_to_fetch(limit)
         )
     )
-    items = [_item_of_version(record, version) for record, version in rows]
+    items = [_item_of_version(record, version, run_status) for record, version, run_status in rows]
     return page_of(items, limit, lambda last: CreatedPosition(last.created_at, last.id))
 
 
@@ -711,16 +724,21 @@ def _found_item(
 
 
 def _content_item(session: Session, record: ContentItemRecord) -> ContentItem:
-    # The item's foreign key keeps its version for as long as the item exists.
+    # The item's foreign keys keep its version and its run for as long as the item exists.
     version = session.execute(
         select(ProductProfileRecord.version).where(
             ProductProfileRecord.id == record.profile_version_id
         )
     ).scalar_one()
-    return _item_of_version(record, version)
+    run_status = session.execute(
+        select(WritingRunRecord.status).where(WritingRunRecord.id == record.run_id)
+    ).scalar_one()
+    return _item_of_version(record, version, run_status)
 
 
-def _item_of_version(record: ContentItemRecord, profile_version: int) -> ContentItem:
+def _item_of_version(
+    record: ContentItemRecord, profile_version: int, run_status: WritingRunStatus
+) -> ContentItem:
     return ContentItem(
         id=record.id,
         project_id=record.project_id,
@@ -744,6 +762,7 @@ def _item_of_version(record: ContentItemRecord, profile_version: int) -> Content
         cost_usd=record.cost_usd,
         created_at=record.created_at,
         settled_at=record.settled_at,
+        run_status=run_status,
         publishing_started_at=record.publishing_started_at,
         published_account_id=record.published_account_id,
         published_username=record.published_username,

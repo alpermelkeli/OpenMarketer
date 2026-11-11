@@ -21,6 +21,8 @@ from openmarketer_core.db.models import Project, Workspace
 from openmarketer_core.db.proposals import ActionProposal, propose_action
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.workflow_start import WorkflowStart
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
+from openmarketer_core.writing.writer_agent.definitions import PUBLISH_POST, PublishPost
 
 
 class FakeSignals:
@@ -88,6 +90,31 @@ def proposed(sessions: sessionmaker[Session], scope: RunScope, text: str = "v2 i
             run=run,
             workflow_id=f"write-{run.run_id}",
             request=ActionRequest(f"writer-run:{run.run_id}:1", "publish_post", {"text": text}),
+            effect=ActionEffect.PUBLISHES,
+            wait_seconds=3600,
+        )
+
+
+def proposed_post(sessions: sessionmaker[Session], scope: RunScope, **target: object):
+    """A writing run's ``publish_post``, held by the gate, from the account ``target`` names."""
+    run = GraphRunRef(kind=WRITING_RUN_KIND, run_id=uuid.uuid4())
+    payload = PublishPost.model_validate(
+        {
+            "workspace_id": scope.workspace_id,
+            "project_id": scope.project_id,
+            "run_id": run.run_id,
+            "content_item_id": uuid.uuid4(),
+            "text": "v2 is out",
+            **target,
+        }
+    ).model_dump(mode="json")
+    with transaction(sessions) as session:
+        return propose_action(
+            session,
+            scope=scope,
+            run=run,
+            workflow_id=f"writing-{run.run_id}",
+            request=ActionRequest(f"{WRITING_RUN_KIND}:{run.run_id}:1", PUBLISH_POST, payload),
             effect=ActionEffect.PUBLISHES,
             wait_seconds=3600,
         )
@@ -278,3 +305,45 @@ def test_the_waiting_list_does_not_hold_another_workspaces_proposals(
     body = client.get("/v1/proposals").json()
 
     assert body["proposals"] == []
+
+
+def test_a_post_proposed_from_an_account_says_where_it_goes_and_its_estimate(
+    client, signals, sessions, scope
+):
+    proposal = proposed_post(
+        sessions,
+        scope,
+        account_id="1500000000000000001",
+        username="memoria_app",
+        cost_estimate_usd="0.015",
+    )
+
+    [listed] = client.get(url(scope)).json()["proposals"]
+    [waiting] = client.get("/v1/proposals").json()["proposals"]
+    one = client.get(url(scope, proposal)).json()
+
+    for body in (listed, waiting, one):
+        assert body["post_destination"] == {
+            "live": True,
+            "account_id": "1500000000000000001",
+            "username": "memoria_app",
+            "cost_estimate_usd": 0.015,
+        }
+
+
+def test_a_post_proposed_with_no_account_is_a_dry_run(client, signals, sessions, scope):
+    proposal = proposed_post(sessions, scope)
+
+    assert client.get(url(scope, proposal)).json()["post_destination"] == {
+        "live": False,
+        "account_id": None,
+        "username": None,
+        "cost_estimate_usd": None,
+    }
+
+
+def test_a_proposal_that_is_not_a_writers_post_has_no_destination(client, signals, sessions, scope):
+    # Another kind of run's publish_post, and a payload that is not a writer's post.
+    proposal = proposed(sessions, scope)
+
+    assert client.get(url(scope, proposal)).json()["post_destination"] is None

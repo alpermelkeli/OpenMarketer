@@ -1967,6 +1967,16 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * External Id
+             * @description The platform's id of the post, once published.
+             */
+            external_id: string | null;
+            /**
+             * External Url
+             * @description The link to the post, once published.
+             */
+            external_url: string | null;
+            /**
              * Flagged Numbers
              * @description Numbers in the post the profile does not hold, for a person to check.
              */
@@ -2005,6 +2015,38 @@ export interface components {
              */
             proposal_id: string | null;
             /**
+             * Published Account Id
+             * @description The platform's identifier of the account it is sent from, once sending.
+             */
+            published_account_id: string | null;
+            /**
+             * Published At
+             * @description When the platform published it.
+             */
+            published_at: string | null;
+            /**
+             * Published Username
+             * @description The username of that account, without `@`, once sending.
+             */
+            published_username: string | null;
+            /**
+             * Publishing Cost Usd
+             * @description What publishing it was reckoned to cost, in USD, once published.
+             */
+            publishing_cost_usd: number | null;
+            /** @description Why a post whose send started was not published: `access_revoked` (connect the account again), `duplicate`, `too_long`, `media_refused`, `not_permitted`, `out_of_credits` or `refused`; null otherwise. */
+            publishing_failure: components["schemas"]["PublishingFailure"] | null;
+            /**
+             * Publishing Started At
+             * @description When its send to the account started; null when it never did.
+             */
+            publishing_started_at: string | null;
+            /**
+             * Publishing Unconfirmed
+             * @description True when its send started and its run ended with no outcome recorded: the platform may have the post or not, and only the account tells. False otherwise.
+             */
+            publishing_unconfirmed: boolean;
+            /**
              * Research Run Id
              * @description The research run whose findings the post drew on; null when none.
              */
@@ -2016,7 +2058,7 @@ export interface components {
             run_id: string;
             /** Settled At */
             settled_at: string | null;
-            /** @description `proposed` while it waits for a person; `dry_run` once approved and recorded as it would have been sent (nothing is sent yet), `rejected`, `expired` or `failed`. */
+            /** @description `proposed` while it waits for a person; once approved, `dry_run` when its proposal named no account (recorded as it would have been sent, nothing sent), or `publishing` while its send to the account is under way and `published` once the platform has it; `rejected`, `expired`, or `failed` (the run ended without settling it, or the platform refused the post: `publishing_failure` says why). */
             status: components["schemas"]["ContentItemStatus"];
             /**
              * Text
@@ -2057,6 +2099,16 @@ export interface components {
              */
             created_at: string;
             /**
+             * External Id
+             * @description The platform's id of the post, once published.
+             */
+            external_id: string | null;
+            /**
+             * External Url
+             * @description The link to the post, once published.
+             */
+            external_url: string | null;
+            /**
              * Id
              * Format: uuid
              */
@@ -2078,6 +2130,38 @@ export interface components {
              */
             proposal_id: string | null;
             /**
+             * Published Account Id
+             * @description The platform's identifier of the account it is sent from, once sending.
+             */
+            published_account_id: string | null;
+            /**
+             * Published At
+             * @description When the platform published it.
+             */
+            published_at: string | null;
+            /**
+             * Published Username
+             * @description The username of that account, without `@`, once sending.
+             */
+            published_username: string | null;
+            /**
+             * Publishing Cost Usd
+             * @description What publishing it was reckoned to cost, in USD, once published.
+             */
+            publishing_cost_usd: number | null;
+            /** @description Why a post whose send started was not published: `access_revoked` (connect the account again), `duplicate`, `too_long`, `media_refused`, `not_permitted`, `out_of_credits` or `refused`; null otherwise. */
+            publishing_failure: components["schemas"]["PublishingFailure"] | null;
+            /**
+             * Publishing Started At
+             * @description When its send to the account started; null when it never did.
+             */
+            publishing_started_at: string | null;
+            /**
+             * Publishing Unconfirmed
+             * @description True when its send started and its run ended with no outcome recorded: the platform may have the post or not, and only the account tells. False otherwise.
+             */
+            publishing_unconfirmed: boolean;
+            /**
              * Research Run Id
              * @description The research run whose findings the post drew on; null when none.
              */
@@ -2089,7 +2173,7 @@ export interface components {
             run_id: string;
             /** Settled At */
             settled_at: string | null;
-            /** @description `proposed` while it waits for a person; `dry_run` once approved and recorded as it would have been sent (nothing is sent yet), `rejected`, `expired` or `failed`. */
+            /** @description `proposed` while it waits for a person; once approved, `dry_run` when its proposal named no account (recorded as it would have been sent, nothing sent), or `publishing` while its send to the account is under way and `published` once the platform has it; `rejected`, `expired`, or `failed` (the run ended without settling it, or the platform refused the post: `publishing_failure` says why). */
             status: components["schemas"]["ContentItemStatus"];
             /**
              * Text
@@ -2101,7 +2185,7 @@ export interface components {
          * ContentItemStatus
          * @enum {string}
          */
-        ContentItemStatus: "proposed" | "dry_run" | "rejected" | "expired" | "failed";
+        ContentItemStatus: "proposed" | "dry_run" | "publishing" | "published" | "rejected" | "expired" | "failed";
         /** CreateChatRequest */
         CreateChatRequest: {
             /**
@@ -2462,6 +2546,32 @@ export interface components {
          */
         Platform: "instagram_post" | "instagram_portrait" | "instagram_story" | "x_post" | "linkedin_post" | "og_image" | "app_store_screenshot";
         /**
+         * PostDestinationResponse
+         * @description Where a proposed post goes once approved: an account, or nowhere (a dry run).
+         */
+        PostDestinationResponse: {
+            /**
+             * Account Id
+             * @description The platform's identifier of the account; null for a dry run.
+             */
+            account_id: string | null;
+            /**
+             * Cost Estimate Usd
+             * @description What publishing it is reckoned to cost, in USD; null for a dry run.
+             */
+            cost_estimate_usd: number | null;
+            /**
+             * Live
+             * @description True when approving publishes the post from `username`'s account; false when it is recorded as a dry run and sent nowhere.
+             */
+            live: boolean;
+            /**
+             * Username
+             * @description The account's username, without `@`; null for a dry run.
+             */
+            username: string | null;
+        };
+        /**
          * Problem
          * @description The body of every error response except request validation (422).
          */
@@ -2685,6 +2795,8 @@ export interface components {
             payload: {
                 [key: string]: unknown;
             };
+            /** @description For a writing run's `publish_post`: where the post goes once approved. Null for any other action. */
+            post_destination: components["schemas"]["PostDestinationResponse"] | null;
             /**
              * Project Id
              * Format: uuid
@@ -2708,6 +2820,12 @@ export interface components {
          * @enum {string}
          */
         ProposalStatus: "pending" | "approved" | "rejected" | "expired";
+        /**
+         * PublishingFailure
+         * @description Why a post whose send started was not published, as a content item records it.
+         * @enum {string}
+         */
+        PublishingFailure: "access_revoked" | "duplicate" | "too_long" | "media_refused" | "not_permitted" | "out_of_credits" | "refused";
         /** RejectedParametersResponse */
         RejectedParametersResponse: {
             changed: components["schemas"]["SettingChangeResponse"] | null;
