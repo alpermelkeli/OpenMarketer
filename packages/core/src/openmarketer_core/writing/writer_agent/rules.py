@@ -36,6 +36,7 @@ import unicodedata
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Protocol, get_args, get_origin
 from urllib.parse import urlsplit
@@ -44,6 +45,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from openmarketer_core.agent_runtime.gate import NOT_APPROVED_TEXTS, ProposalStatus
 from openmarketer_core.profile import FeatureId, LanguageTag, ProductProfile
+from openmarketer_core.social_accounts.catalog import SocialPlatform
+from openmarketer_core.social_accounts.publishing import PublishingAccount
 from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
 from openmarketer_core.writing.failures import WritingError
 from openmarketer_core.writing.platforms import (
@@ -220,6 +223,7 @@ class PostStatus(StrEnum):
     """How a proposed post ended, as its content item records it."""
 
     DRY_RUN = "dry_run"  # approved, and recorded as it would have been sent
+    PUBLISHED = "published"  # approved, and published from the project's connected account
     REJECTED = "rejected"
     EXPIRED = "expired"
     FAILED = "failed"  # approved, and the handler failed
@@ -845,15 +849,50 @@ def decide(
 
 
 # ------------------------------------------------------------------------ the action's end
-def post_status(succeeded: bool, error: str) -> PostStatus:
-    """How the post ended, from the outcome of ``publish_post``."""
+def post_status(succeeded: bool, error: str, result: Mapping[str, Any]) -> PostStatus:
+    """How the post ended, from the outcome of ``publish_post``.
+
+    A handler that succeeded says whether it published the post (``{"status": "published"}``)
+    or recorded it as it would have been sent; an answer without a status is a dry run, as the
+    handler before publishing answered.
+    """
     if succeeded:
-        return PostStatus.DRY_RUN
+        published = result.get("status") == PostStatus.PUBLISHED.value
+        return PostStatus.PUBLISHED if published else PostStatus.DRY_RUN
     if error == REJECTED_OUTCOME:
         return PostStatus.REJECTED
     if error == EXPIRED_OUTCOME:
         return PostStatus.EXPIRED
     return PostStatus.FAILED
+
+
+# --------------------------------------------------------------- where the post is published
+# The platform an account is connected on for each platform a post is written for; a post for
+# a platform no account can be connected on yet (Instagram) is recorded as a dry run.
+_SOCIAL_PLATFORMS = {WritingPlatform.X: SocialPlatform.X}
+
+
+def social_platform(platform: WritingPlatform) -> SocialPlatform | None:
+    """The platform whose connected account publishes a post for ``platform``, if any."""
+    return _SOCIAL_PLATFORMS.get(platform)
+
+
+def publishing_target(
+    account: PublishingAccount | None, cost_estimate_usd: Decimal | None
+) -> dict[str, Any]:
+    """What ``publish_post`` names of where the post goes, as the state keeps it.
+
+    ``{"account_id", "username", "cost_estimate_usd"}`` (the estimate as exact text) for a
+    project with a connected account, which publishes the post once a person approves it;
+    ``{}`` without one, and the post is recorded as a dry run.
+    """
+    if account is None or cost_estimate_usd is None:
+        return {}
+    return {
+        "account_id": account.account_id,
+        "username": account.username,
+        "cost_estimate_usd": str(cost_estimate_usd),
+    }
 
 
 def claims_with_evidence(

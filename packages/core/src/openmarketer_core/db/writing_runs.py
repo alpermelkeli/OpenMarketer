@@ -14,10 +14,11 @@ A run moves forwards only:
   (``WritingRunVersionChosen``), and it must be an approved version of the run's project
   (``ProfileVersionNotApproved``);
 - ``running`` to ``succeeded`` once its content item (``db/content_items.py``) is stored and
-  settled: approved and recorded as a dry run, rejected or expired. Reporting the same again
-  changes nothing;
+  settled: approved and published or recorded as a dry run, rejected or expired; an item still
+  ``publishing`` is not settled. Reporting the same again changes nothing;
 - ``queued`` or ``running`` to ``failed``, with a message. A content item it proposed and that
-  was not settled is settled ``failed`` with it. Reporting a failure of a run that already
+  was not settled is settled ``failed`` with it; one whose send started stays
+  ``publishing``, since the platform may have it. Reporting a failure of a run that already
   failed changes nothing and keeps the first message.
 
 Everything else is refused: a finished run is never started, failed or given another outcome
@@ -278,7 +279,8 @@ def mark_run_succeeded(
     """Record that the run's post is settled and the run is finished, with what it cost.
 
     Raises ``WritingRunNotStarted`` for a queued run, ``WritingRunUnsettled`` while its item
-    is missing or still proposed, and ``WritingRunFinished`` for a run that failed.
+    is missing, still proposed or still publishing, and ``WritingRunFinished`` for a run that
+    failed.
     """
     record = _run_to_change(session, workspace_id, project_id, run_id)
     if record.status is WritingRunStatus.QUEUED:
@@ -293,7 +295,7 @@ def mark_run_succeeded(
             ContentItemRecord.project_id == project_id,
         )
     )
-    if item_status is None or item_status is ContentItemStatus.PROPOSED:
+    if item_status in (None, ContentItemStatus.PROPOSED, ContentItemStatus.PUBLISHING):
         raise WritingRunUnsettled(run_id)
     _change(
         session,

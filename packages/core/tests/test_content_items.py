@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -24,8 +24,15 @@ from openmarketer_core.db.content_items import (
     ProfileVersionNotChosen,
     ProposalNotApproved,
     ProposalOfAnotherRun,
+    PublishedAsAnotherPost,
+    PublishingFromAnotherAccount,
+    PublishingNotBegun,
+    TextAlreadyPublished,
+    begin_publishing,
     content_item,
     list_content_items,
+    record_published,
+    record_publishing_failed,
     settle_content_item,
     store_proposed_content_item,
 )
@@ -42,10 +49,18 @@ from openmarketer_core.db.proposals import decide_proposal, propose_action
 from openmarketer_core.db.writing_runs import (
     WritingRunFinished,
     WritingRunNotStarted,
+    WritingRunUnsettled,
     mark_run_failed,
     mark_run_started,
+    mark_run_succeeded,
     request_writing_run,
     writing_run,
+)
+from openmarketer_core.social_accounts.publishing import (
+    PublishedPost,
+    PublishingAccount,
+    PublishingFailure,
+    PublishingStage,
 )
 from openmarketer_core.writing.brief import WritingBrief, WritingPlatform
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
@@ -483,3 +498,234 @@ def test_a_run_that_failed_after_proposing_keeps_its_item(session, run):
 
     assert failed.status is WritingRunStatus.FAILED
     assert failed.content_item_id == item.id
+
+
+# ------------------------------------------------------------------------------ publishing
+ACCOUNT = PublishingAccount(account_id="42", username="acme")
+POST = PublishedPost(external_id="1850000000000000001", url="https://x.com/acme/status/1850")
+POST_COST = Decimal("0.015")
+
+
+def approved_item(session: Session, run: RunOfProject, item: NewContentItem = ITEM):
+    stored = store(session, run, item)
+    return stored, proposal_of(session, run, approved=True)
+
+
+def begin(session, run, item_id, proposal_id, account=ACCOUNT):
+    return begin_publishing(
+        session, **run.scope(), item_id=item_id, proposal_id=proposal_id, account=account
+    )
+
+
+def published(session, run, item_id, post=POST):
+    return record_published(session, **run.scope(), item_id=item_id, post=post, cost_usd=POST_COST)
+
+
+def test_an_approved_item_starts_publishing_from_its_account(session, run):
+    item, proposal = approved_item(session, run)
+
+    begun = begin(session, run, item.id, proposal)
+
+    assert begun.stage is PublishingStage.STARTED
+    assert begun.item.status is ContentItemStatus.PUBLISHING
+    assert (begun.item.published_account_id, begun.item.published_username) == ("42", "acme")
+    assert begun.item.proposal_id == proposal
+    assert begun.item.publishing_started_at is not None and begun.item.settled_at is None
+
+
+def test_beginning_again_from_the_same_account_is_a_send_whose_outcome_is_unknown(session, run):
+    item, proposal = approved_item(session, run)
+    first = begin(session, run, item.id, proposal)
+
+    again = begin(session, run, item.id, proposal)
+
+    assert again.stage is PublishingStage.RESUMED
+    assert again.item.publishing_started_at == first.item.publishing_started_at
+
+
+def test_beginning_a_published_item_again_says_it_is_done(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+    published(session, run, item.id)
+
+    assert begin(session, run, item.id, proposal).stage is PublishingStage.DONE
+
+
+def test_an_item_being_published_from_one_account_is_not_published_from_another(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+
+    with pytest.raises(PublishingFromAnotherAccount):
+        begin(session, run, item.id, proposal, account=PublishingAccount("43", "other"))
+
+
+def test_an_item_is_not_published_without_a_proposal_a_person_approved(session, run):
+    item = store(session, run)
+    pending = proposal_of(session, run)
+
+    with pytest.raises(ProposalNotApproved):
+        begin(session, run, item.id, pending)
+
+    assert content_item(session, **run.scope(), item_id=item.id).status is (
+        ContentItemStatus.PROPOSED
+    )
+
+
+def test_an_item_settled_another_way_is_not_published(session, run):
+    item, proposal = approved_item(session, run)
+    settle(session, run, item.id, ContentItemStatus.DRY_RUN, proposal_id=proposal)
+
+    with pytest.raises(ContentItemSettled):
+        begin(session, run, item.id, proposal)
+
+
+def test_a_published_item_keeps_the_platforms_post_and_its_estimate(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+
+    done = published(session, run, item.id)
+
+    assert done.status is ContentItemStatus.PUBLISHED
+    assert (done.external_id, done.external_url) == (POST.external_id, POST.url)
+    assert done.publishing_cost_usd == POST_COST
+    assert done.published_at is not None and done.settled_at is not None
+
+
+def test_recording_the_same_post_again_changes_nothing(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+    first = published(session, run, item.id)
+
+    assert published(session, run, item.id) == first
+
+
+def test_an_item_published_as_one_post_is_not_recorded_as_another(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+    published(session, run, item.id)
+
+    with pytest.raises(PublishedAsAnotherPost):
+        published(session, run, item.id, PublishedPost("1850000000000000002", "https://x.com/a/2"))
+
+
+def test_a_post_recorded_for_one_item_is_not_recorded_for_another(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+    published(session, run, item.id)
+    other = another_run_of(session, run.workspace_id, run.project_id)
+    other_item, other_proposal = approved_item(session, other, replace(ITEM, text="Another post."))
+    begin(session, other, other_item.id, other_proposal)
+
+    with pytest.raises(PublishedAsAnotherPost):
+        published(session, other, other_item.id)
+
+
+def test_an_item_whose_send_never_started_has_no_outcome_to_record(session, run):
+    item, _ = approved_item(session, run)
+
+    with pytest.raises(PublishingNotBegun):
+        published(session, run, item.id)
+    with pytest.raises(PublishingNotBegun):
+        record_publishing_failed(
+            session, **run.scope(), item_id=item.id, failure=PublishingFailure.TOO_LONG
+        )
+
+
+def test_an_item_the_platform_refused_fails_with_why_once(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+
+    def failed(failure):
+        return record_publishing_failed(session, **run.scope(), item_id=item.id, failure=failure)
+
+    first = failed(PublishingFailure.ACCESS_REVOKED)
+
+    assert first.status is ContentItemStatus.FAILED
+    assert first.publishing_failure is PublishingFailure.ACCESS_REVOKED
+    assert failed(PublishingFailure.ACCESS_REVOKED) == first
+    with pytest.raises(ContentItemSettled):
+        failed(PublishingFailure.DUPLICATE)
+    with pytest.raises(ContentItemSettled):
+        published(session, run, item.id)
+
+
+def test_a_text_another_project_published_is_refused_from_any_account(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+    elsewhere = another_project_run(session, run)
+    same_words = replace(ITEM, text=f"  {ITEM.text.replace(' ', '\n ')}  ")
+    other_item, other_proposal = approved_item(session, elsewhere, same_words)
+
+    with pytest.raises(TextAlreadyPublished) as refused:
+        begin(session, elsewhere, other_item.id, other_proposal, PublishingAccount("43", "other"))
+
+    assert refused.value.other_item_id == item.id
+    assert refused.value.other_project_id == run.project_id
+    assert content_item(session, **elsewhere.scope(), item_id=other_item.id).status is (
+        ContentItemStatus.PROPOSED
+    )
+
+
+def test_a_text_that_failed_to_publish_may_be_published_by_another_item(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+    record_publishing_failed(
+        session, **run.scope(), item_id=item.id, failure=PublishingFailure.REFUSED
+    )
+    other = another_run_of(session, run.workspace_id, run.project_id)
+    other_item, other_proposal = approved_item(session, other)
+
+    assert begin(session, other, other_item.id, other_proposal).stage is PublishingStage.STARTED
+
+
+def test_the_same_text_in_another_workspace_is_not_refused(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+    other = new_run(session)
+    other_item, other_proposal = approved_item(session, other)
+
+    assert begin(session, other, other_item.id, other_proposal).stage is PublishingStage.STARTED
+
+
+def test_a_run_that_fails_while_its_post_is_being_published_leaves_it_publishing(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+
+    mark_run_failed(session, **run.ids(), error="the worker stopped")
+
+    assert content_item(session, **run.scope(), item_id=item.id).status is (
+        ContentItemStatus.PUBLISHING
+    )
+
+
+def test_a_run_whose_post_is_being_published_has_not_succeeded(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+
+    with pytest.raises(WritingRunUnsettled):
+        mark_run_succeeded(session, **run.ids(), cost_usd=Decimal("0.1"))
+
+    published(session, run, item.id)
+    finished = mark_run_succeeded(session, **run.ids(), cost_usd=Decimal("0.1"))
+    assert finished.status is WritingRunStatus.SUCCEEDED
+
+
+def test_the_database_refuses_a_published_item_without_its_post(session, run):
+    item, proposal = approved_item(session, run)
+    begin(session, run, item.id, proposal)
+
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.execute(
+            update(ContentItemRecord)
+            .where(ContentItemRecord.id == item.id)
+            .values(status=ContentItemStatus.PUBLISHED, settled_at=func.now())
+        )
+
+
+def another_project_run(session: Session, run: RunOfProject) -> RunOfProject:
+    project = Project(
+        workspace_id=run.workspace_id, name="Other", source_repo_url="https://example.com/b.git"
+    )
+    session.add(project)
+    session.flush()
+    return another_run_of(session, run.workspace_id, project.id)

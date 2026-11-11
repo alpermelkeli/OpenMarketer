@@ -12,6 +12,10 @@ events (``openmarketer_core.run_events``):
 - ``decide``: ``variant_chosen`` with the round, the variant and how many numbers the profile
   does not hold it has, or ``revising`` with the round it rewrites;
 - ``store``: ``draft_stored`` with the content item the draft was stored as;
+- ``target``: ``target_chosen`` with whether the post would be published (``live``), the
+  username of the account it would be published from and what that is reckoned to cost, both
+  ``None`` for a dry run; the username is the platform's, checked when the account was
+  connected;
 - ``record``: ``post_recorded`` with how the post ended.
 
 ``propose`` shows nothing: the gate records that the action waits for a person and how that
@@ -38,6 +42,7 @@ VARIANTS_CHECKED = "variants_checked"  # {round, kept, broken}
 VARIANT_CHOSEN = "variant_chosen"  # {round, variant, flagged_numbers}
 REVISING = "revising"  # {round}
 DRAFT_STORED = "draft_stored"  # {content_item_id}
+TARGET_CHOSEN = "target_chosen"  # {live, username, cost_estimate_usd}
 POST_RECORDED = "post_recorded"  # {status}
 
 
@@ -88,6 +93,16 @@ def _stored(state: Mapping[str, Any], update: Mapping[str, Any]) -> list[RunEven
     return [RunEvent(DRAFT_STORED, {"content_item_id": update["content_item_id"]})]
 
 
+def _targeted(state: Mapping[str, Any], update: Mapping[str, Any]) -> list[RunEvent]:
+    kept = update["target"]
+    detail = {
+        "live": bool(kept),
+        "username": kept.get("username"),
+        "cost_estimate_usd": kept.get("cost_estimate_usd"),
+    }
+    return [RunEvent(TARGET_CHOSEN, detail)]
+
+
 def _recorded(state: Mapping[str, Any], update: Mapping[str, Any]) -> list[RunEvent]:
     return [RunEvent(POST_RECORDED, {"status": update["result"]["status"]})]
 
@@ -99,5 +114,6 @@ _SHOWN = {
     "check": _checked,
     "decide": _decided,
     "store": _stored,
+    "target": _targeted,
     "record": _recorded,
 }

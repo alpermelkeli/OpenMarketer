@@ -1,11 +1,14 @@
 """Tests for the writer's rules: the writing context, the code rules, the decide rule, the plan
 the content item stores and the prompts, which come from the same definitions as the checks."""
 
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from openmarketer_core.profile import ProductProfile
+from openmarketer_core.social_accounts.catalog import SocialPlatform
+from openmarketer_core.social_accounts.publishing import PublishingAccount
 from openmarketer_core.writing.brief import WritingPlatform
 from openmarketer_core.writing.writer_agent import rules
 from openmarketer_core.writing.writer_agent.rules import (
@@ -205,10 +208,35 @@ def test_the_draft_keeps_the_shape_the_content_item_stores_with_no_review():
 
 # --------------------------------------------------------------------------- the outcome
 def test_the_outcome_of_publish_post_says_how_the_post_ended():
-    assert rules.post_status(True, "") is PostStatus.DRY_RUN
-    assert rules.post_status(False, rules.REJECTED_OUTCOME) is PostStatus.REJECTED
-    assert rules.post_status(False, rules.EXPIRED_OUTCOME) is PostStatus.EXPIRED
-    assert rules.post_status(False, "the handler failed") is PostStatus.FAILED
+    assert rules.post_status(True, "", {"status": "published"}) is PostStatus.PUBLISHED
+    assert rules.post_status(True, "", {"status": "dry_run"}) is PostStatus.DRY_RUN
+    assert rules.post_status(False, rules.REJECTED_OUTCOME, {}) is PostStatus.REJECTED
+    assert rules.post_status(False, rules.EXPIRED_OUTCOME, {}) is PostStatus.EXPIRED
+    assert rules.post_status(False, "the handler failed", {}) is PostStatus.FAILED
+
+
+def test_a_handler_that_answers_no_status_recorded_a_dry_run():
+    assert rules.post_status(True, "", {}) is PostStatus.DRY_RUN
+
+
+# ----------------------------------------------------------------- where a post is published
+def test_a_post_for_x_is_published_from_the_x_account_and_one_for_instagram_from_none():
+    assert rules.social_platform(WritingPlatform.X) is SocialPlatform.X
+    assert rules.social_platform(WritingPlatform.INSTAGRAM) is None
+
+
+def test_a_connected_account_is_the_target_with_its_estimate_as_exact_text():
+    account = PublishingAccount(account_id="42", username="acme")
+
+    assert rules.publishing_target(account, Decimal("0.015")) == {
+        "account_id": "42",
+        "username": "acme",
+        "cost_estimate_usd": "0.015",
+    }
+
+
+def test_no_connected_account_is_no_target():
+    assert rules.publishing_target(None, Decimal("0.015")) == {}
 
 
 # ----------------------------------------------------------------- prompts and schemas

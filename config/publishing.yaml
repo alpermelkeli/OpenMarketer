@@ -1,0 +1,24 @@
+# OpenMarketer - what publishing a post is reckoned to cost
+#
+# A platform may bill its API per request to the installation's developer account.
+# Each figure is what one post is reckoned to cost, in US dollars: a person reads it
+# on the proposal before approving the post, and the content item records it once
+# the post is published. It is an estimate: nothing caps what posts cost.
+#
+# Every platform a project can connect an account of is listed. A post with a link
+# is not priced: the writer's no_links rule keeps links out of every post. Read with
+# PUBLISHING_CONFIG_PATH, this file by default.
+#
+# IMPORTANT: prices change. Check them in the platform's developer console before
+# relying on them.
+
+version: 1
+
+platforms:
+  x:
+    # X API pay-per-use: a post created. X has published no separate price for an
+    # image uploaded with it; a post with an image is reckoned at the same figure.
+    # Reading the account's latest posts after a lost answer is billed per post
+    # read (5 at most) and is not in this figure.
+    post_usd: 0.015
+    post_with_image_usd: 0.015

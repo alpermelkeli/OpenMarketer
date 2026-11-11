@@ -9,8 +9,9 @@ graph imports; importing it is what puts them on ``agent``.
   approved profile into it, with the version's id, so every later step and every later attempt
   writes from that version, whatever a person approves meanwhile.
 - ``WriterContext`` is what a node needs that is not state: the model of the attempt, which
-  answers the role ``writer``, the limits, and three readings ``prepare`` asks for: the
-  project's approved profile, and the asset and the research run a brief may name.
+  answers the role ``writer``, the limits, three readings ``prepare`` asks for: the
+  project's approved profile, and the asset and the research run a brief may name, and what
+  ``target`` reads: the project's connected account and what a post is reckoned to cost.
 - The two actions. ``StoreDraft`` is internal: it stores the draft the person will review as
   the run's content item, ``proposed``, and answers ``{"content_item_id"}``; storing the same
   draft again gives back the stored item, so repeating it is harmless (keyed by the action's
@@ -26,25 +27,38 @@ graph imports; importing it is what puts them on ``agent``.
   is ``{}`` and each alternative's ``review`` is ``None``.
   ``PublishPost`` publishes, so the policy gate holds it as a proposal until a person approves
   or rejects it; its payload names the content item and carries the text and the image's
-  version, so what the person approves is in the proposal itself. In the first step of the
-  writer its handler records the post as it would have been sent (``dry_run``) and sends
-  nothing; repeating it is harmless, keyed by the action's id.
+  version, so what the person approves is in the proposal itself. It also names where the
+  post goes: the project's connected account on the post's platform (its identifier and its
+  username) and what publishing it is reckoned to cost (``config/publishing.yaml``). Its
+  handler publishes the post from that account and answers ``{"status": "published"}``; a
+  payload that names no account (the project had none connected when the run proposed the
+  post, or its platform has none yet) is recorded as it would have been sent (``dry_run``)
+  and sends nothing. The handler publishes once, keyed by the content item.
 
-The ids of the inputs are left out of a payload that has none (``_absent``), so a thread that
-asked for an action before they existed asks for the same one when its node runs again.
+The ids of the inputs and the target are left out of a payload that has none (``_absent``),
+so a thread that asked for an action before they existed asks for the same one when its node
+runs again.
 """
 
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Annotated, Any, TypedDict
+from decimal import Decimal
+from typing import Annotated, Any, Self, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from openmarketer_core.agent_runtime.actions import ActionEffect
 from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.llm import ChatModel
 from openmarketer_core.profile import FeatureId, ProductProfile
+from openmarketer_core.social_accounts.catalog import (
+    MAX_ACCOUNT_ID_LENGTH,
+    MAX_USERNAME_LENGTH,
+    SocialPlatform,
+)
+from openmarketer_core.social_accounts.publishing import PublishingAccount
+from openmarketer_core.social_accounts.publishing_costs import MAX_POST_COST_USD, PublishingCosts
 from openmarketer_core.writing.brief import WritingBrief
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND, WritingRunInput
 from openmarketer_core.writing.writer_agent import rules
@@ -93,6 +107,9 @@ class WriterState(TypedDict):
     # content item it was stored as; {} and "" until then.
     draft: dict[str, Any]
     content_item_id: str
+    # Where ``publish_post`` publishes the post (``rules.publishing_target``): the account and
+    # the estimate, or {} for a dry run. A thread stored before it existed has no such key.
+    target: dict[str, Any]
     status: str  # a ``PostStatus``'s value once publish_post's outcome came, "" before
     action_error: str  # what the runtime said of an action that did not succeed
     result: dict[str, Any]  # what ``record`` hands to whoever stores the run; {} until then
@@ -122,6 +139,10 @@ class WriterContext:
     ``rules.MAX_SITE_QUOTES`` quotes, and raises ``rules.ResearchNotUsable`` when the project
     has no such run or it has not succeeded. Only ``prepare`` calls them, the last two only for
     a brief that names one, once per run unless an attempt dies before its checkpoint.
+    ``publishing_account`` reads the project's connected account on a platform, with no token,
+    or gives ``None`` when it has none; ``publishing_costs`` is what a post is reckoned to cost
+    on each platform. Only ``target`` reads them, once per run unless an attempt dies before
+    its checkpoint.
     A context serves one attempt, in one thread.
     """
 
@@ -130,6 +151,8 @@ class WriterContext:
     approved_profile: Callable[[], ApprovedProfile | None]
     post_image: Callable[[uuid.UUID], PostImage]
     research_findings: Callable[[uuid.UUID], ResearchFindings]
+    publishing_account: Callable[[SocialPlatform], PublishingAccount | None]
+    publishing_costs: PublishingCosts
 
 
 agent = Agent(WRITING_RUN_KIND, state=WriterState, context=WriterContext)
@@ -146,12 +169,27 @@ class _Payload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def _absent(value: uuid.UUID | None) -> bool:
+def _absent(value: object) -> bool:
     return value is None
 
 
 # The id of a ready input of the brief, left out of the payload when the brief named none.
 InputId = Annotated[uuid.UUID | None, Field(exclude_if=_absent)]
+# Where the post is published, left out of the payload of a dry run.
+TargetAccountId = Annotated[
+    str | None,
+    StringConstraints(min_length=1, max_length=MAX_ACCOUNT_ID_LENGTH),
+    Field(exclude_if=_absent),
+]
+TargetUsername = Annotated[
+    str | None,
+    StringConstraints(min_length=1, max_length=MAX_USERNAME_LENGTH),
+    Field(exclude_if=_absent),
+]
+CostEstimate = Annotated[
+    Decimal | None,
+    Field(ge=0, le=MAX_POST_COST_USD, decimal_places=6, exclude_if=_absent),
+]
 
 
 class RuleFinding(_Payload):
@@ -247,7 +285,11 @@ class StoreDraft(_Payload):
 )
 class PublishPost(_Payload):
     """Publish the post of this run: its content item, with the text and the version of the
-    image the person approves (none for a post without one)."""
+    image the person approves (none for a post without one), from the account it names.
+
+    ``account_id`` (the platform's identifier of the account), ``username`` and
+    ``cost_estimate_usd`` are all there or none: none is a dry run.
+    """
 
     workspace_id: uuid.UUID
     project_id: uuid.UUID
@@ -255,6 +297,21 @@ class PublishPost(_Payload):
     content_item_id: uuid.UUID
     text: PostText
     asset_version_id: InputId = None
+    account_id: TargetAccountId = None
+    username: TargetUsername = None
+    cost_estimate_usd: CostEstimate = None
+
+    @model_validator(mode="after")
+    def _whole_target(self) -> Self:
+        named = [self.account_id, self.username, self.cost_estimate_usd]
+        if any(value is None for value in named) and any(value is not None for value in named):
+            raise ValueError("a post names its account, its username and its estimate, or none")
+        return self
+
+    @property
+    def dry_run(self) -> bool:
+        """Whether the post is recorded as it would have been sent, with no account."""
+        return self.account_id is None
 
 
 def initial_state(run: WritingRunInput, brief: WritingBrief) -> WriterState:
@@ -275,6 +332,7 @@ def initial_state(run: WritingRunInput, brief: WritingBrief) -> WriterState:
         "chosen": -1,
         "draft": {},
         "content_item_id": "",
+        "target": {},
         "status": "",
         "action_error": "",
         "result": {},

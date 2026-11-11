@@ -5,7 +5,7 @@ This module is wiring only. The rules live in ``rules.py``, model access goes th
 reach the database and the world only through the workflow that runs them, the second after
 the policy gate. The state holds plain data only.
 
-    prepare -> write -> check -> decide -> store -> propose -> record -> END
+    prepare -> write -> check -> decide -> store -> target -> propose -> record -> END
                          ^          |
                          +- revise -+
 
@@ -18,10 +18,11 @@ call without tools. ``check`` runs the code rules on every variant, the run's on
 ``decide`` applies ``rules.decide``, and ends the run when nothing can be proposed; ``revise``
 has the writer rewrite from the code's findings, for another round. ``store`` asks for
 ``store_draft``, which stores the draft the person will review as the run's content item, and
-keeps the item's id; ``propose`` asks for ``publish_post`` with that id, the text and the
-image's version: the gate holds it until a person decides, and a rejection or an expiry comes
-back as the outcome. Each action is asked for by a node of its own. ``record`` sets the
-result, which whoever runs the graph stores.
+keeps the item's id; ``target`` reads the project's connected account on the post's
+platform and what a post is reckoned to cost, and keeps them; ``propose`` asks for
+``publish_post`` with that id, the text, the image's version and the target: the gate holds it
+until a person decides, and a rejection or an expiry comes back as the outcome. Each action is
+asked for by a node of its own. ``record`` sets the result, which whoever runs the graph stores.
 
 The writer has no tools: it answers with one JSON object, read strictly. An answer that does
 not fit is told what was wrong and asked once more, inside the node.
@@ -31,12 +32,18 @@ What each node shows of the run's progress is ``progress.py``'s, declared on the
 Every node is safe to run twice: a step that died before its checkpoint is taken again from
 the same state, and the model calls are made for this attempt only. ``store`` and ``propose``
 each ask for the same action whenever they run, built from the state alone, and do nothing
-before it.
+before it. That is why the account is read by ``target``, a node of its own before
+``propose``: read by ``propose``, an account connected or replaced while the post waits for a
+person would change what ``propose`` asks for when it runs again, and the runtime refuses a
+request that changed. A thread stored before ``target`` existed and waiting in ``store``
+passes through it; one already waiting in ``propose`` has no target and asks for the dry run
+it asked for before.
 """
 
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel
@@ -331,18 +338,37 @@ def store(state: WriterState, context: WriterContext) -> dict[str, Any]:
 
 
 @agent.node
+def target(state: WriterState, context: WriterContext) -> dict[str, Any]:
+    """Keep where the post would be published: the project's connected account on the post's
+    platform and what a post is reckoned to cost, or nothing for a dry run."""
+    platform = rules.social_platform(_brief(state).platform)
+    if platform is None:
+        return {"target": {}}
+    account = context.publishing_account(platform)
+    with_image = bool(state["draft"].get("asset_version_id"))
+    estimate = context.publishing_costs.estimate(platform, with_image=with_image)
+    return {"target": rules.publishing_target(account, estimate)}
+
+
+@agent.node
 def propose(state: WriterState, context: WriterContext) -> dict[str, Any]:
     """Ask for ``publish_post``: the gate holds it as a proposal until a person decides."""
     asset_version_id = state["draft"].get("asset_version_id")
+    # A thread stored before ``target`` existed has none, and asks for the dry run it asked for.
+    kept = state.get("target") or {}
+    estimate = kept.get("cost_estimate_usd")
     outcome = request_action(
         PublishPost(
             **_run_ids(state),
             content_item_id=uuid.UUID(state["content_item_id"]),
             text=state["draft"]["text"],
             asset_version_id=uuid.UUID(asset_version_id) if asset_version_id else None,
+            account_id=kept.get("account_id"),
+            username=kept.get("username"),
+            cost_estimate_usd=Decimal(estimate) if estimate is not None else None,
         )
     )
-    status = rules.post_status(outcome.succeeded, outcome.error)
+    status = rules.post_status(outcome.succeeded, outcome.error, outcome.result)
     return {"status": status.value, "action_error": outcome.error}
 
 
@@ -393,7 +419,8 @@ agent.edge(prepare, write)
 agent.edge(write, check)
 agent.edge(check, decide)
 agent.edge(revise, check)
-agent.edge(store, propose)
+agent.edge(store, target)
+agent.edge(target, propose)
 agent.edge(propose, record)
 agent.edge(record, END)
 
@@ -405,5 +432,5 @@ def after_decide(state: WriterState) -> str:
 
 def recursion_limit(limits: rules.Limits) -> int:
     """How many graph steps a run under ``limits`` may take before it is stopped as a defect."""
-    # prepare and write; check, decide and revise per round; store, propose and record
-    return 2 + 3 * limits.max_rounds + 3 + 10
+    # prepare and write; check, decide and revise per round; store, target, propose and record
+    return 2 + 3 * limits.max_rounds + 4 + 10
