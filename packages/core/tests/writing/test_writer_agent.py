@@ -54,6 +54,7 @@ from openmarketer_core.writing.writer_agent.definitions import (
     STORE_DRAFT,
     ApprovedProfile,
     PublishPost,
+    StoreDraft,
     WriterContext,
     agent,
     initial_state,
@@ -186,6 +187,7 @@ def a_variant(body: str = "Your notes keep up offline. Write anywhere.", **chang
     variant = {
         "text": body,
         "angle": "Freedom from connectivity.",
+        "hook": "People who write on trains, who lost a note to a dead connection.",
         "language": "en",
         "claims": [{"statement": "Notes sync after offline use.", "feature_ids": ["offline-sync"]}],
     }
@@ -501,6 +503,37 @@ def test_a_number_the_profile_does_not_hold_is_flagged_for_the_person():
     assert run.result.flagged_numbers == ["3"]
     [(_, draft), _] = run.asked
     assert draft["flagged_numbers"] == ["3"]
+
+
+def test_a_cliche_is_flagged_for_the_person_and_the_variant_still_proposed():
+    chat = ScriptedChat(writer=[a_draft(a_variant("Offline writing, seamlessly. Keep going."))])
+
+    run = Run(chat, brief=ONE_VARIANT)
+
+    assert run.result.check_report["passed"]
+    assert run.result.check_report["flagged_phrases"] == ["seamlessly"]
+    [(_, draft), _] = run.asked
+    assert draft["check_report"]["flagged_phrases"] == ["seamlessly"]
+
+
+def test_of_the_variants_that_keep_every_code_rule_the_one_without_a_cliche_wins():
+    chat = ScriptedChat(
+        writer=[a_draft(a_variant("Unlock offline writing."), a_variant("Offline? Keep writing."))]
+    )
+
+    run = Run(chat)
+
+    assert run.result.chosen["index"] == 1
+
+
+def test_the_variants_hook_is_kept_with_the_variant_in_the_draft():
+    chat = ScriptedChat(writer=[a_draft()])
+
+    run = Run(chat)
+
+    [(_, draft), _] = run.asked
+    assert draft["alternatives"][0]["variant"]["hook"] == a_variant()["hook"]
+    assert run.result.chosen["variant"]["hook"] == a_variant()["hook"]
 
 
 def test_a_language_the_profile_does_not_have_fails_the_variant():
@@ -1138,3 +1171,18 @@ def test_a_writing_context_and_a_draft_kept_before_inputs_existed_name_none():
         "research_run_id": None,
     }
     assert rules.situation(WritingPlatform.X, kept_before).image_words == []
+
+
+def test_a_draft_kept_before_hooks_and_flagged_phrases_asks_for_the_same_store_draft():
+    variant = {k: v for k, v in a_variant().items() if k != "hook"}
+    check = {"passed": True, "failures": [], "length": 43, "flagged_numbers": []}
+    draft = rules.draft_of(
+        chosen=0, variants=[variant, variant], checks=[check, check], context={}, cost_usd=0.01
+    )
+    ids = {"workspace_id": str(uuid.uuid4()), "project_id": str(uuid.uuid4()), "run_id": ITEM_ID}
+
+    asked = StoreDraft.model_validate({**ids, **draft}).model_dump(mode="json")
+
+    assert asked["alternatives"][0]["variant"] == variant
+    assert asked["alternatives"][0]["check"] == check
+    assert asked["check_report"] == check

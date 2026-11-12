@@ -27,6 +27,9 @@ a punycode label. It refuses product names written with a dot, such as "Node.js"
 from a domain would take a list again, and the writer is told to write such a name without its
 dot. It also refuses a full stop with no space after it, between two words of any script.
 
+On X a post is told to carry no hashtag or one, though two are allowed, and to end on
+something a reader wants to answer, since replies are what widen a post's reach there.
+
 Instagram takes a feed caption of at most 2,200 characters and 30 hashtags, and makes no link
 in a caption clickable: a post sends readers to the "link in bio" instead, which the writer is
 told, and an address in a caption is refused like any other link. Instagram does not publish
@@ -58,7 +61,7 @@ X_WEIGHT_ONE_RANGES: tuple[tuple[int, int], ...] = (
     (0x2032, 0x2037),
 )
 X_MAX_WEIGHTED_LENGTH = 280
-X_MAX_HASHTAGS = 2
+X_MAX_HASHTAGS = 1  # hashtags rarely help on X; one names a conversation at most
 INSTAGRAM_MAX_CAPTION_LENGTH = 2200
 INSTAGRAM_MAX_HASHTAGS = 30
 
@@ -196,6 +199,17 @@ PLATFORM_RULES: Mapping[WritingPlatform, PlatformRules] = MappingProxyType(
             allows_links=False,
             allows_mentions=False,
             image_platforms=frozenset(Platform),
+            habits=(
+                "Most good posts on X are one to four short lines; a single sentence can be "
+                "the whole post.",
+                "Hashtags rarely help on X: use none, or one at most when it names a "
+                "conversation people already follow, and never one in the middle of a sentence.",
+                "Replies and conversation are what make X show a post to more people: end on "
+                "something a reader wants to answer.",
+                "The post stands on its own, with no link: X shows a post with a link to fewer "
+                "people.",
+                "Plain words, and one emoji at most, only where it adds meaning.",
+            ),
         ),
         WritingPlatform.INSTAGRAM: PlatformRules(
             name="Instagram",

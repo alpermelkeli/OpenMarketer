@@ -60,7 +60,7 @@ def test_the_text_is_counted_after_nfc_normalization():
 def test_x_allows_280_and_two_hashtags_and_no_links_or_mentions():
     rules = platform_rules(WritingPlatform.X)
     assert rules.max_length == 280
-    assert rules.max_hashtags == 2
+    assert rules.max_hashtags == 1
     assert not rules.allows_links and not rules.allows_mentions
 
 

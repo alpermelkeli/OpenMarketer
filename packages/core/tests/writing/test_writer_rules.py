@@ -16,6 +16,7 @@ from openmarketer_core.writing.writer_agent.rules import (
     Limits,
     PostStatus,
     Variant,
+    WrittenVariant,
 )
 
 PROFILE = ProductProfile.model_validate(
@@ -45,7 +46,7 @@ X_WITH_INPUTS = rules.situation(
 
 
 def variant(text: str = "Write anywhere.", **changes: Any) -> Variant:
-    data = {"text": text, "angle": "a", "language": "en", "claims": [], **changes}
+    data = {"text": text, "angle": "a", "hook": "h", "language": "en", "claims": [], **changes}
     return Variant.model_validate(data)
 
 
@@ -82,11 +83,11 @@ def test_a_claim_without_a_feature_fails():
     assert failures(variant(claims=[claim])) == ["claims"]
 
 
-def test_links_mentions_and_a_third_hashtag_fail():
+def test_links_mentions_and_a_second_hashtag_fail():
     assert failures(variant("See acme.app")) == ["no_links"]
     assert failures(variant("Thanks @acme")) == ["no_mentions"]
-    assert failures(variant("#a #b #c")) == ["hashtags"]
-    assert failures(variant("#a #b")) == []
+    assert failures(variant("#a #b")) == ["hashtags"]
+    assert failures(variant("#a")) == []
 
 
 def test_an_instagram_caption_over_2200_characters_fails():
@@ -120,6 +121,14 @@ def test_the_writer_is_told_instagrams_habits():
     assert '"link in bio"' in prompt
 
 
+def test_the_writer_is_told_xs_habits():
+    prompt = rules.write_system_prompt(X, 3)
+
+    assert X.platform.habits
+    for habit in X.platform.habits:
+        assert habit in prompt
+
+
 def test_an_x_post_is_told_no_habits_of_another_platform():
     assert "link in bio" not in rules.write_system_prompt(X, 3)
 
@@ -135,6 +144,40 @@ def test_a_language_is_one_of_the_profiles_or_a_region_of_one():
     assert failures(variant(language="de")) == ["language"]
 
 
+def test_a_cliche_is_flagged_and_the_variant_still_passes():
+    report = rules.check_variant(variant("A game-changer for offline notes."), X, set())
+
+    assert report["passed"]
+    assert report["flagged_phrases"] == ["game-changer"]
+
+
+@pytest.mark.parametrize(
+    ("text", "flagged"),
+    [
+        ("INTRODUCING offline notes.", ["introducing"]),
+        ("A game changer, really.", ["game-changer"]),
+        ("We’re excited to announce it.", ["excited to announce"]),
+        ("It unlocked nothing and elevated no one.", []),
+        ("Reintroducing paper.", []),
+    ],
+)
+def test_a_cliche_is_matched_in_any_case_on_whole_words_only(text, flagged):
+    assert rules.cliches_in(text) == flagged
+
+
+def test_the_writer_is_told_to_avoid_every_phrase_that_is_flagged():
+    prompt = rules.write_system_prompt(X, 3)
+
+    for phrase in rules.CLICHES:
+        assert f'"{phrase}"' in prompt
+
+
+def test_the_examples_feature_list_holds_cliches_and_its_human_post_none():
+    assert rules.cliches_in(rules.EXAMPLE_FEATURE_LIST)
+    assert rules.cliches_in(rules.EXAMPLE_HUMAN_POST) == []
+    assert rules.EXAMPLE_HUMAN_POST.split("\n")[0] in rules.write_system_prompt(X, 3)
+
+
 def test_numbers_the_profile_holds_are_not_flagged_and_others_are():
     report = rules.check_variant(variant("30 days offline, 2,000 notes."), X, {"30"})
     assert report["flagged_numbers"] == ["2000"]
@@ -146,8 +189,13 @@ def test_the_numbers_of_the_profile_are_read_from_its_words():
 
 
 # ---------------------------------------------------------------------------- decide rule
-def kept(*flagged: str) -> dict[str, Any]:
-    return {"passed": True, "failures": [], "flagged_numbers": list(flagged)}
+def kept(*flagged: str, phrases: tuple[str, ...] = ()) -> dict[str, Any]:
+    return {
+        "passed": True,
+        "failures": [],
+        "flagged_numbers": list(flagged),
+        "flagged_phrases": list(phrases),
+    }
 
 
 BROKEN = {"passed": False, "failures": [{"rule": "length", "finding": ""}], "flagged_numbers": []}
@@ -164,6 +212,18 @@ def test_the_first_variant_that_keeps_every_code_rule_is_proposed():
 
 def test_the_variant_with_fewer_flagged_numbers_is_preferred():
     assert decide([kept("3", "40"), kept("3"), kept("7")]).chosen == 1
+
+
+def test_the_variant_with_fewer_flags_numbers_and_phrases_together_is_preferred():
+    checks = [kept("3", phrases=("unlock",)), kept(phrases=("seamless",)), kept("7")]
+
+    assert decide(checks).chosen == 1
+
+
+def test_a_report_kept_before_phrases_were_flagged_counts_its_numbers_only():
+    before = {"passed": True, "failures": [], "flagged_numbers": []}
+
+    assert decide([kept(phrases=("unlock",)), before]).chosen == 1
 
 
 def test_a_variant_that_keeps_every_code_rule_is_proposed_at_the_limit_too():
@@ -258,7 +318,7 @@ def test_the_prompt_tells_every_code_rule_with_the_platforms_values():
         told = rule.told(X_WITH_INPUTS)
         assert told is not None and told in prompt
     assert "at most 280 as X counts it" in prompt
-    assert "At most 2 hashtags." in prompt
+    assert "At most 1 hashtag." in prompt
     assert "(en, tr)" in prompt
 
 
@@ -272,7 +332,38 @@ def test_a_rule_that_does_not_apply_is_neither_told_nor_checked():
     assert report["passed"]
 
 
-@pytest.mark.parametrize("schema", [Draft, Variant, rules.Claim])
+def test_the_writer_is_told_what_is_not_a_claim_needs_no_feature():
+    prompt = rules.write_system_prompt(X, 3)
+
+    assert "A claim is a concrete statement of what the product does or has." in prompt
+    assert (
+        "These are not claims and need no feature: the reader's situation or pain, a feeling, "
+        "a question, an opinion, a joke, a tiny story"
+    ) in prompt
+    assert "Make one or two claims at most" in prompt
+
+
+def test_a_variant_the_writer_submits_without_a_hook_is_refused():
+    data = variant().model_dump(exclude={"hook"})
+
+    with pytest.raises(ValueError, match="hook"):
+        WrittenVariant.model_validate(data)
+
+
+def test_a_hook_longer_than_its_bound_is_refused():
+    data = {**variant().model_dump(), "hook": "h" * (rules.MAX_HOOK_CHARS + 1)}
+
+    with pytest.raises(ValueError, match="hook"):
+        WrittenVariant.model_validate(data)
+
+
+def test_a_variant_kept_before_hooks_existed_reads_and_dumps_without_one():
+    data = variant().model_dump(exclude={"hook"})
+
+    assert Variant.model_validate(data).model_dump(mode="json") == data
+
+
+@pytest.mark.parametrize("schema", [Draft, Variant, WrittenVariant, rules.Claim])
 def test_the_submission_schemas_forbid_extra_fields(schema):
     assert schema.model_json_schema()["additionalProperties"] is False
 

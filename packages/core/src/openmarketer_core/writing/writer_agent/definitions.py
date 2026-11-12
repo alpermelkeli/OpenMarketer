@@ -37,7 +37,8 @@ graph imports; importing it is what puts them on ``agent``.
 
 The ids of the inputs and the target are left out of a payload that has none (``_absent``),
 so a thread that asked for an action before they existed asks for the same one when its node
-runs again.
+runs again; so are a variant's ``hook`` and a report's ``flagged_phrases`` in a draft a thread
+stored before the writer gave them.
 """
 
 import uuid
@@ -170,6 +171,7 @@ PostText = Annotated[str, StringConstraints(min_length=1, max_length=rules.MAX_T
 RuleName = Annotated[str, StringConstraints(min_length=1, max_length=40)]
 Finding = Annotated[str, StringConstraints(max_length=rules.MAX_FINDING_CHARS)]
 FlaggedNumber = Annotated[str, StringConstraints(max_length=rules.MAX_NUMBER_CHARS)]
+FlaggedPhrase = Annotated[str, StringConstraints(max_length=rules.MAX_PHRASE_CHARS)]
 ClaimStatement = Annotated[str, StringConstraints(min_length=1, max_length=rules.MAX_CLAIM_CHARS)]
 
 
@@ -206,12 +208,19 @@ class RuleFinding(_Payload):
 
 
 class CheckReport(_Payload):
-    """A variant's code-rule report (``rules.check_variant``)."""
+    """A variant's code-rule report (``rules.check_variant``).
+
+    ``flagged_phrases`` is ``None``, and left out, only in a report a thread stored before
+    phrases were flagged, so that thread asks for the same ``store_draft`` again.
+    """
 
     passed: bool
     failures: list[RuleFinding] = Field(max_length=rules.MAX_FINDINGS)
     length: Annotated[int, Field(ge=0)]
     flagged_numbers: list[FlaggedNumber] = Field(max_length=rules.MAX_FLAGGED_NUMBERS)
+    flagged_phrases: list[FlaggedPhrase] | None = Field(
+        default=None, max_length=rules.MAX_FLAGGED_PHRASES, exclude_if=_absent
+    )
 
 
 class DraftClaim(_Payload):
