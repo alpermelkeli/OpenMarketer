@@ -21,6 +21,7 @@ from pydantic import (
     NewPath,
     RootModel,
     create_model,
+    model_validator,
     with_config,
 )
 from pydantic import dataclasses as pydantic_dataclasses
@@ -28,9 +29,11 @@ from pydantic.types import PathType
 
 from openmarketer_core.agent_runtime.model_input import (
     UNKNOWN_FIELD,
+    WHOLE_OBJECT,
     DoesNotFit,
     UnreadableModel,
     answer_object,
+    code_rule,
     fields_that_name_files_or_code,
     lenient_types,
     read_strict_json,
@@ -466,3 +469,47 @@ def test_answer_is_one_object_bare_or_in_a_fence(text):
 )
 def test_answer_that_is_not_one_object_is_none(text):
     assert answer_object(text) is None
+
+
+# ------------------------------------------------------------- rules a validator holds
+class Ranged(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    low: int
+    high: int
+    note: str = ""
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "Ranged":
+        if self.low > self.high:
+            raise code_rule("low is at most high {not a placeholder}")
+        if self.note == "quote":
+            raise ValueError(f"a message that quotes {self.note}")
+        return self
+
+
+class Holding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ranges: list[Ranged]
+
+
+def test_a_code_rule_of_a_whole_object_is_its_reason():
+    with pytest.raises(DoesNotFit) as refused:
+        read_strict_json(Ranged, {"low": 3, "high": 1})
+
+    assert refused.value.reasons == {WHOLE_OBJECT: "low is at most high {not a placeholder}"}
+
+
+def test_a_code_rule_of_a_held_object_is_named_by_its_path():
+    with pytest.raises(DoesNotFit) as refused:
+        read_strict_json(Holding, {"ranges": [{"low": 1, "high": 2}, {"low": 3, "high": 1}]})
+
+    assert refused.value.reasons == {"ranges.1": "low is at most high {not a placeholder}"}
+
+
+def test_any_other_validator_message_is_never_shown():
+    with pytest.raises(DoesNotFit) as refused:
+        read_strict_json(Holding, {"ranges": [{"low": 1, "high": 2, "note": "quote"}]})
+
+    assert "quotes" not in str(refused.value)

@@ -78,12 +78,6 @@ from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 # The most a tool answer is; a profile with many features is the long one.
 MAX_ANSWER_CHARS = 6000
 TRUNCATED = "\n... truncated"
-# What a writing brief whose fields each fit, but not together, is refused with: the brief's
-# rules of which fields each goal and platform carry (``WritingBrief``), in code's words.
-BRIEF_RULES = (
-    "a brief with goal announce names the feature, and only it does; a brief with goal angle "
-    "carries the angle, and only it does; a post on instagram names its asset"
-)
 
 
 @agent.tool
@@ -394,9 +388,7 @@ def start_writing(
             },
         )
     except DoesNotFit as e:
-        # Fields that each fit and a brief that does not are its rules' doing.
-        why = fields_phrase(e.fields, e.reasons) if e.fields else f": {BRIEF_RULES}"
-        return f"error: the writing brief does not fit{why}"
+        return f"error: the writing brief does not fit{fields_phrase(e.fields, e.reasons)}"
     try:
         run = context.requests.start_writing(brief)
     except WritingNotStarted as e:

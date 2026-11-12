@@ -37,6 +37,7 @@ from pydantic import (
     model_validator,
 )
 
+from openmarketer_core.agent_runtime.model_input import code_rule
 from openmarketer_core.profile import FeatureId
 
 MAX_ANGLE_CHARS = 600
@@ -90,15 +91,45 @@ class WritingBrief(BaseModel):
 
     @model_validator(mode="after")
     def _fields_of_the_goal(self) -> WritingBrief:
-        if (self.goal is WritingGoal.ANNOUNCE) != (self.feature is not None):
-            raise ValueError("an announcement names the feature it announces, and only it does")
-        if (self.goal is WritingGoal.ANGLE) != (self.angle is not None):
-            raise ValueError("an angle brief carries the angle, and only it does")
-        if self.platform in PLATFORMS_WITH_IMAGE and self.asset is None:
-            raise ValueError(
-                f"a post on {self.platform.value} is published with an image: name its asset"
-            )
+        broken = brief_rule_broken(
+            self.platform,
+            self.goal,
+            has_feature=self.feature is not None,
+            has_angle=self.angle is not None,
+            has_asset=self.asset is not None,
+        )
+        if broken is not None:
+            raise code_rule(broken)
         return self
+
+
+def brief_rule_broken(
+    platform: WritingPlatform,
+    goal: WritingGoal,
+    *,
+    has_feature: bool,
+    has_angle: bool,
+    has_asset: bool,
+) -> str | None:
+    """The rule of a brief's fields that these break, in code's words, or ``None``.
+
+    The goal decides the optional fields: announce names a feature, angle carries an angle,
+    introduce carries neither; a post on a platform of ``PLATFORMS_WITH_IMAGE`` names its asset.
+    Each sentence says what to send, so that a model refused for it can mend its brief.
+    """
+    if (goal is WritingGoal.ANNOUNCE) != has_feature:
+        return (
+            "goal announce names the feature it announces in feature, and only goal announce "
+            "has a feature: with introduce or angle, feature is null"
+        )
+    if (goal is WritingGoal.ANGLE) != has_angle:
+        return (
+            "goal angle carries the direction in angle, and only goal angle has an angle: "
+            "with introduce or announce, angle is null"
+        )
+    if platform in PLATFORMS_WITH_IMAGE and not has_asset:
+        return f"a post on {platform.value} is published with an image: name its asset"
+    return None
 
 
 class StoredWritingBriefInvalid(Exception):
