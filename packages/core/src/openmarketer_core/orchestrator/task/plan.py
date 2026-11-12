@@ -45,6 +45,7 @@ from pydantic import (
     model_validator,
 )
 
+from openmarketer_core.agent_runtime.model_input import code_rule
 from openmarketer_core.profile import FeatureId, ProductProfile
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.studio.platforms import Platform
@@ -58,11 +59,11 @@ from openmarketer_core.studio.requests import (
 from openmarketer_core.writing.brief import (
     DEFAULT_VARIANTS,
     MAX_VARIANTS,
-    PLATFORMS_WITH_IMAGE,
     Angle,
     WritingBrief,
     WritingGoal,
     WritingPlatform,
+    brief_rule_broken,
 )
 
 # The operator's words are copied verbatim, so they may be as long as a chat message (the API's
@@ -89,8 +90,6 @@ MAX_TASK_COST_USD = Decimal(20)
 # their schemas minus these.
 WRITING_FIELDS_REPLACED = frozenset({"asset", "research_run_id"})
 STUDIO_FIELDS_REPLACED = frozenset({"reference_asset_ids"})
-# What a writing step's request is checked with in place of the image its reference gives.
-_STAND_IN_ASSET = uuid.UUID(int=0)
 
 Request = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_REQUEST_CHARS)
@@ -211,11 +210,18 @@ class WritingStepRequest(BaseModel):
 
     @model_validator(mode="after")
     def _fits_a_brief(self) -> WritingStepRequest:
-        # The brief's own rules (the fields of each goal) hold for the step as they are. Its
-        # image comes from a reference, so it stands in for one here; that a step for a
-        # platform with an image has its reference is the task agent's rule.
-        stand_in = _STAND_IN_ASSET if self.platform in PLATFORMS_WITH_IMAGE else None
-        self.brief_with(asset=stand_in, research_run_id=None)
+        # The brief's own rules (the fields of each goal) hold for the step as they are, in
+        # the brief's words. Its image comes from a reference, so it counts as given here; that
+        # a step for a platform with an image has its reference is the task agent's rule.
+        broken = brief_rule_broken(
+            self.platform,
+            self.goal,
+            has_feature=self.feature is not None,
+            has_angle=self.angle is not None,
+            has_asset=True,
+        )
+        if broken is not None:
+            raise code_rule(broken)
         return self
 
     def brief_with(
@@ -275,7 +281,7 @@ class WritingStep(BaseModel):
     @model_validator(mode="after")
     def _one_research_reference(self) -> WritingStep:
         if self.research_from_step is not None and self.research_from_report is not None:
-            raise ValueError(
+            raise code_rule(
                 "a writing step names its research once: research_from_step or "
                 "research_from_report, not both"
             )
@@ -311,7 +317,7 @@ class TaskPlan(BaseModel):
     @model_validator(mode="after")
     def _steps_named_once(self) -> TaskPlan:
         if len({step.id for step in self.steps}) != len(self.steps):
-            raise ValueError("a step's id is used once in a plan")
+            raise code_rule("a step's id is used once in a plan")
         return self
 
 

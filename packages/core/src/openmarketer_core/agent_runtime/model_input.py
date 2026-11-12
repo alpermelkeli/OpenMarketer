@@ -9,8 +9,11 @@ positions in a list (see ``UNKNOWN_FIELD``), so a key the model invented cannot 
 into an error that is logged or shown to the model again, and the reason is built from the
 kind of the library's error and the limits the code declared (``at most 1000 characters``,
 ``not one of: 'x', 'linkedin'``), never from the value. A model told only which field is at
-fault sends the same value again. ``answer_object`` is the one reading of an answer a model
-wrote as text, perhaps in a Markdown fence.
+fault sends the same value again. A rule a model's validator holds across fields (an
+announcement names its feature) is raised with ``code_rule``: its sentence is code's own, so it
+is shown as the reason, and a rule of the whole object is shown under ``WHOLE_OBJECT``. Any
+other validator's message may quote the value and is never shown. ``answer_object`` is the one
+reading of an answer a model wrote as text, perhaps in a Markdown fence.
 
 What may be read is checked when it is declared, with two questions about the model that holds
 the fields. ``lenient_types`` finds what the library would silently drop a misspelt or
@@ -27,10 +30,11 @@ import dataclasses
 import json
 import re
 from collections.abc import Iterator, Mapping
-from typing import Any, TypeAliasType, cast, get_args, get_type_hints, is_typeddict
+from typing import Any, LiteralString, TypeAliasType, cast, get_args, get_type_hints, is_typeddict
 
 from pydantic import BaseModel, ImportString, PydanticUserError, ValidationError
 from pydantic.types import PathType
+from pydantic_core import PydanticCustomError
 
 # The most of a name, or of a list of names, an error message repeats of what the model sent.
 MAX_SHOWN_CHARACTERS = 60
@@ -43,6 +47,10 @@ MAX_SHOWN_REASONS = 2
 # What a part of a field's path is shown as when the code did not declare it: a key the model
 # invented, a key of a free-form dictionary, the name of a member of a union.
 UNKNOWN_FIELD = "<field>"
+# What the path of a rule of a whole object is shown as: a rule across its fields names none.
+WHOLE_OBJECT = "<whole>"
+# The kind of error ``code_rule`` raises, whose sentence a refusal shows.
+CODE_RULE = "code_rule"
 
 # The library declares ``ImportString`` as an alias of its argument for a type checker, and it is
 # a class: ``ImportString`` bare is the annotation, and ``ImportString[Any]`` is an ``Annotated``
@@ -89,6 +97,17 @@ def answer_object(text: str) -> dict[str, Any] | None:
     except (ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def code_rule(sentence: str) -> PydanticCustomError:
+    """The error a validator raises for a rule it holds across fields, shown as it is.
+
+    ``sentence`` is code's own: a fixed sentence, or one built from values the code declared
+    (an enum's value), never from what a model sent, since a refusal shows it to the model and
+    the log. It is given no context, so the library fills nothing into it: braces stay as they
+    are.
+    """
+    return PydanticCustomError(CODE_RULE, cast("LiteralString", sentence))
 
 
 def read_strict_json[Model: BaseModel](model: type[Model], data: Mapping[str, Any]) -> Model:
@@ -255,11 +274,15 @@ def _faults(
     reasons: dict[str, list[str]] = {}
     for problem in problems:
         path = ".".join(_shown_part(part, declared) for part in problem["loc"])
-        # An error of the whole model names no field.
-        if not path:
+        if problem["type"] == CODE_RULE:
+            path = path or WHOLE_OBJECT
+            reason = _bounded(problem["msg"])
+        elif not path:
+            # Any other error of the whole model names no field, and its message is not code's.
             continue
+        else:
+            reason = _reason(problem["type"], problem.get("ctx") or {})
         found = reasons.setdefault(path, [])
-        reason = _reason(problem["type"], problem.get("ctx") or {})
         if reason not in found and len(found) < MAX_SHOWN_REASONS:
             found.append(reason)
     # Several problems of one field are one field.

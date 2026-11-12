@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from openmarketer_core.agent_runtime.model_input import WHOLE_OBJECT, DoesNotFit, read_strict_json
 from openmarketer_core.orchestrator.task.plan import (
     MAX_TASK_STEPS,
     STUDIO_FIELDS_REPLACED,
@@ -121,6 +122,28 @@ def test_a_writing_step_keeps_the_rules_of_a_brief():
 
     with pytest.raises(ValidationError):
         plan(STUDIO_STEP, step)
+
+
+def test_a_writing_step_that_breaks_a_brief_rule_says_which_rule_where():
+    step = {**WRITING_STEP, "request": {"platform": "x", "goal": "introduce", "angle": "Bold."}}
+
+    with pytest.raises(DoesNotFit) as refused:
+        read_strict_json(TaskPlan, {"goal": "A post", "steps": [STUDIO_STEP, step], "scope": SCOPE})
+
+    [path] = refused.value.fields
+    assert path.startswith("steps.1.") and path.endswith(".request")
+    assert refused.value.reasons[path].startswith("goal angle carries the direction in angle")
+    assert "Bold." not in str(refused.value)
+
+
+def test_a_plan_that_names_a_step_twice_says_so():
+    with pytest.raises(DoesNotFit) as refused:
+        read_strict_json(
+            TaskPlan,
+            {"goal": "A post", "steps": [STUDIO_STEP, STUDIO_STEP], "scope": SCOPE},
+        )
+
+    assert refused.value.reasons == {WHOLE_OBJECT: "a step's id is used once in a plan"}
 
 
 def test_an_instagram_writing_step_is_read_before_its_image_is_resolved():

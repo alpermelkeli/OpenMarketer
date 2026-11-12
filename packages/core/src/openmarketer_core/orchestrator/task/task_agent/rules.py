@@ -50,7 +50,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
 
 from openmarketer_core.agent_runtime.gate import NOT_APPROVED_TEXTS, ProposalStatus
-from openmarketer_core.agent_runtime.model_input import shown
+from openmarketer_core.agent_runtime.model_input import code_rule, shown
 from openmarketer_core.orchestrator.chat_agent.rules import term_not_to_mention
 from openmarketer_core.orchestrator.task.plan import (
     MAX_REPORT_CHARS,
@@ -161,7 +161,10 @@ class Review(BaseModel):
     @model_validator(mode="after")
     def _plan_of_a_change(self) -> Review:
         if (self.decision is ReviewDecision.CHANGE_PLAN) != (self.plan is not None):
-            raise ValueError("a change of plan carries the new plan, and only a change does")
+            raise code_rule(
+                "decision change_plan carries the new plan in plan, and only a change does: "
+                "with any other decision, plan is null"
+            )
         return self
 
 
@@ -811,7 +814,10 @@ the image", "exact_copy": [every line of text the image shows], "platform": one 
 request: {{"platform": one of {", ".join(platform.value for platform in WritingPlatform)}, \
 "goal": "introduce" (the product), "announce" (one live feature, named in "feature") or \
 "angle" (a direction in the operator's words, in "angle"), "feature": a live feature's id or \
-null, "angle": text or null, "variants": 1 to 5}}.
+null, "angle": text or null, "variants": 1 to 5}}. The goal decides the other two: \
+introduce has feature and angle null; announce has a feature and angle null; angle has an \
+angle and feature null. A post about several features, or with the operator's emphasis, is \
+introduce, or angle with that emphasis in angle.
 - Each step has an "id" you choose (lower-case words joined by hyphens, such as "image" or \
 "post-1"), its "agent", its "request" and "depends_on": the ids of earlier steps it waits for.
 - A writing step may take an earlier step's result by reference: "asset_from_step", the id \
