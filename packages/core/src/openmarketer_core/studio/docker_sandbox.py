@@ -51,6 +51,7 @@ from openmarketer_core.studio.code_screening import (
     screen_code,
     screen_requirements,
 )
+from openmarketer_core.studio.ocr_languages import OCR_LANGUAGES, OcrLanguage
 from openmarketer_core.studio.output_check import (
     OutputLimits,
     RawOutput,
@@ -113,6 +114,9 @@ def _did_not_finish(what: str, seconds: float) -> str:
 class SandboxSettings:
     image: str = "openmarketer/studio-sandbox:dev"
     run_timeout_s: float = 60
+    # Reading an image's text is limited apart from a program: a poster's reading is slower
+    # than most programs, and a reading that runs out of time leaves the words to the verifier.
+    ocr_timeout_s: float = 90
     install_timeout_s: float = 180
     # What a container may take beyond its own time limit to start and stop.
     startup_margin_s: float = 30
@@ -321,14 +325,21 @@ class DockerSandbox:
                 rejected_outputs=result.rejected_outputs + tuple(wrong_size),
             )
 
-    def ocr(self, image: bytes) -> str:
+    def ocr(self, image: bytes, languages: Sequence[OcrLanguage]) -> str:
+        if not languages or any(language not in OCR_LANGUAGES for language in languages):
+            raise SandboxRefused([f"OCR reads only in {', '.join(OCR_LANGUAGES)}"])
         checked, reason = check_image(RawOutput("image", image), self.settings.outputs)
         if checked is None:
             raise SandboxRefused([f"the image to read: {reason}"])
         name = f"image.{_EXTENSIONS[checked.mime]}"
+        command = ["ocr", "--image", f"/in/{name}"]
+        for language in dict.fromkeys(languages):
+            command += ["--language", language]
         with self._work_directory() as work:
             given = self._write_inputs(work, {}, {name: image})
-            report, _ = self._run_container(work, given, None, ["ocr", "--image", f"/in/{name}"])
+            report, _ = self._run_container(
+                work, given, None, command, timeout_s=self.settings.ocr_timeout_s
+            )
         if report.exit_code != 0 or report.text is None:
             raise SandboxFailed("the text in the image could not be read", self._logs(report))
         return report.text[: self.settings.max_ocr_chars]
@@ -403,9 +414,12 @@ class DockerSandbox:
         given: Path,
         deps: Path | None,
         command: Sequence[str],
+        *,
+        timeout_s: float | None = None,
     ) -> tuple[_Report, float]:
         settings = self.settings
         limits = settings.outputs
+        timeout_s = settings.run_timeout_s if timeout_s is None else timeout_s
         args = [
             *self._run_prefix(user=SANDBOX_USER, network="none"),
             "--tmpfs",
@@ -423,7 +437,7 @@ class DockerSandbox:
             settings.image,
             *command,
             "--timeout",
-            f"{settings.run_timeout_s:g}",
+            f"{timeout_s:g}",
             "--max-files",
             str(limits.max_files),
             "--max-file-bytes",
@@ -432,11 +446,11 @@ class DockerSandbox:
             str(settings.max_log_chars),
         ]
         started = time.monotonic()
-        outcome = self._docker(args, settings.run_timeout_s)
+        outcome = self._docker(args, timeout_s)
         duration = time.monotonic() - started
         logs = _command_logs(outcome, settings.max_log_chars)
         if outcome.timed_out:
-            raise SandboxFailed(_did_not_finish("the sandbox", settings.run_timeout_s), logs)
+            raise SandboxFailed(_did_not_finish("the sandbox", timeout_s), logs)
         if outcome.overflowed:
             raise SandboxFailed("the sandbox printed more than it is allowed to", logs)
         report = _read_report(outcome.stdout)

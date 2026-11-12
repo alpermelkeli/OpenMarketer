@@ -25,6 +25,10 @@ def test_a_composition_with_the_image_libraries_is_accepted() -> None:
     assert screen_code(COMPOSITION).accepted
 
 
+def test_the_sandbox_s_typography_helper_may_be_imported() -> None:
+    assert screen_code("from studio_type import fit_text, font\n").accepted
+
+
 def test_importing_subprocess_is_refused() -> None:
     assert reasons("import subprocess") == ("line 1: importing subprocess is forbidden",)
 

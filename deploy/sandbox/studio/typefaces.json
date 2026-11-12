@@ -1,0 +1,224 @@
+{
+  "styles": [
+    "thin",
+    "extralight",
+    "light",
+    "regular",
+    "medium",
+    "semibold",
+    "bold",
+    "extrabold",
+    "black",
+    "italic",
+    "bold-italic"
+  ],
+  "typefaces": [
+    {
+      "name": "League Spartan",
+      "category": "display",
+      "faces": {
+        "extralight": "/usr/share/fonts/opentype/league-spartan/LeagueSpartan-ExtraLight.otf",
+        "light": "/usr/share/fonts/opentype/league-spartan/LeagueSpartan-Light.otf",
+        "regular": "/usr/share/fonts/opentype/league-spartan/LeagueSpartan-Regular.otf",
+        "medium": "/usr/share/fonts/opentype/league-spartan/LeagueSpartan-Medium.otf",
+        "semibold": "/usr/share/fonts/opentype/league-spartan/LeagueSpartan-SemiBold.otf",
+        "bold": "/usr/share/fonts/opentype/league-spartan/LeagueSpartan-Bold.otf",
+        "extrabold": "/usr/share/fonts/opentype/league-spartan/LeagueSpartan-ExtraBold.otf",
+        "black": "/usr/share/fonts/opentype/league-spartan/LeagueSpartan-Black.otf"
+      }
+    },
+    {
+      "name": "Bebas Neue",
+      "category": "display",
+      "faces": {
+        "light": "/usr/share/fonts/opentype/bebas-neue/BebasNeue-Light.otf",
+        "regular": "/usr/share/fonts/opentype/bebas-neue/BebasNeue-Regular.otf",
+        "bold": "/usr/share/fonts/opentype/bebas-neue/BebasNeue-Bold.otf"
+      }
+    },
+    {
+      "name": "Roboto Condensed",
+      "category": "display",
+      "faces": {
+        "light": "/usr/share/fonts/truetype/roboto/unhinted/RobotoCondensed-Light.ttf",
+        "regular": "/usr/share/fonts/truetype/roboto/unhinted/RobotoCondensed-Regular.ttf",
+        "medium": "/usr/share/fonts/truetype/roboto/unhinted/RobotoCondensed-Medium.ttf",
+        "bold": "/usr/share/fonts/truetype/roboto/unhinted/RobotoCondensed-Bold.ttf",
+        "italic": "/usr/share/fonts/truetype/roboto/unhinted/RobotoCondensed-Italic.ttf",
+        "bold-italic": "/usr/share/fonts/truetype/roboto/unhinted/RobotoCondensed-BoldItalic.ttf"
+      }
+    },
+    {
+      "name": "Sora",
+      "category": "display",
+      "faces": {
+        "thin": "/usr/share/fonts/opentype/sora/Sora-Thin.otf",
+        "extralight": "/usr/share/fonts/opentype/sora/Sora-ExtraLight.otf",
+        "light": "/usr/share/fonts/opentype/sora/Sora-Light.otf",
+        "regular": "/usr/share/fonts/opentype/sora/Sora-Regular.otf",
+        "semibold": "/usr/share/fonts/opentype/sora/Sora-SemiBold.otf",
+        "bold": "/usr/share/fonts/opentype/sora/Sora-Bold.otf",
+        "extrabold": "/usr/share/fonts/opentype/sora/Sora-ExtraBold.otf"
+      }
+    },
+    {
+      "name": "Comfortaa",
+      "category": "display",
+      "faces": {
+        "light": "/usr/share/fonts/truetype/comfortaa/Comfortaa-Light.ttf",
+        "regular": "/usr/share/fonts/truetype/comfortaa/Comfortaa-Regular.ttf",
+        "bold": "/usr/share/fonts/truetype/comfortaa/Comfortaa-Bold.ttf"
+      }
+    },
+    {
+      "name": "Inter",
+      "category": "sans",
+      "faces": {
+        "thin": "/usr/share/fonts/opentype/inter/Inter-Thin.otf",
+        "extralight": "/usr/share/fonts/opentype/inter/Inter-ExtraLight.otf",
+        "light": "/usr/share/fonts/opentype/inter/Inter-Light.otf",
+        "regular": "/usr/share/fonts/opentype/inter/Inter-Regular.otf",
+        "medium": "/usr/share/fonts/opentype/inter/Inter-Medium.otf",
+        "semibold": "/usr/share/fonts/opentype/inter/Inter-SemiBold.otf",
+        "bold": "/usr/share/fonts/opentype/inter/Inter-Bold.otf",
+        "extrabold": "/usr/share/fonts/opentype/inter/Inter-ExtraBold.otf",
+        "black": "/usr/share/fonts/opentype/inter/Inter-Black.otf",
+        "italic": "/usr/share/fonts/opentype/inter/Inter-Italic.otf",
+        "bold-italic": "/usr/share/fonts/opentype/inter/Inter-BoldItalic.otf"
+      }
+    },
+    {
+      "name": "Manrope",
+      "category": "sans",
+      "faces": {
+        "extralight": "/usr/share/fonts/truetype/manrope/Manrope-ExtraLight.ttf",
+        "light": "/usr/share/fonts/truetype/manrope/Manrope-Light.ttf",
+        "regular": "/usr/share/fonts/truetype/manrope/Manrope-Regular.ttf",
+        "medium": "/usr/share/fonts/truetype/manrope/Manrope-Medium.ttf",
+        "semibold": "/usr/share/fonts/truetype/manrope/Manrope-SemiBold.ttf",
+        "bold": "/usr/share/fonts/truetype/manrope/Manrope-Bold.ttf",
+        "extrabold": "/usr/share/fonts/truetype/manrope/Manrope-ExtraBold.ttf"
+      }
+    },
+    {
+      "name": "Open Sans",
+      "category": "sans",
+      "faces": {
+        "light": "/usr/share/fonts/truetype/open-sans/OpenSans-Light.ttf",
+        "regular": "/usr/share/fonts/truetype/open-sans/OpenSans-Regular.ttf",
+        "semibold": "/usr/share/fonts/truetype/open-sans/OpenSans-Semibold.ttf",
+        "bold": "/usr/share/fonts/truetype/open-sans/OpenSans-Bold.ttf",
+        "extrabold": "/usr/share/fonts/truetype/open-sans/OpenSans-ExtraBold.ttf",
+        "italic": "/usr/share/fonts/truetype/open-sans/OpenSans-Italic.ttf",
+        "bold-italic": "/usr/share/fonts/truetype/open-sans/OpenSans-BoldItalic.ttf"
+      }
+    },
+    {
+      "name": "Roboto",
+      "category": "sans",
+      "faces": {
+        "thin": "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Thin.ttf",
+        "light": "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Light.ttf",
+        "regular": "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
+        "medium": "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Medium.ttf",
+        "bold": "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Bold.ttf",
+        "black": "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Black.ttf",
+        "italic": "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Italic.ttf",
+        "bold-italic": "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-BoldItalic.ttf"
+      }
+    },
+    {
+      "name": "Lato",
+      "category": "sans",
+      "faces": {
+        "thin": "/usr/share/fonts/truetype/lato/Lato-Thin.ttf",
+        "light": "/usr/share/fonts/truetype/lato/Lato-Light.ttf",
+        "regular": "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
+        "medium": "/usr/share/fonts/truetype/lato/Lato-Medium.ttf",
+        "semibold": "/usr/share/fonts/truetype/lato/Lato-Semibold.ttf",
+        "bold": "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
+        "extrabold": "/usr/share/fonts/truetype/lato/Lato-Heavy.ttf",
+        "black": "/usr/share/fonts/truetype/lato/Lato-Black.ttf",
+        "italic": "/usr/share/fonts/truetype/lato/Lato-Italic.ttf",
+        "bold-italic": "/usr/share/fonts/truetype/lato/Lato-BoldItalic.ttf"
+      }
+    },
+    {
+      "name": "Noto Sans",
+      "category": "sans",
+      "faces": {
+        "regular": "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "bold": "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "italic": "/usr/share/fonts/truetype/noto/NotoSans-Italic.ttf",
+        "bold-italic": "/usr/share/fonts/truetype/noto/NotoSans-BoldItalic.ttf"
+      }
+    },
+    {
+      "name": "EB Garamond",
+      "category": "serif",
+      "faces": {
+        "regular": "/usr/share/fonts/opentype/ebgaramond/EBGaramond12-Regular.otf",
+        "italic": "/usr/share/fonts/opentype/ebgaramond/EBGaramond12-Italic.otf"
+      }
+    },
+    {
+      "name": "Vollkorn",
+      "category": "serif",
+      "faces": {
+        "regular": "/usr/share/fonts/truetype/vollkorn/Vollkorn-Regular.ttf",
+        "medium": "/usr/share/fonts/truetype/vollkorn/Vollkorn-Medium.ttf",
+        "semibold": "/usr/share/fonts/truetype/vollkorn/Vollkorn-SemiBold.ttf",
+        "bold": "/usr/share/fonts/truetype/vollkorn/Vollkorn-Bold.ttf",
+        "extrabold": "/usr/share/fonts/truetype/vollkorn/Vollkorn-ExtraBold.ttf",
+        "black": "/usr/share/fonts/truetype/vollkorn/Vollkorn-Black.ttf",
+        "italic": "/usr/share/fonts/truetype/vollkorn/Vollkorn-Italic.ttf",
+        "bold-italic": "/usr/share/fonts/truetype/vollkorn/Vollkorn-BoldItalic.ttf"
+      }
+    },
+    {
+      "name": "Roboto Slab",
+      "category": "serif",
+      "faces": {
+        "thin": "/usr/share/fonts/opentype/roboto/slab/RobotoSlab-Thin.otf",
+        "light": "/usr/share/fonts/opentype/roboto/slab/RobotoSlab-Light.otf",
+        "regular": "/usr/share/fonts/opentype/roboto/slab/RobotoSlab-Regular.otf",
+        "bold": "/usr/share/fonts/opentype/roboto/slab/RobotoSlab-Bold.otf"
+      }
+    },
+    {
+      "name": "Noto Serif",
+      "category": "serif",
+      "faces": {
+        "regular": "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf",
+        "bold": "/usr/share/fonts/truetype/noto/NotoSerif-Bold.ttf",
+        "italic": "/usr/share/fonts/truetype/noto/NotoSerif-Italic.ttf",
+        "bold-italic": "/usr/share/fonts/truetype/noto/NotoSerif-BoldItalic.ttf"
+      }
+    },
+    {
+      "name": "JetBrains Mono",
+      "category": "mono",
+      "faces": {
+        "light": "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Light.ttf",
+        "regular": "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
+        "medium": "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Medium.ttf",
+        "semibold": "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-SemiBold.ttf",
+        "bold": "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Bold.ttf",
+        "extrabold": "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-ExtraBold.ttf",
+        "italic": "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Italic.ttf",
+        "bold-italic": "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-BoldItalic.ttf"
+      }
+    },
+    {
+      "name": "Fira Code",
+      "category": "mono",
+      "faces": {
+        "light": "/usr/share/fonts/truetype/firacode/FiraCode-Light.ttf",
+        "regular": "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf",
+        "medium": "/usr/share/fonts/truetype/firacode/FiraCode-Medium.ttf",
+        "semibold": "/usr/share/fonts/truetype/firacode/FiraCode-SemiBold.ttf",
+        "bold": "/usr/share/fonts/truetype/firacode/FiraCode-Bold.ttf"
+      }
+    }
+  ]
+}

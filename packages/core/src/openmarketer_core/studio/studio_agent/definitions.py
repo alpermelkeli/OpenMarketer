@@ -13,12 +13,14 @@ graph imports; importing it is what puts them on ``agent``.
   an analysis kept from its repository (their list, and the bytes of one by its id). The
   brief keeps the list in the state, ids, paths, kinds and sizes only, so that every later
   step of the run names the same images.
-- The actions: ``generate_image`` and ``edit_image`` spend (the image provider is paid), and
-  the gate weighs them against the creative budget; ``render_html``, ``run_python`` and
+- The actions: ``generate_image`` and ``edit_image`` spend (the image provider is paid), each
+  on the image tier it names (``rules.IMAGE_ROLES``), and the gate weighs them against the
+  creative budget at that tier's estimate; ``render_html``, ``run_python`` and
   ``read_text`` run in the installation's sandbox and are internal. Each of the four that make
   an image stores it as the version its payload names, and answers with
   ``{"version_id", "asset_id", "width", "height", "mime", "size_bytes", "cost_usd"}``;
-  ``read_text`` answers with ``{"text"}``, what OCR read in a version. A payload names
+  ``read_text`` answers with ``{"text"}``, what OCR read in a version in the languages its
+  payload names (those the copy's letters need, ``ocr_languages.languages_for``). A payload names
   identifiers and the short text a model wrote (a prompt, a page, a program), each bounded;
   no field is read as a path, and the handler decides what an id may name.
 """
@@ -35,9 +37,11 @@ from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.llm import ChatModel
 from openmarketer_core.studio.brand_kit import BrandKit
 from openmarketer_core.studio.media_provider import ImageInput
+from openmarketer_core.studio.ocr_languages import OCR_LANGUAGES, OcrLanguage
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_core.studio.studio_agent.rules import (
+    ImageTier,
     Limits,
     RepositoryImageInfo,
     StudioResult,
@@ -59,7 +63,9 @@ READ_TEXT = "read_text"
 # - A render and a program run in the sandbox: repeating one costs nothing and stores the one
 #   version of its action id, so each is tried twice, a program with the time an install of
 #   its packages takes.
-# - Reading text is a short OCR run, tried three times.
+# - Reading text is an OCR run with its own limit in the sandbox (``SandboxSettings.ocr_timeout_s``,
+#   which the worker's settings hold under this action's time), tried twice: a reading that
+#   fails leaves the words to the verifier, so a third try would only make the run wait.
 # - A minute without a heartbeat is a worker that is gone.
 IMAGE_TIMEOUT_SECONDS = 240
 RENDER_TIMEOUT_SECONDS = 120
@@ -67,8 +73,8 @@ RENDER_ATTEMPTS = 2
 PYTHON_TIMEOUT_SECONDS = 360
 PYTHON_ATTEMPTS = 2
 SANDBOX_RETRY_AFTER_SECONDS = 10
-READ_TEXT_TIMEOUT_SECONDS = 120
-READ_TEXT_ATTEMPTS = 3
+READ_TEXT_TIMEOUT_SECONDS = 150
+READ_TEXT_ATTEMPTS = 2
 READ_TEXT_RETRY_AFTER_SECONDS = 5
 HEARTBEAT_SECONDS = 30
 
@@ -94,6 +100,10 @@ class StudioState(TypedDict):
     # from the brand kit with the brief so that a later attempt asks for the same prompt.
     about_product: str
     technique: str  # a ``Technique``'s value: the one this round uses
+    # An ``ImageTier``'s value: the image model this round's generations and edits are asked
+    # of. A thread stored before it was kept has none, and is on the standard one
+    # (``rules.image_tier_of``).
+    image_tier: str
     round: int  # 0 until the brief, then the round being made
     # This round's operations as they ended: {"op", "version_id"?, "ok", "error"?, "note"?}.
     operations: list[dict[str, Any]]
@@ -167,13 +177,21 @@ class _ImagePayload(BaseModel):
     technique: Technique
 
 
+class _PaidImagePayload(_ImagePayload):
+    """What an action the image provider makes names besides: the tier of the image model it is
+    asked of, whose role's estimate the budget holds (an action recorded before the tier was
+    kept was on the standard one)."""
+
+    image_tier: ImageTier = ImageTier.STANDARD
+
+
 @agent.action(
     GENERATE_IMAGE,
     timeout=IMAGE_TIMEOUT_SECONDS,
     heartbeat=HEARTBEAT_SECONDS,
     effect=ActionEffect.SPENDS,
 )
-class GenerateImage(_ImagePayload):
+class GenerateImage(_PaidImagePayload):
     """Make an image at the run's platform size from a prompt, following reference images.
 
     ``prompt`` holds the exact copy as code put it (``rules.generation_prompt``), and a line of
@@ -193,7 +211,7 @@ class GenerateImage(_ImagePayload):
     heartbeat=HEARTBEAT_SECONDS,
     effect=ActionEffect.SPENDS,
 )
-class EditImage(_ImagePayload):
+class EditImage(_PaidImagePayload):
     """Change the version ``source_version_id`` of this run as the instruction says.
 
     It is sent first, then the references in the order ``GenerateImage`` sends them.
@@ -260,7 +278,8 @@ class RunPython(_ImagePayload):
     effect=ActionEffect.INTERNAL,
 )
 class ReadText(BaseModel):
-    """Read the text in the version ``version_id`` of this run with OCR; answers ``{"text"}``."""
+    """Read the text in the version ``version_id`` of this run with OCR, in ``languages``;
+    answers ``{"text"}``. An action recorded before the languages were named reads in all."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -268,6 +287,9 @@ class ReadText(BaseModel):
     project_id: uuid.UUID
     run_id: uuid.UUID
     version_id: uuid.UUID
+    languages: Annotated[list[OcrLanguage], Field(min_length=1)] = Field(
+        default_factory=lambda: list(OCR_LANGUAGES)
+    )
 
 
 def initial_state(run: StudioRunInput, request: AssetRequest) -> StudioState:
@@ -285,6 +307,7 @@ def initial_state(run: StudioRunInput, request: AssetRequest) -> StudioState:
         "repository_images": [],
         "about_product": "",
         "technique": Technique.GENERATED.value,
+        "image_tier": ImageTier.STANDARD.value,
         "round": 0,
         "operations": [],
         "pending": {},

@@ -15,8 +15,8 @@ the agent runtime asks an agent for:
 - the handlers of the five actions: ``generate_image`` and ``edit_image`` (the image
   provider, paid), ``render_html`` and ``run_python`` (the sandbox), each storing the image
   it made as the version its payload names, and ``read_text`` (the sandbox's OCR);
-- ``estimate``: what a paid image is reckoned to cost, which the creative budget weighs before
-  the handler may run;
+- ``estimate``: what a paid image is reckoned to cost on the image tier its payload names (the
+  role of that tier), which the creative budget weighs before the handler may run;
 - ``finish``: storing the reviews of the run's candidates and its outcome, both or neither.
 
 ``WordedSteps`` wraps the steps of the graph so that what a studio run fails with leaves the
@@ -179,16 +179,17 @@ class StudioWork:
         checkpoints: CheckpointAccess,
         *,
         new_model: Callable[[uuid.UUID], ChatModel],
-        new_media: Callable[[uuid.UUID], MediaProvider],
-        image_estimate: Callable[[uuid.UUID], Decimal],
+        new_media: Callable[[uuid.UUID, rules.ImageTier], MediaProvider],
+        image_estimate: Callable[[uuid.UUID, rules.ImageTier], Decimal],
         limits: rules.Limits,
         sandbox: Sandbox,
         assets: AssetStore,
     ) -> None:
         """``new_model`` and ``new_media`` make the chat model and the image provider of one
-        attempt for a workspace, with the key it has now; either may raise one of
-        ``WORKSPACE_FAILURES``. ``image_estimate`` is what one paid image is reckoned to cost
-        under the workspace's models, and needs no key. ``limits`` are the run's, as the
+        attempt for a workspace (the provider on an image tier's role), with the key it has
+        now; either may raise one of ``WORKSPACE_FAILURES``. ``image_estimate`` is what one
+        paid image on a tier is reckoned to cost under the workspace's models, and needs no
+        key. ``limits`` are the run's, as the
         operator set them; ``sandbox`` runs agent-written code and reads text; ``assets``
         keeps the images.
         """
@@ -245,8 +246,15 @@ class StudioWork:
         )
 
     def limits_of(self, workspace_id: uuid.UUID) -> rules.Limits:
-        """The run's limits, with what a paid image costs under the workspace's models."""
-        return replace(self._limits, image_estimate_usd=float(self._image_estimate(workspace_id)))
+        """The run's limits, with what a paid image on each tier costs under the workspace's
+        models."""
+        return replace(
+            self._limits,
+            image_estimate_usd=float(self._image_estimate(workspace_id, rules.ImageTier.STANDARD)),
+            strong_image_estimate_usd=float(
+                self._image_estimate(workspace_id, rules.ImageTier.STRONG)
+            ),
+        )
 
     def record_progress(self, run: GraphRunRef, events: Sequence[RunEvent]) -> None:
         """Store the events of one node of ``run``, for the chat that watches it.
@@ -316,10 +324,10 @@ class StudioWork:
         }
 
     # -------------------------------------------------------------------- the handlers
-    def estimate(self, workspace_id: uuid.UUID) -> Decimal:
-        """What one paid image is reckoned to cost under the workspace's models."""
+    def estimate(self, workspace_id: uuid.UUID, tier: rules.ImageTier) -> Decimal:
+        """What one paid image on ``tier`` is reckoned to cost under the workspace's models."""
         try:
-            return self._image_estimate(workspace_id)
+            return self._image_estimate(workspace_id, tier)
         except (MediaProviderError, StoredModelChoiceInvalid) as e:
             raise failure(steps.OPERATION_FAILED, str(e)) from None
 
@@ -338,6 +346,7 @@ class StudioWork:
         )
         made = self._drawn(
             run,
+            payload.image_tier,
             lambda provider: provider.generate(
                 payload.prompt, width=spec.width, height=spec.height, references=references
             ),
@@ -362,6 +371,7 @@ class StudioWork:
         )
         made = self._drawn(
             run,
+            payload.image_tier,
             lambda provider: provider.edit(
                 source,
                 payload.instruction,
@@ -416,21 +426,23 @@ class StudioWork:
             workspace_id=payload.workspace_id, project_id=payload.project_id, run_id=payload.run_id
         )
         image = self._image_of_the_run(run, payload.version_id)
-        text = self._in_the_sandbox(lambda: self._sandbox.ocr(image.data))
+        text = self._in_the_sandbox(lambda: self._sandbox.ocr(image.data, payload.languages))
         return {"text": text[:MAX_READ_TEXT_CHARS]}
 
     # ---------------------------------------------------------------------- the details
     def _drawn(
         self,
         run: StudioRunInput,
+        tier: rules.ImageTier,
         draw: Callable[[MediaProvider], Any],
         spec: PlatformSpec,
         *,
         prompt: str,
     ) -> _Image:
-        """The image the provider drew, fitted to the platform's size."""
+        """The image the provider drew on ``tier``'s image model, fitted to the platform's
+        size."""
         try:
-            result = draw(self._new_media(run.workspace_id))
+            result = draw(self._new_media(run.workspace_id, tier))
         except MediaAccountLimited as e:
             # No other operation the provider makes can pass until a person raises the limit.
             raise failure(steps.OPERATION_FAILED, rules.BLOCKED + str(e)) from None

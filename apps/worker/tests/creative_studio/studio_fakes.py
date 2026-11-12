@@ -158,13 +158,15 @@ class FakeMedia:
 @dataclass
 class FakeSandbox:
     """A ``Sandbox`` whose runs leave ``made`` (a PNG at the canvas size by default), or end
-    as ``result`` says; ``ocr`` reads ``text``. It remembers the inputs of each run."""
+    as ``result`` says; ``ocr`` reads ``text``. It remembers the inputs of each run, and the
+    languages of each reading."""
 
     text: str = "Launch day"
     result: SandboxResult | None = None
     failures: list[Exception] = field(default_factory=list)
     runs: list[dict[str, Any]] = field(default_factory=list)
     read: list[bytes] = field(default_factory=list)
+    read_in: list[list[str]] = field(default_factory=list)
 
     def run_python(self, code, inputs, requirements, size: CanvasSize) -> SandboxResult:
         return self._run("run_python", dict(inputs), size.width, size.height)
@@ -172,10 +174,11 @@ class FakeSandbox:
     def render_html(self, html, inputs, width, height) -> SandboxResult:
         return self._run("render_html", dict(inputs), width, height)
 
-    def ocr(self, image: bytes) -> str:
+    def ocr(self, image: bytes, languages) -> str:
         if self.failures:
             raise self.failures.pop(0)
         self.read.append(image)
+        self.read_in.append(list(languages))
         return self.text
 
     def _run(self, operation, inputs, width, height) -> SandboxResult:

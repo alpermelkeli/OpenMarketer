@@ -350,11 +350,38 @@ def test_the_page_is_written_to_in(tmp_path: Path) -> None:
 
 def test_ocr_returns_the_text_read(tmp_path: Path) -> None:
     runner = answered(report(text="HELLO\n"))
-    assert sandbox(runner, tmp_path).ocr(png()) == "HELLO\n"
+    assert sandbox(runner, tmp_path).ocr(png(), ["eng"]) == "HELLO\n"
 
 
 def test_ocr_of_what_is_not_an_image_starts_no_container(tmp_path: Path) -> None:
     runner = answered()
     with pytest.raises(SandboxRefused):
-        sandbox(runner, tmp_path).ocr(b"not an image")
+        sandbox(runner, tmp_path).ocr(b"not an image", ["eng"])
     assert runner.calls == []
+
+
+def test_ocr_names_each_language_to_the_container(tmp_path: Path) -> None:
+    runner = answered(report(text="Merhaba\n"))
+    sandbox(runner, tmp_path).ocr(png(), ["eng", "tur"])
+    assert _values(runner.calls[0].args, "--language") == ["eng", "tur"]
+
+
+def test_ocr_in_a_language_the_sandbox_lacks_starts_no_container(tmp_path: Path) -> None:
+    runner = answered()
+    with pytest.raises(SandboxRefused):
+        sandbox(runner, tmp_path).ocr(png(), ["eng", "--psm 0"])  # pyright: ignore[reportArgumentType]
+    assert runner.calls == []
+
+
+def test_ocr_with_no_language_starts_no_container(tmp_path: Path) -> None:
+    runner = answered()
+    with pytest.raises(SandboxRefused):
+        sandbox(runner, tmp_path).ocr(png(), [])
+    assert runner.calls == []
+
+
+def test_ocr_has_its_own_time_limit(tmp_path: Path) -> None:
+    runner = answered(report(text="HELLO\n"))
+    settings = SandboxSettings(run_timeout_s=60, ocr_timeout_s=90, work_root=tmp_path.resolve())
+    DockerSandbox(settings, runner).ocr(png(), ["eng"])
+    assert _values(runner.calls[0].args, "--timeout") == ["90"]

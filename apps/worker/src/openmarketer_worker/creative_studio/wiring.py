@@ -12,7 +12,9 @@ No credential is read here. The model provider's key (the one key the studio use
 models and its image model are both OpenRouter's) can be stored from the dashboard after the
 worker started, so it is resolved for the run's workspace when an attempt needs it
 (``new_model``, ``new_media``), and so are the workspace's model choices. What one paid image
-is reckoned to cost is read from the image role of the workspace's models, and needs no key.
+is reckoned to cost is read from the role of its image tier in the workspace's models
+(``rules.IMAGE_ROLES``: the standard one, and the strong one a repeated failure moves a run
+to), and needs no key; a configuration without both roles stops the worker at start-up.
 The provider's catalogue (``ModelCatalog``, read without a key, kept for a while and shared by
 every attempt) tells an image request what its models make; one that cannot be read leaves
 the request as it was, and never fails an image.
@@ -44,7 +46,7 @@ from openmarketer_core.agent_runtime.langgraph_agent import AgentSteps
 from openmarketer_core.db.checkpoint_cleanup import remove_checkpoints_of_studio_runs
 from openmarketer_core.llm import ChatModel, RouterChatModel
 from openmarketer_core.llm_catalog import ModelCatalog
-from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ModelRouter
+from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ConfigError, ModelRouter
 from openmarketer_core.studio.asset_store import AssetStore, S3AssetStore
 from openmarketer_core.studio.docker_sandbox import DockerSandbox
 from openmarketer_core.studio.media_provider import MediaProvider
@@ -91,9 +93,10 @@ class StudioParts:
     # when they are needed, so no credential or choice of the workspace is held between
     # attempts.
     new_model: Callable[[uuid.UUID], ChatModel]
-    new_media: Callable[[uuid.UUID], MediaProvider]
-    # What one paid image is reckoned to cost under the workspace's models; needs no key.
-    image_estimate: Callable[[uuid.UUID], Decimal]
+    new_media: Callable[[uuid.UUID, rules.ImageTier], MediaProvider]
+    # What one paid image on a tier is reckoned to cost under the workspace's models; needs no
+    # key.
+    image_estimate: Callable[[uuid.UUID, rules.ImageTier], Decimal]
     sandbox: Sandbox
     assets: AssetStore
     policy: StudioPolicy
@@ -121,6 +124,7 @@ def creative_studio(
     router = ModelRouter.from_file(
         environ.get("LLM_CONFIG_PATH") or DEFAULT_CONFIG_PATH, env=environ
     )
+    require_the_image_roles(router)
     workspace_settings = WorkspaceSettings(sessions)
     catalog = ModelCatalog(router.config.provider.base_url)
 
@@ -129,16 +133,23 @@ def creative_studio(
         key = credentials.model_key(workspace_id, chosen)
         return tracing.model(RouterChatModel(router=chosen, api_key=key))
 
-    def new_media(workspace_id: uuid.UUID) -> MediaProvider:
-        # The same key and the same workspace router as the chat model: the image role is
+    def new_media(workspace_id: uuid.UUID, tier: rules.ImageTier) -> MediaProvider:
+        # The same key and the same workspace router as the chat model: the image roles are
         # OpenRouter's like every other role.
         chosen = workspace_settings.router_for(workspace_id, router)
         key = credentials.model_key(workspace_id, chosen)
-        return tracing.media(OpenRouterImages(router=chosen, api_key=key, catalog=catalog.models))
+        return tracing.media(
+            OpenRouterImages(
+                router=chosen,
+                role=rules.IMAGE_ROLES[tier],
+                api_key=key,
+                catalog=catalog.models,
+            )
+        )
 
-    def image_estimate(workspace_id: uuid.UUID) -> Decimal:
+    def image_estimate(workspace_id: uuid.UUID, tier: rules.ImageTier) -> Decimal:
         chosen = workspace_settings.router_for(workspace_id, router)
-        return OpenRouterImages(router=chosen).estimate("generate")
+        return OpenRouterImages(router=chosen, role=rules.IMAGE_ROLES[tier]).estimate("generate")
 
     return registration(
         StudioParts(
@@ -202,14 +213,15 @@ def registration(parts: StudioParts) -> AgentRegistration:
         # Reading changes nothing: the action's id is not needed.
         return work.read_text(payload, context)
 
-    # What a paid image costs is the image role's figure, never a number a model wrote.
+    # What a paid image costs is the figure of the role of the tier it is made on, never a
+    # number a model wrote.
     @worker.estimate(GenerateImage)
     def estimate_generation(payload: GenerateImage, context: SpendContext) -> Decimal:
-        return work.estimate(context.scope.workspace_id)
+        return work.estimate(context.scope.workspace_id, payload.image_tier)
 
     @worker.estimate(EditImage)
     def estimate_edit(payload: EditImage, context: SpendContext) -> Decimal:
-        return work.estimate(context.scope.workspace_id)
+        return work.estimate(context.scope.workspace_id, payload.image_tier)
 
     graph_steps = AgentSteps(
         agent,
@@ -233,6 +245,16 @@ def registration(parts: StudioParts) -> AgentRegistration:
         sessions=parts.sessions,
         environ=parts.environ,
     )
+
+
+def require_the_image_roles(router: ModelRouter) -> None:
+    """Raises ``ConfigError`` for a configuration that lacks a role of an image tier
+    (``rules.IMAGE_ROLES``): every run that reached it would fail."""
+    for role in rules.IMAGE_ROLES.values():
+        try:
+            router.resolve(role)
+        except KeyError as e:
+            raise ConfigError(f"the studio needs the image role {role}: {e}") from None
 
 
 def cleanup_of_studio_runs(longest_run: timedelta) -> CheckpointCleanup:

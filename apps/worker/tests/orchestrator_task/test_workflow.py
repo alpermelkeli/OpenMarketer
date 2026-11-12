@@ -177,8 +177,8 @@ def serving(temporal, task_queue, children, task_registration, sessions, checkpo
                 sessions=sessions,
                 checkpoints=checkpoints,
                 new_model=lambda workspace_id: studio_chat,  # type: ignore[arg-type,return-value]
-                new_media=lambda workspace_id: studio_fakes.FakeMedia(),  # type: ignore[arg-type,return-value]
-                image_estimate=lambda workspace_id: studio_fakes.ESTIMATE,
+                new_media=lambda workspace_id, tier: studio_fakes.FakeMedia(),  # type: ignore[arg-type,return-value]
+                image_estimate=lambda workspace_id, tier: studio_fakes.ESTIMATE,
                 sandbox=studio_fakes.FakeSandbox(text=COPY),
                 assets=studio_fakes.MemoryAssets(),
                 policy=studio_fakes.QUICK,

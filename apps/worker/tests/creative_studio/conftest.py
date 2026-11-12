@@ -64,18 +64,20 @@ def studio_parts(sessions, checkpoints, media, sandbox, assets):
         *,
         model: ScriptedChat | None = None,
         new_model: Callable[[uuid.UUID], object] | None = None,
-        new_media: Callable[[uuid.UUID], object] | None = None,
+        new_media: Callable[[uuid.UUID, rules.ImageTier], object] | None = None,
         environ: Mapping[str, str] = CAPS,
         policy: StudioPolicy = QUICK,
         limits: rules.Limits | None = None,
-        image_estimate: Callable[[uuid.UUID], Decimal] = lambda workspace_id: ESTIMATE,
+        image_estimate: Callable[[uuid.UUID, rules.ImageTier], Decimal] = (
+            lambda workspace_id, tier: ESTIMATE
+        ),
     ) -> wiring.StudioParts:
         chat = model or one_round_that_passes()
         return wiring.StudioParts(
             sessions=sessions,
             checkpoints=checkpoints,
             new_model=new_model or (lambda workspace_id: chat),  # type: ignore[arg-type]
-            new_media=new_media or (lambda workspace_id: media),  # type: ignore[arg-type]
+            new_media=new_media or (lambda workspace_id, tier: media),  # type: ignore[arg-type]
             image_estimate=image_estimate,
             sandbox=sandbox,
             assets=assets,

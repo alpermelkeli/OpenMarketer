@@ -2,7 +2,8 @@
 
     entry.py python  --timeout S ...           run /in/main.py (working directory /out)
     entry.py render  --width W --height H ...  render /in/page.html to /out/render.png
-    entry.py ocr     --image /in/image.png ... read the text in an image
+    entry.py ocr     --image /in/image.png --language eng [--language tur ...] ...
+                                               read the text in an image
 
 The program (Python, Chromium or Tesseract) runs as a child in a session of its own, with its
 output going to files in /tmp, and is killed with its whole group when its time is up. Then the
@@ -46,9 +47,10 @@ CHROMIUM_FLAGS = [
 ]
 
 
-# The languages a reading knows, so that the letters of the copy beyond English (ç, ğ, ı, ş, é,
-# ß...) are read as they are written and a right image is not failed for them.
-OCR_LANGUAGES = "eng+tur+deu+fra+spa+ita+por"
+# The languages a reading may be asked for: those whose models the image installs, as core's
+# ocr_languages.OCR_LANGUAGES names them. The host names the ones the copy needs; argparse
+# refuses any other value, so nothing but these reaches tesseract's command line.
+OCR_LANGUAGES = ("eng", "tur", "deu", "fra", "spa", "ita", "por")
 
 
 def main() -> int:
@@ -65,7 +67,8 @@ def main() -> int:
             "file:///in/page.html",
         ]
     else:
-        command = [sys.executable, "-I", "/opt/studio/read_text.py", arguments.image, OCR_LANGUAGES]
+        languages = "+".join(dict.fromkeys(arguments.language or ["eng"]))
+        command = [sys.executable, "-I", "/opt/studio/read_text.py", arguments.image, languages]
     exit_code, timed_out = run(command, arguments.timeout)
     if arguments.mode == "render" and exit_code == 0:
         fit_to(OUT / "render.png", arguments.width, arguments.height)
@@ -95,6 +98,7 @@ def parse() -> argparse.Namespace:
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument("--image")
+    parser.add_argument("--language", action="append", choices=OCR_LANGUAGES)
     return parser.parse_args()
 
 

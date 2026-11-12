@@ -1,6 +1,7 @@
 """The ``MediaProvider`` port answered by an image model on OpenRouter's chat endpoint.
 
-One request per model: the role's model (``image_generator`` by default, resolved by
+One request per model: the role's model (``image_generator`` by default, or
+``image_generator_strong`` for the studio's strong tier: ``rules.IMAGE_ROLES``, resolved by
 ``ModelRouter``) is sent the prompt, or the image to edit and the instruction, and any
 references as image parts (``llm.image_part``), and asked for an image back with its own
 ``modalities``: ``["image"]`` when the provider's catalogue says it makes images only,
@@ -163,7 +164,7 @@ _NOT_ON_THIS_ENDPOINT_STATUS = 404
 _IMAGES_ENDPOINT_MARKS = ("/images endpoint", "api/v1/images", "image generation model")
 IMAGES_ENDPOINT_ONLY = (
     "this image model is served by OpenRouter's images endpoint, which the studio does not use "
-    "yet; choose another image model for the image_generator role in Settings"
+    "yet; choose another image model for the studio's image roles in Settings"
 )
 # OpenRouter answers 404 "No endpoints found that support the requested output modalities" to a
 # model of images only that is asked for an image and text.
