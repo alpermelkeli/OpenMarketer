@@ -82,6 +82,14 @@ RECORD_FAILURE = DatabaseWritePolicy(
     max_retry_wait_seconds=60,
     give_up_after_seconds=60 * 60,
 )
+# Telling the chat that asked for the run how it ended is for a screen and a follow-up turn,
+# not for the run's record: ten minutes of trying, and the run ends as it did without it.
+RECORD_END = DatabaseWritePolicy(
+    attempt_timeout_seconds=30,
+    retry_after_seconds=1,
+    max_retry_wait_seconds=60,
+    give_up_after_seconds=10 * 60,
+)
 
 # The longest wait before another attempt at publishing that a platform's answer may ask for.
 LONGEST_PLATFORM_WAIT_SECONDS: float = 15 * 60
@@ -101,9 +109,9 @@ def longest_writing_seconds(policy: WriterPolicy) -> float:
     The sum of what the workflow can spend: the write that starts the run, each step of the
     graph at every attempt's time limit with the waits between the attempts, each action at
     its limits (the one that publishes with its proposal stored, the longest wait for a person
-    and its settlement), the time settling the post or recording the failure and the forgetting
-    of the checkpoints keep trying (only one of the two writes happens, the longer is counted),
-    and the allowance for attempts waiting on a worker.
+    and its settlement), the time settling the post or recording the failure, telling the chat
+    and the forgetting of the checkpoints keep trying (only one of the first two writes
+    happens, the longer is counted), and the allowance for attempts waiting on a worker.
     """
     step = _attempts_and_waits(
         policy.attempt_timeout_seconds,
@@ -121,6 +129,7 @@ def longest_writing_seconds(policy: WriterPolicy) -> float:
         + GRAPH_STEPS * step
         + sum(_longest_action(name) for name in ACTIONS)
         + max(_time_to_give_up(RECORD_OUTCOME), _time_to_give_up(RECORD_FAILURE))
+        + _time_to_give_up(RECORD_END)
         + _time_to_give_up(FORGET_RUN_LIMITS)
         + WORKER_OUTAGE_ALLOWANCE_SECONDS
     )

@@ -1,4 +1,5 @@
-"""The three activities the hooks of ``WritePost`` call: a run starts, its post settles, it failed.
+"""The four activities the hooks of ``WritePost`` call: a run starts, its post settles, it
+failed, it ended.
 
 They hold no rule of their own: how a run and its content item change state is core's
 (``db/writing_runs.py``, ``db/content_items.py``). What they add is what an activity owes the
@@ -13,6 +14,9 @@ rest); ``record_failure`` records the run failed with what its stored draft cost
 a post nobody decided on ``failed`` with it. A post whose send started and was never confirmed
 stays ``publishing`` (core leaves it so: the platform may have it), and the run's error says
 that first, so whoever reads it checks the account before asking for the post again.
+``record_end`` tells the chat that asked for the run, if one did, how it ended: the run's last
+event, written in the transaction that reads the run, and which chat that is, so the workflow
+can start the chat's follow-up turn.
 
 None writes or stores a post: the steps of the graph and its two actions are the agent
 runtime's activities, with what ``writing.py`` hands them, and a run that is over is forgotten
@@ -41,6 +45,7 @@ from openmarketer_core.db.content_items import (
 )
 from openmarketer_core.db.models import ContentItemStatus, WritingRunStatus
 from openmarketer_core.db.projects import ProjectNotFound
+from openmarketer_core.db.run_events import append_events
 from openmarketer_core.db.session import transaction
 from openmarketer_core.db.writing_runs import (
     WritingRunFinished,
@@ -52,7 +57,8 @@ from openmarketer_core.db.writing_runs import (
     mark_run_succeeded,
     writing_run,
 )
-from openmarketer_core.writing.workflow_contract import WritingRunInput
+from openmarketer_core.run_events import FAILED, FINISHED, RunEvent
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND, WritingRunInput
 from openmarketer_worker.agent_runtime.activity_support import worded_failures
 from openmarketer_worker.writer import steps
 from openmarketer_worker.writer.policy import WriterPolicy
@@ -168,6 +174,39 @@ class WriterActivities:
                 # Nothing to record: no such run for this workspace and project, or its post
                 # was settled and the run succeeded, or it failed before.
                 logger.info("failure of writing run %s not recorded: %s", run.run_id, e)
+
+    @activity.defn(name=steps.RECORD_END)
+    def record_end(self, end: steps.RunEnd) -> steps.RunEndRecorded:
+        """Record the run's last event, ``finished`` or ``failed``; the chat that asked for it.
+
+        In one transaction with reading the run, so an attempt that is tried again after a
+        failure records the event once. A run that does not exist for this workspace and
+        project records nothing and has no chat to tell.
+        """
+        with worded_failures(steps.WRITING_TEXTS, subject=subject_of(end.run.run_id)):
+            try:
+                with transaction(self._sessions) as session:
+                    run = writing_run(session, **scope_of(end.run))
+                    append_events(
+                        session,
+                        workspace_id=end.run.workspace_id,
+                        project_id=end.run.project_id,
+                        run_kind=WRITING_RUN_KIND,
+                        run_id=end.run.run_id,
+                        events=[last_event(end)],
+                    )
+            except (WritingRunNotFound, ProjectNotFound) as e:
+                logger.info("end of writing run %s not recorded: %s", end.run.run_id, e)
+                return steps.RunEndRecorded(chat_id=None)
+        return steps.RunEndRecorded(chat_id=run.chat_thread_id)
+
+
+def last_event(end: steps.RunEnd) -> RunEvent:
+    """The event a run that ended as ``end`` says ends its progress."""
+    if end.reason is not None:
+        return RunEvent(FAILED, {"reason": end.reason})
+    item = None if end.content_item_id is None else str(end.content_item_id)
+    return RunEvent(FINISHED, {"content_item_id": item, "post_status": end.post_status})
 
 
 def _require_recorded_as_sent(

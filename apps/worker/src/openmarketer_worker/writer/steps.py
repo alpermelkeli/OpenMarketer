@@ -4,7 +4,7 @@ The workflow calls activities by name and the activities register under the same
 the workflow module never imports the code that talks to the database (the workflow sandbox
 could not load it). The steps of the graph and the two actions it asks for (``store_draft``,
 ``publish_post``) are the agent runtime's activities, named there (``agent_runtime.vocabulary``);
-the three here are what the workflow's hooks call. Everything here is stored in the workflow
+the four here are what the workflow's hooks call. Everything here is stored in the workflow
 history: identifiers, a status, an amount and short messages only, never a brief, a profile
 or a post.
 
@@ -29,6 +29,8 @@ START_RUN = "start_run"
 # Once the graph finished: how the post ended, settled on its content item, and the run's end.
 RECORD_OUTCOME = "record_outcome"
 RECORD_FAILURE = "record_failure"
+# Once the run is recorded as it ended: its last event, and the chat that asked for it.
+RECORD_END = "record_end"
 
 # Failure types of the writer's activities, of its handlers and of a step of its graph. Those in
 # NOT_RETRIED end the run (a step) or the action (a handler) at once. The ones every agent's
@@ -109,3 +111,24 @@ class RunFailure:
 
     run: WritingRunInput
     error: str
+
+
+@dataclass(frozen=True)
+class RunEnd:
+    """How a run ended, as the chat that asked for it is shown it.
+
+    A run that settled its post names the content item and how it ended (``post_status``, the
+    value of core's ``PostStatus``); one that failed has the reason recorded on the run instead.
+    """
+
+    run: WritingRunInput
+    content_item_id: uuid.UUID | None = None
+    post_status: str | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RunEndRecorded:
+    """What ``record_end`` answers: the chat that asked for the run, or ``None`` if none did."""
+
+    chat_id: uuid.UUID | None

@@ -21,7 +21,7 @@ that sends.
 
 ``writer`` reads the environment; ``registration`` takes what was built (``WriterParts``) and
 declares the agent's worker side: the handlers of its two actions, the steps of its graph
-(which record each node's progress), the three activities of the workflow's hooks and the
+(which record each node's progress), the four activities of the workflow's hooks and the
 cleanup of its runs' checkpoints.
 
 This module holds no rule: what a post may say and how a run changes state are core's. It does
@@ -215,7 +215,12 @@ def registration(parts: WriterParts) -> AgentRegistration:
         graph=WordedSteps(graph_steps),
         workflows=[WritePost],
         texts=steps.WRITING_TEXTS,
-        activities=[activities.start_run, activities.record_outcome, activities.record_failure],
+        activities=[
+            activities.start_run,
+            activities.record_outcome,
+            activities.record_failure,
+            activities.record_end,
+        ],
         longest_run=longest_run,
         checkpoint_cleanups=[cleanup_of_writing_runs(longest_run)],
         # The gate stores the proposal of ``publish_post`` and checks its approval there.

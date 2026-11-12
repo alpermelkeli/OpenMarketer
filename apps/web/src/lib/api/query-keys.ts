@@ -8,6 +8,7 @@ import {
   STUDIO_RUN,
   TASK_RUN,
   TURN_ENDS,
+  WRITING_RUN,
 } from "@/lib/chat/events";
 
 import type { RunEvent } from "./types";
@@ -232,6 +233,8 @@ function refreshedByRunStarted(projectId: string, runKind: unknown): Refresh[] {
     return [{ queryKey: queryKeys.researches(projectId) }];
   if (runKind === STUDIO_RUN)
     return [{ queryKey: queryKeys.studioRuns(projectId) }];
+  if (runKind === WRITING_RUN)
+    return [{ queryKey: queryKeys.writingRuns(projectId) }];
   return [];
 }
 

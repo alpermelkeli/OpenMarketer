@@ -1,8 +1,8 @@
 """Tests for the adapter the chat turn's request actions reach: a real database, a fake starter.
 
 They need PostgreSQL (see the root ``conftest.py``). The adapter is core's ``ChatRequests`` for
-one turn: it stores a research run or a studio run of the turn's project and starts its
-workflow through the starter it was given, the way the research and studio routes do. Nothing
+one turn: it stores a research run, a studio run, a writing run or a task of the turn's project
+and starts its workflow through the starter it was given, the way the routes do. Nothing
 here reaches Temporal: the starter is a list (or a function that refuses), so what the adapter
 asks it to start is read back whole.
 """
@@ -21,12 +21,14 @@ from openmarketer_core.db.models import (
     StudioRunRecord,
     TaskRecord,
     Workspace,
+    WritingRunRecord,
 )
 from openmarketer_core.db.session import session_factory, transaction
 from openmarketer_core.orchestrator.requests import (
     ResearchNotStarted,
     StudioNotStarted,
     TaskNotStarted,
+    WritingNotStarted,
 )
 from openmarketer_core.orchestrator.task.plan import TaskRequest
 from openmarketer_core.orchestrator.task.workflow_contract import (
@@ -48,11 +50,19 @@ from openmarketer_core.studio.workflow_contract import (
     StudioRunInput,
 )
 from openmarketer_core.workflow_start import WorkflowNotStarted, WorkflowStart
+from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
+from openmarketer_core.writing.workflow_contract import (
+    WRITING_TASK_QUEUE,
+    WRITING_WORKFLOW,
+    WritingRunInput,
+)
 
 REQUEST = ResearchRequest(questions=["What did competitors post last month?"])
 ASSET_REQUEST = AssetRequest(
     goal="Announce the Android launch", exact_copy=["Now on Android"], platform=Platform.X_POST
 )
+
+BRIEF = WritingBrief(platform=WritingPlatform.X, goal=WritingGoal.INTRODUCE, variants=2)
 
 TASK_REQUEST = TaskRequest(
     request="Post about offline mode, with an image",
@@ -232,3 +242,84 @@ def test_a_task_workflow_that_cannot_be_started_is_the_ports_own_error_in_a_fixe
         status = session.scalar(select(TaskRecord.status).where(TaskRecord.project_id == scope[1]))
     assert status is not None
     assert status.value == "failed"
+
+
+def test_starting_a_writing_run_stores_it_for_the_chat_and_hands_its_workflow_to_the_starter(
+    sessions, scope
+):
+    started: list[WorkflowStart] = []
+
+    reading = adapter_of(sessions, scope, started.append).start_writing(BRIEF)
+
+    [workflow] = started
+    assert (workflow.workflow, workflow.task_queue) == (WRITING_WORKFLOW, WRITING_TASK_QUEUE)
+    assert workflow.input == WritingRunInput(
+        workspace_id=scope[0], project_id=scope[1], run_id=reading.id
+    )
+    assert (reading.status.value, reading.requested_by, reading.platform) == (
+        "queued",
+        "orchestrator",
+        "x",
+    )
+    assert reading.brief == BRIEF.model_dump(mode="json")
+    with transaction(sessions) as session:
+        stored = session.get(WritingRunRecord, reading.id)
+    assert stored is not None
+    assert (stored.requested_by, stored.chat_thread_id) == ("orchestrator", scope[2])
+
+
+def test_a_writing_workflow_that_cannot_be_started_is_the_ports_own_error_in_a_fixed_sentence(
+    sessions, scope
+):
+    with pytest.raises(WritingNotStarted) as refused:
+        adapter_of(sessions, scope, refusing).start_writing(BRIEF)
+
+    assert str(refused.value) == "the post could not be handed to a worker"
+    with transaction(sessions) as session:
+        status = session.scalar(
+            select(WritingRunRecord.status).where(WritingRunRecord.project_id == scope[1])
+        )
+    assert status is not None
+    assert status.value == "failed"
+
+
+def test_an_asset_the_project_lacks_starts_no_writing_run(sessions, scope):
+    started: list[WorkflowStart] = []
+    brief = BRIEF.model_copy(update={"asset": uuid.uuid4()})
+
+    with pytest.raises(WritingNotStarted) as refused:
+        adapter_of(sessions, scope, started.append).start_writing(brief)
+
+    assert str(refused.value) == "the post's asset is not in this project's Studio library"
+    assert started == []
+    with transaction(sessions) as session:
+        stored = session.scalar(
+            select(WritingRunRecord.id).where(WritingRunRecord.project_id == scope[1])
+        )
+    assert stored is None
+
+
+def test_a_research_run_the_project_lacks_starts_no_writing_run(sessions, scope):
+    started: list[WorkflowStart] = []
+    brief = BRIEF.model_copy(update={"research_run_id": uuid.uuid4()})
+
+    with pytest.raises(WritingNotStarted) as refused:
+        adapter_of(sessions, scope, started.append).start_writing(brief)
+
+    assert str(refused.value) == "the post's research run is not one of this project's"
+    assert started == []
+
+
+def test_a_research_run_that_has_not_succeeded_starts_no_writing_run(sessions, scope):
+    started: list[WorkflowStart] = []
+    adapter = adapter_of(sessions, scope, started.append)
+    research = adapter.start_research(REQUEST)
+    brief = BRIEF.model_copy(update={"research_run_id": research.id})
+
+    with pytest.raises(WritingNotStarted) as refused:
+        adapter.start_writing(brief)
+
+    assert str(refused.value) == (
+        "the post's research run has not succeeded, so it has no findings to use"
+    )
+    assert len(started) == 1

@@ -417,6 +417,10 @@ describe("a studio run in its chat", () => {
     expect(onlyTurn([event("turn_started", { trigger: "studio_finished" })]).trigger).toBe("studio_finished");
     expect(onlyTurn([event("turn_started", { trigger: "something_else" })]).trigger).toBe("message");
   });
+
+  it("is followed up on a writing run by a turn that says so", () => {
+    expect(onlyTurn([event("turn_started", { trigger: "writing_finished" })]).trigger).toBe("writing_finished");
+  });
 });
 
 const TASK = "88888888-8888-4888-8888-888888888888";

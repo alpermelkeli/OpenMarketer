@@ -1080,6 +1080,7 @@ class ChatTurnTrigger(StrEnum):
     MESSAGE = "message"  # the operator wrote a message
     RESEARCH_FINISHED = "research_finished"  # a research run the thread started has ended
     STUDIO_FINISHED = "studio_finished"  # a studio run the thread started has ended
+    WRITING_FINISHED = "writing_finished"  # a writing run the thread started has ended
     TASK_FINISHED = "task_finished"  # a task the thread started has ended
     # a step of a task the thread started has ended, and the task goes on
     TASK_STEP_FINISHED = "task_step_finished"
@@ -1147,12 +1148,12 @@ class ChatMessageRecord(Base):
 class ChatTurnRecord(Base):
     """One turn of the orchestrator in a chat thread, from its start to its answer or failure.
 
-    A turn answers the operator's message, or follows up on a research run, a studio run or a
-    task the thread started (``research_run_id``, ``studio_run_id`` or ``task_id``, each set
-    exactly for its trigger), or on one step of such a task that ended while the task goes on
-    (``task_id`` and ``task_step_key``, the step's id in the task's plan). A thread
-    has at most one running turn; a failed turn keeps why, worded for the
-    operator.
+    A turn answers the operator's message, or follows up on a research run, a studio run, a
+    writing run or a task the thread started (``research_run_id``, ``studio_run_id``,
+    ``writing_run_id`` or ``task_id``, each set exactly for its trigger), or on one step of
+    such a task that ended while the task goes on (``task_id`` and ``task_step_key``, the
+    step's id in the task's plan). A thread has at most one running turn; a failed turn keeps
+    why, worded for the operator.
     """
 
     __tablename__ = "chat_turn"
@@ -1164,6 +1165,10 @@ class ChatTurnRecord(Base):
         CheckConstraint(
             "(trigger = 'studio_finished') = (studio_run_id IS NOT NULL)",
             name="studio_run_id",
+        ),
+        CheckConstraint(
+            "(trigger = 'writing_finished') = (writing_run_id IS NOT NULL)",
+            name="writing_run_id",
         ),
         CheckConstraint(
             "(trigger IN ('task_finished', 'task_step_finished')) = (task_id IS NOT NULL)",
@@ -1197,6 +1202,7 @@ class ChatTurnRecord(Base):
     # each kind of run a chat can start, so that a CHECK can tie each to its trigger.
     research_run_id: Mapped[uuid.UUID | None] = mapped_column()
     studio_run_id: Mapped[uuid.UUID | None] = mapped_column()
+    writing_run_id: Mapped[uuid.UUID | None] = mapped_column()
     task_id: Mapped[uuid.UUID | None] = mapped_column()
     task_step_key: Mapped[str | None] = mapped_column(Text)
     status: Mapped[ChatTurnStatus] = mapped_column(

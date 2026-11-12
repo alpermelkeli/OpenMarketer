@@ -60,6 +60,7 @@ from openmarketer_core.orchestrator.chat_agent.tools import (
     start_creative,
     start_research,
     start_task,
+    start_writing,
 )
 from openmarketer_core.orchestrator.reads import (
     MAX_LISTED_RECORDS,
@@ -84,6 +85,7 @@ from openmarketer_core.orchestrator.requests import (
     ResearchNotStarted,
     StudioNotStarted,
     TaskNotStarted,
+    WritingNotStarted,
 )
 from openmarketer_core.orchestrator.task.plan import (
     MAX_REQUEST_CHARS,
@@ -97,6 +99,13 @@ from openmarketer_core.run_events import RUN_STARTED, TOOL_ANSWERED, TOOL_CALLED
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+from openmarketer_core.writing.brief import (
+    MAX_ANGLE_CHARS,
+    MAX_VARIANTS,
+    WritingBrief,
+    WritingGoal,
+    WritingPlatform,
+)
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 PROJECT_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
@@ -470,6 +479,7 @@ class FakeRequests:
         self.started: list[ResearchRequest] = []
         self.creatives: list[AssetRequest] = []
         self.tasks: list[TaskRequest] = []
+        self.writings: list[WritingBrief] = []
 
     def start_research(self, request: ResearchRequest) -> ResearchRunReading:
         self.started.append(request)
@@ -492,6 +502,12 @@ class FakeRequests:
         if self.fails is not None:
             raise self.fails
         return studio_run_reading(StudioRunStatus.QUEUED)
+
+    def start_writing(self, brief: WritingBrief) -> WritingRunReading:
+        self.writings.append(brief)
+        if self.fails is not None:
+            raise self.fails
+        return writing_run_reading(WritingRunStatus.QUEUED)
 
     def start_task(self, request: TaskRequest) -> TaskReading:
         self.tasks.append(request)
@@ -637,7 +653,7 @@ def test_the_turn_fails_when_the_model_never_answers(reads):
     reading = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
     wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
     assert "read_profile" in reading
-    assert wrap_up == ["start_research", "start_creative", "start_task", SUBMIT]
+    assert wrap_up == ["start_research", "start_creative", "start_writing", "start_task", SUBMIT]
     messages = [
         m for m in model.requests[-1]["messages"] if "You are out of reading budget" in str(m)
     ]
@@ -743,7 +759,7 @@ def test_cost_limit_stops_the_turn(reads):
         )
     assert len(model.requests) == 3
     wrap_up = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
-    assert wrap_up == ["start_research", "start_creative", "start_task", SUBMIT]
+    assert wrap_up == ["start_research", "start_creative", "start_writing", "start_task", SUBMIT]
 
 
 # ------------------------------------------------------------------- tools
@@ -917,7 +933,7 @@ def test_a_spent_reading_budget_still_lets_the_turn_start_research(reads):
     assert turn.answer == "Started it."
     assert any("out of reading budget" in str(m) for m in model.requests[1]["messages"])
     wrap_up = [schema["function"]["name"] for schema in model.requests[1]["tools"]]
-    assert wrap_up == ["start_research", "start_creative", "start_task", SUBMIT]
+    assert wrap_up == ["start_research", "start_creative", "start_writing", "start_task", SUBMIT]
 
 
 def test_empty_readings_are_plain_sentences():
@@ -947,6 +963,7 @@ def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
         "start_creative",
         "list_writing_runs",
         "get_writing_run",
+        "start_writing",
         "start_task",
         "list_tasks",
         "get_task",
@@ -979,7 +996,7 @@ def test_tool_schemas_are_the_reads_the_request_action_and_the_submission():
 
 def test_the_wrap_up_offers_the_request_action_and_the_submission_only():
     names = [schema["function"]["name"] for schema in wrap_up_tool_schemas(agent)]
-    assert names == ["start_research", "start_creative", "start_task", SUBMIT]
+    assert names == ["start_research", "start_creative", "start_writing", "start_task", SUBMIT]
 
 
 # ------------------------------------------------------------ the creative studio
@@ -1326,31 +1343,29 @@ def test_a_request_for_several_agents_starts_a_task(reads):
     ]
 
 
-def test_a_post_request_starts_a_task_and_never_the_writer(reads):
+def test_a_post_without_an_image_starts_the_writer_and_no_task(reads):
     requests = FakeRequests()
+    events = RecordedEvents()
     model = ScriptedModel(
-        [
-            call(
-                "start_task",
-                request="Write a tweet announcing the product.",
-                understanding="One post on X introducing the product.",
-            )
-        ],
-        [call(SUBMIT, answer=f"Started task `{TASK_ID}`.")],
+        [call("start_writing", platform="x", goal="introduce")],
+        [call(SUBMIT, answer=f"Started `{WRITING_RUN_ID}`.")],
     )
 
     answer_message(
         reads,
         model,
-        [{"role": "user", "content": "Write a tweet announcing the product."}],
+        [{"role": "user", "content": "Write a tweet introducing the product."}],
         requests=requests,
+        events=events,
     )
 
-    offered = [schema["function"]["name"] for schema in model.requests[0]["tools"]]
-    assert "start_task" in offered
-    assert not [name for name in offered if "writ" in name and name.startswith("start")]
-    assert [task.understanding for task in requests.tasks] == [
-        "One post on X introducing the product."
+    assert requests.writings == [
+        WritingBrief(platform=WritingPlatform.X, goal=WritingGoal.INTRODUCE)
+    ]
+    assert requests.tasks == []
+    started = [event for event in events.events if event.kind == RUN_STARTED]
+    assert [event.detail for event in started] == [
+        {"run_kind": WRITING_RUN_KIND, "run_id": str(WRITING_RUN_ID)}
     ]
 
 
@@ -1407,23 +1422,39 @@ def test_a_follow_up_on_a_task_tells_the_chat_to_give_its_report():
     assert "cannot start another run" in instruction
 
 
-def test_the_chat_has_no_request_action_for_the_writer():
-    names = {schema["function"]["name"] for schema in agent.tool_schemas()}
-    assert "start_writing" not in names
-    assert REQUEST_ACTIONS == {"start_research", "start_creative", "start_task"}
+def test_the_request_actions_start_research_an_image_a_post_and_a_task():
+    assert REQUEST_ACTIONS == {"start_research", "start_creative", "start_writing", "start_task"}
 
 
-def test_a_follow_up_on_a_writing_run_is_refused():
-    with pytest.raises(ValueError):
-        follow_up_instruction(WRITING_RUN_KIND, str(WRITING_RUN_ID), "succeeded")
+def test_a_writing_follow_up_is_told_to_read_the_run_and_say_what_became_of_the_post():
+    instruction = follow_up_instruction(WRITING_RUN_KIND, str(WRITING_RUN_ID), "succeeded")
+
+    assert instruction.startswith("[Written by OpenMarketer, not by the operator.]")
+    assert f"get_writing_run and run_id {WRITING_RUN_ID}" in instruction
+    assert "rejected by a person" in instruction
+    assert "write no link" in instruction
+    assert "cannot start another run" in instruction
 
 
-def test_the_prompt_routes_a_post_to_a_task():
-    assert 'A post, a tweet, a thread, or "introduce / announce the product" is a **task**' in (
+def test_the_prompt_routes_a_request_one_agent_can_do_to_that_agents_action():
+    assert "**A request one agent can do alone uses that agent's action.**" in SYSTEM_PROMPT
+    assert "or writing a post again or rewriting one, is the **writer**: `start_writing`" in (
         SYSTEM_PROMPT
     )
-    assert "Writing screen" not in SYSTEM_PROMPT
-    assert "start_writing" not in SYSTEM_PROMPT
+
+
+def test_the_prompt_routes_a_post_with_an_image_of_the_library_to_the_writer():
+    assert "One post with an image that **already exists** in the Studio library" in SYSTEM_PROMPT
+    assert "`start_writing` with that image as its `asset`" in SYSTEM_PROMPT
+
+
+def test_the_prompt_routes_a_post_with_a_new_image_to_a_task():
+    assert "That is a post with a new image" in " ".join(SYSTEM_PROMPT.split())
+    assert "makes the image first and gives it to the writer" in " ".join(SYSTEM_PROMPT.split())
+
+
+def test_the_prompt_says_a_post_waits_in_approvals_before_anything_is_published():
+    assert "nothing is published before" in " ".join(SYSTEM_PROMPT.split())
 
 
 def test_the_prompt_routes_an_image_alone_and_research_alone_to_their_runs():
@@ -1433,7 +1464,8 @@ def test_the_prompt_routes_an_image_alone_and_research_alone_to_their_runs():
 
 def test_the_prompt_routes_a_request_for_several_agents_to_a_task():
     assert "**A request that needs several agents together**" in SYSTEM_PROMPT
-    assert "is a **task**: `start_task`. Do not start its parts separately." in SYSTEM_PROMPT
+    assert "is a **task**: `start_task`." in SYSTEM_PROMPT
+    assert "Do not start its parts separately." in SYSTEM_PROMPT
     assert "starts nothing" not in SYSTEM_PROMPT
 
 
@@ -1467,6 +1499,123 @@ def test_no_writing_runs_is_a_plain_sentence():
     assert list_writing_runs(a_context(FakeReads(empty=True), None)) == (
         "The project has no writing runs."
     )
+
+
+# ------------------------------------------------------------------ the writer
+def test_start_writing_reads_the_brief_strictly_before_asking_the_caller():
+    requests = FakeRequests()
+
+    answer = start_writing(
+        a_context(FakeReads(), requests),
+        platform=WritingPlatform.X,
+        goal=WritingGoal.INTRODUCE,
+        variants=MAX_VARIANTS + 1,
+    )
+
+    assert answer == (f"error: the writing brief does not fit: 'variants' (at most {MAX_VARIANTS})")
+    assert requests.writings == []
+
+
+def test_a_brief_whose_fields_do_not_go_together_is_refused_with_the_briefs_rules():
+    requests = FakeRequests()
+
+    answer = start_writing(
+        a_context(FakeReads(), requests), platform=WritingPlatform.X, goal=WritingGoal.ANNOUNCE
+    )
+
+    assert answer.startswith("error: the writing brief does not fit: ")
+    assert "goal announce names the feature" in answer
+    assert requests.writings == []
+
+
+def test_start_writing_asks_the_caller_for_the_brief_with_its_inputs():
+    requests = FakeRequests()
+
+    start_writing(
+        a_context(FakeReads(), requests),
+        platform=WritingPlatform.INSTAGRAM,
+        goal=WritingGoal.ANNOUNCE,
+        feature="offline-sync",
+        variants=2,
+        asset=ASSET_ID,
+        research_run_id=RESEARCH_RUN_ID,
+    )
+
+    assert requests.writings == [
+        WritingBrief(
+            platform=WritingPlatform.INSTAGRAM,
+            goal=WritingGoal.ANNOUNCE,
+            feature="offline-sync",
+            variants=2,
+            asset=ASSET_ID,
+            research_run_id=RESEARCH_RUN_ID,
+        )
+    ]
+
+
+def test_start_writing_answers_with_the_new_runs_id_and_status():
+    answer = start_writing(
+        a_context(FakeReads(), FakeRequests()), platform=WritingPlatform.X, goal=WritingGoal.ANGLE,
+        angle="Why notes should work on a plane.",
+    )  # fmt: skip
+
+    assert json.loads(answer) == {
+        "run_id": str(WRITING_RUN_ID),
+        "status": "queued",
+        "platform": "x",
+    }
+
+
+def test_a_writing_run_that_could_not_be_started_is_an_error_the_turn_reads():
+    refused = WritingNotStarted("the post's asset is not in this project's Studio library")
+    model = ScriptedModel(
+        [call("start_writing", platform="x", goal="introduce", asset=str(ASSET_ID))],
+        [call(SUBMIT, answer="I could not start it.")],
+    )
+
+    turn = answer_message(FakeReads(), model, history(), requests=FakeRequests(fails=refused))
+
+    assert turn.answer == "I could not start it."
+    assert model.tool_results()[0] == f"error: {refused}"
+
+
+def test_start_writing_is_not_available_without_a_caller():
+    answer = start_writing(
+        a_context(FakeReads(), None), platform=WritingPlatform.X, goal=WritingGoal.INTRODUCE
+    )
+
+    assert answer == "error: starting a writing run is not available here"
+
+
+def test_the_schema_of_start_writing_says_the_briefs_limits_before_the_first_call():
+    [schema] = [s for s in agent.tool_schemas() if s["function"]["name"] == "start_writing"]
+    parameters = schema["function"]["parameters"]
+    properties = parameters["properties"]
+
+    assert parameters["required"] == ["platform", "goal"]
+    assert parameters["$defs"]["WritingPlatform"]["enum"] == ["x", "instagram"]
+    assert parameters["$defs"]["WritingGoal"]["enum"] == ["introduce", "announce", "angle"]
+    assert properties["variants"]["maximum"] == MAX_VARIANTS
+    assert f'"maxLength": {MAX_ANGLE_CHARS}' in json.dumps(properties["angle"])
+    assert '"pattern"' in json.dumps(properties["feature"])
+
+
+def test_a_turn_that_started_a_post_and_ran_out_of_calls_answers_in_codes_words(reads):
+    events = RecordedEvents()
+    model = ScriptedModel([call("start_writing", platform="x", goal="introduce")])
+
+    turn = answer_message(
+        reads,
+        model,
+        history(),
+        limits=ChatLimits(max_model_calls=3),
+        requests=FakeRequests(),
+        events=events,
+    )
+
+    assert turn.answer == STARTED_RUN_SENTENCES[WRITING_RUN_KIND]
+    assert "Approvals" in turn.answer
+    assert events.events[0].detail["label"] == TOOL_LABELS["start_writing"]
 
 
 # ------------------------------------------------------------------- graph

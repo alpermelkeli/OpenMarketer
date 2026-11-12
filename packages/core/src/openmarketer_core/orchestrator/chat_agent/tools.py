@@ -5,19 +5,23 @@ and never with what a model sent. Problems (a section that does not exist, an id
 that does not name anything) are text the model can correct from. No read tool writes
 anything or asks for an action.
 
-``start_research``, ``start_creative`` and ``start_task`` are the other kind: *request actions*.
-Each asks the turn's caller (``ChatTurnContext.requests``) to create a run for the project and
-start it (a research run, a studio run that makes one image, an orchestrator task that plans and
-runs several agents), and answers with the run's id and status; it writes nothing itself and
-starts no workflow, and a caller that gave no port is told that starting runs is not available.
-A run that was started is recorded for the person watching the turn (``run_started``, through
+``start_research``, ``start_creative``, ``start_writing`` and ``start_task`` are the other
+kind: *request actions*. Each asks the turn's caller (``ChatTurnContext.requests``) to create a
+run for the project and start it (a research run, a studio run that makes one image, a writing
+run that writes one post for a person to approve, an orchestrator task that plans and runs
+several agents), and answers with the run's id and status; it writes nothing itself and starts
+no workflow, and a caller that gave no port is told that starting runs is not available. A run
+that was started is recorded for the person watching the turn (``run_started``, through
 ``ChatTurnContext.events``), so the chat can follow the run's own progress. What it sends is
-read strictly against ``ResearchRequest``, ``AssetRequest`` or ``TaskRequest`` first, so a
-request that does not fit is refused with the fields at fault and never their values.
+read strictly against ``ResearchRequest``, ``AssetRequest``, ``WritingBrief`` or
+``TaskRequest`` first, so a request that does not fit is refused with the fields at fault and
+never their values.
 
-Writing runs are read only (``list_writing_runs``, ``get_writing_run``): the chat starts no
-writing run itself. A post is a task's (``start_task``), whose plan decides whether it needs an
-image first. Tasks are read with ``list_tasks`` and ``get_task``.
+Which of them a request starts is the prompt's (``rules.SYSTEM_PROMPT``): a post one agent can
+write alone, with no image or with one the Studio library already has, is the writer's
+(``start_writing``); a post that needs a new image, and any request that needs several agents
+together, is a task's (``start_task``). Writing runs are read with ``list_writing_runs`` and
+``get_writing_run``, tasks with ``list_tasks`` and ``get_task``.
 
 Everything a read tool answers with that a person, a model or a web page wrote (a research
 finding, a studio run's goal and copy, the verifier's notes) is the project's data, and the
@@ -51,18 +55,35 @@ from openmarketer_core.orchestrator.requests import (
     ResearchNotStarted,
     StudioNotStarted,
     TaskNotStarted,
+    WritingNotStarted,
 )
 from openmarketer_core.orchestrator.task.plan import Request, TaskRequest, Understanding
 from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
+from openmarketer_core.profile import FeatureId
 from openmarketer_core.research.questions import DEFAULT_MAX_SOURCES, ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.run_events import RUN_STARTED, RunEvent
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+from openmarketer_core.writing.brief import (
+    DEFAULT_VARIANTS,
+    Angle,
+    Variants,
+    WritingBrief,
+    WritingGoal,
+    WritingPlatform,
+)
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 # The most a tool answer is; a profile with many features is the long one.
 MAX_ANSWER_CHARS = 6000
 TRUNCATED = "\n... truncated"
+# What a writing brief whose fields each fit, but not together, is refused with: the brief's
+# rules of which fields each goal and platform carry (``WritingBrief``), in code's words.
+BRIEF_RULES = (
+    "a brief with goal announce names the feature, and only it does; a brief with goal angle "
+    "carries the angle, and only it does; a post on instagram names its asset"
+)
 
 
 @agent.tool
@@ -337,13 +358,63 @@ def get_writing_run(context: ChatTurnContext, run_id: str) -> str:
     return _text(asdict(found))
 
 
+# Typed with the brief's own types and limits, so that the schema the model is shown says them.
+@agent.tool
+def start_writing(
+    context: ChatTurnContext,
+    platform: WritingPlatform,
+    goal: WritingGoal,
+    feature: FeatureId | None = None,
+    angle: Angle | None = None,
+    variants: Variants = DEFAULT_VARIANTS,
+    asset: uuid.UUID | None = None,
+    research_run_id: uuid.UUID | None = None,
+) -> str:
+    """Start a writing run of this project: the writer writes one post for one platform, with
+    variants to choose from, and proposes it; a person approves or rejects it in Approvals
+    before anything is published. goal is introduce (the product), announce (one live feature
+    of the Product Profile, named by its id in feature) or angle (a direction in the
+    operator's words, in angle). asset is an image of the Studio library the post goes with,
+    one made for the platform; a post on instagram needs one. research_run_id is a succeeded
+    research run whose findings the post may draw on. It answers with the new run's id and
+    status; the post is read later."""
+    if context.requests is None:
+        return "error: starting a writing run is not available here"
+    try:
+        brief = read_strict_json(
+            WritingBrief,
+            {
+                "platform": platform.value,
+                "goal": goal.value,
+                "feature": feature,
+                "angle": angle,
+                "variants": variants,
+                "asset": None if asset is None else str(asset),
+                "research_run_id": None if research_run_id is None else str(research_run_id),
+            },
+        )
+    except DoesNotFit as e:
+        # Fields that each fit and a brief that does not are its rules' doing.
+        why = fields_phrase(e.fields, e.reasons) if e.fields else f": {BRIEF_RULES}"
+        return f"error: the writing brief does not fit{why}"
+    try:
+        run = context.requests.start_writing(brief)
+    except WritingNotStarted as e:
+        return f"error: {e}"
+    context.events.record(
+        RunEvent(RUN_STARTED, {"run_kind": WRITING_RUN_KIND, "run_id": str(run.id)})
+    )
+    return _text({"run_id": str(run.id), "status": run.status, "platform": run.platform})
+
+
 # Typed with the request's own limits, so that the schema the model is shown says them.
 @agent.tool
 def start_task(context: ChatTurnContext, request: Request, understanding: Understanding) -> str:
     """Start an orchestrator task of this project: it plans the steps, has a plan that can
     spend confirmed by the operator, runs the agents one after another, reviews each result
-    and reports in this chat when it is done. Use it for a post (the task decides whether the
-    post needs an image) and for any request that needs several agents together. request is
+    and reports in this chat when it is done. Use it only for a request that needs several
+    agents together: a post with a new image, research and then a post, several posts or
+    outputs. A post the writer can write alone is start_writing. request is
     the operator's request in their own words, verbatim; understanding is one paragraph of
     what you understood they want, with what the project's records add to it. It answers
     with the new task's id and status; its report comes later in this chat."""
