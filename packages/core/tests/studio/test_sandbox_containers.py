@@ -14,6 +14,8 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from openmarketer_core.studio.docker_sandbox import DockerSandbox, SandboxSettings
+from openmarketer_core.studio.image_checks import copy_matches
+from openmarketer_core.studio.ocr_languages import languages_for
 from openmarketer_core.studio.sandbox import CanvasSize
 
 IMAGE = SandboxSettings().image
@@ -112,4 +114,51 @@ def test_ocr_reads_known_text(sandbox: DockerSandbox) -> None:
     ImageDraw.Draw(image).text((40, 50), "OPEN MARKETER", fill="black", font=font)
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
-    assert "OPEN MARKETER" in sandbox.ocr(buffer.getvalue())
+    assert "OPEN MARKETER" in sandbox.ocr(buffer.getvalue(), ["eng"])
+
+
+def test_every_face_of_the_catalogue_is_in_the_image_and_renders_turkish() -> None:
+    checked = subprocess.run(
+        [
+            "docker", "run", "--rm", "--network", "none", "--read-only",
+            "--entrypoint", "python", IMAGE,
+            "-I", "/opt/studio/check_fonts.py", "/opt/studio/lib/typefaces.json",
+        ],
+        capture_output=True, text=True, timeout=120, check=False,
+    )  # fmt: skip
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+def test_a_program_fits_words_in_a_box_with_studio_type(sandbox: DockerSandbox) -> None:
+    code = (
+        "from PIL import Image\n"
+        "from studio_type import fit_text\n"
+        "image = Image.new('RGB', (800, 400), 'white')\n"
+        "fitted = fit_text(image, 'Pazarı kim yapacak?', (40, 40, 760, 360), 'League Spartan',\n"
+        "                  'bold', fill='black')\n"
+        "left, top, right, bottom = fitted.bbox\n"
+        "print(fitted.size, 40 <= left and right <= 760 and 40 <= top and bottom <= 360)\n"
+        "image.save('/out/image.png')\n"
+    )
+    result = sandbox.run_python(code, {}, [], CanvasSize(800, 400))
+    assert result.succeeded, result.logs
+    size, inside = result.logs.stdout.split()
+    assert int(size) > 60 and inside == "True"
+
+
+def test_words_studio_type_sets_in_a_catalogue_font_are_read_in_turkish(
+    sandbox: DockerSandbox,
+) -> None:
+    copy = ["Ürünü sen yaptın.", "Pazarı kim yapacak?"]
+    code = (
+        "from PIL import Image\n"
+        "from studio_type import fit_text\n"
+        "image = Image.new('RGB', (1200, 600), (20, 24, 40))\n"
+        f"fit_text(image, {copy[0]!r}, (60, 80, 1140, 180), 'Inter', 'bold', fill='white')\n"
+        f"fit_text(image, {copy[1]!r}, (60, 320, 1140, 420), 'Vollkorn', fill='white')\n"
+        "image.save('/out/image.png')\n"
+    )
+    made = sandbox.run_python(code, {}, [], CanvasSize(1200, 600))
+    assert made.succeeded, made.logs
+    text = sandbox.ocr(made.files[0].data, languages_for(copy))
+    assert copy_matches(text, copy).all_confirmed, text

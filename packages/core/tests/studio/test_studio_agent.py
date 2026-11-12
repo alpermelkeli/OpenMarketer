@@ -315,10 +315,10 @@ A_KIT = BrandKit(
 )
 
 
-def test_a_brief_for_a_background_with_copy_does_not_forbid_the_words_it_asks_for():
+def test_a_prompt_with_copy_does_not_forbid_the_words_it_asks_for():
     banned = "A navy gradient, no text, no letters, no numbers, no logos."
     chat = ScriptedChat(
-        creative_director=[a_brief("background_overlay", image_prompt=banned)],
+        creative_director=[a_brief(image_prompt=banned)],
         studio=[operation("generate_image", prompt=banned), ready()],
         asset_verifier=[a_verdict()],
     )
@@ -332,6 +332,34 @@ def test_a_brief_for_a_background_with_copy_does_not_forbid_the_words_it_asks_fo
     assert "no letters" not in generated["prompt"]
     assert '"Launch day"\n"Try it free"' in generated["prompt"]
     assert "Where the words go: Centered, upper third." in generated["prompt"]
+
+
+def test_a_run_the_director_starts_with_words_laid_by_code_keeps_its_background_free_of_them():
+    chat = ScriptedChat(
+        creative_director=[a_brief("background_overlay", image_prompt="A quiet harbour.")],
+        studio=[
+            operation("generate_image", prompt="A quiet harbour, calm sky above."),
+            lambda messages: operation(
+                "run_python",
+                code="from studio_type import fit_text\n",
+                input_version_ids=[latest_image(messages)],
+            ),
+            ready(),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    run = Run(chat, world)
+
+    [background] = world.payloads(GENERATE_IMAGE)
+    assert background["technique"] == "background_overlay"
+    assert "Launch day" not in background["prompt"]
+    assert "The image shows no text" in background["prompt"]
+    [program] = world.payloads(RUN_PYTHON)
+    assert run.result.final_version_id == program["version_id"]
+    assert run.result.rounds == 1
 
 
 def test_every_generation_and_edit_is_told_what_the_product_is():
@@ -609,14 +637,13 @@ def test_a_run_at_its_round_limit_escalates_with_its_best_candidate():
             editing_latest(instruction="Recompose."),
             ready(),
         ],
-        asset_verifier=[a_verdict(composition="major")],
+        asset_verifier=[
+            a_verdict(composition="major"),
+            a_verdict(composition="major", artifacts="major"),
+        ],
     )
-    # The edit comes back at the wrong size and its words cannot be read: two failures to one.
-    world = World(
-        [READ_BACK],
-        sizes={1: (1080, 1000)},
-        failing={READ_TEXT: ["", "the sandbox timed out"]},
-    )
+    # The edit fails two criteria where the first image failed one.
+    world = World([READ_BACK, READ_BACK])
 
     run = Run(chat, world, limits=Limits(max_rounds=2))
 
@@ -1528,3 +1555,51 @@ def test_a_brief_in_a_markdown_fence_is_read():
 
     assert run.final["brief"]["goal"] == "Announce the launch."
     assert len([c for c in chat.calls if c["role"] == "creative_director"]) == 1
+
+
+def test_a_reading_that_fails_leaves_every_line_to_the_verifier_and_fails_nothing():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict({1: "Launch day", 2: "Try it free"})],
+    )
+    world = World([], failing={READ_TEXT: ["the sandbox did not finish within 90 seconds"]})
+
+    run = Run(chat, world)
+
+    [review] = run.result.reviews
+    assert review.passed and run.result.rounds == 1
+    assert review.check_report["copy"] == {"unread": True}
+    assert review.check_report["notices"] == [rules.COPY_NOT_READ]
+    copy = verifier_copy_data(chat)
+    assert (copy["confirmed_by_ocr"], copy["to_transcribe"]) == ([], [1, 2])
+
+
+def test_a_reading_that_fails_and_a_verifier_who_reads_a_wrong_line_fail_the_words():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict({1: "Lanch day", 2: "Try it free"})],
+    )
+    world = World([], failing={READ_TEXT: ["the sandbox did not finish within 90 seconds"]})
+
+    run = Run(chat, world, limits=Limits(max_rounds=1))
+
+    [review] = run.result.reviews
+    assert not review.passed
+    assert review.verifier_report is not None
+    assert [line["matches"] for line in review.verifier_report["copy_verdict"]] == [False, True]
+
+
+def test_the_words_are_read_only_in_the_languages_their_letters_need():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world)
+
+    [reading] = world.payloads(READ_TEXT)
+    assert reading["languages"] == ["eng"]

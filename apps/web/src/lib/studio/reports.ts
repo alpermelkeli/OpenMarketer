@@ -49,7 +49,7 @@ export type CheckReport = {
 };
 
 const FAILURE_FIELDS = new Set(["size", "format", "bytes", "unreadable", "copy", "copy_unread"]);
-const NOTICE_FIELDS = new Set(["copy_unconfirmed"]);
+const NOTICE_FIELDS = new Set(["copy_unconfirmed", "copy_not_read"]);
 
 /**
  * The checks by code of a version, with the verifier's verdict on the lines of copy OCR could
@@ -116,14 +116,38 @@ function copyVerdictOf(report: MediaAssetVersion["verifier_report"]): VerdictLin
 }
 
 function copyItemOf(copy: unknown, unread: boolean, verdict: VerdictLine[] | null): CheckItem | null {
-  if (unread || (isRecord(copy) && copy.unread === true)) {
+  // `copy_unread` failed a round before a reading that failed became a notice.
+  if (unread) {
     return { label: "Words", passed: false, detail: "The words in the image could not be read." };
   }
+  if (isRecord(copy) && copy.unread === true) return unreadCopyItemOf(verdict);
   if (!isRecord(copy)) return null;
   if (Array.isArray(copy.confirmed) || Array.isArray(copy.unconfirmed)) {
     return confirmedCopyItemOf(copy, verdict);
   }
   return comparedCopyItemOf(copy);
+}
+
+/** A report whose OCR could not read the image: every line was the verifier's to read. */
+function unreadCopyItemOf(verdict: VerdictLine[] | null): CheckItem {
+  const ocr = "OCR could not read the image";
+  if (verdict === null || verdict.length === 0) {
+    return { label: "Words", passed: false, unconfirmed: true, detail: `${ocr}; no one has confirmed the words.` };
+  }
+  const lines = verdict.map((line): CopyLine => {
+    const verifier = { read: line.transcribed, matches: line.matches };
+    return { expected: line.expected, read: null, verifier, verdict: verdictWords(verifier) };
+  });
+  const wrong = lines.filter((line) => line.verifier?.matches === false).length;
+  if (wrong > 0) {
+    return {
+      label: "Words",
+      passed: false,
+      detail: `${ocr}; the verifier read ${wrong} of ${lines.length} lines differently from what was asked.`,
+      lines,
+    };
+  }
+  return { label: "Words", passed: true, detail: `${ocr}; the verifier read every line as asked.`, lines };
 }
 
 /** A report that says which lines OCR confirmed, the others left to the verifier. */

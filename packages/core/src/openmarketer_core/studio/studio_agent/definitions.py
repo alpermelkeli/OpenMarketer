@@ -19,7 +19,8 @@ graph imports; importing it is what puts them on ``agent``.
   ``read_text`` run in the installation's sandbox and are internal. Each of the four that make
   an image stores it as the version its payload names, and answers with
   ``{"version_id", "asset_id", "width", "height", "mime", "size_bytes", "cost_usd"}``;
-  ``read_text`` answers with ``{"text"}``, what OCR read in a version. A payload names
+  ``read_text`` answers with ``{"text"}``, what OCR read in a version in the languages its
+  payload names (those the copy's letters need, ``ocr_languages.languages_for``). A payload names
   identifiers and the short text a model wrote (a prompt, a page, a program), each bounded;
   no field is read as a path, and the handler decides what an id may name.
 """
@@ -36,6 +37,7 @@ from openmarketer_core.agent_runtime.agent import Agent
 from openmarketer_core.llm import ChatModel
 from openmarketer_core.studio.brand_kit import BrandKit
 from openmarketer_core.studio.media_provider import ImageInput
+from openmarketer_core.studio.ocr_languages import OCR_LANGUAGES, OcrLanguage
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_core.studio.studio_agent.rules import (
@@ -61,7 +63,9 @@ READ_TEXT = "read_text"
 # - A render and a program run in the sandbox: repeating one costs nothing and stores the one
 #   version of its action id, so each is tried twice, a program with the time an install of
 #   its packages takes.
-# - Reading text is a short OCR run, tried three times.
+# - Reading text is an OCR run with its own limit in the sandbox (``SandboxSettings.ocr_timeout_s``,
+#   which the worker's settings hold under this action's time), tried twice: a reading that
+#   fails leaves the words to the verifier, so a third try would only make the run wait.
 # - A minute without a heartbeat is a worker that is gone.
 IMAGE_TIMEOUT_SECONDS = 240
 RENDER_TIMEOUT_SECONDS = 120
@@ -69,8 +73,8 @@ RENDER_ATTEMPTS = 2
 PYTHON_TIMEOUT_SECONDS = 360
 PYTHON_ATTEMPTS = 2
 SANDBOX_RETRY_AFTER_SECONDS = 10
-READ_TEXT_TIMEOUT_SECONDS = 120
-READ_TEXT_ATTEMPTS = 3
+READ_TEXT_TIMEOUT_SECONDS = 150
+READ_TEXT_ATTEMPTS = 2
 READ_TEXT_RETRY_AFTER_SECONDS = 5
 HEARTBEAT_SECONDS = 30
 
@@ -274,7 +278,8 @@ class RunPython(_ImagePayload):
     effect=ActionEffect.INTERNAL,
 )
 class ReadText(BaseModel):
-    """Read the text in the version ``version_id`` of this run with OCR; answers ``{"text"}``."""
+    """Read the text in the version ``version_id`` of this run with OCR, in ``languages``;
+    answers ``{"text"}``. An action recorded before the languages were named reads in all."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -282,6 +287,9 @@ class ReadText(BaseModel):
     project_id: uuid.UUID
     run_id: uuid.UUID
     version_id: uuid.UUID
+    languages: Annotated[list[OcrLanguage], Field(min_length=1)] = Field(
+        default_factory=lambda: list(OCR_LANGUAGES)
+    )
 
 
 def initial_state(run: StudioRunInput, request: AssetRequest) -> StudioState:

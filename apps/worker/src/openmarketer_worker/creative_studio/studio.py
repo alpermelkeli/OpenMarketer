@@ -426,7 +426,7 @@ class StudioWork:
             workspace_id=payload.workspace_id, project_id=payload.project_id, run_id=payload.run_id
         )
         image = self._image_of_the_run(run, payload.version_id)
-        text = self._in_the_sandbox(lambda: self._sandbox.ocr(image.data))
+        text = self._in_the_sandbox(lambda: self._sandbox.ocr(image.data, payload.languages))
         return {"text": text[:MAX_READ_TEXT_CHARS]}
 
     # ---------------------------------------------------------------------- the details

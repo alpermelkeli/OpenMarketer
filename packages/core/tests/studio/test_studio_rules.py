@@ -707,11 +707,17 @@ def test_the_declarations_load_no_graph_framework_database_or_pillow():
 
 
 # ----------------------------------------------------------------------- first technique
-def test_a_run_never_starts_with_the_background_overlay_fallback():
+def test_a_run_may_start_with_words_laid_by_code_on_a_background():
     assert (
         rules.first_technique(Technique.BACKGROUND_OVERLAY, has_reference_assets=False)
-        == Technique.GENERATED
+        == Technique.BACKGROUND_OVERLAY
     )
+
+
+def test_the_creative_director_may_choose_code_for_exact_prominent_words():
+    prompt = " ".join(rules.BRIEF_SYSTEM_PROMPT.split())
+    assert "Never start with background_overlay" not in prompt
+    assert "a headline poster, a quote: background_overlay" in prompt
 
 
 def test_a_run_starts_composed_only_with_real_images_to_compose():
@@ -899,12 +905,17 @@ def test_the_studio_is_told_code_is_for_real_images_framing_and_cropping():
         assert use in prompt
 
 
-def test_the_studio_is_told_not_to_mend_an_image_models_words_or_look_in_code():
+def test_the_studio_is_told_not_to_mend_an_image_models_look_in_code():
     prompt = " ".join(rules.STUDIO_SYSTEM_PROMPT.split())
     assert (
-        "mend them with edit_image or a new generate_image, never by redrawing words or adding "
-        "panels or gradients in code" in prompt
+        "mend them with edit_image or a new generate_image, never with panels or boxes in code"
+        in prompt
     )
+
+
+def test_the_studio_may_redraw_a_wrong_line_cleanly_in_code():
+    prompt = " ".join(rules.STUDIO_SYSTEM_PROMPT.split())
+    assert "set the exact line with fit_text in a catalogue font" in prompt
 
 
 def test_a_program_made_on_the_image_models_image_is_a_layouts_candidate():
@@ -982,12 +993,13 @@ def test_a_brand_failure_with_the_real_icon_chosen_is_mended_by_pasting_it_in_co
     assert ICON_ID in strategy
 
 
-def test_wrong_words_in_an_image_models_image_are_mended_by_the_image_model_not_code():
+def test_wrong_words_in_an_image_models_image_are_mended_by_an_edit_or_redrawn_in_code():
     spec = platform_spec(Platform.INSTAGRAM_POST)
     for technique in (Technique.GENERATED, Technique.HTML_REFERENCE):
         [strategy] = rules.edit_strategies([COPY], technique, spec)
         assert strategy.startswith("Edit the image with the image model")
-        assert "Do not redraw the words in code" in strategy
+        assert "redraw them cleanly with run_python" in strategy
+        assert "studio_type.fit_text" in strategy
 
 
 def test_illegible_words_in_an_image_models_image_are_mended_by_the_image_model():
@@ -997,10 +1009,12 @@ def test_illegible_words_in_an_image_models_image_are_mended_by_the_image_model(
     assert "panel" not in strategy
 
 
-def test_illegible_words_laid_by_code_may_get_a_panel_behind_them():
+def test_illegible_words_laid_by_code_are_made_larger_before_anything_is_put_behind_them():
     spec = platform_spec(Platform.INSTAGRAM_POST)
     [strategy] = rules.edit_strategies(["verifier:legibility"], Technique.BACKGROUND_OVERLAY, spec)
-    assert "panel or a gradient" in strategy
+    assert strategy.startswith("Make the words larger with fit_text")
+    assert "panel" not in strategy
+    assert "subtle local gradient only where the picture behind them stays busy" in strategy
 
 
 def test_an_overlay_round_without_a_candidate_is_told_to_lay_the_words_over_in_code():
@@ -1235,3 +1249,40 @@ def test_a_program_without_copy_is_a_candidate_at_once():
 def test_the_verifier_passes_a_close_likeness_of_the_real_icon():
     prompt = " ".join(rules.VERIFIER_SYSTEM_PROMPT.split())
     assert "A close likeness" in prompt and "passes brand_fit" in prompt
+
+
+# ------------------------------------------------------------- a reading that did not happen
+def test_a_reading_that_failed_leaves_every_line_unconfirmed():
+    assert rules.unconfirmed_lines(["Launch day", "Try it free"], {"unread": True}) == [1, 2]
+
+
+def test_a_reading_stored_failed_by_an_older_check_leaves_every_line_unconfirmed():
+    old = {"passed": False, "unread": True}
+    assert rules.unconfirmed_lines(["Launch day", "Try it free"], old) == [1, 2]
+
+
+def test_the_verifier_is_told_ocr_could_not_read_the_image():
+    data = rules.copy_review_data(["Launch day", "Try it free"], {"unread": True})
+    assert data["confirmed_by_ocr"] == [] and data["to_transcribe"] == [1, 2]
+    assert data["ocr_notes"] == [rules.OCR_NOT_READ_NOTE]
+
+
+def test_a_failed_reading_has_no_edit_strategy_of_its_own():
+    spec = platform_spec(Platform.INSTAGRAM_POST)
+    assert rules.edit_strategies([rules.COPY_UNREAD], Technique.GENERATED, spec) == []
+
+
+def test_the_director_is_told_the_catalogue_family_of_each_brand_font():
+    state = {
+        "goal": "Launch",
+        "platform": "instagram_post",
+        "style_notes": "",
+        "reference_asset_ids": [],
+        "exact_copy": ["Launch day"],
+    }
+    kit = BrandKit(fonts=("Montserrat (headline)",)).as_data()
+    [_, user] = rules.brief_messages(state, platform_spec(Platform.INSTAGRAM_POST), kit)
+    sent = json.loads(user["content"])
+    assert sent["brand_typefaces"] == [
+        {"brand_font": "Montserrat (headline)", "use": "League Spartan", "in_the_sandbox": False}
+    ]

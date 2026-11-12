@@ -11,9 +11,9 @@ workflow and the activities read none of it.
 
 A value that does not fit stops the worker at start-up with the variable's name, not every
 run: a number that is not one, and a sandbox whose time limits do not fit in the time a
-program or a render is given (``definitions.py`` in core), which would end every one of them
-as timed out. (Reading an image's text is a short run whatever the limit, and is not held to
-it.)
+program, a render or a reading of an image's text is given (``definitions.py`` in core), which
+would end every one of them as timed out. A reading has a limit of its own
+(``STUDIO_SANDBOX_OCR_TIMEOUT_S``), apart from a program's run (``STUDIO_SANDBOX_TIMEOUT_S``).
 The caps of the creative budget are not here: they are resolved for a run's workspace at each
 attempt (``MEDIA_MONTHLY_CAP_USD``, ``MEDIA_AUTO_APPROVE_USD``, read by the runtime's budget).
 """
@@ -69,6 +69,9 @@ class StudioSettings:
                 run_timeout_s=positive_number(
                     environ, "STUDIO_SANDBOX_TIMEOUT_S", sandbox.run_timeout_s
                 ),
+                ocr_timeout_s=positive_number(
+                    environ, "STUDIO_SANDBOX_OCR_TIMEOUT_S", sandbox.ocr_timeout_s
+                ),
                 memory_mb=_whole_number(environ, "STUDIO_SANDBOX_MEMORY_MB", sandbox.memory_mb),
                 cpus=_amount(environ, "STUDIO_SANDBOX_CPUS", sandbox.cpus),
                 pids=_whole_number(environ, "STUDIO_SANDBOX_PIDS", sandbox.pids),
@@ -99,12 +102,13 @@ def _require_a_sandbox_that_fits_its_actions(sandbox: SandboxSettings) -> None:
             PYTHON_TIMEOUT_SECONDS,
         ),
         "a render": (sandbox.run_timeout_s + margin, RENDER_TIMEOUT_SECONDS),
-        "a reading": (sandbox.run_timeout_s + margin, READ_TEXT_TIMEOUT_SECONDS),
+        "a reading": (sandbox.ocr_timeout_s + margin, READ_TEXT_TIMEOUT_SECONDS),
     }
     for what, (needed, given) in fits.items():
         if needed > given:
             raise SettingsError(
-                f"STUDIO_SANDBOX_TIMEOUT_S and STUDIO_SANDBOX_INSTALL_TIMEOUT_S let {what} take "
+                "STUDIO_SANDBOX_TIMEOUT_S, STUDIO_SANDBOX_INSTALL_TIMEOUT_S and "
+                f"STUDIO_SANDBOX_OCR_TIMEOUT_S let {what} take "
                 f"{needed:g} seconds with the sandbox's start-up, more than the {given:g} "
                 "seconds its action is given: lower them"
             )

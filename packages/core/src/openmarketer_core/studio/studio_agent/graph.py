@@ -56,6 +56,7 @@ from openmarketer_core.llm import ChatReply, image_part
 from openmarketer_core.studio.contact_sheet import SheetImage, contact_sheet
 from openmarketer_core.studio.failures import StudioError
 from openmarketer_core.studio.image_checks import COPY, check_image, copy_matches
+from openmarketer_core.studio.ocr_languages import languages_for
 from openmarketer_core.studio.platforms import Platform, PlatformSpec, platform_spec
 from openmarketer_core.studio.studio_agent import progress, rules
 from openmarketer_core.studio.studio_agent.definitions import (
@@ -695,27 +696,34 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
 def check(state: StudioState, context: StudioContext) -> dict[str, Any]:
     """Measure the candidate in code: its file against the platform, its words against the copy.
 
-    The words are read by OCR, an action, only when the request has copy. OCR is evidence: a
-    line it did not read exactly is recorded (``rules.COPY_UNCONFIRMED``) and left to the
-    verifier, and does not fail the check.
+    The words are read by OCR, an action, only when the request has copy, in the languages
+    its letters need (``languages_for``). OCR is evidence, not a judge: a line it did not read
+    exactly is recorded (``rules.COPY_UNCONFIRMED``) and left to the verifier, and a reading
+    that failed (``rules.COPY_NOT_READ``, its copy ``{"unread": True}``) leaves every line to
+    the verifier, who transcribes them all. Neither fails the check; a blocked reading ends the
+    run, as any blocked action does.
     """
     candidate = state["candidate"]
-    failures: list[str] = []
     notices: list[str] = []
     copy: dict[str, Any] | None = None
     if state["exact_copy"]:
-        outcome = request_action(ReadText(**_run_ids(state), version_id=uuid.UUID(candidate)))
+        reading = ReadText(
+            **_run_ids(state),
+            version_id=uuid.UUID(candidate),
+            languages=list(languages_for(state["exact_copy"])),
+        )
+        outcome = request_action(reading)
         if outcome.succeeded:
             matched = copy_matches(str(outcome.result.get("text", "")), state["exact_copy"])
             copy = matched.as_data()
             notices += [] if matched.all_confirmed else [rules.COPY_UNCONFIRMED]
         else:
             _end_if_blocked(outcome.error)
-            copy = {"passed": False, "unread": True}
-            failures.append(rules.COPY_UNREAD)
+            copy = {"unread": True}
+            notices.append(rules.COPY_NOT_READ)
     image = context.image_of(candidate)
     measured = check_image(image.data, _spec(state))
-    failures = [*measured.failures, *failures]
+    failures = list(measured.failures)
     report = {
         "version_id": candidate,
         "passed": not failures,

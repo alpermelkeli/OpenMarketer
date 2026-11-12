@@ -56,6 +56,7 @@ from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.studio.media_provider import MediaAccountLimited
 from openmarketer_core.studio.openrouter_images import ACCOUNT_LIMITED
 from openmarketer_core.studio.sandbox import SandboxUnavailable
+from openmarketer_core.studio.studio_agent.definitions import READ_TEXT_ATTEMPTS
 from openmarketer_core.studio.studio_agent.rules import ImageTier
 from openmarketer_core.studio.workflow_contract import (
     STUDIO_RUN_KIND,
@@ -322,7 +323,7 @@ async def test_sandbox_that_cannot_start_ends_the_run_failed_once_its_attempts_a
     serving, start, studio_database, sessions, sandbox
 ):
     no_sandbox = "the sandbox could not be started: the docker command was not found"
-    sandbox.failures = [SandboxUnavailable(no_sandbox) for _ in range(3)]
+    sandbox.failures = [SandboxUnavailable(no_sandbox) for _ in range(READ_TEXT_ATTEMPTS)]
     model = one_round_that_passes()
     run = studio_database.requested().run
     async with serving(model=model):

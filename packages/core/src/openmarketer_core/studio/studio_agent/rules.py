@@ -22,8 +22,17 @@ The four techniques, in the order the decide rule falls back through:
   at the start, when the layout is the message; the decide rule never falls back to it, and
   from it goes the way ``generated`` does.
 - ``background_overlay``: the image model makes a background without text, and code in the
-  sandbox puts the exact words (and anything else exact) on it.
+  sandbox puts the exact words (and anything else exact) on it, in a font of the sandbox's
+  catalogue (``typefaces.py``). The creative director may start with it when the words must be
+  exact and prominent (a headline poster, a quote); otherwise it is the fallback after the
+  strong image model.
 - ``composed``: everything is code, and only for a run with real images to compose.
+
+With ``generated`` and ``html_reference`` the words are the image model's, but a program may
+redraw one line it got wrong, cleanly, over a calm area, with the sandbox's ``studio_type``
+helper and a catalogue font. Every prompt that may set words in code carries the typography
+guide built from the catalogue (``typefaces.typography_guide``), and the brand kit's fonts as
+the catalogue families to use for them (``typefaces.brand_typefaces_data``).
 
 Nothing here depends on the agent framework, a database or a network: ``graph.py`` wires these
 functions into a graph, and the worker runs the operations as actions.
@@ -60,6 +69,7 @@ from openmarketer_core.studio.image_checks import (
 from openmarketer_core.studio.platforms import PlatformSpec
 from openmarketer_core.studio.requests import MAX_COPY_LINE_CHARS, MAX_COPY_LINES
 from openmarketer_core.studio.square_crop import crop_safe_note
+from openmarketer_core.studio.typefaces import brand_typefaces_data, typography_guide
 
 CREATIVE_DIRECTOR_ROLE = "creative_director"
 STUDIO_ROLE = "studio"
@@ -115,7 +125,8 @@ SPENDING_OPERATIONS = frozenset({GENERATE_IMAGE, EDIT_IMAGE})
 # run_python is of every technique: what code does is exact, so it pastes the product's real
 # images (icon, logo, screenshots), puts a real screenshot in a device frame, and crops or
 # frames to the size on top of what the image model made, whatever the technique. Words and
-# layout are code's only with background_overlay and composed; otherwise the image model's.
+# layout are code's with background_overlay and composed; otherwise the image model's, but a
+# program may redraw a line of copy the image model got wrong.
 ALLOWED_OPERATIONS: Mapping[Technique, tuple[str, ...]] = {
     Technique.GENERATED: (GENERATE_IMAGE, EDIT_IMAGE, RUN_PYTHON, CANDIDATE_READY),
     Technique.HTML_REFERENCE: (
@@ -131,10 +142,15 @@ ALLOWED_OPERATIONS: Mapping[Technique, tuple[str, ...]] = {
 
 # The failure keys a round can have besides the image checks' own (``image_checks.py``).
 NO_CANDIDATE = "no_candidate"
+# A failure of rounds checked before a failed reading became a notice: it is no longer
+# recorded, and an old failure history that holds it is compared as any other key.
 COPY_UNREAD = "copy_unread"
 # What a check records, without failing, when OCR did not read a line exactly: the verifier
 # reads that line instead (``copy_verdict``).
 COPY_UNCONFIRMED = "copy_unconfirmed"
+# What a check records, without failing, when OCR could not read the image at all (its time
+# ran out, the sandbox failed): the verifier reads every line.
+COPY_NOT_READ = "copy_not_read"
 VERIFIER_UNREAD = "verifier_unread"
 VERIFIER_PREFIX = "verifier:"
 
@@ -728,14 +744,13 @@ def _verifier_saw_an_imitation(state: Mapping[str, Any]) -> bool:
 
 
 def first_technique(chosen: Technique, *, has_reference_assets: bool) -> Technique:
-    """The technique a run starts with: the creative director's, unless it chose a fallback.
+    """The technique a run starts with: the creative director's, unless it cannot start one.
 
-    background_overlay is only ever a fallback, and composed starts a run only when there are
-    real images to compose (``has_reference_assets``: the request gave some, or the brief chose
-    the product's real screenshots); otherwise the image model makes the image.
+    composed starts a run only when there are real images to compose (``has_reference_assets``:
+    the request gave some, or the brief chose the product's real screenshots); otherwise the
+    image model makes the image. background_overlay may start a run: the director chooses it
+    when the words must be exact and prominent.
     """
-    if chosen == Technique.BACKGROUND_OVERLAY:
-        return Technique.GENERATED
     if chosen == Technique.COMPOSED and not has_reference_assets:
         return Technique.GENERATED
     return chosen
@@ -1210,11 +1225,14 @@ def verifier_problems(report: VerifierReport, *, to_transcribe: Sequence[int] = 
 def unconfirmed_lines(exact_copy: Sequence[str], copy_check: Mapping[str, Any] | None) -> list[int]:
     """The numbers (from 1) of the lines of copy OCR did not confirm.
 
-    A check stored before OCR became evidence has no ``unconfirmed``; it reached the verifier
-    only when OCR had read every line, so none is unconfirmed.
+    A reading that failed (``{"unread": True}``) confirmed none. A check stored before OCR
+    became evidence has no ``unconfirmed``; it reached the verifier only when OCR had read
+    every line, so none is unconfirmed.
     """
     if not copy_check:
         return []
+    if copy_check.get("unread"):
+        return list(range(1, len(exact_copy) + 1))
     expected = {entry["expected"] for entry in copy_check.get("unconfirmed", [])}
     return [number for number, line in enumerate(exact_copy, start=1) if line in expected]
 
@@ -1226,6 +1244,13 @@ def copy_review_data(
     what OCR read of each of the others."""
     unconfirmed = set(unconfirmed_lines(exact_copy, copy_check))
     read = {entry["expected"]: entry["read"] for entry in (copy_check or {}).get("unconfirmed", [])}
+    if (copy_check or {}).get("unread"):
+        return {
+            "lines": [{"line": n, "text": line} for n, line in enumerate(exact_copy, start=1)],
+            "confirmed_by_ocr": [],
+            "to_transcribe": sorted(unconfirmed),
+            "ocr_notes": [OCR_NOT_READ_NOTE],
+        }
     return {
         "lines": [{"line": n, "text": line} for n, line in enumerate(exact_copy, start=1)],
         "confirmed_by_ocr": [n for n in range(1, len(exact_copy) + 1) if n not in unconfirmed],
@@ -1234,6 +1259,11 @@ def copy_review_data(
             _ocr_note(exact_copy[n - 1], read[exact_copy[n - 1]]) for n in sorted(unconfirmed)
         ],
     }
+
+
+OCR_NOT_READ_NOTE = (
+    "OCR could not read this image: read every line letter by letter, and judge the words yourself."
+)
 
 
 def _ocr_note(expected: str, read: str) -> str:
@@ -1405,8 +1435,9 @@ def edit_strategies(
 
     ``real_assets`` are the product's real icon, logo or screenshots the brief chose
     (``chosen_real_assets``): a brand failure then is mended by pasting them in code. With
-    generated and html_reference the words and the look are the image model's to mend, by an
-    edit or a new generation; code does not redraw them (the decide rule moves a failure that
+    generated and html_reference the look is the image model's to mend, by an edit or a new
+    generation; a line of copy it got wrong may be mended by either, or redrawn cleanly in code
+    with ``studio_type.fit_text`` and a catalogue font (the decide rule moves a failure that
     comes twice to the strong image model).
     """
     by_code = technique in (Technique.BACKGROUND_OVERLAY, Technique.COMPOSED)
@@ -1427,16 +1458,19 @@ def edit_strategies(
         "naming that image.",
     }.get(technique, "End the round with candidate_ready naming an image made in it.")
     copy_fix = (
-        "Fix the code that places the words: they are given exactly; check the font size, "
-        "the wrapping and that every line fits."
+        "Fix the code that places the words: they are given exactly; set them with "
+        "studio_type.fit_text in a catalogue font, so that every line fits its box."
         if by_code
         else "Edit the image with the image model, with an instruction that names the lines "
         "that came out wrong, or generate it again; the code puts the exact lines into every "
-        "prompt. Do not redraw the words in code."
+        "prompt. Or, for one or two wrong lines on a calm area, redraw them cleanly with "
+        "run_python: cover the wrong line with the background around it, then set the exact "
+        "line with studio_type.fit_text in a catalogue font close to the image's lettering."
     )
     legibility_fix = (
-        "Make the words larger, put a panel or a gradient behind them, or raise their contrast "
-        "within the palette."
+        "Make the words larger with fit_text over a larger box, move them to a calmer area, "
+        "or raise their contrast within the palette; a soft shadow or a subtle local gradient "
+        "only where the picture behind them stays busy."
         if by_code
         else "Have the image model make the words larger and set them on a calmer, "
         "higher-contrast part of the picture, by an edit or a new generation."
@@ -1444,8 +1478,6 @@ def edit_strategies(
     strategies = {
         COPY: copy_fix,
         f"{VERIFIER_PREFIX}copy_rendered": copy_fix,
-        COPY_UNREAD: "The words could not be read back: keep them large, plain and high in "
-        "contrast.",
         WRONG_SIZE: f"Make the image exactly {spec.width}x{spec.height} pixels; crop or frame "
         "it in code if needed.",
         WRONG_FORMAT: "Save the image as PNG or JPEG.",
@@ -1542,9 +1574,10 @@ and the place of the words only, into a rich, finished image with light, depth, 
 texture; never a copy of the flat render. Only when the layout itself is the message: a \
 diagram, a list of steps, a comparison table. Only the creative director chooses it, at the \
 start.
-- background_overlay: the image model makes a background with no text, and Python code \
-(Pillow) puts the exact words and anything else exact on it. A fallback, after the strong image \
-model got it wrong too.
+- background_overlay: the image model makes a real picture with no text, and Python code \
+(Pillow, with the sandbox's studio_type helper and a catalogue font) sets the exact words and \
+anything else exact on it. For when the words must be exact and prominent: a headline poster, \
+a quote. Also the fallback after the strong image model got the words wrong too.
 - composed: everything is code (Python or HTML). The last fallback, and only with real \
 screenshots or images to compose."""
 
@@ -1580,10 +1613,13 @@ light and depth that say what the product does for the person who sees it.
 {_TECHNIQUES}
 
 Choose the first technique for this asset: generated, unless the layout itself is the message \
-(a diagram, a list of steps, a comparison table: html_reference) or the asset is made of the \
-real screenshots the request gives (composed). A feature announcement is generated: a scene or \
-a visual metaphor of what the feature does for the person, not a layout. Never start with \
-background_overlay: it is the studio's fallback when the image model gets the words wrong.
+(a diagram, a list of steps, a comparison table: html_reference), the words must be exact and \
+prominent, set as typography on a real picture (a headline poster, a quote: \
+background_overlay), or the asset is made of the real screenshots the request gives \
+(composed). A feature announcement is generated: a scene or a visual metaphor of what the \
+feature does for the person, not a layout. With background_overlay the image_prompt asks for \
+the picture with calm space where the words go, and copy_placement says where they go, in \
+which catalogue font, weight and size (from the typography guide below).
 
 {_COPY_RULES}
 
@@ -1610,7 +1646,9 @@ never for a copy of the render. When the request has exact_copy and the techniqu
 generated or html_reference, the image model renders those words, so the image_prompt never \
 says "no text", "no letters" or "no words": code adds the exact words and where they go. Use \
 the brand kit for the subject, the colours and the mood: what the product is and who it is for. \
-Never name a term of its do_not_mention."""
+Never name a term of its do_not_mention.
+
+{typography_guide()}"""
 
 STUDIO_SYSTEM_PROMPT = f"""\
 You are the studio: you make one marketing image to a brief, one operation at a time, look at \
@@ -1629,28 +1667,32 @@ for the composition and where the words go: ask the image model to reinterpret i
 image, never to reproduce or copy it.
 - edit_image: source_version_id and instruction, changing an image of this run, with the same \
 references.
-- render_html: html, a whole page at the image's size. Local files only: an image of this run \
+- render_html: html, a whole page at the image's size, its words in the catalogue's families \
+by name (font-family: "Inter"). Local files only: an image of this run \
 is /in/<version_id>.png when it is in input_version_ids, and a repository image is \
 /in/<id>.png when it is in input_repository_image_ids. No network, no scripts from outside.
-- run_python: code (Pillow and numpy are installed; requirements for more), with the images \
-of input_version_ids and input_repository_image_ids at /in/<id>.png: list every image the code \
-opens. Write the image to \
-/out/image.png at exactly the asked size. It is of every technique, on top of images of this \
-run (input_version_ids) or the product's repository images (input_repository_image_ids), and \
-what it does is exact, so it is for what must be exact: paste the product's real icon, logo or \
-screenshots, put a real screenshot into a device frame, and crop or frame the image to the \
-size. With background_overlay and composed code is the technique: it lays the words and the \
-layout. With generated and html_reference the words, the look and the layout are the image \
-model's: mend them with edit_image or a new generate_image, never by redrawing words or adding \
-panels or gradients in code. Paste a real image only where it is needed: compare the image \
-with the real ones you are shown first. A close likeness (the same symbol, colours and shape, \
-with small differences of line or shade) is enough and is not pasted over: a paste risks \
-leaving the old one showing round it. Paste only a clearly different one: another symbol, \
-wrong colours, an invented logo or screen. A paste covers what is under it: place it over the \
-imitation only, never over the words. \
-The technique's rule of a candidate still holds: with html_reference the candidate is the image \
-model's image or a program's on top of it, never the bare render; with background_overlay it \
-is the background with the words laid over by code.
+- run_python: code (Pillow, numpy and studio_type are installed; requirements for more; words \
+with `from studio_type import fit_text`, in catalogue fonts by name), with the images of \
+input_version_ids and input_repository_image_ids at /in/<id>.png: list every image the code \
+opens. Write the image to /out/image.png at exactly the asked size. It is of every technique, on \
+top of images of this run (input_version_ids) or the product's repository images \
+(input_repository_image_ids), and what it does is exact, so it is for what must be exact: paste \
+the product's real icon, logo or screenshots, put a real screenshot into a device frame, and crop \
+or frame the image to the size. With background_overlay and composed code is the technique: it \
+lays the words and the layout, with studio_type.fit_text in a catalogue font (the typography \
+guide below). With generated and html_reference the look and the layout are the image model's: \
+mend them with edit_image or a new generate_image, never with panels or boxes in code. A line of \
+copy the image model got wrong may be mended by an edit, or redrawn in code: cover the wrong line \
+with the background around it, then set the exact line with fit_text in a catalogue font close to \
+the image's lettering, over a calm area, never over the subject. Paste a real image only where it \
+is needed: compare the image with the real ones you are shown first. A close likeness (the same \
+symbol, colours and shape, with small differences of line or shade) is enough and is not pasted \
+over: a paste risks leaving the old one showing round it. Paste only a clearly different one: \
+another symbol, wrong colours, an invented logo or screen. A paste covers what is under it: place \
+it over the imitation only, never over the words. The technique's rule of a candidate still \
+holds: with html_reference the candidate is the image model's image or a program's on top of it, \
+never the bare render; with background_overlay it is the background with the words laid over by \
+code.
 - After a program draws, moves or covers words, look at the image it made (you are shown it) \
 before candidate_ready: every line of the copy must be visible, whole and unbroken, with \
 nothing pasted over it. The words are read back only after candidate_ready.
@@ -1659,6 +1701,8 @@ Each field holds its own content: what an edit changes goes in instruction, the 
 the program in code, the picture in prompt; note is only a short remark for the log.
 Set technique on an operation to switch technique from it on. Tools: brand_kit reads the brand \
 kit, view_image shows an image of this run or a repository image.
+
+{typography_guide()}
 
 {_REPOSITORY_IMAGES}
 - The brief's reference_images are the ones the creative director chose, with what each is \
@@ -1737,7 +1781,11 @@ def brief_messages(
 ) -> list[dict[str, Any]]:
     """What the creative director is sent; with repository images, the list and the contact
     sheet (an image part of a message) after the request."""
-    data: dict[str, Any] = {"request": request_data(state, spec), "brand_kit": brand_kit}
+    data: dict[str, Any] = {
+        "request": request_data(state, spec),
+        "brand_kit": brand_kit,
+        "brand_typefaces": brand_typefaces_data(brand_kit.get("fonts", [])),
+    }
     if not repository_images:
         content: Any = json.dumps(data, ensure_ascii=False)
     else:
@@ -1765,6 +1813,7 @@ def produce_data(
     return {
         "request": request_data(state, spec),
         "brand_kit": brand_kit,
+        "brand_typefaces": brand_typefaces_data(brand_kit.get("fonts", [])),
         "brief": state["brief"],
         "technique": technique.value,
         "allowed_operations": list(ALLOWED_OPERATIONS[technique]),

@@ -9,6 +9,7 @@ import yaml
 
 from openmarketer_core.agent_runtime.actions import DEFAULT_APPROVAL_WAIT_SECONDS
 from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ConfigError, ModelRouter
+from openmarketer_core.studio.docker_sandbox import SandboxSettings
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_worker.creative_studio import wiring
 from openmarketer_worker.creative_studio.policy import (
@@ -64,6 +65,22 @@ def test_value_that_does_not_fit_is_refused_with_its_name(name, value):
 def test_sandbox_whose_program_cannot_finish_in_its_actions_time_is_refused():
     with pytest.raises(SettingsError, match="STUDIO_SANDBOX_TIMEOUT_S"):
         StudioSettings.from_env({"STUDIO_SANDBOX_TIMEOUT_S": "600"})
+
+
+def test_reading_has_its_own_time_limit_from_the_environment():
+    settings = StudioSettings.from_env({"STUDIO_SANDBOX_OCR_TIMEOUT_S": "45"})
+
+    assert settings.sandbox.ocr_timeout_s == 45
+    assert settings.sandbox.run_timeout_s == SandboxSettings().run_timeout_s
+
+
+def test_sandbox_whose_reading_cannot_finish_in_its_actions_time_is_refused():
+    with pytest.raises(SettingsError, match="STUDIO_SANDBOX_OCR_TIMEOUT_S"):
+        StudioSettings.from_env({"STUDIO_SANDBOX_OCR_TIMEOUT_S": "600"})
+
+
+def test_default_sandbox_fits_its_actions():
+    assert StudioSettings.from_env({}).sandbox.ocr_timeout_s == 90
 
 
 def test_longest_run_covers_every_paid_image_waiting_for_a_person():

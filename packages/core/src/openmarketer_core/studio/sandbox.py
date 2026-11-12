@@ -2,7 +2,8 @@
 
 The ``Sandbox`` port has three operations: run a Python program the studio's model wrote
 (``run_python``, with extra packages installed first when it asks for them), render an HTML
-page to a PNG of a given size (``render_html``) and read the text in an image (``ocr``). Each
+page to a PNG of a given size (``render_html``) and read the text in an image (``ocr``, in the
+languages it names of the sandbox's fixed set, ``ocr_languages.OCR_LANGUAGES``). Each
 is given its inputs as bytes, by file name, and returns the image files the run left, its
 logs and how long it took; nothing else comes out.
 
@@ -20,6 +21,8 @@ This module is the port and its data. ``docker_sandbox.py`` is the adapter.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
+
+from openmarketer_core.studio.ocr_languages import OcrLanguage
 
 ImageMime = Literal["image/png", "image/jpeg", "image/webp"]
 
@@ -110,6 +113,6 @@ class Sandbox(Protocol):
         """Render ``html`` (as ``/in/page.html``) to a ``width`` by ``height`` PNG."""
         ...
 
-    def ocr(self, image: bytes) -> str:
-        """The text an OCR engine reads in ``image`` (PNG, JPEG or WebP)."""
+    def ocr(self, image: bytes, languages: Sequence[OcrLanguage]) -> str:
+        """The text an OCR engine reads in ``image`` (PNG, JPEG or WebP), in ``languages``."""
         ...

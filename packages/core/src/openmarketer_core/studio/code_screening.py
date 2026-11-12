@@ -29,8 +29,9 @@ MAX_SOURCE_BYTES = 64 * 1024
 # The most extra packages one run may ask for.
 MAX_REQUIREMENTS = 5
 
-# What the sandbox image installs (deploy/sandbox/studio/requirements.txt), as imported.
-PREINSTALLED_MODULES = frozenset({"PIL", "numpy", "cairosvg", "qrcode", "fontTools"})
+# What the sandbox image installs (deploy/sandbox/studio/requirements.txt), as imported, and
+# its own typography helper (deploy/sandbox/studio/studio_type.py).
+PREINSTALLED_MODULES = frozenset({"PIL", "numpy", "cairosvg", "qrcode", "fontTools", "studio_type"})
 
 # The parts of the standard library composition needs and that reach nothing outside the
 # process. ``os`` is here for ``os.path``; what in it starts or replaces a process is refused

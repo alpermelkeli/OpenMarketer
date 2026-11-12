@@ -142,6 +142,35 @@ describe("the programmatic checks of a version", () => {
     expect(noCopy?.items.map((item) => item.label)).not.toContain("Words");
   });
 
+  it("show the verifier's reading of every line when OCR could not read the image", () => {
+    const verifier = {
+      criteria: [],
+      copy_verdict: [
+        { line: 1, expected: "Çay saati", transcribed: "Çay saati", matches: true },
+        { line: 2, expected: "Şimdi", transcribed: "Simdi", matches: false },
+      ],
+    };
+    const report = checkReportOf(
+      { passed: true, failures: [], notices: ["copy_not_read"], copy: { unread: true }, ...MEASURED },
+      verifier,
+    );
+    expect(report?.otherNotices).toEqual([]);
+    expect(report?.items.at(-1)).toMatchObject({
+      label: "Words",
+      passed: false,
+      detail: "OCR could not read the image; the verifier read 1 of 2 lines differently from what was asked.",
+    });
+    expect(report?.items.at(-1)?.lines?.map((line) => line.verdict)).toEqual([
+      "The verifier read “Çay saati” — matches",
+      "The verifier read “Simdi” — does not match",
+    ]);
+  });
+
+  it("leave the words unconfirmed when OCR could not read the image and no verifier read them", () => {
+    const report = checkReportOf({ passed: true, failures: [], notices: ["copy_not_read"], copy: { unread: true }, ...MEASURED });
+    expect(report?.items.at(-1)).toMatchObject({ label: "Words", passed: false, unconfirmed: true });
+  });
+
   it("keep a failure it has no words for by its name, and skip fields of the wrong shape", () => {
     const report = checkReportOf({ passed: false, failures: ["contrast", "verifier:legibility", 3], width: "wide" });
     expect(report?.other).toEqual(["contrast"]);
