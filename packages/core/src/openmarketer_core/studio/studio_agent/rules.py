@@ -13,12 +13,17 @@ since some image models return a square whatever they are asked.
 
 The four techniques, in the order the decide rule falls back through:
 
-- ``generated`` (the default): the image model makes the whole image, its words included.
+- ``generated`` (the default): the image model makes the whole image, its words included. A
+  failure that comes twice is tried once more on the strong image model (``ImageTier``)
+  before code takes over.
 - ``html_reference``: code writes HTML and CSS for the layout and the placement of the words,
-  the sandbox renders it, and the image model makes the final image from that render.
+  the sandbox renders it, and the image model reinterprets that render, as a reference for the
+  layout and where the words go, into a finished image. Only the creative director chooses it,
+  at the start, when the layout is the message; the decide rule never falls back to it, and
+  from it goes the way ``generated`` does.
 - ``background_overlay``: the image model makes a background without text, and code in the
   sandbox puts the exact words (and anything else exact) on it.
-- ``composed``: everything is code.
+- ``composed``: everything is code, and only for a run with real images to compose.
 
 Nothing here depends on the agent framework, a database or a network: ``graph.py`` wires these
 functions into a graph, and the worker runs the operations as actions.
@@ -79,6 +84,22 @@ class Technique(StrEnum):
     COMPOSED = "composed"
 
 
+class ImageTier(StrEnum):
+    """Which image model a round's generations and edits are asked of: a run starts on the
+    standard one, and the decide rule moves it to the strong one, never back."""
+
+    STANDARD = "standard"
+    STRONG = "strong"
+
+
+# The role each tier's images are made with (``config/models.yaml``); the version keeps the
+# model that answered.
+IMAGE_ROLES: Mapping[ImageTier, str] = {
+    ImageTier.STANDARD: "image_generator",
+    ImageTier.STRONG: "image_generator_strong",
+}
+
+
 # The operations, as the model names them; the four that make an image are the actions of the
 # same names (``definitions.py``).
 GENERATE_IMAGE = "generate_image"
@@ -91,9 +112,10 @@ OperationName = Literal[
 ]
 SPENDING_OPERATIONS = frozenset({GENERATE_IMAGE, EDIT_IMAGE})
 
-# run_python is of every technique: what code does is exact, so it composites the product's
-# real images (icon, logo, screenshots), fixes a line of text, frames, crops or raises the
-# contrast behind the words on top of what the image model made, whatever the technique.
+# run_python is of every technique: what code does is exact, so it pastes the product's real
+# images (icon, logo, screenshots), puts a real screenshot in a device frame, and crops or
+# frames to the size on top of what the image model made, whatever the technique. Words and
+# layout are code's only with background_overlay and composed; otherwise the image model's.
 ALLOWED_OPERATIONS: Mapping[Technique, tuple[str, ...]] = {
     Technique.GENERATED: (GENERATE_IMAGE, EDIT_IMAGE, RUN_PYTHON, CANDIDATE_READY),
     Technique.HTML_REFERENCE: (
@@ -155,11 +177,21 @@ MAX_ABOUT_FEATURES = 3
 MAX_REFERENCE_LINES_CHARS = 3 * MAX_REFERENCES * (MAX_REFERENCE_USE_CHARS + 30) + 200
 # The sentence of the region a square keeps once cropped to the size (``crop_safe_note``).
 MAX_CROP_NOTE_CHARS = 300
+# What code tells an image model sent a rendered layout (html_reference): the render is a
+# reference for the composition and the place of the words, never a look to copy.
+LAYOUT_REINTERPRETATION = (
+    "The rendered layout attached is a reference for the composition and for where each line "
+    "of text goes, not a look to copy: reinterpret it as a rich, finished image with real "
+    "light, depth, material and texture, in the style described above. Do not reproduce its "
+    "flat shapes, plain fills or boxes."
+)
 # What the code adds to a model's prompt: the lines of copy and a sentence around them, where
-# they go, what the product is, what each reference is for, and the region to keep things in.
+# they go, what the product is, what each reference is for, how to read a rendered layout, and
+# the region to keep things in.
 MAX_COMPOSED_PROMPT_CHARS = (
     MAX_PROMPT_CHARS
     + 1200
+    + len(LAYOUT_REINTERPRETATION)
     + MAX_PLACEMENT_CHARS
     + MAX_ABOUT_CHARS
     + MAX_REFERENCE_LINES_CHARS
@@ -171,14 +203,22 @@ MAX_COMPOSED_PROMPT_CHARS = (
 class Limits:
     """What one studio run may use. They are counted in the state, over every attempt.
 
-    ``image_estimate_usd`` is what one generation or edit is reckoned to cost, so that the
-    model is not offered one the run's cost cap cannot pay for.
+    ``image_estimate_usd`` is what one generation or edit is reckoned to cost, and
+    ``strong_image_estimate_usd`` one on the strong image model, so that the model is not
+    offered one the run's cost cap cannot pay for.
     """
 
     max_rounds: int = 4
     max_operations_per_round: int = 4
     max_cost_usd: float = 1.00
     image_estimate_usd: float = 0.08
+    strong_image_estimate_usd: float = 0.09
+
+    def image_estimate(self, tier: ImageTier) -> float:
+        """What one generation or edit on ``tier``'s image model is reckoned to cost."""
+        if tier == ImageTier.STRONG:
+            return self.strong_image_estimate_usd
+        return self.image_estimate_usd
 
 
 # ---------------------------------------------------------------------------- submissions
@@ -536,7 +576,7 @@ def reference_lines(
     uses = {reference["id"]: reference["use"] for reference in brief.get("reference_images", [])}
     kinds = {image["id"]: image["kind"] for image in listed}
     layout = (
-        "the rendered layout to follow: its composition and where the words go"
+        "the rendered layout: follow its composition and where the words go, not its flat look"
         if technique == Technique.HTML_REFERENCE
         else "an earlier image of this run"
     )
@@ -615,7 +655,8 @@ def next_step(state: Mapping[str, Any]) -> str:
         if not any(op["op"] in (GENERATE_IMAGE, EDIT_IMAGE) for op in after):
             return (
                 f"generate_image with reference_version_ids [{last_render}]: the image model "
-                "makes the final image from the layout"
+                "reinterprets the layout into a rich, finished image; describe the scene, its "
+                "light, depth, material and texture in prompt, never a copy of the flat render"
             )
         return _look_then(made, state, "edit_image to fix it")
     if technique == Technique.BACKGROUND_OVERLAY and state["exact_copy"]:
@@ -707,11 +748,21 @@ def operation_problems(
     images: RunImages,
     cost_usd: float,
     limits: Limits,
+    image_tier: ImageTier = ImageTier.STANDARD,
 ) -> list[str]:
     """What is wrong with ``operation``, worded for the model; empty when it may be run.
 
-    No value the model wrote is repeated, only the names of the fields at fault.
+    ``technique`` is the round's; an operation that sets another switches to it from there on,
+    except to html_reference, which only the creative director chooses, at the start. A
+    generation or an edit is weighed at the estimate of the round's ``image_tier``. No value
+    the model wrote is repeated, only the names of the fields at fault.
     """
+    if operation.technique == Technique.HTML_REFERENCE and technique != Technique.HTML_REFERENCE:
+        return [
+            "html_reference is chosen only by the creative director at the start of a run: "
+            "keep the technique of the round"
+        ]
+    technique = operation.technique or technique
     allowed = ALLOWED_OPERATIONS[technique]
     if operation.op not in allowed:
         return [
@@ -719,7 +770,7 @@ def operation_problems(
             f"use one of {', '.join(allowed)}"
         ]
     problems: list[str] = []
-    if operation.op in SPENDING_OPERATIONS and cost_usd + limits.image_estimate_usd > (
+    if operation.op in SPENDING_OPERATIONS and cost_usd + limits.image_estimate(image_tier) > (
         limits.max_cost_usd
     ):
         problems.append(
@@ -902,16 +953,19 @@ def generation_prompt(
     about: str = "",
     references: str = "",
     crop_to: PlatformSpec | None = None,
+    layout_reference: bool = False,
 ) -> str:
-    """The prompt an image model is sent: the model's picture, what the product is, what each
-    reference is for (``reference_lines``), then the copy and where it goes, as code puts them,
-    and, for a ``crop_to`` that is not square, the region a square picture keeps once cropped
-    to it (``crop_safe_note``).
+    """The prompt an image model is sent: the model's picture, how to read a rendered layout
+    when one is attached (``layout_reference``, with html_reference: ``LAYOUT_REINTERPRETATION``),
+    what the product is, what each reference is for (``reference_lines``), then the copy and
+    where it goes, as code puts them, and, for a ``crop_to`` that is not square, the region a
+    square picture keeps once cropped to it (``crop_safe_note``).
 
     With copy that the image model renders, a sentence of the model's that forbids text would
     contradict the copy, so it is taken out first (``without_text_bans``).
     """
     crop = _crop_note(crop_to)
+    prompt = _joined(prompt, _reinterpretation(technique, layout_reference))
     if technique == Technique.BACKGROUND_OVERLAY:
         return _joined(
             prompt,
@@ -943,10 +997,13 @@ def edit_instruction(
     about: str = "",
     references: str = "",
     crop_to: PlatformSpec | None = None,
+    layout_reference: bool = False,
 ) -> str:
-    """The instruction an edit is sent with, with the product, the references and the copy as
-    code puts them, and the region a square keeps once cropped to ``crop_to``."""
+    """The instruction an edit is sent with, with how to read a rendered layout attached
+    (``layout_reference``), the product, the references and the copy as code puts them, and
+    the region a square keeps once cropped to ``crop_to``."""
     crop = _crop_note(crop_to)
+    instruction = _joined(instruction, _reinterpretation(technique, layout_reference))
     if technique == Technique.BACKGROUND_OVERLAY:
         return _joined(
             instruction,
@@ -975,6 +1032,12 @@ def edit_instruction(
 
 def _joined(*parts: str) -> str:
     return "\n\n".join(part for part in parts if part)
+
+
+def _reinterpretation(technique: Technique, layout_reference: bool) -> str:
+    if technique != Technique.HTML_REFERENCE or not layout_reference:
+        return ""
+    return LAYOUT_REINTERPRETATION
 
 
 def _crop_note(spec: PlatformSpec | None) -> str:
@@ -1219,27 +1282,52 @@ Next = Literal["finalize", "edit", "escalate"]
 
 @dataclass(frozen=True)
 class Decision:
-    """What follows a round: ``next``, with the technique the next round uses, and why."""
+    """What follows a round: ``next``, with the technique and the image model's tier the next
+    round uses, and why."""
 
     next: Next
     technique: Technique
     reason: str
+    image_tier: ImageTier = ImageTier.STANDARD
 
 
-def next_technique(current: Technique, repeated: Sequence[str]) -> Technique | None:
-    """The technique to fall back to after ``repeated`` failed twice with ``current``.
+@dataclass(frozen=True)
+class Fallback:
+    """Where a run goes after the same failure came twice: a technique and an image tier."""
 
-    Wrong words from the image model are not mended by giving it a layout, so a copy failure
-    of a generated image goes to code for the words; any other goes to a coded layout first.
+    technique: Technique
+    image_tier: ImageTier
+
+
+def next_technique(
+    current: Technique, image_tier: ImageTier, *, has_images_to_compose: bool
+) -> Fallback | None:
+    """Where to fall back to after the same failure came twice with ``current`` on
+    ``image_tier``, or ``None`` when nothing is left but a person.
+
+    The image model's image is tried once more on the strong model before code takes over:
+    ``generated`` (and ``html_reference``, which the creative director alone chooses) goes from
+    the standard tier to the strong one, then to ``background_overlay``, a generated background
+    with the words placed by code; ``composed`` comes last, and only for a run with real images
+    to compose (``has_images_to_compose``): drawing a whole image in code from nothing makes a
+    flat card, so such a run escalates instead. No fallback leads to ``html_reference``, and
+    the tier never goes back to the standard one.
     """
-    if current == Technique.GENERATED:
-        copy_failed = {COPY, f"{VERIFIER_PREFIX}copy_rendered"} & set(repeated)
-        return Technique.BACKGROUND_OVERLAY if copy_failed else Technique.HTML_REFERENCE
-    return {
-        Technique.HTML_REFERENCE: Technique.BACKGROUND_OVERLAY,
-        Technique.BACKGROUND_OVERLAY: Technique.COMPOSED,
-        Technique.COMPOSED: None,
-    }[current]
+    if current in (Technique.GENERATED, Technique.HTML_REFERENCE):
+        if image_tier == ImageTier.STANDARD:
+            return Fallback(current, ImageTier.STRONG)
+        return Fallback(Technique.BACKGROUND_OVERLAY, image_tier)
+    if current == Technique.BACKGROUND_OVERLAY and has_images_to_compose:
+        return Fallback(Technique.COMPOSED, image_tier)
+    return None
+
+
+def has_images_to_compose(state: Mapping[str, Any]) -> bool:
+    """Whether the run has real images code may compose: assets the request gave, or the
+    product's real screenshots the brief chose."""
+    brief = state.get("brief") or {}
+    listed = state.get("repository_images", [])
+    return bool(state["reference_asset_ids"]) or chosen_screenshots(brief, listed)
 
 
 def decide(
@@ -1251,35 +1339,59 @@ def decide(
     round_no: int,
     cost_usd: float,
     limits: Limits,
+    image_tier: ImageTier = ImageTier.STANDARD,
+    has_images_to_compose: bool = False,
 ) -> Decision:
     """What follows a round that ``passed`` or failed with ``failures``.
 
     A pass is finalized. A run at its round or cost limit escalates to a person with its best
-    candidate. A failure the previous round had too, with the same technique, switches to the
-    next technique (``next_technique``), and escalates when there is none. Anything else is
-    edited. ``earlier`` is the failure history of the rounds before: ``{"round",
-    "technique", "failures"}``.
+    candidate. A failure the previous round had too, with the same technique, falls back one
+    step (``next_technique``: the strong image model, then a background with the words in code,
+    then, with real images to compose, everything in code), and escalates when nothing is left.
+    So the same wrong words twice on the standard model move the run to the strong one, and
+    once more there to a background with the words in code. Anything else is edited as it is.
+    ``earlier`` is the failure history of the rounds before: ``{"round", "technique",
+    "image_tier", "failures"}`` (an entry stored before the tier was kept has none).
     """
     if passed:
-        return Decision("finalize", technique, "the candidate passed")
+        return Decision("finalize", technique, "the candidate passed", image_tier)
     if round_no >= limits.max_rounds:
-        return Decision("escalate", technique, f"the round limit ({limits.max_rounds}) was hit")
+        return Decision(
+            "escalate", technique, f"the round limit ({limits.max_rounds}) was hit", image_tier
+        )
     if cost_usd >= limits.max_cost_usd:
-        return Decision("escalate", technique, "the cost limit was hit")
-    previous = earlier[-1] if earlier else None
-    repeated = (
-        sorted(set(failures) & set(previous["failures"]))
-        if previous is not None and previous["technique"] == technique.value
-        else []
-    )
+        return Decision("escalate", technique, "the cost limit was hit", image_tier)
+    repeated = _repeated_failures(failures, earlier, technique)
     if not repeated:
-        return Decision("edit", technique, "the candidate failed: " + ", ".join(failures))
-    switched = next_technique(technique, repeated)
-    if switched is None:
-        return Decision("escalate", technique, "the same failure came twice with every technique")
+        return Decision(
+            "edit", technique, "the candidate failed: " + ", ".join(failures), image_tier
+        )
+    fallback = next_technique(technique, image_tier, has_images_to_compose=has_images_to_compose)
+    if fallback is None:
+        return Decision(
+            "escalate",
+            technique,
+            "the same failure came twice and no technique is left to try",
+            image_tier,
+        )
+    to = "the strong image model" if fallback.technique == technique else fallback.technique.value
     return Decision(
-        "edit", switched, f"the same failure came twice ({', '.join(repeated)}): switching"
+        "edit",
+        fallback.technique,
+        f"the same failure came twice ({', '.join(repeated)}): switching to {to}",
+        fallback.image_tier,
     )
+
+
+def _repeated_failures(
+    failures: Sequence[str], earlier: Sequence[Mapping[str, Any]], technique: Technique
+) -> list[str]:
+    """The failures of this round the round before had too, with the same technique; none
+    when it used another. The image tier does not count: a failure the strong model repeats
+    from the standard one's round is a failure the strong model did not mend."""
+    if not earlier or earlier[-1]["technique"] != technique.value:
+        return []
+    return sorted(set(failures) & set(earlier[-1]["failures"]))
 
 
 def edit_strategies(
@@ -1292,7 +1404,10 @@ def edit_strategies(
     """The edits that mend each failure, as the design's table of edit strategies says.
 
     ``real_assets`` are the product's real icon, logo or screenshots the brief chose
-    (``chosen_real_assets``): a brand failure then is mended by pasting them in code.
+    (``chosen_real_assets``): a brand failure then is mended by pasting them in code. With
+    generated and html_reference the words and the look are the image model's to mend, by an
+    edit or a new generation; code does not redraw them (the decide rule moves a failure that
+    comes twice to the strong image model).
     """
     by_code = technique in (Technique.BACKGROUND_OVERLAY, Technique.COMPOSED)
     brand_fix = (
@@ -1315,24 +1430,31 @@ def edit_strategies(
         "Fix the code that places the words: they are given exactly; check the font size, "
         "the wrapping and that every line fits."
         if by_code
-        else "Edit the image with an instruction that names the lines that came out wrong, or "
-        "generate it again; the code puts the exact lines into every prompt."
+        else "Edit the image with the image model, with an instruction that names the lines "
+        "that came out wrong, or generate it again; the code puts the exact lines into every "
+        "prompt. Do not redraw the words in code."
+    )
+    legibility_fix = (
+        "Make the words larger, put a panel or a gradient behind them, or raise their contrast "
+        "within the palette."
+        if by_code
+        else "Have the image model make the words larger and set them on a calmer, "
+        "higher-contrast part of the picture, by an edit or a new generation."
     )
     strategies = {
         COPY: copy_fix,
         f"{VERIFIER_PREFIX}copy_rendered": copy_fix,
         COPY_UNREAD: "The words could not be read back: keep them large, plain and high in "
         "contrast.",
-        WRONG_SIZE: f"Make the image exactly {spec.width}x{spec.height} pixels; recompose in "
-        "code if needed.",
+        WRONG_SIZE: f"Make the image exactly {spec.width}x{spec.height} pixels; crop or frame "
+        "it in code if needed.",
         WRONG_FORMAT: "Save the image as PNG or JPEG.",
         TOO_MANY_BYTES: f"Keep the file under {spec.max_bytes} bytes (JPEG, or fewer colours).",
         UNREADABLE: "Make the image again: the file did not read as an image.",
         NO_CANDIDATE: no_candidate,
         VERIFIER_UNREAD: "The verifier's report could not be read: keep the image simple and "
         "the words clear.",
-        f"{VERIFIER_PREFIX}legibility": "Make the words larger, put a panel or a gradient behind "
-        "them, or raise their contrast within the palette.",
+        f"{VERIFIER_PREFIX}legibility": legibility_fix,
         f"{VERIFIER_PREFIX}brand_fit": brand_fix,
         f"{VERIFIER_PREFIX}artifacts": "Edit the region with the defect, or generate again with "
         "a revised prompt.",
@@ -1412,13 +1534,19 @@ def forced(name: str) -> dict[str, Any]:
 # -------------------------------------------------------------------------------- prompts
 _TECHNIQUES = """\
 Techniques
-- generated (default): the image model makes the whole image, its words included.
+- generated (the default, and right for almost every asset): the image model makes the whole \
+image, its words included: a finished picture with a subject, a setting, light and depth.
 - html_reference: code writes HTML and CSS for the layout and where the words go, the sandbox \
-renders it, and the image model makes the final image from that render as a reference. Good \
-when a specific layout is needed: a feature announcement, a comparison, a list, a device frame.
+renders it, and the image model reinterprets that render, as a reference for the composition \
+and the place of the words only, into a rich, finished image with light, depth, material and \
+texture; never a copy of the flat render. Only when the layout itself is the message: a \
+diagram, a list of steps, a comparison table. Only the creative director chooses it, at the \
+start.
 - background_overlay: the image model makes a background with no text, and Python code \
-(Pillow) puts the exact words and anything else exact on it. A fallback.
-- composed: everything is code (Python or HTML). The last fallback, as for real screenshots."""
+(Pillow) puts the exact words and anything else exact on it. A fallback, after the strong image \
+model got it wrong too.
+- composed: everything is code (Python or HTML). The last fallback, and only with real \
+screenshots or images to compose."""
 
 _COPY_RULES = """\
 The words
@@ -1442,18 +1570,20 @@ The idea
 - The request's goal and style_notes are binding when they are given: follow them, and decide \
 only what they leave open. With empty style_notes, you choose the style, the lighting, the \
 palette (from the brand kit's colours) and the composition yourself.
-- Think of up to {MAX_CONCEPTS} distinct concepts for the asset, each one short sentence: a \
-scene, a visual metaphor, the product in use, the product's real screenshot in a device in a \
-real setting, a bold typographic layout. List them in concepts, then choose the strongest for \
-the goal and the audience as visual_concept.
+- Think of up to {MAX_CONCEPTS} distinct concepts for the asset, each one short sentence, \
+in these kinds: a photographic scene, an editorial illustration, a 3D render, the product in \
+use with its real screenshot in a device in a real setting, a visual metaphor. List them in \
+concepts, then choose the strongest for the goal and the audience as visual_concept.
 - Prefer visual storytelling to a flat card of text on a plain background: a subject, a place, \
 light and depth that say what the product does for the person who sees it.
 
 {_TECHNIQUES}
 
-Choose the first technique for this asset: generated unless the request needs a specific \
-layout (html_reference) or is made of the real screenshots it gives (composed). Never start \
-with background_overlay: it is the studio's fallback when the image model gets the words wrong.
+Choose the first technique for this asset: generated, unless the layout itself is the message \
+(a diagram, a list of steps, a comparison table: html_reference) or the asset is made of the \
+real screenshots the request gives (composed). A feature announcement is generated: a scene or \
+a visual metaphor of what the feature does for the person, not a layout. Never start with \
+background_overlay: it is the studio's fallback when the image model gets the words wrong.
 
 {_COPY_RULES}
 
@@ -1471,7 +1601,12 @@ image_prompt (what to ask the image model for, without the words: code adds them
 prompt), copy_placement (where each line of the copy goes), \
 reference_images (a list of {{"id", "use"}}, empty when none).
 
-The image_prompt describes the picture. When the request has exact_copy and the technique is \
+The image_prompt describes the picture as an art director would, in this order: the subject; \
+its action, what is happening; the setting; the camera and the composition (shot, angle, lens, \
+framing, and the calm space where the words go); the lighting; the style and the medium (a \
+photograph, an editorial illustration, a 3D render); the palette, from the brand kit's colours; \
+the mood. With html_reference it asks for that finished image in the layout of the render, \
+never for a copy of the render. When the request has exact_copy and the technique is \
 generated or html_reference, the image model renders those words, so the image_prompt never \
 says "no text", "no letters" or "no words": code adds the exact words and where they go. Use \
 the brand kit for the subject, the colours and the mood: what the product is and who it is for. \
@@ -1487,7 +1622,11 @@ Operations (call submit_operation with one):
 - generate_image: prompt, and reference_version_ids / reference_asset_ids / \
 reference_repository_image_ids for images to follow. Code adds the exact words, where they go, \
 what the product is and what each reference is for to your prompt; describe the picture, not \
-the words, and with exact_copy never ask for no text or no letters.
+the words, and with exact_copy never ask for no text or no letters. Describe a finished \
+picture: the subject, its action, the setting, the camera and the composition, the lighting, \
+the style and the medium, the palette, the mood. With html_reference the render is a reference \
+for the composition and where the words go: ask the image model to reinterpret it as a rich \
+image, never to reproduce or copy it.
 - edit_image: source_version_id and instruction, changing an image of this run, with the same \
 references.
 - render_html: html, a whole page at the image's size. Local files only: an image of this run \
@@ -1498,15 +1637,17 @@ of input_version_ids and input_repository_image_ids at /in/<id>.png: list every 
 opens. Write the image to \
 /out/image.png at exactly the asked size. It is of every technique, on top of images of this \
 run (input_version_ids) or the product's repository images (input_repository_image_ids), and \
-what it does is exact: composite the product's real icon, logo or screenshots, fix or redraw \
-a line of text the image model got wrong, crop or frame the image, put a screenshot in a device \
-frame, raise the contrast behind the words with a panel or a gradient, and compose a layout. \
-Paste a real image only where it is needed: compare the image with the real ones you are \
-shown first. A close likeness (the same symbol, colours and shape, with small differences of \
-line or shade) is enough and is not pasted over: a paste risks leaving the old one showing \
-round it. Paste only a clearly different one: another symbol, wrong colours, an invented logo \
-or screen. A paste covers what is under it: place it over the imitation only, never over the \
-words. \
+what it does is exact, so it is for what must be exact: paste the product's real icon, logo or \
+screenshots, put a real screenshot into a device frame, and crop or frame the image to the \
+size. With background_overlay and composed code is the technique: it lays the words and the \
+layout. With generated and html_reference the words, the look and the layout are the image \
+model's: mend them with edit_image or a new generate_image, never by redrawing words or adding \
+panels or gradients in code. Paste a real image only where it is needed: compare the image \
+with the real ones you are shown first. A close likeness (the same symbol, colours and shape, \
+with small differences of line or shade) is enough and is not pasted over: a paste risks \
+leaving the old one showing round it. Paste only a clearly different one: another symbol, \
+wrong colours, an invented logo or screen. A paste covers what is under it: place it over the \
+imitation only, never over the words. \
 The technique's rule of a candidate still holds: with html_reference the candidate is the image \
 model's image or a program's on top of it, never the bare render; with background_overlay it \
 is the background with the words laid over by code.
@@ -1632,7 +1773,7 @@ def produce_data(
         "cost": {
             "spent_usd": round(state["cost_usd"], 4),
             "limit_usd": limits.max_cost_usd,
-            "per_image_usd": limits.image_estimate_usd,
+            "per_image_usd": limits.image_estimate(image_tier_of(state)),
         },
         "edit_plan": state["edit_plan"],
         "this_round": state["operations"],
@@ -1641,6 +1782,12 @@ def produce_data(
         # A thread stored before the run kept its repository images has none.
         **_repository_images_of(state),
     }
+
+
+def image_tier_of(state: Mapping[str, Any]) -> ImageTier:
+    """The image tier of the round; a thread stored before the tier was kept is on the
+    standard one."""
+    return ImageTier(state.get("image_tier", ImageTier.STANDARD.value))
 
 
 def _repository_images_of(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -1660,6 +1807,7 @@ def edit_plan_data(
         "request": request_data(state, spec),
         "brief": state["brief"],
         "technique": state["technique"],
+        "image_tier": image_tier_of(state).value,
         "round_done": state["round"],
         "failures": list(failures),
         "edit_strategies": edit_strategies(

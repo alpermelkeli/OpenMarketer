@@ -22,6 +22,7 @@ from openmarketer_core.studio.media_provider import (
 )
 from openmarketer_core.studio.openrouter_images import (
     ACCOUNT_LIMITED,
+    IMAGE_ROLE,
     IMAGES_ENDPOINT_ONLY,
     OpenRouterImages,
     SquareOnlyModels,
@@ -29,6 +30,7 @@ from openmarketer_core.studio.openrouter_images import (
     padded_to_a_square,
 )
 from openmarketer_core.studio.square_crop import crop_safe_note
+from openmarketer_core.studio.studio_agent.rules import IMAGE_ROLES, ImageTier
 
 MODELS_YAML = Path(__file__).resolve().parents[4] / "config" / "models.yaml"
 PROVIDER_KEY = "sk-or-v1-made-up-image-key"
@@ -472,6 +474,21 @@ def test_the_estimate_is_the_roles_estimate_per_image():
     provider = answering({})
     expected = provider.images.router.resolve("image_generator").estimate_usd_per_image
     assert provider.images.estimate("edit") == Decimal(str(expected))
+
+
+def test_the_strong_image_role_is_estimated_at_its_own_figure():
+    router = ModelRouter.from_file(MODELS_YAML, env={})
+    strong = OpenRouterImages(router=router, role=IMAGE_ROLES[ImageTier.STRONG])
+
+    assert strong.estimate("generate") == Decimal("0.09")
+
+
+def test_each_image_tier_is_an_images_role_of_the_configuration():
+    router = ModelRouter.from_file(MODELS_YAML, env={})
+
+    assert IMAGE_ROLES[ImageTier.STANDARD] == IMAGE_ROLE
+    for role in IMAGE_ROLES.values():
+        assert router.resolve(role).kind == "images"
 
 
 def test_the_key_handed_in_is_sent_and_kept_out_of_repr_and_errors():

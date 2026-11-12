@@ -5,11 +5,14 @@ object storage, and its row in the test's database; skipped when PostgreSQL is n
 """
 
 import uuid
+from decimal import Decimal
 
 import pytest
 from studio_fakes import ESTIMATE, IMAGE_COST, a_failed_program, a_png, size_of
 from temporalio.exceptions import ApplicationError
 
+from openmarketer_core.agent_runtime.actions import ActionRequest
+from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.db.media_assets import asset_version
 from openmarketer_core.db.repository_images import remove_repository_image
@@ -22,17 +25,23 @@ from openmarketer_core.studio.media_provider import (
 from openmarketer_core.studio.openrouter_images import ACCOUNT_LIMITED
 from openmarketer_core.studio.sandbox import SandboxUnavailable
 from openmarketer_core.studio.studio_agent.definitions import (
+    GENERATE_IMAGE,
     EditImage,
     GenerateImage,
     ReadText,
     RenderHtml,
     RunPython,
 )
-from openmarketer_core.studio.studio_agent.rules import BLOCKED, Technique
+from openmarketer_core.studio.studio_agent.rules import BLOCKED, ImageTier, Technique
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 from openmarketer_worker.agent_runtime.routes import ActionContext
-from openmarketer_worker.agent_runtime.vocabulary import DATABASE_UNAVAILABLE, MAX_ERROR_CHARACTERS
+from openmarketer_worker.agent_runtime.vocabulary import (
+    DATABASE_UNAVAILABLE,
+    MAX_ERROR_CHARACTERS,
+    SpendInput,
+)
 from openmarketer_worker.creative_studio import steps
+from openmarketer_worker.creative_studio.studio import StudioWork
 
 
 def an_action() -> ActionContext:
@@ -254,7 +263,73 @@ def test_version_of_a_run_never_started_is_not_stored(work, studio_database, ass
 
 
 def test_estimate_of_a_paid_image_is_the_image_roles(work, run):
-    assert work.estimate(run.workspace_id) == ESTIMATE
+    assert work.estimate(run.workspace_id, ImageTier.STANDARD) == ESTIMATE
+
+
+STRONG_ESTIMATE = Decimal("0.09")
+
+
+def work_of(parts) -> StudioWork:
+    return StudioWork(
+        parts.sessions,
+        parts.checkpoints,
+        new_model=parts.new_model,
+        new_media=parts.new_media,
+        image_estimate=parts.image_estimate,
+        limits=parts.limits,
+        sandbox=parts.sandbox,
+        assets=parts.assets,
+    )
+
+
+def estimate_of_the_tier(workspace_id: uuid.UUID, tier: ImageTier) -> Decimal:
+    return STRONG_ESTIMATE if tier == ImageTier.STRONG else ESTIMATE
+
+
+def test_estimate_of_an_image_on_the_strong_model_is_the_strong_roles(studio_parts, run):
+    parts = studio_parts(image_estimate=estimate_of_the_tier)
+
+    work = work_of(parts)
+
+    assert work.estimate(run.workspace_id, ImageTier.STRONG) == STRONG_ESTIMATE
+    assert work.limits_of(run.workspace_id).strong_image_estimate_usd == float(STRONG_ESTIMATE)
+
+
+def test_budget_holds_an_image_on_the_strong_model_at_the_strong_roles_estimate(
+    studio_registration, run
+):
+    registration = studio_registration(image_estimate=estimate_of_the_tier)
+    [reserve] = [
+        a for a in registration.activities if getattr(a, "__name__", "") == "reserve_spend"
+    ]
+    payload = generation(run, image_tier=ImageTier.STRONG).model_dump(mode="json")
+
+    reserved = reserve(
+        SpendInput(
+            scope=RunScope(workspace_id=run.workspace_id, project_id=run.project_id),
+            run=GraphRunRef(STUDIO_RUN_KIND, run.run_id),
+            request=ActionRequest(
+                action_id=an_action().action_id, name=GENERATE_IMAGE, payload=payload
+            ),
+        )
+    )
+
+    assert Decimal(reserved.estimate_usd) == STRONG_ESTIMATE
+
+
+def test_image_on_the_strong_model_is_drawn_by_the_strong_roles_provider(studio_parts, run, media):
+    asked: list[ImageTier] = []
+
+    def new_media(workspace_id: uuid.UUID, tier: ImageTier):
+        asked.append(tier)
+        return media
+
+    parts = studio_parts(new_media=new_media)
+    work = work_of(parts)
+
+    work.generate_image(generation(run, image_tier=ImageTier.STRONG), an_action())
+
+    assert asked == [ImageTier.STRONG]
 
 
 # ------------------------------------------------------------------ the sandbox

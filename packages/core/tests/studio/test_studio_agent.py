@@ -405,6 +405,25 @@ def test_a_thread_stored_before_the_product_block_still_asks_for_its_image():
     assert "About the product" not in payload.model_dump()["prompt"]
 
 
+def test_an_operation_chosen_before_the_image_tier_was_kept_is_asked_of_the_standard_model():
+    run = StudioRunInput(uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+    request = AssetRequest(goal="Launch.", exact_copy=COPY, platform=Platform.INSTAGRAM_POST)
+    state: dict[str, Any] = {**initial_state(run, request), "round": 1}
+    del state["image_tier"]
+    pending = {
+        "op": GENERATE_IMAGE,
+        "version_id": str(uuid.uuid4()),
+        "technique": "generated",
+        "prompt": "A desk.",
+        "reference_version_ids": [],
+        "reference_asset_ids": [],
+    }
+
+    payload = _payload_of(state, pending)  # type: ignore[arg-type]
+
+    assert payload.model_dump()["image_tier"] == "standard"
+
+
 PORTRAIT_CROP_NOTE = crop_safe_note(1080, 1350)
 
 
@@ -496,14 +515,43 @@ def test_words_read_back_wrong_are_edited_in_a_second_round_that_passes():
     assert "edit_planned" in run.kinds()
 
 
-def test_the_same_wrong_words_twice_switch_to_a_background_with_the_words_in_code():
+def wrong_twice_then(*studio: Answer) -> list[Answer]:
+    """The studio's answers for two rounds whose words come out wrong, then ``studio``."""
+    return [
+        operation("generate_image", prompt="A desk."),
+        ready(),
+        a_plan(),
+        editing_latest(instruction="Spell it right."),
+        ready(),
+        a_plan(),
+        *studio,
+    ]
+
+
+def test_the_same_wrong_words_twice_make_the_next_round_on_the_strong_image_model():
     chat = ScriptedChat(
         creative_director=[a_brief()],
-        studio=[
-            operation("generate_image", prompt="A desk."),
-            ready(),
-            a_plan(),
-            editing_latest(instruction="Spell it right."),
+        studio=wrong_twice_then(operation("generate_image", prompt="A desk at dawn."), ready()),
+        asset_verifier=[reading("Lauch day"), reading("Lanch day"), a_verdict()],
+    )
+    world = World(["Lauch day\nTry it free", "Lanch day\nTry it free", READ_BACK])
+
+    run = Run(chat, world)
+
+    first, again = world.payloads(GENERATE_IMAGE)
+    [edited] = world.payloads(EDIT_IMAGE)
+    assert [first["image_tier"], edited["image_tier"]] == ["standard", "standard"]
+    assert (again["technique"], again["image_tier"]) == ("generated", "strong")
+    assert (run.final["technique"], run.final["image_tier"]) == ("generated", "strong")
+    assert run.result.final_version_id == again["version_id"]
+    assert any("switching to the strong image model" in note for note in run.result.notes)
+
+
+def test_the_same_wrong_words_again_on_the_strong_model_switch_to_words_laid_by_code():
+    chat = ScriptedChat(
+        creative_director=[a_brief()],
+        studio=wrong_twice_then(
+            operation("generate_image", prompt="A desk at dawn."),
             ready(),
             a_plan(),
             operation("generate_image", prompt="A desk, empty space at the top."),
@@ -514,16 +562,31 @@ def test_the_same_wrong_words_twice_switch_to_a_background_with_the_words_in_cod
             ),
             ready(),
             ready(),
+        ),
+        asset_verifier=[
+            reading("Lauch day"),
+            reading("Lanch day"),
+            reading("Laumch day"),
+            a_verdict(),
         ],
-        asset_verifier=[reading("Lauch day"), reading("Lanch day"), a_verdict()],
     )
-    world = World(["Lauch day\nTry it free", "Lanch day\nTry it free", READ_BACK])
+    world = World(
+        [
+            "Lauch day\nTry it free",
+            "Lanch day\nTry it free",
+            "Laumch day\nTry it free",
+            READ_BACK,
+        ]
+    )
 
     run = Run(chat, world)
 
     assert run.final["technique"] == "background_overlay"
     background = world.payloads(GENERATE_IMAGE)[-1]
-    assert background["technique"] == "background_overlay"
+    assert (background["technique"], background["image_tier"]) == (
+        "background_overlay",
+        "strong",
+    )
     assert "Launch day" not in background["prompt"]
     [program] = world.payloads(RUN_PYTHON)
     assert program["input_version_ids"] == [background["version_id"]]
@@ -532,7 +595,7 @@ def test_the_same_wrong_words_twice_switch_to_a_background_with_the_words_in_cod
     assert switched.detail == {
         "from_technique": "generated",
         "to_technique": "background_overlay",
-        "round": 2,
+        "round": 3,
     }
 
 
@@ -588,6 +651,29 @@ def test_an_html_reference_renders_the_layout_and_generates_from_it():
     assert generated["reference_version_ids"] == [layout["version_id"]]
     assert generated["technique"] == "html_reference"
     assert run.result.final_version_id == generated["version_id"]
+
+
+def test_the_image_model_is_told_to_reinterpret_the_rendered_layout():
+    chat = ScriptedChat(
+        creative_director=[a_brief("html_reference")],
+        studio=[
+            operation("render_html", html="<html><body><h1>Launch day</h1></body></html>"),
+            lambda messages: operation(
+                "generate_image",
+                prompt="A sunlit studio desk, shallow depth of field.",
+                reference_version_ids=[latest_image(messages)],
+            ),
+            ready(),
+        ],
+        asset_verifier=[a_verdict()],
+    )
+    world = World([READ_BACK])
+
+    Run(chat, world)
+
+    [generated] = world.payloads(GENERATE_IMAGE)
+    assert rules.LAYOUT_REINTERPRETATION in generated["prompt"]
+    assert "the rendered layout: follow its composition" in generated["prompt"]
 
 
 def test_references_a_weak_model_sends_as_json_text_are_used():

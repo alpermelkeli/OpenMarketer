@@ -110,6 +110,15 @@ const ROLES = new Map<string, RoleLabel>([
       inUse: true,
     },
   ],
+  [
+    "image_generator_strong",
+    {
+      label: "Strong image generator",
+      purpose:
+        "Makes a studio round again when the same failure came twice with the image generator, before code places the words. It takes a model only, one that answers with images.",
+      inUse: true,
+    },
+  ],
   ["embeddings", { label: "Embeddings", purpose: "Turns text into vectors for the memory. It takes a model only.", inUse: false }],
 ]);
 

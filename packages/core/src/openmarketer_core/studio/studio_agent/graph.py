@@ -27,7 +27,9 @@ asks for the candidate's text to be read (when the request has copy) and measure
 the read text as evidence only; ``verify`` shows it to the verifier, a different model, when its
 file passed, and fails the copy (``COPY``) when a line OCR did not confirm is not what the
 verifier reads letter by letter (``rules.copy_verdict``); ``decide``
-applies ``rules.decide``; ``edit_plan`` has the studio model plan the next round; ``finalize``
+applies ``rules.decide``, which may move the next round to another technique or to the
+strong image model (``state["image_tier"]``, which every later generation and edit names);
+``edit_plan`` has the studio model plan the next round; ``finalize``
 and ``escalate`` set the result, which whoever runs the graph stores when it ends.
 
 Every node is safe to run twice: a step that died before its checkpoint is taken again from
@@ -69,6 +71,7 @@ from openmarketer_core.studio.studio_agent.definitions import (
 from openmarketer_core.studio.studio_agent.rules import (
     Brief,
     EditPlan,
+    ImageTier,
     Operation,
     References,
     RunImages,
@@ -450,10 +453,11 @@ def _answer_call(
             return completed.problems
         return rules.operation_problems(
             completed.operation,
-            technique=operation.technique or Technique(state["technique"]),
+            technique=Technique(state["technique"]),
             images=images,
             cost_usd=state["cost_usd"],
             limits=context.limits,
+            image_tier=rules.image_tier_of(state),
         )
 
     submitted = _read(arguments, Operation, problems)
@@ -506,8 +510,10 @@ def _chosen(state: StudioState, operation: Operation) -> dict[str, Any]:
         **{name: getattr(operation, name) for name in fields},
     }
     if operation.op in rules.SPENDING_OPERATIONS:
-        # Kept with the operation, so that its prompt is the same on every run of ``operate``.
+        # Kept with the operation, so that its prompt and its image model are the same on
+        # every run of ``operate``.
         pending["crop_safe"] = True
+        pending["image_tier"] = rules.image_tier_of(state).value
     return {"pending": pending, "technique": technique, "notes": notes}
 
 
@@ -531,6 +537,7 @@ def _round_ends(
             images=images,
             cost_usd=state["cost_usd"],
             limits=context.limits,
+            image_tier=rules.image_tier_of(state),
         )
         if not problems:
             return {"candidate": latest[-1], "pending": {}, "notes": notes}
@@ -627,9 +634,14 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
     }
     crop_to = _spec(state) if pending.get("crop_safe") else None
     op = pending["op"]
+    # A pending operation stored before the tier was kept is asked of the standard model.
+    image_tier = ImageTier(pending.get("image_tier", ImageTier.STANDARD.value))
+    # With html_reference, a version among the references is the rendered layout.
+    layout_reference = bool(pending.get("reference_version_ids"))
     if op == rules.GENERATE_IMAGE:
         return GenerateImage(
             **common,
+            image_tier=image_tier,
             prompt=rules.generation_prompt(
                 pending["prompt"],
                 state["exact_copy"],
@@ -637,6 +649,7 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
                 **added,
                 references=lines(1),
                 crop_to=crop_to,
+                layout_reference=layout_reference,
             ),
             reference_version_ids=ids("reference_version_ids"),
             reference_asset_ids=ids("reference_asset_ids"),
@@ -646,6 +659,7 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
         # The image it changes is sent first, so the references are numbered from 2.
         return EditImage(
             **common,
+            image_tier=image_tier,
             source_version_id=uuid.UUID(pending["source_version_id"]),
             instruction=rules.edit_instruction(
                 pending["instruction"],
@@ -654,6 +668,7 @@ def _payload_of(state: StudioState, pending: dict[str, Any]) -> BaseModel:
                 **added,
                 references=lines(2),
                 crop_to=crop_to,
+                layout_reference=layout_reference,
             ),
             reference_version_ids=ids("reference_version_ids"),
             reference_asset_ids=ids("reference_asset_ids"),
@@ -789,6 +804,7 @@ def decide(state: StudioState, context: StudioContext) -> dict[str, Any]:
     else:
         passed, failures = False, list(state["check"].get("failures", [rules.NO_CANDIDATE]))
     technique = Technique(state["technique"])
+    image_tier = rules.image_tier_of(state)
     decision = rules.decide(
         passed=passed,
         failures=failures,
@@ -797,16 +813,24 @@ def decide(state: StudioState, context: StudioContext) -> dict[str, Any]:
         round_no=state["round"],
         cost_usd=state["cost_usd"],
         limits=context.limits,
+        image_tier=image_tier,
+        has_images_to_compose=rules.has_images_to_compose(state),
     )
     update: dict[str, Any] = {
         "decision": decision.next,
         "reason": decision.reason,
         "technique": decision.technique.value,
+        "image_tier": decision.image_tier.value,
     }
     if not passed:
-        failed = {"round": state["round"], "technique": technique.value, "failures": failures}
+        failed = {
+            "round": state["round"],
+            "technique": technique.value,
+            "image_tier": image_tier.value,
+            "failures": failures,
+        }
         update["failures"] = [*state["failures"], failed]
-    if decision.technique != technique:
+    if (decision.technique, decision.image_tier) != (technique, image_tier):
         update["notes"] = [*state["notes"], f"round {state['round']}: {decision.reason}"]
     return update
 

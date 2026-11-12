@@ -1,11 +1,16 @@
-"""Tests for the studio's settings read from the environment, and the longest a run lasts."""
+"""Tests for the studio's settings read from the environment, the longest a run lasts, and the
+image roles its configuration must have."""
 
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
+import yaml
 
 from openmarketer_core.agent_runtime.actions import DEFAULT_APPROVAL_WAIT_SECONDS
+from openmarketer_core.llm_config import DEFAULT_CONFIG_PATH, ConfigError, ModelRouter
 from openmarketer_core.studio.studio_agent import rules
+from openmarketer_worker.creative_studio import wiring
 from openmarketer_worker.creative_studio.policy import (
     StudioPolicy,
     graph_steps,
@@ -77,3 +82,17 @@ def test_more_rounds_make_a_longer_run():
     assert longest_studio_seconds(StudioPolicy(), more) > longest_studio_seconds(
         StudioPolicy(), fewer
     )
+
+
+def test_configuration_with_both_image_roles_is_accepted():
+    wiring.require_the_image_roles(ModelRouter.from_file(DEFAULT_CONFIG_PATH, env={}))
+
+
+def test_configuration_without_the_strong_image_role_stops_the_worker(tmp_path):
+    configured = yaml.safe_load(Path(DEFAULT_CONFIG_PATH).read_text())
+    del configured["roles"][rules.IMAGE_ROLES[rules.ImageTier.STRONG]]
+    path = tmp_path / "models.yaml"
+    path.write_text(yaml.safe_dump(configured))
+
+    with pytest.raises(ConfigError, match="image_generator_strong"):
+        wiring.require_the_image_roles(ModelRouter.from_file(path, env={}))

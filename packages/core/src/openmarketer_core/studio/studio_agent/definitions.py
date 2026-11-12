@@ -13,8 +13,9 @@ graph imports; importing it is what puts them on ``agent``.
   an analysis kept from its repository (their list, and the bytes of one by its id). The
   brief keeps the list in the state, ids, paths, kinds and sizes only, so that every later
   step of the run names the same images.
-- The actions: ``generate_image`` and ``edit_image`` spend (the image provider is paid), and
-  the gate weighs them against the creative budget; ``render_html``, ``run_python`` and
+- The actions: ``generate_image`` and ``edit_image`` spend (the image provider is paid), each
+  on the image tier it names (``rules.IMAGE_ROLES``), and the gate weighs them against the
+  creative budget at that tier's estimate; ``render_html``, ``run_python`` and
   ``read_text`` run in the installation's sandbox and are internal. Each of the four that make
   an image stores it as the version its payload names, and answers with
   ``{"version_id", "asset_id", "width", "height", "mime", "size_bytes", "cost_usd"}``;
@@ -38,6 +39,7 @@ from openmarketer_core.studio.media_provider import ImageInput
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.studio_agent import rules
 from openmarketer_core.studio.studio_agent.rules import (
+    ImageTier,
     Limits,
     RepositoryImageInfo,
     StudioResult,
@@ -94,6 +96,10 @@ class StudioState(TypedDict):
     # from the brand kit with the brief so that a later attempt asks for the same prompt.
     about_product: str
     technique: str  # a ``Technique``'s value: the one this round uses
+    # An ``ImageTier``'s value: the image model this round's generations and edits are asked
+    # of. A thread stored before it was kept has none, and is on the standard one
+    # (``rules.image_tier_of``).
+    image_tier: str
     round: int  # 0 until the brief, then the round being made
     # This round's operations as they ended: {"op", "version_id"?, "ok", "error"?, "note"?}.
     operations: list[dict[str, Any]]
@@ -167,13 +173,21 @@ class _ImagePayload(BaseModel):
     technique: Technique
 
 
+class _PaidImagePayload(_ImagePayload):
+    """What an action the image provider makes names besides: the tier of the image model it is
+    asked of, whose role's estimate the budget holds (an action recorded before the tier was
+    kept was on the standard one)."""
+
+    image_tier: ImageTier = ImageTier.STANDARD
+
+
 @agent.action(
     GENERATE_IMAGE,
     timeout=IMAGE_TIMEOUT_SECONDS,
     heartbeat=HEARTBEAT_SECONDS,
     effect=ActionEffect.SPENDS,
 )
-class GenerateImage(_ImagePayload):
+class GenerateImage(_PaidImagePayload):
     """Make an image at the run's platform size from a prompt, following reference images.
 
     ``prompt`` holds the exact copy as code put it (``rules.generation_prompt``), and a line of
@@ -193,7 +207,7 @@ class GenerateImage(_ImagePayload):
     heartbeat=HEARTBEAT_SECONDS,
     effect=ActionEffect.SPENDS,
 )
-class EditImage(_ImagePayload):
+class EditImage(_PaidImagePayload):
     """Change the version ``source_version_id`` of this run as the instruction says.
 
     It is sent first, then the references in the order ``GenerateImage`` sends them.
@@ -285,6 +299,7 @@ def initial_state(run: StudioRunInput, request: AssetRequest) -> StudioState:
         "repository_images": [],
         "about_product": "",
         "technique": Technique.GENERATED.value,
+        "image_tier": ImageTier.STANDARD.value,
         "round": 0,
         "operations": [],
         "pending": {},

@@ -1176,6 +1176,15 @@ def test_every_platform_is_named_to_the_model():
         assert platform.value in SYSTEM_PROMPT
 
 
+def test_the_model_is_advised_few_or_no_words_in_an_x_post_image():
+    by_name = {schema["function"]["name"]: schema for schema in agent.tool_schemas()}
+    description = " ".join(by_name["start_creative"]["function"]["description"].split())
+    assert (
+        "For an x_post image, leave it empty or give one short headline of a few words: the "
+        "post's text carries the message" in description
+    )
+
+
 def test_the_prompt_says_the_operators_details_are_followed_exactly():
     assert "verbatim" in SYSTEM_PROMPT
     assert "What the operator gives is followed exactly" in SYSTEM_PROMPT

@@ -56,6 +56,7 @@ from openmarketer_core.llm_config import ModelRouter
 from openmarketer_core.studio.media_provider import MediaAccountLimited
 from openmarketer_core.studio.openrouter_images import ACCOUNT_LIMITED
 from openmarketer_core.studio.sandbox import SandboxUnavailable
+from openmarketer_core.studio.studio_agent.rules import ImageTier
 from openmarketer_core.studio.workflow_contract import (
     STUDIO_RUN_KIND,
     STUDIO_WORKFLOW,
@@ -408,7 +409,7 @@ async def test_history_holds_no_key_no_image_and_nothing_of_the_request(
         used.append(credentials.model_key(workspace_id, router))
         return model
 
-    def new_media(workspace_id: uuid.UUID):
+    def new_media(workspace_id: uuid.UUID, tier: ImageTier):
         used.append(credentials.model_key(workspace_id, router))
         return media
 

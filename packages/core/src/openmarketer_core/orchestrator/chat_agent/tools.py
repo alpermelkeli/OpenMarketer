@@ -272,7 +272,9 @@ def start_creative(
     x_post, linkedin_post, og_image, app_store_screenshot.
     exact_copy is every line of text the image must show: the operator's words verbatim when
     they gave some, otherwise at most two short lines you wrote (a headline and an optional
-    subline); empty for an image without text. style_notes are the operator's wishes on the
+    subline); empty for an image without text. For an x_post image, leave it empty or give one
+    short headline of a few words: the post's text carries the message, and an image with
+    fewer words is a richer picture. style_notes are the operator's wishes on the
     look, or your own art direction where they gave none; goal states the idea of the image.
     reference_asset_ids name images of the Studio library to look at. A copy that names a
     term the brand says not to mention is refused. It answers with the new run's id and

@@ -22,6 +22,11 @@ describe("the words for a role", () => {
     expect(roleLabel("image_generator").purpose).toContain("takes a model only");
   });
 
+  it("say that the strong image generator runs today and takes a model only", () => {
+    expect(roleLabel("image_generator_strong")).toMatchObject({ label: "Strong image generator", inUse: true });
+    expect(roleLabel("image_generator_strong").purpose).toContain("takes a model only");
+  });
+
   it("call a role the dashboard does not know by its name", () => {
     expect(roleLabel("poet")).toMatchObject({ label: "poet", inUse: false });
     expect(roleLabel("constructor").label).toBe("constructor");
