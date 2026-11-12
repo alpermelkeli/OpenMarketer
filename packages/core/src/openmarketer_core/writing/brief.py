@@ -71,6 +71,8 @@ Angle = Annotated[
     StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_ANGLE_CHARS),
     AfterValidator(_without_control_characters),
 ]
+# How many texts of the post a brief may ask the writer to offer.
+Variants = Annotated[int, Field(ge=1, le=MAX_VARIANTS)]
 
 
 class WritingBrief(BaseModel):
@@ -82,7 +84,7 @@ class WritingBrief(BaseModel):
     goal: WritingGoal
     feature: FeatureId | None = None
     angle: Angle | None = None
-    variants: int = Field(default=DEFAULT_VARIANTS, ge=1, le=MAX_VARIANTS)
+    variants: Variants = DEFAULT_VARIANTS
     asset: uuid.UUID | None = None  # a media asset of the project's library
     research_run_id: uuid.UUID | None = None  # a succeeded research run of the project
 

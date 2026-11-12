@@ -508,11 +508,11 @@ def send(
     `chat_unanswered` when the agent gave no answer within its limits and
     `model_unavailable` when the provider could not answer; the turn is
     recorded as failed, no message is stored, and sending the message again
-    starts a new turn. A turn may start a research run, a studio run or an
-    orchestrator task when the operator asks for one (the request actions
-    `start_research`, `start_creative` and `start_task`), and says so in the
-    answer; a run whose workflow could not be started is recorded as failed and
-    the answer says it could not be started.
+    starts a new turn. A turn may start a research run, a studio run, a writing
+    run or an orchestrator task when the operator asks for one (the request
+    actions `start_research`, `start_creative`, `start_writing` and
+    `start_task`), and says so in the answer; a run whose workflow could not be
+    started is recorded as failed and the answer says it could not be started.
     """
     with tracing.traced():
         exchange = ask_project(

@@ -52,6 +52,8 @@ from openmarketer_core.db.tasks import (
     record_task_plan,
     request_task_run,
 )
+from openmarketer_core.db.writing_runs import WritingRunNotFound, request_writing_run
+from openmarketer_core.db.writing_runs import mark_run_failed as mark_writing_failed
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator import follow_up as follow_up_module
 from openmarketer_core.orchestrator.chat_agent.rules import SUBMIT, ChatTurnError
@@ -79,6 +81,8 @@ from openmarketer_core.studio.asset_store import asset_key
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 ASSET_REQUEST = AssetRequest(
     goal="Announce the Android launch", exact_copy=["Now on Android"], platform=Platform.X_POST
@@ -609,6 +613,114 @@ def test_a_studio_follow_up_not_taken_tells_the_chat_why(sessions, scope, chat_i
     assert recorded_events[0].detail == {"trigger": "studio_finished"}
     assert recorded_events[-1].detail == {
         "reason": NOT_TAKEN[STUDIO_RUN_KIND].format(cause="no worker took it")
+    }
+
+
+# --------------------------------------------------------------------------- writing runs
+def writing_run_of_chat(sessions, scope: RunScope, chat_id: uuid.UUID, *, ended: bool = True):
+    """A writing run the chat asked for, which failed unless ``ended`` is false."""
+    with transaction(sessions) as session:
+        run = request_writing_run(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            brief=WritingBrief(platform=WritingPlatform.X, goal=WritingGoal.INTRODUCE),
+            requested_by=REQUESTED_BY_THE_CHAT,
+            chat_thread_id=chat_id,
+        )
+        if ended:
+            mark_writing_failed(
+                session,
+                workspace_id=scope.workspace_id,
+                project_id=scope.project_id,
+                run_id=run.id,
+                error="no approved profile",
+            )
+        return run.id
+
+
+def test_a_writing_follow_up_reads_the_run_and_is_a_writing_finished_turn(sessions, scope, chat_id):
+    run_id = writing_run_of_chat(sessions, scope, chat_id)
+    model = ScriptedModel(
+        [call("get_writing_run", run_id=str(run_id))], [call(SUBMIT, answer="It failed.")]
+    )
+
+    done = follow_up(sessions, scope, chat_id, run_id, model, run_kind=WRITING_RUN_KIND)
+
+    assert done is not None
+    instruction = model.requests[0]["messages"][-1]["content"]
+    assert f"writing run {run_id}" in instruction
+    assert "status failed" in instruction
+    read = [m["content"] for m in model.requests[1]["messages"] if m["role"] == "tool"]
+    assert "no approved profile" in read[0]
+    with transaction(sessions) as session:
+        recorded = events_of_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            after=None,
+            limit=100,
+        )
+    started = [event.detail for event in recorded if event.kind == TURN_STARTED]
+    assert started == [{"trigger": "writing_finished"}]
+
+
+def test_a_writing_follow_up_is_taken_once(sessions, scope, chat_id):
+    run_id = writing_run_of_chat(sessions, scope, chat_id)
+    first = ScriptedModel([call(SUBMIT, answer="Done.")])
+    follow_up(sessions, scope, chat_id, run_id, first, run_kind=WRITING_RUN_KIND)
+    again = ScriptedModel([call(SUBMIT, answer="Twice.")])
+
+    assert follow_up(sessions, scope, chat_id, run_id, again, run_kind=WRITING_RUN_KIND) is None
+    assert again.requests == []
+
+
+def test_a_writing_run_that_has_not_ended_has_nothing_to_follow_up_on(sessions, scope, chat_id):
+    run_id = writing_run_of_chat(sessions, scope, chat_id, ended=False)
+    model = ScriptedModel([call(SUBMIT, answer="unreached")])
+
+    with pytest.raises(RunNotEnded):
+        follow_up(sessions, scope, chat_id, run_id, model, run_kind=WRITING_RUN_KIND)
+
+    assert model.requests == []
+
+
+def test_a_writing_follow_up_on_a_run_the_chat_did_not_ask_for_is_not_found(
+    sessions, scope, chat_id
+):
+    model = ScriptedModel([call(SUBMIT, answer="unreached")])
+
+    with pytest.raises(WritingRunNotFound):
+        follow_up(sessions, scope, chat_id, uuid.uuid4(), model, run_kind=WRITING_RUN_KIND)
+
+
+def test_a_writing_follow_up_not_taken_tells_the_chat_why(sessions, scope, chat_id):
+    run_id = writing_run_of_chat(sessions, scope, chat_id)
+
+    recorded = record_follow_up_not_taken(
+        sessions,
+        workspace_id=scope.workspace_id,
+        project_id=scope.project_id,
+        chat_id=chat_id,
+        run_kind=WRITING_RUN_KIND,
+        run_id=run_id,
+        cause="no worker took it",
+    )
+
+    assert recorded
+    with transaction(sessions) as session:
+        recorded_events = events_of_chat(
+            session,
+            workspace_id=scope.workspace_id,
+            project_id=scope.project_id,
+            chat_id=chat_id,
+            after=None,
+            limit=100,
+        )
+    assert recorded_events[0].detail == {"trigger": "writing_finished"}
+    assert recorded_events[-1].detail == {
+        "reason": NOT_TAKEN[WRITING_RUN_KIND].format(cause="no worker took it")
     }
 
 

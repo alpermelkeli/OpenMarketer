@@ -24,6 +24,7 @@ import pytest
 from google.protobuf.json_format import MessageToDict
 from sqlalchemy import text
 from temporalio.client import WorkflowFailureError, WorkflowHandle, WorkflowHistory
+from temporalio.service import RPCError, RPCStatusCode
 from writer_fakes import (
     ACCESS_TOKEN,
     BRAND_VOICE,
@@ -40,18 +41,29 @@ from openmarketer_core.credentials.catalog import OPENROUTER_API_KEY
 from openmarketer_core.db.checkpoint_schema import CHECKPOINT_TABLES_OF_THREADS
 from openmarketer_core.db.content_items import settle_content_item
 from openmarketer_core.db.models import ContentItemStatus, WritingRunStatus
+from openmarketer_core.db.run_events import latest_event_of_run
 from openmarketer_core.db.session import transaction
 from openmarketer_core.llm import LLMError
 from openmarketer_core.llm_config import ModelRouter
+from openmarketer_core.run_events import FAILED, FINISHED
 from openmarketer_core.social_accounts.publishing import (
     PublishingFailure,
     PublishingRefused,
     PublishingUnavailable,
     RefusalReason,
 )
-from openmarketer_core.writing.workflow_contract import WRITING_WORKFLOW, writing_workflow_id
+from openmarketer_core.writing.workflow_contract import (
+    WRITING_RUN_KIND,
+    WRITING_WORKFLOW,
+    writing_workflow_id,
+)
 from openmarketer_worker import main
 from openmarketer_worker.credentials import WorkspaceCredentials
+from openmarketer_worker.orchestrator.contract import (
+    CHAT_FOLLOW_UP_TASK_QUEUE,
+    CHAT_FOLLOW_UP_WORKFLOW,
+    follow_up_workflow_id,
+)
 
 MODELS = str(Path(__file__).resolve().parents[4] / "config" / "models.yaml")
 RATE_LIMITED = LLMError("the model provider answered HTTP 429", status=429)
@@ -380,6 +392,90 @@ async def test_history_and_checkpoints_hold_no_key_and_nothing_of_the_profile(
     for shown in (history, kept):
         assert STORED_KEY not in shown and STORED_KEY.encode().hex() not in shown
     assert FEATURE_DESCRIPTION not in history and BRAND_VOICE not in history
+
+
+# ------------------------------------------------------------------ telling the chat
+async def follow_up_of(temporal, run) -> tuple[Any, dict[str, Any]]:
+    """The follow-up the run started, described, and its input; it is then terminated."""
+    handle = temporal.get_workflow_handle(follow_up_workflow_id(WRITING_RUN_KIND, run.run_id))
+    try:
+        described = await handle.describe()
+        started = (await handle.fetch_history()).events[0]
+    finally:
+        try:
+            await handle.terminate()
+        except RPCError:
+            pass  # it ended already: a worker of the dev stack may serve the queue
+    (argument,) = started.workflow_execution_started_event_attributes.input.payloads
+    return described, json.loads(argument.data)
+
+
+def last_event(writer_database, run, kind: str):
+    with transaction(writer_database.sessions) as session:
+        return latest_event_of_run(
+            session,
+            workspace_id=run.workspace_id,
+            project_id=run.project_id,
+            run_kind=WRITING_RUN_KIND,
+            run_id=run.run_id,
+            kind=kind,
+        )
+
+
+async def test_run_a_chat_asked_for_starts_the_chats_follow_up_once_its_post_is_settled(
+    serving, start, writer_database, temporal
+):
+    asked = writer_database.requested(from_a_chat=True)
+    async with serving():
+        handle = await start(asked.run)
+        await decided(writer_database, handle, asked.run, approved=False)
+
+    described, given = await follow_up_of(temporal, asked.run)
+    assert (described.workflow_type, described.task_queue) == (
+        CHAT_FOLLOW_UP_WORKFLOW,
+        CHAT_FOLLOW_UP_TASK_QUEUE,
+    )
+    assert given == {
+        "workspace_id": str(asked.run.workspace_id),
+        "project_id": str(asked.run.project_id),
+        "chat_id": str(asked.chat_id),
+        "run_kind": WRITING_RUN_KIND,
+        "run_id": str(asked.run.run_id),
+        "step": None,
+    }
+    finished = last_event(writer_database, asked.run, FINISHED)
+    assert finished is not None
+    assert dict(finished.detail) == {
+        "content_item_id": str(writer_database.item(asked.run).id),
+        "post_status": "rejected",
+    }
+
+
+async def test_failed_run_a_chat_asked_for_tells_the_chat_why(
+    serving, start, writer_database, temporal
+):
+    asked = writer_database.requested(approved=False, from_a_chat=True)
+    async with serving():
+        with pytest.raises(WorkflowFailureError):
+            await ended(await start(asked.run))
+
+    _, given = await follow_up_of(temporal, asked.run)
+    assert given["chat_id"] == str(asked.chat_id)
+    failed = last_event(writer_database, asked.run, FAILED)
+    assert failed is not None
+    assert dict(failed.detail) == {"reason": writer_database.run(asked.run).error}
+
+
+async def test_run_no_chat_asked_for_starts_no_follow_up(serving, start, writer_database, temporal):
+    asked = writer_database.requested()
+    async with serving():
+        handle = await start(asked.run)
+        await decided(writer_database, handle, asked.run, approved=False)
+
+    handle = temporal.get_workflow_handle(follow_up_workflow_id(WRITING_RUN_KIND, asked.run.run_id))
+    with pytest.raises(RPCError) as missing:
+        await handle.describe()
+    assert missing.value.status is RPCStatusCode.NOT_FOUND
 
 
 def checkpoints_as_text(sessions) -> str:

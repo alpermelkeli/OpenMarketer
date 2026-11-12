@@ -1,11 +1,13 @@
 """Following up in a chat on a run it started, once the run has ended.
 
-When a research run, a studio run or a task that a chat turn started has ended, the
-orchestrator speaks again in that chat on its own: ``follow_up_on_run`` takes one turn (trigger
-``research_finished``, ``studio_finished`` or ``task_finished``, with the run) in which the chat
-agent reads the run with its read tools and explains it to the operator: a research run's
-findings, what became of a studio run's image (in the Studio library and waiting to be
-accepted, handed to a person with the reason, or not made and why), or a task's report, which
+When a research run, a studio run, a writing run or a task that a chat turn started has ended,
+the orchestrator speaks again in that chat on its own: ``follow_up_on_run`` takes one turn
+(trigger ``research_finished``, ``studio_finished``, ``writing_finished`` or ``task_finished``,
+with the run) in which the chat agent reads the run with its read tools and explains it to the
+operator: a research run's findings, what became of a studio run's image (in the Studio library
+and waiting to be accepted, handed to a person with the reason, or not made and why), what
+became of a writing run's post (published, recorded as a dry run, rejected or expired, or not
+written and why), or a task's report, which
 code built from its steps' outcomes. It is the design report's "the report is written into the
 thread", in one follow-up turn.
 
@@ -53,11 +55,13 @@ from openmarketer_core.db.models import (
     ResearchRunStatus,
     StudioRunStatus,
     TaskStatus,
+    WritingRunStatus,
 )
 from openmarketer_core.db.research_runs import research_run
 from openmarketer_core.db.session import transaction
 from openmarketer_core.db.studio_runs import studio_run
 from openmarketer_core.db.tasks import orchestrator_task
+from openmarketer_core.db.writing_runs import writing_run
 from openmarketer_core.llm import ChatModel
 from openmarketer_core.orchestrator.chat_agent.graph import answer_message
 from openmarketer_core.orchestrator.chat_agent.rules import (
@@ -72,20 +76,24 @@ from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
 from openmarketer_core.orchestrator.turn_lifecycle import StoredAnswer, TurnOf, take_turn
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
+from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND
 
 # The statuses of a run that has an outcome to tell; a queued or running one has none yet.
 RESEARCH_ENDED = (ResearchRunStatus.SUCCEEDED, ResearchRunStatus.FAILED)
 STUDIO_ENDED = (StudioRunStatus.SUCCEEDED, StudioRunStatus.NEEDS_REVIEW, StudioRunStatus.FAILED)
+WRITING_ENDED = (WritingRunStatus.SUCCEEDED, WritingRunStatus.FAILED)
 TASK_ENDED = (TaskStatus.SUCCEEDED, TaskStatus.FAILED)
 # The trigger of a follow-up on each kind of run, and how the chat is told it was not taken.
 TRIGGERS: Mapping[str, ChatTurnTrigger] = {
     RESEARCH_RUN_KIND: ChatTurnTrigger.RESEARCH_FINISHED,
     STUDIO_RUN_KIND: ChatTurnTrigger.STUDIO_FINISHED,
+    WRITING_RUN_KIND: ChatTurnTrigger.WRITING_FINISHED,
     TASK_RUN_KIND: ChatTurnTrigger.TASK_FINISHED,
 }
 NOT_TAKEN: Mapping[str, str] = {
     RESEARCH_RUN_KIND: "The orchestrator could not review the research run: {cause}",
     STUDIO_RUN_KIND: "The orchestrator could not review the studio run: {cause}",
+    WRITING_RUN_KIND: "The orchestrator could not review the writing run: {cause}",
     TASK_RUN_KIND: "The orchestrator could not report on the task: {cause}",
 }
 STEP_NOT_TAKEN = "The orchestrator could not write up the task's progress: {cause}"
@@ -123,15 +131,16 @@ def follow_up_on_run(
 ) -> FollowUp | None:
     """Have the chat agent tell the chat what run ``run_id`` of ``run_kind`` came to; store it.
 
-    ``run_kind`` is ``RESEARCH_RUN_KIND``, ``STUDIO_RUN_KIND`` or ``TASK_RUN_KIND``
-    (``ValueError`` otherwise, before anything is read). ``step``, for a task only
+    ``run_kind`` is ``RESEARCH_RUN_KIND``, ``STUDIO_RUN_KIND``, ``WRITING_RUN_KIND`` or
+    ``TASK_RUN_KIND`` (``ValueError`` otherwise, before anything is read). ``step``, for a task only
     (``ValueError`` otherwise), is the id in its plan of a step whose run has ended while the
     task goes on: the turn is about the task's progress up to that step, and ``RunNotEnded``
     while the step's run has no outcome. ``None``, and nothing done, when a turn of the chat
     has already answered about the run (or the step). Raises ``ChatBusy`` while another turn of
     the chat runs, ``FollowUpGivenUp`` when the chat has tried as often as it may;
-    ``ProjectNotFound``, ``ChatNotFound``, ``ResearchRunNotFound``, ``StudioRunNotFound`` or
-    ``TaskNotFound`` (for a run this chat did not ask for), and ``RunNotEnded``, when there is
+    ``ProjectNotFound``, ``ChatNotFound``, ``ResearchRunNotFound``, ``StudioRunNotFound``,
+    ``WritingRunNotFound`` or ``TaskNotFound`` (for a run this chat did not ask for), and
+    ``RunNotEnded``, when there is
     nothing to follow up on; ``ChatTurnError`` when no answer was given within the limits and
     ``LLMError`` when the model cannot be used, after the turn is recorded as failed and nothing
     is stored.
@@ -168,6 +177,7 @@ def follow_up_on_run(
         trigger,
         research_run_id=run_id if run_kind == RESEARCH_RUN_KIND else None,
         studio_run_id=run_id if run_kind == STUDIO_RUN_KIND else None,
+        writing_run_id=run_id if run_kind == WRITING_RUN_KIND else None,
         task_id=run_id if run_kind == TASK_RUN_KIND else None,
         task_step_key=step,
     )
@@ -197,8 +207,8 @@ def record_follow_up_not_taken(
     that failed at once. Whether
     anything was recorded: nothing is when the chat started a turn about the run, which shows
     its own outcome. Raises ``ValueError`` for a kind of run a chat does not follow up on, and
-    ``ProjectNotFound``, ``ChatNotFound``, ``ResearchRunNotFound``, ``StudioRunNotFound`` and
-    ``TaskNotFound`` when there is no chat to tell.
+    ``ProjectNotFound``, ``ChatNotFound``, ``ResearchRunNotFound``, ``StudioRunNotFound``,
+    ``WritingRunNotFound`` and ``TaskNotFound`` when there is no chat to tell.
     """
     _trigger_of(run_kind, step)
     told = NOT_TAKEN[run_kind] if step is None else STEP_NOT_TAKEN
@@ -210,6 +220,7 @@ def record_follow_up_not_taken(
             chat_id=chat_id,
             research_run_id=run_id if run_kind == RESEARCH_RUN_KIND else None,
             studio_run_id=run_id if run_kind == STUDIO_RUN_KIND else None,
+            writing_run_id=run_id if run_kind == WRITING_RUN_KIND else None,
             task_id=run_id if run_kind == TASK_RUN_KIND else None,
             task_step_key=step,
             error=told.format(cause=cause),
@@ -249,6 +260,11 @@ def _ended_status(
                 session, workspace_id=workspace_id, project_id=project_id, task_id=run_id
             )
             ended, status = task.status in TASK_ENDED, task.status.value
+        elif run_kind == WRITING_RUN_KIND:
+            writing = writing_run(
+                session, workspace_id=workspace_id, project_id=project_id, run_id=run_id
+            )
+            ended, status = writing.status in WRITING_ENDED, writing.status.value
         else:
             studio = studio_run(
                 session, workspace_id=workspace_id, project_id=project_id, run_id=run_id

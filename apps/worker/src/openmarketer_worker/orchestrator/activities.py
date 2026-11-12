@@ -1,7 +1,7 @@
 """The activity of ``ChatFollowUp``: one follow-up turn, with the model of the chat's workspace.
 
-It calls core's ``follow_up_on_run`` for the run's kind (a research run, a studio run or an
-orchestrator task, or one step of a task) and
+It calls core's ``follow_up_on_run`` for the run's kind (a research run, a studio run, a
+writing run or an orchestrator task, or one step of a task) and
 holds no rule of its own: what the turn is told,
 what it stores, that a run already followed up on is not followed up again, and that a busy
 chat is ``ChatBusy`` are all core's. What it adds is what an activity owes the engine: the
@@ -48,6 +48,7 @@ from openmarketer_core.db.research_runs import ResearchRunNotFound
 from openmarketer_core.db.session import transaction
 from openmarketer_core.db.studio_runs import StudioRunNotFound
 from openmarketer_core.db.tasks import TaskNotFound
+from openmarketer_core.db.writing_runs import WritingRunNotFound
 from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.llm_config import ConfigError
 from openmarketer_core.orchestrator.chat_agent.rules import (
@@ -81,6 +82,7 @@ NOTHING_THERE = (
     ResearchRunNotFound,
     StudioRunNotFound,
     TaskNotFound,
+    WritingRunNotFound,
 )
 
 

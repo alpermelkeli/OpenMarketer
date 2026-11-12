@@ -23,6 +23,7 @@ export const CHAT_RUN = "orchestrator-chat";
 export const RESEARCH_RUN = "research-run";
 export const STUDIO_RUN = "studio-run";
 export const TASK_RUN = "orchestrator-task";
+export const WRITING_RUN = "writing-run";
 
 /** Every kind of run event the API records, which a stream listens for by name. */
 export const EVENT_KINDS = [
@@ -80,12 +81,14 @@ export type TurnTrigger =
   | "message"
   | "research_finished"
   | "studio_finished"
+  | "writing_finished"
   | "task_finished"
   | "task_step_finished";
 
 const FOLLOW_UP_TRIGGERS: readonly TurnTrigger[] = [
   "research_finished",
   "studio_finished",
+  "writing_finished",
   "task_finished",
   "task_step_finished",
 ];

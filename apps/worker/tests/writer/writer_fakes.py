@@ -23,6 +23,7 @@ from openmarketer_core.agent_runtime.actions import ActionEffect, ActionRequest
 from openmarketer_core.agent_runtime.gate import RunScope
 from openmarketer_core.agent_runtime.steps import GraphRunRef
 from openmarketer_core.credentials.cipher import CredentialCipher
+from openmarketer_core.db.chat import create_chat
 from openmarketer_core.db.content_items import ContentItem, content_item
 from openmarketer_core.db.media_assets import (
     NewAssetVersion,
@@ -79,7 +80,7 @@ from openmarketer_core.studio.asset_store import AssetStoreUnavailable, asset_ke
 from openmarketer_core.studio.platforms import Platform
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.writing.brief import WritingBrief, WritingGoal, WritingPlatform
-from openmarketer_core.writing.request import REQUESTED_BY_A_PERSON
+from openmarketer_core.writing.request import REQUESTED_BY_A_PERSON, REQUESTED_BY_THE_CHAT
 from openmarketer_core.writing.workflow_contract import WRITING_RUN_KIND, WritingRunInput
 from openmarketer_worker.writer.policy import WriterPolicy
 
@@ -281,13 +282,15 @@ class Image:
 
 @dataclass(frozen=True)
 class RequestedPost:
-    """A writing run the tests set up, the profile version it should write from, and the image
-    and the research run its brief names (``None`` when it names none)."""
+    """A writing run the tests set up, the profile version it should write from, the image and
+    the research run its brief names, and the chat that asked for it (``None`` when it names
+    none)."""
 
     run: WritingRunInput
     version_id: uuid.UUID | None
     image: Image | None = None
     research_run_id: uuid.UUID | None = None
+    chat_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -301,11 +304,13 @@ class WriterDatabase:
         started: bool = False,
         with_image: bool = False,
         with_research: bool = False,
+        from_a_chat: bool = False,
     ) -> RequestedPost:
         """A queued writing run of a new project in a new workspace, whose profile is approved
         unless ``approved`` is false; marked started, as ``start_run`` does, if ``started``.
         Its brief names an image of the project's library if ``with_image``, and a research run
-        of the project that succeeded if ``with_research``."""
+        of the project that succeeded if ``with_research``. A chat of the project asked for it
+        if ``from_a_chat``."""
         with transaction(self.sessions) as session:
             workspace = Workspace(name="Acme")
             session.add(workspace)
@@ -329,12 +334,18 @@ class WriterDatabase:
                     "research_run_id": research_run_id,
                 }
             )
+            chat_id = (
+                create_chat(session, workspace_id=workspace.id, project_id=project.id).id
+                if from_a_chat
+                else None
+            )
             run = request_writing_run(
                 session,
                 workspace_id=scope["workspace_id"],
                 project_id=scope["project_id"],
                 brief=brief,
-                requested_by=REQUESTED_BY_A_PERSON,
+                requested_by=REQUESTED_BY_THE_CHAT if from_a_chat else REQUESTED_BY_A_PERSON,
+                chat_thread_id=chat_id,
             )
             if started:
                 mark_run_started(session, **scope, run_id=run.id)
@@ -343,6 +354,7 @@ class WriterDatabase:
             version_id=version_id,
             image=image,
             research_run_id=research_run_id,
+            chat_id=chat_id,
         )
 
     def another_image(self, run: WritingRunInput) -> Image:

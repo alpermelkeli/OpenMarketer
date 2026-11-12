@@ -74,6 +74,9 @@ describe("what a chat's event refreshes", () => {
     expect(refreshed(started("studio-run"))).toEqual([
       queryKeys.studioRuns(PROJECT),
     ]);
+    expect(refreshed(started("writing-run"))).toEqual([
+      queryKeys.writingRuns(PROJECT),
+    ]);
     expect(refreshed(started("analysis"))).toEqual([]);
   });
 

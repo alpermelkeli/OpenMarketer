@@ -12,6 +12,11 @@ describe("how a follow-up turn is worded", () => {
     expect(followUpWording("studio_finished").reviewing).toBe("The orchestrator is reviewing the studio’s image…");
     expect(followUpWording("studio_finished").failed).toBe("The orchestrator could not review the studio’s image");
   });
+
+  it("names the post when a writing run has ended", () => {
+    expect(followUpWording("writing_finished").reviewing).toBe("The orchestrator is reviewing the post…");
+    expect(followUpWording("writing_finished").stillThere).toBe("The post is still on the run’s page.");
+  });
 });
 
 describe("how a follow-up on a task is worded", () => {
