@@ -554,19 +554,6 @@ def _model_of(annotation: Any) -> type[BaseModel] | None:
     return item if isinstance(item, type) and issubclass(item, BaseModel) else None
 
 
-_FENCE = re.compile(r"^\s*```[a-zA-Z]*\s*\n(?P<body>.*?)\n\s*```\s*$", re.DOTALL)
-
-
-def answer_object(text: str) -> Any:
-    """The JSON value an answer holds, or ``None``: one object, perhaps in a Markdown fence."""
-    fenced = _FENCE.match(text)
-    body = fenced.group("body") if fenced else text
-    try:
-        return json.loads(body)
-    except ValueError:
-        return None
-
-
 # ------------------------------------------------------------------------- the code rules
 @dataclass(frozen=True)
 class Situation:

@@ -72,8 +72,12 @@ class UnknownTool(Exception):
 class InvalidToolArguments(Exception):
     """The arguments the model gave a tool do not fit what the tool takes."""
 
-    def __init__(self, tool_name: str, fields: tuple[str, ...]) -> None:
-        super().__init__(f"arguments of tool {shown(tool_name)} do not fit{fields_phrase(fields)}")
+    def __init__(
+        self, tool_name: str, fields: tuple[str, ...], reasons: Mapping[str, str] | None = None
+    ) -> None:
+        super().__init__(
+            f"arguments of tool {shown(tool_name)} do not fit{fields_phrase(fields, reasons)}"
+        )
         self.tool_name = tool_name
         self.fields = fields
 
@@ -156,7 +160,7 @@ class Toolbox:
         try:
             read = read_strict_json(spec.arguments, arguments)
         except DoesNotFit as e:
-            raise InvalidToolArguments(spec.name, e.fields) from None
+            raise InvalidToolArguments(spec.name, e.fields, e.reasons) from None
         # Not ``model_dump``: it would turn a model the tool asks for into a dict.
         given = {field: getattr(read, field) for field in type(read).model_fields}
         if spec.takes_context:

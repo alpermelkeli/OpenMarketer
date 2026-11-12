@@ -2,6 +2,7 @@
 
     call_model -> run_tools -> call_model -> ... -> END
          ^___________|  (until an answer is submitted with submit_answer)
+    call_model -> END       (a limit reached after a run was started: code's answer)
 
 Importing this module is what puts the read tools and the nodes on ``definitions.agent``.
 ``answer_message`` runs one turn in memory, in the process that serves the message: a chat
@@ -41,13 +42,24 @@ from openmarketer_core.orchestrator.requests import ChatRequests
 def call_model(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]:
     limits = context.limits
     cost = state["cost_usd"]
-    if cost >= limits.max_cost_usd:
-        raise ChatTurnError(f"cost limit reached (${cost:.3f}) before an answer was given")
-    if state["step"] >= limits.max_model_calls:
+    out_of_cost = cost >= limits.max_cost_usd
+    if out_of_cost or state["step"] >= limits.max_model_calls:
+        if state["started_runs"]:
+            # The run is going: the operator is told so in code's words, not left with a
+            # failure that says nothing was done.
+            return {"answer": rules.started_runs_answer(state["started_runs"])}
+        if out_of_cost:
+            raise ChatTurnError(f"cost limit reached (${cost:.3f}) before an answer was given")
         raise ChatTurnError(f"no answer after {limits.max_model_calls} model calls")
     step = state["step"] + 1
     wrapping_up = rules.is_wrapping_up(step, cost, state["tool_calls"], limits)
     offer_requests = context.requests is not None
+    if step >= limits.max_model_calls and state["started_runs"]:
+        offered = rules.final_tool_schemas()
+    elif wrapping_up:
+        offered = rules.wrap_up_tool_schemas(agent, offer_requests=offer_requests)
+    else:
+        offered = rules.tool_schemas(agent, offer_requests=offer_requests)
 
     new_messages: list[dict[str, Any]] = []
     if wrapping_up and not state["wrap_up_sent"]:
@@ -60,15 +72,7 @@ def call_model(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]
                 ),
             }
         )
-    reply = context.model.chat(
-        rules.ROLE,
-        state["messages"] + new_messages,
-        tools=(
-            rules.wrap_up_tool_schemas(agent, offer_requests=offer_requests)
-            if wrapping_up
-            else rules.tool_schemas(agent, offer_requests=offer_requests)
-        ),
-    )
+    reply = context.model.chat(rules.ROLE, state["messages"] + new_messages, tools=offered)
     new_messages.append(reply.message)
     if not reply.tool_calls:
         nudge = (
@@ -90,7 +94,11 @@ def call_model(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]
 
 @agent.node
 def run_tools(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]:
-    last_chance = state["wrapping_up"] or state["step"] >= context.limits.max_model_calls
+    # A turn that started a run is not failed by a submission that does not fit: it is
+    # answered by code instead (``call_model``).
+    last_chance = (
+        state["wrapping_up"] or state["step"] >= context.limits.max_model_calls
+    ) and not state["started_runs"]
     outcome = rules.run_tool_calls(
         state["pending_calls"], agent, context, last_chance=last_chance, events=context.events
     )
@@ -99,11 +107,14 @@ def run_tools(state: ChatTurnState, context: ChatTurnContext) -> dict[str, Any]:
         "tool_calls": outcome.names,
         "pending_calls": [],
         "answer": outcome.answer,
+        "started_runs": outcome.started,
     }
 
 
-@agent.route(after=call_model, to=[run_tools, call_model])
+@agent.route(after=call_model, to=[run_tools, call_model, END])
 def after_model(state: ChatTurnState) -> str:
+    if state["answer"] is not None:
+        return END
     return run_tools.__name__ if state["pending_calls"] else call_model.__name__
 
 

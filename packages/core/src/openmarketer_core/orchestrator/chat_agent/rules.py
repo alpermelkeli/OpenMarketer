@@ -20,6 +20,13 @@ worded here, by code, and so is the check a studio request's copy passes before 
 is asked (``term_not_to_mention``): the copy may be the model's own, so the brand's
 ``do_not_mention`` is held by code and not only by the prompt.
 
+A turn that started a run never fails for running out of calls or cost: the run is going and
+the operator must learn of it, so the turn ends with ``started_runs_answer``, fixed sentences
+written here that name what was started, and its last allowed call offers only the
+submission (``final_tool_schemas``). A turn that started nothing still fails at a limit. A
+refused tool call or submission is logged at warning in code's own words (``_log_refusal``),
+never with what the model wrote, so the worker's log says why a turn went round.
+
 Which run a request starts is the prompt's: the model reads what the operator asked for. A post,
 and any request that needs several agents together, is a task (``start_task``), whose plan
 decides whether a post needs an image first; an image alone is the studio's, research alone the
@@ -37,13 +44,15 @@ The answer is the operator's; nothing here changes the project.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from openmarketer_core.agent_runtime.agent import Agent
+from openmarketer_core.agent_runtime.model_input import DoesNotFit, read_strict_json
 from openmarketer_core.agent_runtime.tools import InvalidToolArguments, UnknownTool
 from openmarketer_core.llm import ChatModel, LLMError
 from openmarketer_core.orchestrator.events import TurnEvents
@@ -53,15 +62,22 @@ from openmarketer_core.run_events import TOOL_ANSWERED, TOOL_CALLED, RunEvent
 from openmarketer_core.studio.image_checks import normalized, without_marks
 from openmarketer_core.studio.workflow_contract import STUDIO_RUN_KIND
 
+logger = logging.getLogger(__name__)
+
 ROLE = "orchestrator"
 SUBMIT = "submit_answer"
 # The tools that ask the turn's caller for work instead of reading the project: the reading
 # budget ignores them, and a turn out of budget keeps them.
 REQUEST_ACTIONS = frozenset({"start_research", "start_creative", "start_task"})
+# The kind of run each request action starts when it answers without an error.
+STARTED_RUN_KIND: Mapping[str, str] = {
+    "start_research": RESEARCH_RUN_KIND,
+    "start_creative": STUDIO_RUN_KIND,
+    "start_task": TASK_RUN_KIND,
+}
 WRAP_UP_CALLS = 2  # the last model calls are reserved for finishing the turn
 WRAP_UP_TOOL_SHARE = 0.75  # of the reading budget; submitting costs no read
 WRAP_UP_COST_SHARE = 0.7  # of the cost limit; the rest pays for the submission itself
-MAX_SHOWN_SCHEMA_PROBLEMS = 12
 MAX_HISTORY_CHARS = 24_000  # a longer conversation has its older messages summarised
 KEEP_RECENT_MESSAGES = 12  # the newest messages, kept word for word when they are
 TOOL_ERROR_PREFIX = "error:"  # how a tool answers that it could not do what was asked
@@ -98,6 +114,24 @@ FOLLOWED_RUN_KINDS = (RESEARCH_RUN_KIND, STUDIO_RUN_KIND, TASK_RUN_KIND)
 UNANSWERED_REASON = "The orchestrator gave no answer within its limits."
 MODEL_UNAVAILABLE_REASON = "The model could not answer just now."
 UNEXPECTED_FAILURE_REASON = "The turn stopped because of an unexpected error."
+
+# What a turn that started a run but reached a limit answers with, one sentence per kind of run
+# it started: fixed, so that the operator learns what is going whatever the model wrote.
+STARTED_RUN_SENTENCES: Mapping[str, str] = {
+    TASK_RUN_KIND: (
+        "I started a task for this request. It plans the steps, and a plan that spends waits "
+        "for you to confirm it in Approvals; I will report here when it is done."
+    ),
+    RESEARCH_RUN_KIND: (
+        "I started a research run for this request. Its report will be in the project's "
+        "Research once it is done, and I will sum it up here."
+    ),
+    STUDIO_RUN_KIND: (
+        "I started an image in the studio for this request. It will land in the project's "
+        "Studio library for you to accept or reject; a bigger image first waits for your "
+        "approval in Approvals."
+    ),
+}
 
 SYSTEM_PROMPT = """\
 You are the orchestrator of OpenMarketer. You answer the operator's messages about a \
@@ -404,6 +438,20 @@ def wrap_up_tool_schemas(agent: Agent, *, offer_requests: bool = True) -> list[d
     return [*request_actions, submit_schema()]
 
 
+def final_tool_schemas() -> list[dict[str, Any]]:
+    """The tools of the last call of a turn that already started a run: the submission only."""
+    return [submit_schema()]
+
+
+def started_runs_answer(started: Sequence[str]) -> str:
+    """The answer of a turn that started runs of the kinds ``started`` and then reached a limit.
+
+    One fixed sentence per kind, in the order they were started; nothing a model wrote.
+    """
+    kinds = dict.fromkeys(kind for kind in started if kind in STARTED_RUN_SENTENCES)
+    return " ".join(STARTED_RUN_SENTENCES[kind] for kind in kinds)
+
+
 def is_wrapping_up(
     step: int, cost_usd: float, tool_calls: Sequence[str], limits: ChatLimits
 ) -> bool:
@@ -428,6 +476,7 @@ class ToolOutcome:
     messages: list[dict[str, Any]] = field(default_factory=list)  # tool results for the model
     names: list[str] = field(default_factory=list)
     answer: str | None = None  # set when a submission was accepted
+    started: list[str] = field(default_factory=list)  # the kinds of run started, in order
 
 
 def run_tool_calls(
@@ -442,7 +491,9 @@ def run_tool_calls(
 
     A call that does not fit its tool is answered with what was wrong, for the model to
     correct, and never with what it sent. ``last_chance`` makes a submission that does not
-    fit ``ChatTurnError`` instead of a rejection: no further model call could fix it. Each
+    fit ``ChatTurnError`` instead of a rejection: no further model call could fix it, unless a
+    run was started among these calls, which the turn then answers about. A request action
+    that answers without an error has started a run, whose kind is kept in ``started``. Each
     call other than the submission is recorded in ``events``: ``tool_called`` before it runs
     and ``tool_answered``, with whether it did what was asked, after. An event names a tool
     the agent does not have as ``UNKNOWN_TOOL``, so nothing the model wrote reaches it.
@@ -461,9 +512,10 @@ def run_tool_calls(
                 raise ValueError("arguments must be an object")
         except (ValueError, KeyError) as e:
             result = f"{TOOL_ERROR_PREFIX} could not parse the arguments: {e}"
+            _log_refusal(shown, result)
         else:
             if name == SUBMIT:
-                answer, result = _answer(arguments, last_chance=last_chance)
+                answer, result = _answer(arguments, last_chance=last_chance and not outcome.started)
                 if answer is not None:
                     outcome.answer = answer
                     return outcome
@@ -472,6 +524,12 @@ def run_tool_calls(
         if name != SUBMIT:
             answered = not result.startswith(TOOL_ERROR_PREFIX)
             events.record(RunEvent(TOOL_ANSWERED, {"tool": shown, "ok": answered}))
+            if answered and name in STARTED_RUN_KIND:
+                outcome.started.append(STARTED_RUN_KIND[name])
+            elif not answered and name in REQUEST_ACTIONS:
+                # A request action's refusal is code's: the fields at fault and why, a
+                # caller's sentence, or a brand term of the profile.
+                _log_refusal(name, result)
         outcome.messages.append(
             {"role": "tool", "tool_call_id": call.get("id", ""), "content": result}
         )
@@ -620,23 +678,27 @@ def _comparable(text: str) -> str:
 def _tool_answer(agent: Agent, name: str, arguments: dict[str, Any], context: Any) -> str:
     try:
         return agent.call_tool(name, arguments, context)
-    except (UnknownTool, InvalidToolArguments) as e:
+    except UnknownTool as e:
+        # The name is the model's: the log says only that it was not a tool.
+        _log_refusal(UNKNOWN_TOOL, "the model called a tool the agent does not have")
         return f"error: {e}"
+    except InvalidToolArguments as e:
+        result = f"error: {e}"
+        _log_refusal(name, result)
+        return result
 
 
 def _answer(arguments: dict[str, Any], *, last_chance: bool) -> tuple[str | None, str]:
     """The answer of a submission, or ``None`` and what to tell the model to fix."""
     try:
-        return SubmittedAnswer.model_validate(arguments).answer, ""
-    except ValidationError as e:
-        problems = _schema_problems(e)
+        return read_strict_json(SubmittedAnswer, arguments).answer, ""
+    except DoesNotFit as e:
+        _log_refusal(SUBMIT, str(e))
         if last_chance:
-            raise ChatTurnError("the submitted answer does not fit: " + "; ".join(problems)) from e
-        return None, "Rejected. Fix this and call submit_answer again:\n- " + "\n- ".join(problems)
+            raise ChatTurnError(f"the submitted answer {e}") from None
+        return None, f"Rejected. Fix this and call submit_answer again: {e}"
 
 
-def _schema_problems(error: ValidationError) -> list[str]:
-    return [
-        f"{'.'.join(str(p) for p in e['loc']) or 'answer'}: {e['msg']}"
-        for e in error.errors()[:MAX_SHOWN_SCHEMA_PROBLEMS]
-    ]
+def _log_refusal(tool: str, refusal: str) -> None:
+    """Log a refused call in code's own words; ``tool`` is a declared name or ``UNKNOWN_TOOL``."""
+    logger.warning("role %s: %s refused: %s", ROLE, tool, refusal)

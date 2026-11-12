@@ -40,6 +40,7 @@ passes through it; one already waiting in ``propose`` has no target and asks for
 it asked for before.
 """
 
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -50,7 +51,11 @@ from pydantic import BaseModel
 
 from openmarketer_core.agent_runtime.agent import END
 from openmarketer_core.agent_runtime.langgraph_steps import request_action
-from openmarketer_core.agent_runtime.model_input import DoesNotFit, read_strict_json
+from openmarketer_core.agent_runtime.model_input import (
+    DoesNotFit,
+    answer_object,
+    read_strict_json,
+)
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.writing.brief import WritingBrief
 from openmarketer_core.writing.failures import WritingError
@@ -68,6 +73,10 @@ from openmarketer_core.writing.writer_agent.rules import (
     NoApprovedProfile,
     NoVariantToPropose,
 )
+
+logger = logging.getLogger(__name__)
+# What a refusal in the log is said to be of.
+AGENT_NAME = "writer"
 
 Problems = Callable[[Any], list[str]]
 
@@ -109,15 +118,24 @@ def _read[Model: BaseModel](
 ) -> Model | str:
     """The submission in ``answer``, or the text that tells the model what was wrong."""
     if not isinstance(answer, dict):
+        _log_refusal(model_type.__name__, "the answer was not one JSON object")
         return "error: answer with one JSON object and nothing else"
     try:
         submitted = read_strict_json(model_type, rules.unwrapped_arguments(model_type, answer))
     except DoesNotFit as e:
+        _log_refusal(model_type.__name__, str(e))
         return f"Rejected. Fix this and answer again: {e}"
     found = problems(submitted)
     if found:
+        # A finding may quote the model's text: the log counts them.
+        _log_refusal(model_type.__name__, f"{len(found)} finding(s) of the code rules")
         return "Rejected. Fix this and answer again: " + "; ".join(found)
     return submitted
+
+
+def _log_refusal(submission: str, refusal: str) -> None:
+    """Log a refused submission in code's own words, never with what the model wrote."""
+    logger.warning("%s: %s refused: %s", AGENT_NAME, submission, refusal)
 
 
 def _ask[Model: BaseModel](
@@ -137,7 +155,7 @@ def _ask[Model: BaseModel](
     for _ in range(rules.SUBMISSION_ATTEMPTS):
         reply = context.model.chat(role, messages)
         spent.add(reply)
-        submitted = _read(rules.answer_object(reply.text), model_type, problems)
+        submitted = _read(answer_object(reply.text), model_type, problems)
         if not isinstance(submitted, str):
             return submitted
         if reply.finish_reason == "length":

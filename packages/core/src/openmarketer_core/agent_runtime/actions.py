@@ -121,9 +121,11 @@ class NotAnAction(Exception):
 class InvalidActionPayload(Exception):
     """The payload of the request does not fit the model of its action."""
 
-    def __init__(self, action_name: str, fields: tuple[str, ...]) -> None:
+    def __init__(
+        self, action_name: str, fields: tuple[str, ...], reasons: Mapping[str, str] | None = None
+    ) -> None:
         super().__init__(
-            f"payload of action {shown(action_name)} does not fit{fields_phrase(fields)}"
+            f"payload of action {shown(action_name)} does not fit{fields_phrase(fields, reasons)}"
         )
         self.action_name = action_name
         self.fields = fields
@@ -380,7 +382,7 @@ class ActionCatalog:
         try:
             return read_strict_json(definition.payload, request.payload)
         except DoesNotFit as e:
-            raise InvalidActionPayload(request.name, e.fields) from None
+            raise InvalidActionPayload(request.name, e.fields, e.reasons) from None
 
 
 def mark_as_action(model: type[BaseModel], name: str) -> None:

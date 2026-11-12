@@ -209,7 +209,7 @@ def start_research(
             },
         )
     except DoesNotFit as e:
-        return f"error: the research request does not fit{fields_phrase(e.fields)}"
+        return f"error: the research request does not fit{fields_phrase(e.fields, e.reasons)}"
     try:
         run = context.requests.start_research(request)
     except ResearchNotStarted as e:
@@ -291,7 +291,7 @@ def start_creative(
             },
         )
     except DoesNotFit as e:
-        return f"error: the image request does not fit{fields_phrase(e.fields)}"
+        return f"error: the image request does not fit{fields_phrase(e.fields, e.reasons)}"
     banned = term_not_to_mention(request.exact_copy, _do_not_mention(context))
     if banned is not None:
         return (
@@ -349,7 +349,7 @@ def start_task(context: ChatTurnContext, request: str, understanding: str) -> st
     try:
         asked = read_strict_json(TaskRequest, {"request": request, "understanding": understanding})
     except DoesNotFit as e:
-        return f"error: the task request does not fit{fields_phrase(e.fields)}"
+        return f"error: the task request does not fit{fields_phrase(e.fields, e.reasons)}"
     try:
         task = context.requests.start_task(asked)
     except TaskNotStarted as e:

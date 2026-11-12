@@ -30,6 +30,7 @@ from openmarketer_core.orchestrator.chat_agent.definitions import ChatTurnContex
 from openmarketer_core.orchestrator.chat_agent.graph import answer_message
 from openmarketer_core.orchestrator.chat_agent.rules import (
     REQUEST_ACTIONS,
+    STARTED_RUN_SENTENCES,
     SUBMIT,
     SYSTEM_PROMPT,
     TOOL_LABELS,
@@ -38,6 +39,7 @@ from openmarketer_core.orchestrator.chat_agent.rules import (
     ChatTurnError,
     follow_up_instruction,
     is_wrapping_up,
+    started_runs_answer,
     submit_schema,
     term_not_to_mention,
     wrap_up_tool_schemas,
@@ -83,7 +85,7 @@ from openmarketer_core.orchestrator.requests import (
     StudioNotStarted,
     TaskNotStarted,
 )
-from openmarketer_core.orchestrator.task.plan import TaskRequest
+from openmarketer_core.orchestrator.task.plan import MAX_UNDERSTANDING_CHARS, TaskRequest
 from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
@@ -638,6 +640,81 @@ def test_the_turn_fails_when_the_model_never_answers(reads):
     assert len(messages) == 1
 
 
+def test_a_turn_that_started_a_task_and_ran_out_of_calls_answers_in_codes_words(reads):
+    model = ScriptedModel(
+        [call("start_task", request="Write a post.", understanding="A post about the launch.")]
+    )  # then only ever reads the status
+
+    turn = answer_message(
+        reads, model, history(), limits=ChatLimits(max_model_calls=3), requests=FakeRequests()
+    )
+
+    assert turn.answer == STARTED_RUN_SENTENCES[TASK_RUN_KIND]
+    last = [schema["function"]["name"] for schema in model.requests[-1]["tools"]]
+    assert last == [SUBMIT]
+
+
+def test_a_turn_that_started_a_run_answers_in_codes_words_when_its_cost_runs_out(reads):
+    model = ScriptedModel(
+        [call("start_research", questions=["Who are the competitors?"])], cost=0.3
+    )
+
+    turn = answer_message(
+        reads, model, history(), limits=ChatLimits(max_cost_usd=0.5), requests=FakeRequests()
+    )
+
+    assert turn.answer == STARTED_RUN_SENTENCES[RESEARCH_RUN_KIND]
+
+
+def test_a_submission_that_does_not_fit_on_the_last_call_after_a_start_is_not_a_failure(reads):
+    model = ScriptedModel(
+        [call("start_creative", goal="Announce the launch.", platform="x_post")],
+        [call(SUBMIT, answer="")],
+    )
+
+    turn = answer_message(
+        reads, model, history(), limits=ChatLimits(max_model_calls=2), requests=FakeRequests()
+    )
+
+    assert turn.answer == STARTED_RUN_SENTENCES[STUDIO_RUN_KIND]
+
+
+def test_the_answer_of_started_runs_has_one_sentence_per_kind_in_order():
+    answer = started_runs_answer([TASK_RUN_KIND, RESEARCH_RUN_KIND, TASK_RUN_KIND])
+
+    assert answer == " ".join(
+        [STARTED_RUN_SENTENCES[TASK_RUN_KIND], STARTED_RUN_SENTENCES[RESEARCH_RUN_KIND]]
+    )
+
+
+def test_a_refused_task_request_says_the_limit_and_not_what_was_sent():
+    requests = FakeRequests()
+    too_long = "y" * (MAX_UNDERSTANDING_CHARS + 1)
+
+    answer = start_task(a_context(FakeReads(), requests), request="A post.", understanding=too_long)
+
+    assert answer == (
+        "error: the task request does not fit: "
+        f"'understanding' (at most {MAX_UNDERSTANDING_CHARS} characters)"
+    )
+    assert requests.tasks == []
+
+
+def test_a_refused_request_action_is_logged_with_why_and_not_what_was_sent(reads, caplog):
+    too_long = "z" * (MAX_UNDERSTANDING_CHARS + 1)
+    model = ScriptedModel(
+        [call("start_task", request="A post.", understanding=too_long)],
+        [call(SUBMIT, answer="Done.")],
+    )
+
+    with caplog.at_level("WARNING"):
+        answer_message(reads, model, history(), requests=FakeRequests())
+
+    [record] = [r for r in caplog.records if "refused" in r.getMessage()]
+    assert f"'understanding' (at most {MAX_UNDERSTANDING_CHARS} characters)" in record.getMessage()
+    assert too_long not in record.getMessage()
+
+
 def test_request_actions_do_not_count_against_the_reading_budget():
     limits = ChatLimits()
     assert not is_wrapping_up(1, 0.0, ["start_research"] * limits.max_tool_calls, limits)
@@ -1039,7 +1116,8 @@ def test_an_unknown_platform_is_a_tool_error_the_turn_reads_and_corrects(reads):
     turn = answer_message(reads, model, history(), requests=requests)
 
     first = [m for m in model.requests[1]["messages"] if m["role"] == "tool"][0]["content"]
-    assert first == "error: the image request does not fit: 'platform'"
+    assert first.startswith("error: the image request does not fit: 'platform' (not one of: ")
+    assert "'x_post'" in first and "tiktok" not in first
     assert [request.platform for request in requests.creatives] == [Platform.X_POST]
     assert turn.answer == f"Started {STUDIO_RUN_ID}."
 
