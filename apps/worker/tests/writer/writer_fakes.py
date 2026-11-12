@@ -157,6 +157,7 @@ def a_draft(body: str = POST) -> ChatReply:
     variant = {
         "text": body,
         "angle": "Freedom from connectivity.",
+        "hook": "People who write on trains, who lost a note to a dead connection.",
         "language": "en",
         "claims": [{"statement": "Notes sync after offline use.", "feature_ids": ["offline-sync"]}],
     }

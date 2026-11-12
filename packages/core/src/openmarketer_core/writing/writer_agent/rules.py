@@ -9,9 +9,20 @@ schema and the line of the prompt that describes it, so the prompt and the check
 
 The code rules are the control and the prompt a convenience (the design's D1): a variant that
 breaks one is never proposed. They are the run's only review: no second model judges the
-variants: the design's critic is left out, to keep the writer simple. A number the profile
-does not hold is not refused but flagged, for the person, and ``decide`` prefers the variant
-with fewer of them.
+variants: the design's critic is left out, to keep the writer simple. Two things are not
+refused but flagged, for the person: a number the profile does not hold, and a phrase of
+``CLICHES`` (the advertising and engagement-bait phrases the writer is told to avoid, from the
+same list); ``decide`` prefers the variant with fewer flags, numbers and phrases counted
+together.
+
+A claim is narrow on purpose: a concrete statement of what the product does or has. Each names
+the live features it rests on, and a claim on a feature that is not live, or on none, breaks a
+code rule, so no variant announces what the product does not do. What a post says around its
+claims (the reader's situation, a feeling, a question, an opinion, a joke, a tiny story, what a
+feature changes for the reader) is not a claim and needs no feature: the writer is told so, and
+told to make one or two claims at most, so that a post reads as a person talking to a reader
+and not as a list of features. Each variant also says whom its first line stops and why
+(``hook``), the way a social media manager would plan it.
 
 A brief may name two ready inputs, which no agent of this run makes: an asset of the project's
 Studio library the post goes with, and a finished research run whose findings the post may draw
@@ -24,8 +35,9 @@ a live feature of the profile, and a number a finding gives is flagged like any 
 Nothing here depends on the agent framework, a database or a network: ``graph.py`` wires these
 functions into a graph, and the worker runs the two actions and stores what the run produced.
 The writer writes posts for X and Instagram (``platforms.py``), and never asks for an image or
-research itself. A platform's habits (a few hashtags at the end of an Instagram caption, "link
-in bio" instead of an address) are told to the writer; only its rules are code.
+research itself. A platform's habits (no hashtag or one on X, where replies carry a post; a
+few hashtags at the end of an Instagram caption, "link in bio" instead of an address) are told
+to the writer; only its rules are code.
 """
 
 from __future__ import annotations
@@ -70,6 +82,7 @@ CUT_OFF_HINT = (
 )
 
 MAX_ANGLE_CHARS = 300
+MAX_HOOK_CHARS = 300
 # The features the stored plan names: those of the chosen variant's claims, the first few.
 MAX_PLAN_FEATURES = 3
 # A variant's text, bounded far above what a platform counts: the length rule is a code rule
@@ -86,6 +99,8 @@ MAX_FINDINGS = 20
 MAX_FINDING_CHARS = 300
 MAX_FLAGGED_NUMBERS = 20
 MAX_NUMBER_CHARS = 40
+MAX_FLAGGED_PHRASES = 10
+MAX_PHRASE_CHARS = 40
 # The evidence a claim carries to the person: a few locations per claim, each a short path.
 MAX_CLAIM_EVIDENCE = 3
 MAX_EVIDENCE_FILE_CHARS = 500
@@ -476,8 +491,17 @@ CLAIM_FIELDS: Mapping[str, str] = {
 }
 
 
-class Variant(BaseModel):
-    """One text of the post, as the writer wrote it."""
+HookText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_HOOK_CHARS)
+]
+
+
+def _absent(value: object) -> bool:
+    return value is None
+
+
+class _VariantFields(BaseModel):
+    """What every variant holds besides its hook."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -489,9 +513,27 @@ class Variant(BaseModel):
     claims: list[Claim] = Field(max_length=MAX_CLAIMS)
 
 
+class Variant(_VariantFields):
+    """One text of the post, as the run keeps it.
+
+    ``hook`` is ``None`` only for a variant a thread stored before the writer gave one; it is
+    then left out of the variant's dump, so that thread asks for the same ``store_draft`` when
+    its node runs again. The writer always gives it (``WrittenVariant``).
+    """
+
+    hook: HookText | None = Field(default=None, exclude_if=_absent)
+
+
+class WrittenVariant(_VariantFields):
+    """A variant as the writer submits it: its hook is required."""
+
+    hook: HookText
+
+
 VARIANT_FIELDS: Mapping[str, str] = {
     "text": "the post exactly as it would be published",
     "angle": "the angle and the form this variant takes, in a sentence",
+    "hook": "whom the first line stops and why, in a sentence",
     "language": 'the language the text is written in, as a BCP 47 tag ("en", "de", "pt-BR")',
     "claims": "a list of every claim the text makes about the product, each an object with "
     + ", ".join(f'"{name}" ({meaning})' for name, meaning in CLAIM_FIELDS.items())
@@ -508,7 +550,7 @@ class Draft(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    variants: list[Variant] = Field(min_length=1, max_length=MAX_SUBMITTED_VARIANTS)
+    variants: list[WrittenVariant] = Field(min_length=1, max_length=MAX_SUBMITTED_VARIANTS)
 
 
 def unwrapped_arguments(
@@ -621,9 +663,9 @@ def _check_do_not_mention(variant: Variant, s: Situation) -> list[str]:
 
 def _told_claims(s: Situation) -> str:
     return (
-        "Every claim names, in its feature_ids, at least one feature of the writing context by "
-        "its id, and only those. A statement about the product that rests on no listed feature "
-        "is not allowed: leave it out."
+        "A claim is a concrete statement of what the product does or has. Every claim names, "
+        "in its feature_ids, at least one feature of the writing context by its id, and only "
+        "those: a claim that no listed feature backs is not allowed, so leave it out."
     )
 
 
@@ -685,7 +727,8 @@ def _check_mentions(variant: Variant, s: Situation) -> list[str]:
 
 
 def _told_hashtags(s: Situation) -> str:
-    return f"At most {s.platform.max_hashtags} hashtags."
+    most = s.platform.max_hashtags
+    return f"At most {most} hashtag{'' if most == 1 else 's'}."
 
 
 def _check_hashtags(variant: Variant, s: Situation) -> list[str]:
@@ -774,12 +817,64 @@ def profile_numbers(context: Mapping[str, Any]) -> set[str]:
     return numbers
 
 
+# The phrases that make a post read like an advertisement or beg for engagement. The writer is
+# told to avoid them (``write_system_prompt``), and a variant that holds one is flagged for the
+# person, never refused: one list for both, so the two cannot drift.
+CLICHES: tuple[str, ...] = (
+    "introducing",
+    "excited to announce",
+    "thrilled to",
+    "game-changer",
+    "game-changing",
+    "seamless",
+    "seamlessly",
+    "unlock",
+    "elevate",
+    "revolutionize",
+    "revolutionary",
+    "supercharge",
+    "next-level",
+    "cutting-edge",
+    "unleash",
+    "empower",
+    "look no further",
+    "say goodbye to",
+    "like if you",
+    "rt if you",
+    "retweet if",
+    "follow for more",
+)
+
+
+def _plain_apostrophes(text: str) -> str:
+    return text.replace("’", "'")
+
+
+def _phrase_pattern(phrase: str) -> re.Pattern[str]:
+    """``phrase`` as whole words, a hyphen and a space between them alike."""
+    words = re.split(r"[\s-]+", _plain_apostrophes(_folded(phrase)).strip())
+    return re.compile(r"(?<!\w)" + r"[\s-]+".join(map(re.escape, words)) + r"(?!\w)")
+
+
+_CLICHE_PATTERNS = tuple((phrase, _phrase_pattern(phrase)) for phrase in CLICHES)
+
+
+def cliches_in(text: str) -> list[str]:
+    """The phrases of ``CLICHES`` that ``text`` holds, in the list's order: matched without
+    regard to case, on whole words, a hyphen and a space alike, a curly apostrophe as a
+    straight one."""
+    folded = _plain_apostrophes(_folded(text))
+    return [phrase for phrase, pattern in _CLICHE_PATTERNS if pattern.search(folded)]
+
+
 def check_variant(variant: Variant, s: Situation, known_numbers: set[str]) -> dict[str, Any]:
     """The code-rule report of one variant: whether it kept every rule, and the findings.
 
-    ``{"passed", "failures": [{"rule", "finding"}], "length", "flagged_numbers"}``: the
-    numbers of the text the profile does not hold are flagged. Bounded, since it leaves the
-    graph: at most ``MAX_FINDINGS`` findings, each cut, and ``MAX_FLAGGED_NUMBERS`` numbers.
+    ``{"passed", "failures": [{"rule", "finding"}], "length", "flagged_numbers",
+    "flagged_phrases"}``: the numbers of the text the profile does not hold and the phrases of
+    ``CLICHES`` it holds are flagged, neither refused. Bounded, since it leaves the graph: at
+    most ``MAX_FINDINGS`` findings, each cut, ``MAX_FLAGGED_NUMBERS`` numbers and
+    ``MAX_FLAGGED_PHRASES`` phrases.
     """
     failures = [
         {"rule": rule.key, "finding": _cut(finding, MAX_FINDING_CHARS)}
@@ -788,12 +883,20 @@ def check_variant(variant: Variant, s: Situation, known_numbers: set[str]) -> di
         for finding in rule.check(variant, s)
     ]
     flagged = sorted(_numbers_in(variant.text) - known_numbers)
+    phrases = cliches_in(variant.text)
     return {
         "passed": not failures,
         "failures": failures[:MAX_FINDINGS],
         "length": s.platform.count(variant.text),
         "flagged_numbers": [_cut(n, MAX_NUMBER_CHARS) for n in flagged[:MAX_FLAGGED_NUMBERS]],
+        "flagged_phrases": [_cut(p, MAX_PHRASE_CHARS) for p in phrases[:MAX_FLAGGED_PHRASES]],
     }
+
+
+def flags(check: Mapping[str, Any]) -> int:
+    """How many things a variant's report flags for the person: its numbers and its phrases.
+    A report a thread stored before phrases were flagged has none."""
+    return len(check["flagged_numbers"]) + len(check.get("flagged_phrases", []))
 
 
 def _cut(text: str, limit: int) -> str:
@@ -819,13 +922,14 @@ def decide(
 ) -> Decision:
     """The writer's decide rule.
 
-    A variant that keeps every code rule may be proposed: propose the one with the fewest
-    numbers the profile does not hold, and the earliest of those. None keeps them and rounds
-    and cost are left: revise. At the limit: the run fails.
+    A variant that keeps every code rule may be proposed: propose the one with the fewest flags
+    (``flags``: the numbers the profile does not hold and the clichés, counted together, one
+    each), and the earliest of those. None keeps them and rounds and cost are left: revise. At
+    the limit: the run fails.
     """
     kept = [index for index, check in enumerate(checks) if check["passed"]]
     if kept:
-        chosen = min(kept, key=lambda index: (len(checks[index]["flagged_numbers"]), index))
+        chosen = min(kept, key=lambda index: (flags(checks[index]), index))
         return Decision(
             "propose", chosen, f"variant {chosen} kept every code rule in round {round_no}"
         )
@@ -1040,36 +1144,103 @@ def _given_data(s: Situation) -> str:
     return "".join(f", {text}" for has, text in given if has)
 
 
-def _habits_text(s: Situation) -> str:
-    """The platform's habits as lines of the prompt's list, each ending its line; none for X."""
-    return "".join(f"- {habit}\n" for habit in s.platform.habits)
+def _habits_section(s: Situation) -> str:
+    """The platform's habits as a section of the prompt, followed by a blank line; none for a
+    platform without habits."""
+    if not s.platform.habits:
+        return ""
+    habits = "".join(f"- {habit}\n" for habit in s.platform.habits)
+    return f"On {s.platform.name}\n{habits}\n"
+
+
+# The forms a variant may take; the writer gives each variant a different one.
+FORMS: tuple[str, ...] = (
+    "problem, then reveal: the reader's problem first, the product as the way out",
+    "before and after: how it went until now, and how it goes now",
+    "a hot take: an opinion about the reader's world that the product backs up",
+    "a mini story: one person, one moment, in two or three lines",
+    '"you can now...": what the reader can do today that they could not before',
+    "a contrast: the usual way against this one",
+    "a list of three: three short lines, the last one the turn",
+    "why it was built this way: one decision and the reason for it",
+)
+
+# A post that lists features, and the same news as a person writes it, about a product made up
+# for the example, so the writer copies the move and not a real brand's words.
+EXAMPLE_PRODUCT = "Kettlebook, a recipe app"
+EXAMPLE_FEATURE_LIST = (
+    "Introducing Kettlebook 2.0! Kettlebook now supports ingredient scaling, unit conversion "
+    "and shopping list export. Cook seamlessly! 🚀🔥🎉"
+)
+EXAMPLE_HUMAN_POST = (
+    "The recipe serves four. You're cooking for seven.\n"
+    "\n"
+    "Kettlebook now scales every ingredient for you, grams and cups included.\n"
+    "\n"
+    "What's the dish you always end up making too little of?"
+)
+
+
+def _quoted(text: str) -> str:
+    return "\n".join(f"> {line}".rstrip() for line in text.split("\n"))
 
 
 def write_system_prompt(s: Situation, variants: int) -> str:
-    """What the writer is told when it writes or rewrites the variants: how to make each one a
-    take of its own, the rules as code holds them, the claims, and the shape of its answer."""
+    """What the writer is told when it writes or rewrites the variants: how a social media
+    manager writes a post, the forms a variant may take, the platform's habits, an example, the
+    rules as code holds them, the claims, and the shape of its answer."""
     told = [text for rule in CODE_RULES if (text := rule.told(s)) is not None]
     rules_text = "\n".join(f"- {text}" for text in told)
+    cliches = ", ".join(f'"{phrase}"' for phrase in CLICHES)
+    forms = "".join(f"  - {form}\n" for form in FORMS)
     return f"""\
-You write a social-media post for a product, for {s.platform.name}. You are given, as data, \
-the writing context (what the product's approved profile says: the product, its voice, its \
-audience, what never to mention, and its live features) and the brief{_given_data(s)}. Write \
-{variants} variants of the post.
+You are the social media manager of a product, and you write one post for it on \
+{s.platform.name}. You know the product well: you are given, as data, the writing context (what \
+the product's approved profile says: the product, its voice, its audience, what never to \
+mention, and its live features) and the brief{_given_data(s)}. Write {variants} variants of the \
+post.
 
-Each variant is its own take
-- Pick a fresh angle and the form that suits it: a hook, a question, a tiny story, a \
-contrast, a short list, or whatever fits. Variants are different ideas, not rewordings.
-- Write in the brand's voice, to its audience. Be specific and concrete: one real detail of a \
-feature says more than any adjective. No filler, no hype, no clichés.
+How a post people stop for is written
+- Start from the reader's moment: a situation, a frustration or a wish the audience \
+recognises. The product comes in as what changes for them, never as the opening.
+- Translate a feature into what it changes for the reader. The feature descriptions were \
+drafted from the product's code: never restate one, and never list what the product "has" or \
+"supports" as a spec sheet would.
+- One idea per post, in plain words and the brand's voice, written as a person who knows the \
+product, to its audience.
+- The first line stops the scroll: it is often the only line read, so it makes the reader it \
+is for stop on their own; say in hook whom it stops and why. Then short lines, with line \
+breaks between them.
+- End so that people want to reply: a real question you would like answered, or an opinion \
+someone could disagree with. Never ask for likes, reposts or follows.
+- Avoid what makes a post read like an ad: the phrases {cliches}, which are flagged for \
+review; a string of emojis; more than one exclamation mark; the corporate "we" of a press \
+release.
 - An announcement is about the feature the brief announces; a brief with an angle is followed.
-{_habits_text(s)}\
+
+Each variant takes its own form
+- Give each variant a different form, for example:
+{forms}\
+- Variants are different ideas, not rewordings.
+
+{_habits_section(s)}\
+An example, about {EXAMPLE_PRODUCT} (a made-up product: never write about it)
+A list of features, which is what not to write:
+{_quoted(EXAMPLE_FEATURE_LIST)}
+The same news as a person writes it:
+{_quoted(EXAMPLE_HUMAN_POST)}
 
 Rules the code checks: a variant that breaks one is never posted
 {rules_text}
 
 Claims
-- A claim is a statement the text makes about the product. List every claim the text makes, \
-each with the ids of the live features it rests on.
+- A claim is a concrete statement of what the product does or has, such as "it scales every \
+ingredient". List every claim the text makes, each with the ids of the live features it rests \
+on.
+- These are not claims and need no feature: the reader's situation or pain, a feeling, a \
+question, an opinion, a joke, a tiny story, and a benefit told as what a listed feature \
+changes for the reader. Write them freely; they are what makes the post worth reading.
+- Make one or two claims at most: a post that makes more reads like a list of features.
 - {NUMBERS_ADVICE}
 
 - You have no tools.
@@ -1120,8 +1291,8 @@ def revise_messages(
     }
     instruction = (
         f"No variant of round {round_no} kept every code rule. What the code found in each, "
-        "and the numbers it holds that the profile does not, are in last_round. Write "
-        f"{brief.variants} new variants that mend every finding."
+        "the numbers it holds that the profile does not and the clichés it uses, are in "
+        f"last_round. Write {brief.variants} new variants that mend every finding."
     )
     return [
         {"role": "system", "content": write_system_prompt(s, brief.variants)},
@@ -1132,12 +1303,13 @@ def revise_messages(
 def findings_data(
     variants: Sequence[Mapping[str, Any]], checks: Sequence[Mapping[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Each variant of a round with what the code found in it."""
+    """Each variant of a round with what the code found and flagged in it."""
     return [
         {
             "text": variant["text"],
             "code_findings": [failure["finding"] for failure in check["failures"]],
             "numbers_not_in_profile": check["flagged_numbers"],
+            "cliches": check.get("flagged_phrases", []),
         }
         for variant, check in zip(variants, checks, strict=True)
     ]
