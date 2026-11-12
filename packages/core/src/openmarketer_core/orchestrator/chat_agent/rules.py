@@ -526,10 +526,6 @@ def run_tool_calls(
             events.record(RunEvent(TOOL_ANSWERED, {"tool": shown, "ok": answered}))
             if answered and name in STARTED_RUN_KIND:
                 outcome.started.append(STARTED_RUN_KIND[name])
-            elif not answered and name in REQUEST_ACTIONS:
-                # A request action's refusal is code's: the fields at fault and why, a
-                # caller's sentence, or a brand term of the profile.
-                _log_refusal(name, result)
         outcome.messages.append(
             {"role": "tool", "tool_call_id": call.get("id", ""), "content": result}
         )
@@ -676,16 +672,22 @@ def _comparable(text: str) -> str:
 
 
 def _tool_answer(agent: Agent, name: str, arguments: dict[str, Any], context: Any) -> str:
+    """What the tool answered, each refusal logged once."""
     try:
-        return agent.call_tool(name, arguments, context)
+        result = agent.call_tool(name, arguments, context)
     except UnknownTool as e:
         # The name is the model's: the log says only that it was not a tool.
         _log_refusal(UNKNOWN_TOOL, "the model called a tool the agent does not have")
-        return f"error: {e}"
+        return f"{TOOL_ERROR_PREFIX} {e}"
     except InvalidToolArguments as e:
-        result = f"error: {e}"
+        result = f"{TOOL_ERROR_PREFIX} {e}"
         _log_refusal(name, result)
         return result
+    if name in REQUEST_ACTIONS and result.startswith(TOOL_ERROR_PREFIX):
+        # A request action's own refusal is code's: the fields at fault and why, a caller's
+        # sentence, or a brand term of the profile.
+        _log_refusal(name, result)
+    return result
 
 
 def _answer(arguments: dict[str, Any], *, last_chance: bool) -> tuple[str | None, str]:

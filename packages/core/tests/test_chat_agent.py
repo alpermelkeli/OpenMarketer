@@ -85,7 +85,11 @@ from openmarketer_core.orchestrator.requests import (
     StudioNotStarted,
     TaskNotStarted,
 )
-from openmarketer_core.orchestrator.task.plan import MAX_UNDERSTANDING_CHARS, TaskRequest
+from openmarketer_core.orchestrator.task.plan import (
+    MAX_REQUEST_CHARS,
+    MAX_UNDERSTANDING_CHARS,
+    TaskRequest,
+)
 from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
@@ -685,6 +689,14 @@ def test_the_answer_of_started_runs_has_one_sentence_per_kind_in_order():
     assert answer == " ".join(
         [STARTED_RUN_SENTENCES[TASK_RUN_KIND], STARTED_RUN_SENTENCES[RESEARCH_RUN_KIND]]
     )
+
+
+def test_the_schema_of_start_task_says_its_limits_before_the_first_call():
+    [schema] = [s for s in agent.tool_schemas() if s["function"]["name"] == "start_task"]
+    properties = schema["function"]["parameters"]["properties"]
+
+    assert properties["request"]["maxLength"] == MAX_REQUEST_CHARS
+    assert properties["understanding"]["maxLength"] == MAX_UNDERSTANDING_CHARS
 
 
 def test_a_refused_task_request_says_the_limit_and_not_what_was_sent():
