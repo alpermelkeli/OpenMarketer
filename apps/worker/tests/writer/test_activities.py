@@ -6,6 +6,7 @@ with what its draft cost. Each is safe to repeat.
 """
 
 import contextlib
+import dataclasses
 import uuid
 from decimal import Decimal
 
@@ -136,7 +137,10 @@ async def test_outcome_of_a_published_post_marks_the_run_succeeded_and_keeps_the
 
     stored = writer_database.run(run)
     assert (stored.status, stored.cost_usd) == (WritingRunStatus.SUCCEEDED, Decimal("0.031"))
-    assert writer_database.item(run) == published
+    # The post is kept as it was sent; only its run has ended since.
+    assert writer_database.item(run) == dataclasses.replace(
+        published, run_status=WritingRunStatus.SUCCEEDED
+    )
 
 
 @pytest.mark.parametrize("status", ["published", "dry_run"])

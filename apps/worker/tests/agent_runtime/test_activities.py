@@ -365,7 +365,9 @@ async def test_payload_that_does_not_fit_runs_nothing_and_is_not_repeated_in_the
     request = asking_for("send_email", {"to": "ada", "bcc": SECRET})
     failure = await refused(activities.run_action, request)
     assert (failure.type, failure.non_retryable) == (INVALID_ACTION_PAYLOAD, True)
-    assert failure.message == "payload of action 'send_email' does not fit: '<field>'"
+    assert failure.message == (
+        "payload of action 'send_email' does not fit: '<field>' (unknown field)"
+    )
     assert failure.__cause__ is None
     assert SECRET not in str(failure)
     assert send.calls == []
