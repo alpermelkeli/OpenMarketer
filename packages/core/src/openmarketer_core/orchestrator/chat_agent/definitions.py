@@ -47,6 +47,7 @@ class ChatTurnState(TypedDict):
     wrap_up_sent: bool
     model: str
     answer: str | None  # the accepted answer, once one is submitted
+    started_runs: Annotated[list[str], operator.add]  # kinds of run this turn started
 
 
 @dataclass
@@ -92,6 +93,7 @@ def initial_state(history: Sequence[Mapping[str, Any]]) -> ChatTurnState:
         "wrap_up_sent": False,
         "model": "",
         "answer": None,
+        "started_runs": [],
     }
 
 

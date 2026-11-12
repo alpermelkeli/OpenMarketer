@@ -49,7 +49,11 @@ from pydantic import BaseModel
 
 from openmarketer_core.agent_runtime.agent import END
 from openmarketer_core.agent_runtime.langgraph_steps import request_action
-from openmarketer_core.agent_runtime.model_input import DoesNotFit, read_strict_json
+from openmarketer_core.agent_runtime.model_input import (
+    DoesNotFit,
+    answer_object,
+    read_strict_json,
+)
 from openmarketer_core.decisions import DecisionError
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.research.page_text import PageTextUnavailable
@@ -180,12 +184,9 @@ def _ask_in_text[Model: BaseModel](
 
 def _read_text[Model: BaseModel](text: str, model_type: type[Model]) -> Model | str:
     """The JSON object the answer holds, or the text to tell the model what was wrong."""
-    try:
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            raise ValueError("the answer must be one JSON object")
-    except ValueError as e:
-        return f"error: could not parse the answer as JSON: {e}"
+    parsed = answer_object(text)
+    if parsed is None:
+        return "error: answer with one JSON object and nothing else"
     try:
         return read_strict_json(model_type, parsed)
     except DoesNotFit as e:

@@ -52,7 +52,7 @@ from openmarketer_core.orchestrator.requests import (
     StudioNotStarted,
     TaskNotStarted,
 )
-from openmarketer_core.orchestrator.task.plan import TaskRequest
+from openmarketer_core.orchestrator.task.plan import Request, TaskRequest, Understanding
 from openmarketer_core.orchestrator.task.workflow_contract import TASK_RUN_KIND
 from openmarketer_core.research.questions import DEFAULT_MAX_SOURCES, ResearchRequest
 from openmarketer_core.research.workflow_contract import RESEARCH_RUN_KIND
@@ -209,7 +209,7 @@ def start_research(
             },
         )
     except DoesNotFit as e:
-        return f"error: the research request does not fit{fields_phrase(e.fields)}"
+        return f"error: the research request does not fit{fields_phrase(e.fields, e.reasons)}"
     try:
         run = context.requests.start_research(request)
     except ResearchNotStarted as e:
@@ -291,7 +291,7 @@ def start_creative(
             },
         )
     except DoesNotFit as e:
-        return f"error: the image request does not fit{fields_phrase(e.fields)}"
+        return f"error: the image request does not fit{fields_phrase(e.fields, e.reasons)}"
     banned = term_not_to_mention(request.exact_copy, _do_not_mention(context))
     if banned is not None:
         return (
@@ -335,8 +335,9 @@ def get_writing_run(context: ChatTurnContext, run_id: str) -> str:
     return _text(asdict(found))
 
 
+# Typed with the request's own limits, so that the schema the model is shown says them.
 @agent.tool
-def start_task(context: ChatTurnContext, request: str, understanding: str) -> str:
+def start_task(context: ChatTurnContext, request: Request, understanding: Understanding) -> str:
     """Start an orchestrator task of this project: it plans the steps, has a plan that can
     spend confirmed by the operator, runs the agents one after another, reviews each result
     and reports in this chat when it is done. Use it for a post (the task decides whether the
@@ -349,7 +350,7 @@ def start_task(context: ChatTurnContext, request: str, understanding: str) -> st
     try:
         asked = read_strict_json(TaskRequest, {"request": request, "understanding": understanding})
     except DoesNotFit as e:
-        return f"error: the task request does not fit{fields_phrase(e.fields)}"
+        return f"error: the task request does not fit{fields_phrase(e.fields, e.reasons)}"
     try:
         task = context.requests.start_task(asked)
     except TaskNotStarted as e:

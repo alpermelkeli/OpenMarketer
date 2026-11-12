@@ -35,6 +35,7 @@ the same state, and the model calls are made for this attempt only.
 """
 
 import json
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -44,7 +45,11 @@ from pydantic import BaseModel
 
 from openmarketer_core.agent_runtime.agent import END
 from openmarketer_core.agent_runtime.langgraph_steps import request_action
-from openmarketer_core.agent_runtime.model_input import DoesNotFit, read_strict_json
+from openmarketer_core.agent_runtime.model_input import (
+    DoesNotFit,
+    answer_object,
+    read_strict_json,
+)
 from openmarketer_core.llm import ChatReply, image_part
 from openmarketer_core.studio.contact_sheet import SheetImage, contact_sheet
 from openmarketer_core.studio.failures import StudioError
@@ -70,6 +75,10 @@ from openmarketer_core.studio.studio_agent.rules import (
     Technique,
     VerifierReport,
 )
+
+logger = logging.getLogger(__name__)
+# What a refusal in the log is said to be of.
+AGENT_NAME = "studio"
 
 # The most of a handler's error the studio model is shown, in the round's operations.
 MAX_ERROR_CHARS = 500
@@ -104,15 +113,24 @@ def _read[Model: BaseModel](
 ) -> Model | str:
     """The submission in ``arguments``, or the text that tells the model what was wrong."""
     if not isinstance(arguments, dict):
+        _log_refusal(model_type.__name__, "the answer was not one JSON object")
         return "error: the answer must be one JSON object"
     try:
         submitted = read_strict_json(model_type, rules.unwrapped_arguments(model_type, arguments))
     except DoesNotFit as e:
+        _log_refusal(model_type.__name__, str(e))
         return f"Rejected. Fix this and submit again: {e}"
     found = problems(submitted)
     if found:
+        # A finding may quote the model's text: the log counts them.
+        _log_refusal(model_type.__name__, f"{len(found)} finding(s) of the code rules")
         return "Rejected. Fix this and submit again: " + "; ".join(found)
     return submitted
+
+
+def _log_refusal(submission: str, refusal: str) -> None:
+    """Log a refused submission in code's own words, never with what the model wrote."""
+    logger.warning("%s: %s refused: %s", AGENT_NAME, submission, refusal)
 
 
 def _arguments_of(call: dict[str, Any]) -> Any:
@@ -135,11 +153,7 @@ def _ask_in_text[Model: BaseModel](
     for _ in range(rules.SUBMISSION_ATTEMPTS):
         reply = context.model.chat(role, messages)
         spent.add(reply)
-        try:
-            parsed: Any = json.loads(reply.text)
-        except ValueError:
-            parsed = None
-        submitted = _read(parsed, model_type, problems)
+        submitted = _read(answer_object(reply.text), model_type, problems)
         if not isinstance(submitted, str):
             return submitted
         if reply.finish_reason == "length":

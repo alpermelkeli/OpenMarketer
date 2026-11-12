@@ -65,8 +65,12 @@ from openmarketer_core.writing.brief import (
     WritingPlatform,
 )
 
-MAX_REQUEST_CHARS = 2000
-MAX_UNDERSTANDING_CHARS = 1000
+# The operator's words are copied verbatim, so they may be as long as a chat message (the API's
+# MAX_MESSAGE_LENGTH); a shorter limit refused a long message the model could not shorten.
+MAX_REQUEST_CHARS = 10_000
+# One paragraph of what the operator wants and what the project's records add to it: 1000
+# characters was too few for that, and the chat sent the same longer paragraph again and again.
+MAX_UNDERSTANDING_CHARS = 3000
 MAX_TASK_GOAL_CHARS = 500
 MAX_STEP_ID_CHARS = 32
 MAX_REPORT_LABEL_CHARS = 16

@@ -142,7 +142,7 @@ def test_an_answer_that_is_not_json_is_told_so_and_asked_once_more():
     assert len(model.calls) == 2
     told = model.calls[1]["messages"][-1]
     assert told["role"] == "user"
-    assert told["content"].startswith("error: could not parse the answer as JSON")
+    assert told["content"] == "error: answer with one JSON object and nothing else"
     assert changes["readings"][0]["reading"]["summary"] == "Fine."
 
 

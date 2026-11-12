@@ -30,6 +30,7 @@ from openmarketer_core.agent_runtime.model_input import (
     UNKNOWN_FIELD,
     DoesNotFit,
     UnreadableModel,
+    answer_object,
     fields_that_name_files_or_code,
     lenient_types,
     read_strict_json,
@@ -398,3 +399,70 @@ def test_names_the_library_gives_a_union_member_are_not_shown():
         for field in refused.value.fields
         for part in field.split(".")
     )
+
+
+# ------------------------------------------------------------ what an error says of why
+class Limited(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(max_length=10)
+    platform: Literal["x", "linkedin"]
+    count: int = Field(ge=1)
+
+
+def reasons_of(data: dict[str, Any]) -> DoesNotFit:
+    with pytest.raises(DoesNotFit) as refused:
+        read_strict_json(Limited, data)
+    return refused.value
+
+
+def test_reason_names_the_limit_a_field_broke():
+    refused = reasons_of({"summary": "x" * 11, "platform": "x", "count": 1})
+
+    assert refused.reasons == {"summary": "at most 10 characters"}
+    assert str(refused) == "does not fit: 'summary' (at most 10 characters)"
+
+
+def test_reason_lists_the_values_the_code_declared_and_never_the_value_sent():
+    refused = reasons_of({"summary": "ok", "platform": INSTRUCTION, "count": 1})
+
+    assert refused.reasons["platform"].startswith("not one of: ")
+    assert "'linkedin'" in str(refused)
+    assert INSTRUCTION not in str(refused)
+
+
+def test_reason_of_a_missing_field_a_wrong_type_and_a_bound():
+    refused = reasons_of({"platform": "x", "count": 0, INSTRUCTION: "x"})
+
+    assert refused.reasons == {
+        "summary": "required",
+        "count": "at least 1",
+        UNKNOWN_FIELD: "unknown field",
+    }
+    assert reasons_of({"summary": 3, "platform": "x", "count": 1}).reasons == {
+        "summary": "must be a string"
+    }
+
+
+# ------------------------------------------------------------ reading an answer written as text
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"a": 1}',
+        '  {"a": 1}\n',
+        '```json\n{"a": 1}\n```',
+        '```\n{"a": 1}\n```',
+        '```JSON {"a": 1}```',
+        '\n```json\n{"a": 1}\n```\n',
+    ],
+)
+def test_answer_is_one_object_bare_or_in_a_fence(text):
+    assert answer_object(text) == {"a": 1}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "[1, 2]", '"a"', 'Here it is: {"a": 1}', '{"a": 1} {"b": 2}', "```json\n[1]\n```"],
+)
+def test_answer_that_is_not_one_object_is_none(text):
+    assert answer_object(text) is None

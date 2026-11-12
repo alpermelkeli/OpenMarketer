@@ -5131,13 +5131,13 @@
         "description": "What a task is asked: the operator's words, and the chat's understanding of them.",
         "properties": {
           "request": {
-            "maxLength": 2000,
+            "maxLength": 10000,
             "minLength": 1,
             "title": "Request",
             "type": "string"
           },
           "understanding": {
-            "maxLength": 1000,
+            "maxLength": 3000,
             "minLength": 1,
             "title": "Understanding",
             "type": "string"

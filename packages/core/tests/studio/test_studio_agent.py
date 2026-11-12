@@ -1421,3 +1421,24 @@ def test_a_candidate_a_program_just_made_is_refused_once_and_shown_again():
     assert looked_again[-1]["content"][1]["type"] == "image_url"
     assert run.result.final_version_id == program["version_id"]
     assert chat.left() == {}
+
+
+def test_a_brief_in_a_markdown_fence_is_read():
+    fenced = ChatReply(
+        message={
+            "role": "assistant",
+            "content": "```json\n" + a_brief().message["content"] + "\n```",
+        },
+        model="m",
+        cost_usd=0.0,
+    )
+    chat = ScriptedChat(
+        creative_director=[fenced],
+        studio=[operation("generate_image", prompt="A desk."), ready()],
+        asset_verifier=[a_verdict()],
+    )
+
+    run = Run(chat, World([READ_BACK]))
+
+    assert run.final["brief"]["goal"] == "Announce the launch."
+    assert len([c for c in chat.calls if c["role"] == "creative_director"]) == 1

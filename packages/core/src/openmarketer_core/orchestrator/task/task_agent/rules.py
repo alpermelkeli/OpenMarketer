@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -292,19 +291,6 @@ def _shown_reports(reports: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
 
 
 # ------------------------------------------------------------------------- reading answers
-_FENCE = re.compile(r"^\s*```(?:json)?\s*(?P<body>.*?)\s*```\s*$", re.DOTALL)
-
-
-def answer_object(text: str) -> Any:
-    """The JSON value an answer holds, or ``None``: one object, perhaps in a Markdown fence."""
-    fenced = _FENCE.match(text)
-    body = fenced.group("body") if fenced else text
-    try:
-        return json.loads(body)
-    except ValueError:
-        return None
-
-
 def plan_data(answer: Any) -> Any:
     """A plan as a weak model sends it, read as what it means; anything else as it is.
 

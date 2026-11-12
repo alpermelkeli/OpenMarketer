@@ -3,10 +3,14 @@
 A tool's arguments and an action's payload are written by a model, so they are data and
 never a decision. This module is the one reading of them. ``read_strict_json`` converts
 nothing to the type the model wants (``"7"`` is not 7), lets nothing JSON cannot write pass
-(NaN, infinity) and, when the data does not fit, says which fields are at fault and never
-what was sent: a path in a refusal keeps only the names the code declared and the positions
-in a list (see ``UNKNOWN_FIELD``), so a key the model invented cannot put its text into an
-error that is logged or shown to the model again.
+(NaN, infinity) and, when the data does not fit, says which fields are at fault and why, and
+never what was sent: a path in a refusal keeps only the names the code declared and the
+positions in a list (see ``UNKNOWN_FIELD``), so a key the model invented cannot put its text
+into an error that is logged or shown to the model again, and the reason is built from the
+kind of the library's error and the limits the code declared (``at most 1000 characters``,
+``not one of: 'x', 'linkedin'``), never from the value. A model told only which field is at
+fault sends the same value again. ``answer_object`` is the one reading of an answer a model
+wrote as text, perhaps in a Markdown fence.
 
 What may be read is checked when it is declared, with two questions about the model that holds
 the fields. ``lenient_types`` finds what the library would silently drop a misspelt or
@@ -21,6 +25,7 @@ Whom an error is shown to, and whether it ends a run, is for its callers.
 
 import dataclasses
 import json
+import re
 from collections.abc import Iterator, Mapping
 from typing import Any, TypeAliasType, cast, get_args, get_type_hints, is_typeddict
 
@@ -30,6 +35,10 @@ from pydantic.types import PathType
 # The most of a name, or of a list of names, an error message repeats of what the model sent.
 MAX_SHOWN_CHARACTERS = 60
 MAX_SHOWN_FIELDS = 5
+# The most of one field's reason a message repeats: the values an enum declared can be many.
+MAX_SHOWN_REASON_CHARACTERS = 200
+# The most reasons one field is given: a union refused reports one per member.
+MAX_SHOWN_REASONS = 2
 
 # What a part of a field's path is shown as when the code did not declare it: a key the model
 # invented, a key of a free-form dictionary, the name of a member of a union.
@@ -55,11 +64,31 @@ class UnreadableModel(ValueError):
 
 
 class DoesNotFit(Exception):
-    """What was sent does not fit the model that reads it; ``fields`` names where, never what."""
+    """What was sent does not fit the model that reads it.
 
-    def __init__(self, fields: tuple[str, ...]) -> None:
-        super().__init__(f"does not fit{fields_phrase(fields)}")
+    ``fields`` names where and ``reasons`` says why, per field (``"at most 1000 characters"``),
+    never what was sent; the message holds both.
+    """
+
+    def __init__(self, fields: tuple[str, ...], reasons: Mapping[str, str] | None = None) -> None:
         self.fields = fields
+        self.reasons: dict[str, str] = dict(reasons or {})
+        super().__init__(f"does not fit{fields_phrase(fields, self.reasons)}")
+
+
+def answer_object(text: str) -> dict[str, Any] | None:
+    """The one JSON object an answer written as text holds, or ``None``.
+
+    The object may be bare or in a Markdown fence (```` ```json ````, ```` ``` ````), with
+    whitespace around it; anything else (two objects, prose around it, a list) is ``None``.
+    """
+    fenced = _FENCE.match(text)
+    body = fenced.group("body") if fenced else text
+    try:
+        value = json.loads(body)
+    except (ValueError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def read_strict_json[Model: BaseModel](model: type[Model], data: Mapping[str, Any]) -> Model:
@@ -69,19 +98,20 @@ def read_strict_json[Model: BaseModel](model: type[Model], data: Mapping[str, An
     nothing JSON cannot write (NaN, infinity) passes. A field the model does
     not declare is refused only by a model that forbids extra fields (see
     ``lenient_types``). Raises ``DoesNotFit``, which names the fields at fault
-    and never their values or any name the code did not declare.
+    and why, and never their values or any name the code did not declare.
     """
     try:
         text = json.dumps(data, allow_nan=False)
     except (TypeError, ValueError, RecursionError):
-        raise DoesNotFit(_fields_not_json(model, data)) from None
+        not_json = _fields_not_json(model, data)
+        raise DoesNotFit(not_json, dict.fromkeys(not_json, _NOT_JSON)) from None
     try:
         # Strict, and from JSON text: nothing is converted to the type the model wants, and
         # the library still reads a UUID, a date or an enum value from the string JSON has.
         return model.model_validate_json(text, strict=True)
     except ValidationError as e:
         # ``from None``: the library's error holds the values it refused.
-        raise DoesNotFit(_fields_at_fault(model, e)) from None
+        raise DoesNotFit(*_faults(model, e)) from None
 
 
 def lenient_types(model: type[BaseModel]) -> Iterator[type]:
@@ -124,9 +154,16 @@ def fields_that_name_files_or_code(model: type[BaseModel]) -> Iterator[tuple[typ
                 yield structure, name
 
 
-def fields_phrase(fields: tuple[str, ...]) -> str:
-    """The fields at fault as the end of a message: ``": a, b and 3 more"``, or nothing."""
-    listed = ", ".join(shown(name) for name in fields[:MAX_SHOWN_FIELDS])
+def fields_phrase(fields: tuple[str, ...], reasons: Mapping[str, str] | None = None) -> str:
+    """The fields at fault as the end of a message: ``": a (required), b and 3 more"``, or nothing.
+
+    ``reasons`` gives a field's reason, which follows its name in brackets.
+    """
+    reasons = reasons or {}
+    listed = ", ".join(
+        shown(name) + (f" ({reasons[name]})" if reasons.get(name) else "")
+        for name in fields[:MAX_SHOWN_FIELDS]
+    )
     more = len(fields) - MAX_SHOWN_FIELDS
     if more > 0:
         listed += f" and {more} more"
@@ -139,6 +176,10 @@ def shown(text: str) -> str:
     if len(quoted) <= MAX_SHOWN_CHARACTERS:
         return quoted
     return quoted[: MAX_SHOWN_CHARACTERS - 3] + "..."
+
+
+# A model's answer in a Markdown fence: ```json, ``` or another word after the backticks.
+_FENCE = re.compile(r"^\s*```[A-Za-z]*[ \t]*\n?(?P<body>.*?)\s*```\s*$", re.DOTALL)
 
 
 # ----------------------------------------------------------- the library's schema
@@ -205,14 +246,115 @@ def _fields_not_json(model: type[BaseModel], data: Any) -> tuple[str, ...]:
     return tuple(dict.fromkeys(not_json))
 
 
-def _fields_at_fault(model: type[BaseModel], error: ValidationError) -> tuple[str, ...]:
+def _faults(
+    model: type[BaseModel], error: ValidationError
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """The fields at fault and the reason of each, from the kind and the context of each error."""
     declared = _declared_names(model)
-    problems = error.errors(include_input=False, include_url=False, include_context=False)
-    paths = (
-        ".".join(_shown_part(part, declared) for part in problem["loc"]) for problem in problems
-    )
-    # Several problems of one field are one field; an error of the whole model names none.
-    return tuple(dict.fromkeys(path for path in paths if path))
+    problems = error.errors(include_input=False, include_url=False, include_context=True)
+    reasons: dict[str, list[str]] = {}
+    for problem in problems:
+        path = ".".join(_shown_part(part, declared) for part in problem["loc"])
+        # An error of the whole model names no field.
+        if not path:
+            continue
+        found = reasons.setdefault(path, [])
+        reason = _reason(problem["type"], problem.get("ctx") or {})
+        if reason not in found and len(found) < MAX_SHOWN_REASONS:
+            found.append(reason)
+    # Several problems of one field are one field.
+    return tuple(reasons), {path: "; ".join(found) for path, found in reasons.items()}
+
+
+_NOT_JSON = "not a JSON value"
+
+# The reason of an error that says nothing but its kind.
+_PLAIN_REASONS = {
+    "missing": "required",
+    "extra_forbidden": "unknown field",
+    "string_type": "must be a string",
+    "int_type": "must be an integer",
+    "int_parsing": "must be an integer",
+    "int_from_float": "must be an integer",
+    "float_type": "must be a number",
+    "float_parsing": "must be a number",
+    "finite_number": "must be a finite number",
+    "bool_type": "must be true or false",
+    "bool_parsing": "must be true or false",
+    "none_required": "must be null",
+    "list_type": "must be a list",
+    "tuple_type": "must be a list",
+    "set_type": "must be a list",
+    "frozen_set_type": "must be a list",
+    "dict_type": "must be an object",
+    "model_type": "must be an object",
+    "model_attributes_type": "must be an object",
+    "dataclass_type": "must be an object",
+    "uuid_type": "must be a UUID",
+    "uuid_parsing": "must be a UUID",
+    "date_type": "must be a date (YYYY-MM-DD)",
+    "date_parsing": "must be a date (YYYY-MM-DD)",
+    "date_from_datetime_parsing": "must be a date (YYYY-MM-DD)",
+    "datetime_type": "must be a date and time (ISO 8601)",
+    "datetime_parsing": "must be a date and time (ISO 8601)",
+    "datetime_from_date_parsing": "must be a date and time (ISO 8601)",
+    "url_type": "must be a URL",
+    "url_parsing": "must be a URL",
+    "url_scheme": "must be a URL with an allowed scheme",
+    "string_pattern_mismatch": "does not have the expected form",
+    "frozen_field": "cannot be set",
+}
+
+
+def _reason(kind: str, ctx: Mapping[str, Any]) -> str:
+    """Why a field does not fit, from the kind of the error and the limits the code declared.
+
+    Only a number or a list of values the code declared is repeated from ``ctx``; a custom
+    validator's message (``value_error``) may quote the value and is never shown.
+    """
+    if kind in _PLAIN_REASONS:
+        return _PLAIN_REASONS[kind]
+    if kind == "string_too_long":
+        return _counted("at most", ctx.get("max_length"), "character")
+    if kind == "string_too_short":
+        return _counted("at least", ctx.get("min_length"), "character")
+    if kind == "too_long":
+        return _counted("at most", ctx.get("max_length"), "item")
+    if kind == "too_short":
+        return _counted("at least", ctx.get("min_length"), "item")
+    if kind in ("enum", "literal_error"):
+        return _bounded(f"not one of: {ctx.get('expected', '')}")
+    if kind in ("union_tag_invalid", "union_tag_not_found"):
+        tags = ctx.get("expected_tags")
+        return _bounded(f"not one of: {tags}") if isinstance(tags, str) else "kind not recognised"
+    bounds = {
+        "greater_than": ("must be greater than", "gt"),
+        "greater_than_equal": ("at least", "ge"),
+        "less_than": ("must be less than", "lt"),
+        "less_than_equal": ("at most", "le"),
+        "multiple_of": ("must be a multiple of", "multiple_of"),
+    }
+    if kind in bounds:
+        words, key = bounds[kind]
+        limit = ctx.get(key)
+        return f"{words} {limit}" if _is_number(limit) else "out of range"
+    return "is not valid"
+
+
+def _counted(words: str, count: object, unit: str) -> str:
+    if not _is_number(count):
+        return "is not valid"
+    return f"{words} {count} {unit}{'' if count == 1 else 's'}"
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _bounded(reason: str) -> str:
+    if len(reason) <= MAX_SHOWN_REASON_CHARACTERS:
+        return reason
+    return reason[: MAX_SHOWN_REASON_CHARACTERS - 3] + "..."
 
 
 def _shown_part(part: object, declared: frozenset[str]) -> str:

@@ -30,6 +30,7 @@ Every node is safe to run twice. ``plan`` and ``review`` cost one or two model c
 alone, and do nothing before it.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -39,7 +40,11 @@ from pydantic import BaseModel
 
 from openmarketer_core.agent_runtime.agent import END
 from openmarketer_core.agent_runtime.langgraph_steps import request_action
-from openmarketer_core.agent_runtime.model_input import DoesNotFit, read_strict_json
+from openmarketer_core.agent_runtime.model_input import (
+    DoesNotFit,
+    answer_object,
+    read_strict_json,
+)
 from openmarketer_core.llm import ChatReply
 from openmarketer_core.orchestrator.task.failures import TaskError
 from openmarketer_core.orchestrator.task.plan import (
@@ -67,6 +72,10 @@ from openmarketer_core.orchestrator.task.task_agent.rules import (
 from openmarketer_core.research.questions import ResearchRequest
 from openmarketer_core.studio.requests import AssetRequest
 from openmarketer_core.writing.brief import WritingBrief
+
+logger = logging.getLogger(__name__)
+# What a refusal in the log is said to be of.
+AGENT_NAME = "task"
 
 DISPATCH = "dispatch"
 CHECK = "check"
@@ -119,24 +128,33 @@ def _ask[Model: BaseModel](
     for _ in range(rules.SUBMISSION_ATTEMPTS):
         reply = context.model.chat(rules.ROLE, messages)
         spent.add(reply)
-        answer = shaped(rules.answer_object(reply.text))
+        answer = shaped(answer_object(reply.text))
         told: str
         if not isinstance(answer, dict):
+            _log_refusal(model_type.__name__, "the answer was not one JSON object")
             told = "error: answer with one JSON object and nothing else"
         else:
             try:
                 submitted = read_strict_json(model_type, answer)
             except DoesNotFit as e:
+                _log_refusal(model_type.__name__, str(e))
                 told = f"Rejected. Fix this and answer again: {e}"
             else:
                 found = problems(submitted)
                 if not found:
                     return submitted
+                # A finding may quote the model's text: the log counts them.
+                _log_refusal(model_type.__name__, f"{len(found)} finding(s) of the code rules")
                 told = rules.problems_text(found)
         if reply.finish_reason == "length":
             told = f"The answer was cut off by the model's length limit. {told}"
         messages = [*messages, reply.message, {"role": "user", "content": told}]
     return None
+
+
+def _log_refusal(submission: str, refusal: str) -> None:
+    """Log a refused submission in code's own words, never with what the model wrote."""
+    logger.warning("%s: %s refused: %s", AGENT_NAME, submission, refusal)
 
 
 def _limits(state: TaskState) -> TaskLimits:
